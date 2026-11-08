@@ -20,7 +20,7 @@ public static class AgentScript
         run["parameters"]["properties"]["background"] = new JsonObject { ["type"] = "boolean",
             ["description"] = "配合task_node启动持续后台脚本并立即返回句柄；Agent可同时查询和准备后续。脚本内直接顺序调用动作，不嵌套action_start。" };
         run["description"] = run["description"].ToString()
-            + "多动作连续执行可用background:true，脚本拥有主动作句柄，内部直接tool('nav_to',...)、tool('gather',...)及条件循环；action_control暂停/取消，原workflow保留。运行中改当前脚本需先暂停，后续节点可直接修改。"
+            + "多动作连续执行可用background:true，脚本拥有主动作句柄，内部直接tool('nav_to',...)、tool('gather',...)及条件循环；action_control暂停/取消，原workflow保留。运行中可准备下一段源码；立即改变正在执行的动作时先暂停。"
             + "临时恢复可传task_node、code及独立workflow，动作仍归属该节点，恢复进度单独保存，原节点script和workflow保留；恢复后可继续原句柄或节点。临时脚本使用前台模式。";
         run["description"] = run["description"].ToString()
             + "普通动作失败直接返回失败结果，JS可在同轮按现场执行已准备的恢复分支；step仍会拒绝把失败记录为完成。"
@@ -101,6 +101,7 @@ public static class AgentScript
         + "\n长任务采用DAG：task_plan传mode:'dag'，节点包含id、depends_on、script和conditions。共享前置只建一个节点；依赖表示前置已验收，不代表输入互斥。先查当前必要知识，再建立可执行节点；未知后续行为可用调查脚本返回缺失事实，不能猜来源或假造完成条件。"
         + "首个行动的目的地、必要条件和验收已明确时，先建立最小DAG，再从所属节点启动后台动作并立即返回；不要等全部配方、后续资源和完整路线查完才出发，也不要先启动无所属节点的动作再补建DAG。导航运行期间可查询知识、观察现场并用task_plan_patch添加后续节点；保留当前节点和原句柄，不为只读调查暂停导航。最终目标的验收条件从初始计划保留，后续细化不能遗漏原要求。导航的逐格移动、挖掘和搭桥交给导航执行器，不用模型反复生成逐格修路脚本替代导航。"
         + "长任务优先用run_script({task_node:id,background:true})执行ready_steps中的节点，宿主返回后台句柄并保存稳定workflow。此模式下节点script直接用tool('nav_to',参数)、tool('gather',参数)等顺序执行，step保存已完成效果；Agent同时观察和准备后继。action_control管理宿主返回的句柄。普通前台脚本可用action_start启动独立后台动作并保存返回句柄，再用action_query观察。task_step verify读取真实状态验收节点。"
+        + "同一节点分段准备时，在行动期间用task_plan_patch更新该节点script，保留已完成step的id，写入接下来的查询、判断、动作与恢复分支。正在运行的片段保持执行；正常yield后若已保存新源码，宿主立即续跑新版本，已完成step复用结果。主动decision_point、危险或动作失败仍交回处理。"
         + "多个ready节点可共同推进，但不轮流抢移动：默认继续当前动作，出现具体顺路收益、阻塞或危险才切换。切换前暂停原主动作并保存理由；插入结束核实所得，回到原节点恢复句柄。独立防身可与移动并行，不把所有怪物变成必须完成的前置任务。"
         + "新事实需要修改方案时用task_plan_patch的nodes更新未完成节点script/depends_on，或add_nodes插入有实际完成条件的新机会/恢复节点，两者可同批提交，带expected_revision和reason；共享已有前置，保留workflow与已完成step，不重建计划。不要为开箱把采集节点脚本改成只有开箱；新机会单独成节点，原节点保留原意图与句柄。脚本改动不会清除uncertain，仍须核对。最终验收检查所有末端节点，必须把最终仍需持有的物品等要求写入末端conditions。\n"
         + "\n以下只是游戏API用途索引，不是参数定义。写代码前用game_api({names:[本次需要的工具名]})读取完整参数和限制；同一会话已查过的定义可复用，不要猜测工具名、参数或坐标单位。查询可批量进行，不需要先写脚本。\n"
@@ -128,6 +129,7 @@ public static class AgentScript
         + "长导航写入节点script，以run_script({task_node:id,background:true})启动，立即使用宿主返回的句柄进行并行观察和后续准备。后台脚本顺序调用动作，连续主路线串联已查证路点；普通机会通过passive_events观察，由策略决定插入行动，短程躲避由独立实时控制器响应。"
         + "永久生命上限低于160时，生命水晶具有更高优先级；获得后及时使用并核对永久上限增加，除非玩家明确要求保留。优先级不代表无视地形或为遥远水晶无限绕路。"
         + "workflow.watch_policy保留该工作流最后成功设置的watch参数，是历史策略而非当前生效状态。续接先对照get_state.watch，按当前目标选择恢复或修改观察范围；需要恢复时用tool('watch', policy)，不会自动覆盖你新设的策略。"
+        + "uncertain步骤带repeatable_navigation:true时，已确认其中唯一工具调用为返回no_progress的导航；根据失败现场修正目标后，直接续接原workflow即可重新执行该step，历史失败保留。其他uncertain步骤先核对实际效果。"
         + "需要事件驱动的快速反应时使用event_delivery:script，程序用script_events消费订阅事件、用jev_judge根据当前事实判断；模型不必为每次事件重新生成整段代码。"
         + "有沿途收集要求时，先用recipe确认所需物品和数量、game_catalog确认编号，再查证来源。game_catalog的matches[].type是对应kind的编号；物品编号、NPC编号和方块编号不能混用，名称相似也不证明掉落关系。NPC材料先用npc_drop_sources查询注册掉落及条件；植物来源与变体查wiki或依据实际采集证据，不能把材料名当TileID、把生长基底当材料来源，也不能猜npc_types或frame。未知来源应报告未查证，不得假装已经配置正确。"
         + "按查证的来源配置watch：方块和工作站使用nearby_tile+tile_types，箱子使用nearby_chest，已掉落材料使用nearby_drop；发现候选不代表必定取得目标物品。"
@@ -173,7 +175,7 @@ public static class AgentScript
     {
         if (string.IsNullOrWhiteSpace(source) || source.Length > 16000)
             throw new ArgumentException("code必须是1..16000字符的JavaScript函数体，使用return返回结果。");
-        progress?.Begin();
+        progress?.Begin(source);
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
         var clock = Stopwatch.StartNew();
         var trace = new Queue<JsonNode>();

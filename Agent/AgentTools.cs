@@ -125,9 +125,11 @@ public static partial class AgentTools
         if (previous["status"]?.ToString() != "completed" && !plan["ready_steps"].AsArray().Any(n => n?.ToString() == owner)) return;
         bool verified = previous["status"]?.ToString() == "completed"
             || Plan.Advance(owner, AgentTaskEvidence.Measure)["verified"]?.GetValue<bool>() == true;
+        bool prepared = !verified && workflow?.HasPreparedContinuation(previous["script"]?.ToString()) == true;
         continuedActions.Add(attempt);
-        if (!verified && (workflow == null || workflow.Yielded || workflow.ReviewRequested
+        if (!verified && !prepared && (workflow == null || workflow.Yielded || workflow.ReviewRequested
             || action["status"]?.ToString() != "completed")) return;
+        if (prepared) Watches.AcknowledgeExecutionStart(owner, Main.LocalPlayer.dead, Main.LocalPlayer.suffocating, Actions.Summary());
         Watches.AcknowledgeCompletion(action, nodeVerified: verified);
         plan = Plan.Snapshot();
         string next = verified ? plan["current_step"]?.ToString() : owner;

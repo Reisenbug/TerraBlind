@@ -216,6 +216,58 @@ static class RuntimeTests
             HttpServerSystem.Handler = previous;
         }
     }
+
+    static async Task TestPreparedScriptRevision()
+    {
+        var previous = HttpServerSystem.Handler;
+        AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
+        string workflow = null;
+        int starts = 0;
+        bool finish = false;
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/nav_recede") starts++;
+            return (200, path == "/nav_recede_done" ? "{\"done\":" + (finish ? "true" : "false") + "}"
+                : "{\"accepted\":true}");
+        };
+        try
+        {
+            string first = "step('first',()=>{const r=tool('nav_to',{x:12,y:34});return {done:r.done};});";
+            AgentTools.Plan.Create(new JsonObject { ["goal"] = "prepare next segment while moving", ["mode"] = "dag",
+                ["steps"] = new JsonArray(new JsonObject { ["id"] = "travel", ["description"] = "continuous segments",
+                    ["depends_on"] = new JsonArray(), ["script"] = first + "return {status:'yield'};",
+                    ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "item", ["type"] = 191, ["count"] = 9999 }) }) }, _ => 0);
+            workflow = AgentTools.Plan.Script("travel")["workflow"].ToString();
+            var started = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                { ["task_node"] = "travel", ["background"] = true }, default)));
+            await PumpUntil(() => starts == 1);
+            var patch = new JsonObject { ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                ["reason"] = "next route verified while first action continues",
+                ["nodes"] = new JsonArray(new JsonObject { ["id"] = "travel", ["script"] = first
+                    + "step('second',()=>{const r=tool('nav_to',{x:16,y:34});return {done:r.done};});return {status:'yield'};" }) };
+            AgentTools.Plan.Revise(patch, _ => 0);
+            Check(starts == 1 && AgentTools.Actions.HasPrimaryControl, "preparing a continuation interrupted current movement");
+            finish = true;
+            await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
+            var finished = await Execute(AgentTools.Actions.Query(started["handle"].ToString(), 0, default));
+            AgentTools.Watches.Emit("action_finished", started["handle"] + ":1", finished);
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            await PumpUntil(() => { AgentTools.ContinuePreparedNode(default); return starts == 2; });
+            Check(timer.ElapsedMilliseconds < 1000, "prepared segment waited for model review");
+            await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl && !AgentTools.Workflows[workflow].Running);
+            Check(AgentTools.Workflows[workflow].Completed == 2 && AgentTools.Plan.Incomplete,
+                "continuation replayed earned work or invented goal completion");
+            for (int i = 0; i < 10; i++) { AgentTools.ContinuePreparedNode(default); Agent.PostUpdateEverything(); await Task.Delay(5); }
+            Check(starts == 2, "unchanged yielded script was replayed indefinitely");
+            Console.WriteLine($"PASS: prepared same-node script revision continues without replay or model wait; handoff_ms={timer.ElapsedMilliseconds}");
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+            if (workflow != null) AgentTools.Workflows.Remove(workflow);
+            HttpServerSystem.Handler = previous;
+        }
+    }
     static void Check(bool condition, string message)
     { if (!condition) throw new Exception(message); }
 
@@ -338,6 +390,7 @@ static class RuntimeTests
         await TestGapContinuation();
         await TestOwnedRecovery();
         await TestInlineFailureRecovery();
+        await TestPreparedScriptRevision();
         var depthPlayer = Game.LocalPlayer;
         var oldDepth = (Game.worldSurface, Game.rockLayer, depthPlayer.ZoneSkyHeight, depthPlayer.ZoneOverworldHeight,
             depthPlayer.ZoneDirtLayerHeight, depthPlayer.ZoneRockLayerHeight, depthPlayer.ZoneUnderworldHeight);

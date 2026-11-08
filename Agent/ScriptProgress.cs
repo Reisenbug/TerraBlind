@@ -17,6 +17,9 @@ public sealed class ScriptProgress
     public bool Running { get { lock (gate) return running; } }
     JsonObject last;
     JsonObject watchPolicy;
+    string executedSource;
+    int stepCalls;
+    JsonObject navigationFailure;
     static readonly JsonSerializerOptions JsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     public int Completed { get { lock (gate) return steps.Values.Count(s => s["status"].ToString() == "completed"); } }
     public int Segment { get { lock (gate) return segment; } }
@@ -26,11 +29,19 @@ public sealed class ScriptProgress
     internal static bool Failed(JsonObject result) => result["error"] != null || result["ok"]?.ToString() == "false"
         || result["outcome"]?.ToString() is "interrupted" or "interrupted_by_death" or "no_progress";
 
-    public void Begin()
+    internal bool HasPreparedContinuation(string source)
+    {
+        lock (gate) return !running && executedSource != null && source != executedSource
+            && last?["error"] == null && last?["failure"] == null
+            && last?["value"] is JsonObject value && value["status"]?.ToString() == "yield" && value["wake"] == null;
+    }
+
+    public void Begin(string source = null)
     {
         lock (gate)
         {
             if (running) throw new InvalidOperationException("workflow正在执行，不能并发续接。");
+            executedSource = source;
             running = true; segment++; revision++;
         }
     }
@@ -42,6 +53,14 @@ public sealed class ScriptProgress
             if (string.IsNullOrWhiteSpace(id) || id.Length > 80) throw new ArgumentException("step id需要1..80字符。");
             if (steps.TryGetValue(id, out var saved))
             {
+                if (saved["status"].ToString() == "uncertain" && saved["repeatable_navigation"]?.GetValue<bool>() == true)
+                {
+                    saved["previous_failure"] = saved["failure"]?.DeepClone();
+                    saved.Remove("repeatable_navigation"); saved.Remove("failure");
+                    saved["status"] = "running"; saved["segment"] = segment;
+                    stepCalls = 0; navigationFailure = null; revision++;
+                    return new JsonObject { ["execute"] = true };
+                }
                 if (saved["status"].ToString() != "completed")
                     throw new InvalidOperationException("step_requires_reconciliation: " + id);
                 return new JsonObject { ["execute"] = false, ["value"] = saved["value"]?.DeepClone() };
@@ -50,6 +69,7 @@ public sealed class ScriptProgress
             if (steps.Values.Any(s => s["status"].ToString() == "running"))
                 throw new InvalidOperationException("step不支持嵌套。");
             steps[id] = new JsonObject { ["id"] = id, ["status"] = "running", ["segment"] = segment };
+            stepCalls = 0; navigationFailure = null;
             revision++;
             return new JsonObject { ["execute"] = true };
         }
@@ -72,6 +92,13 @@ public sealed class ScriptProgress
     {
         lock (gate)
         {
+            if (steps.Values.Any(s => s["status"]?.ToString() == "running"))
+            {
+                navigationFailure = null;
+                if (++stepCalls == 1 && name == "nav_to" && JsonNode.Parse(result) is JsonObject navigation
+                    && navigation["outcome"]?.ToString() == "no_progress")
+                    navigationFailure = navigation;
+            }
             if (name == "watch" && JsonNode.Parse(result) is JsonObject observed
                 && observed["error"] == null && observed["events"] is JsonArray)
                 watchPolicy = (JsonObject)args.DeepClone();
@@ -86,7 +113,15 @@ public sealed class ScriptProgress
     {
         lock (gate)
         {
-            foreach (var step in steps.Values.Where(s => s["status"].ToString() == "running")) step["status"] = "uncertain";
+            foreach (var step in steps.Values.Where(s => s["status"].ToString() == "running"))
+            {
+                step["status"] = "uncertain";
+                if (navigationFailure != null && result["error"]?.ToString() == "script_failed")
+                {
+                    step["repeatable_navigation"] = true;
+                    step["failure"] = navigationFailure.DeepClone();
+                }
+            }
             last = new JsonObject { ["error"] = result["error"]?.DeepClone(), ["detail"] = result["detail"]?.DeepClone(),
                 ["value"] = result["value"]?.DeepClone(), ["tool_counts"] = result["tool_counts"]?.DeepClone(),
                 ["tool_calls"] = result["tool_calls"]?.DeepClone(), ["elapsed_ms"] = result["elapsed_ms"]?.DeepClone(),

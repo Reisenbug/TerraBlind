@@ -650,6 +650,13 @@ static class ScriptTests
             && stalledNavigation["failure"]?["evidence"]?["reason"]?.ToString() == "local_oscillation"
             && stalledProgress.Summary()["last_execution"]["failure"]["evidence"]["state"]["hp"].GetValue<int>() == 96
             && stalledProgress.Completed == 0, "navigation stall lost its cause and observed state during script handoff: " + stalledNavigation);
+        var retriedNavigation = await AgentScript.Run("return step('walk',()=>tool('nav_to',{x:21,y:30}));", 5,
+            (_, _) => { }, (_, args, _) => Task.FromResult("{\"done\":true,\"x\":" + args["x"] + "}"),
+            _ => Task.CompletedTask, default, stalledProgress);
+        Check(retriedNavigation["ok"]?.GetValue<bool>() == true && stalledProgress.Completed == 1
+            && retriedNavigation["value"]?["x"]?.GetValue<int>() == 21
+            && stalledProgress.Snapshot()["steps"][0]["previous_failure"]?["reason"]?.ToString() == "local_oscillation",
+            "known failed navigation required an extra reconciliation round or lost its failure history: " + retriedNavigation);
         var waitTimeout = await AgentScript.Run("return tool('script_events');", 5, (_, _) => { },
             (_, _, _) => Task.FromResult("{\"outcome\":\"timeout\",\"events\":[]}"), _ => Task.CompletedTask, default);
         Check(waitTimeout["ok"].GetValue<bool>() && waitTimeout["failure"] == null,
