@@ -950,7 +950,7 @@ public static partial class AgentTools
                             else Stop();
                             return true;
                         }, cleanupToken), token, workflow,
-                        localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasInterrupting ? Watches.Pending() : null, checkToken));
+                        localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasRecoveryBlocker ? Watches.Pending() : null, checkToken));
                 }
                 finally
                 {

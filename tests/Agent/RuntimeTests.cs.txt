@@ -49,6 +49,16 @@ static class RuntimeTests
             AgentTools.Watches.ExecutionFault(new JsonObject { ["task_node"] = "resume", ["reason"] = "new_step_stalled" });
             Check(AgentTools.Watches.Pending()["events"].AsArray().Count(e => e["kind"]?.ToString() == "execution_gap") == 2,
                 "resolved gap prevented reporting a new execution failure");
+            var inspectedGap = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["code"] = "return {state:tool('get_state').permanent_max_health,progress:tool('script_progress',{workflow:'" + gapWorkflow + "'})};"
+            }, default)));
+            Check(inspectedGap["ok"]?.GetValue<bool>() == true && inspectedGap["tool_calls"]?.GetValue<int>() == 2
+                && inspectedGap["value"]?["state"] != null && inspectedGap["value"]?["progress"] != null,
+                "execution-gap notice prevented the model from reading the evidence needed to repair it: " + inspectedGap);
+            Check(AgentTools.Watches.HasInterrupting && AgentTools.Watches.Pending()["events"].AsArray()
+                .Any(e => e["kind"]?.ToString() == "execution_gap" && e["wake_deferred"]?.GetValue<bool>() != true),
+                "observing a gap incorrectly declared the missing action repaired");
             AgentTools.Watches.Take();
             foreach (string status in new[] { "completed", "failed" })
             {
