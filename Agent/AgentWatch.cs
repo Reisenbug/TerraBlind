@@ -119,6 +119,19 @@ public sealed class AgentWatch
             }
     }
 
+    internal void AcknowledgeResult(JsonObject action)
+    {
+        if (action["status"]?.ToString() != "failed") { AcknowledgeCompletion(action); return; }
+        string key = action["handle"] + ":" + action["attempt"];
+        continuedAttempts.Add(key);
+        foreach (var notice in pending)
+            if (notice["kind"]?.ToString() == "action_finished" && notice["key"]?.ToString() == key)
+            {
+                notice["wake_deferred"] = true;
+                notice["deferred_reason"] = "failure_returned_to_script";
+            }
+    }
+
     internal void AcknowledgeExecutionStart(string node, bool dead, bool suffocating, JsonArray actions = null)
     {
         foreach (var action in actions ?? new JsonArray())

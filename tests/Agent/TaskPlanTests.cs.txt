@@ -215,6 +215,9 @@ static class TaskPlanTests
         """);
         int Measure(JsonObject c) => c["type"].GetValue<int>() == 4 ? 0 : 1;
         plan.Create(request, Measure);
+        var selected = plan.Snapshot();
+        plan.Select("a"); plan.Select("a");
+        Check(JsonNode.DeepEquals(selected, plan.Snapshot()), "selecting the current node invalidated the prepared plan revision");
         Check(plan.Snapshot()["ready_steps"].ToJsonString() == "[\"a\",\"e\"]", "DAG did not expose independent roots");
         try { plan.Advance("b", Measure); throw new Exception("DAG bypassed prerequisite"); }
         catch (InvalidOperationException) { }

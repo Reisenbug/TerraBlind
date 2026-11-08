@@ -181,6 +181,41 @@ static class RuntimeTests
         Check(watch.HasAdvisories && watch.PendingCount == 2, "new honey episode failed to rearm observation");
         Console.WriteLine("PASS: persistent honey slowdown wakes observation once per entry while current action continues");
     }
+
+    static async Task TestInlineFailureRecovery()
+    {
+        var previous = HttpServerSystem.Handler;
+        AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
+        int recoveries = 0;
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/act") recoveries++;
+            return (200, path == "/nav_recede_done" ? "{\"done\":false,\"status\":\"failed\",\"reason\":\"fixture_blocked\"}"
+                : path == "/act_status" ? "{\"active\":false}" : "{\"accepted\":true}");
+        };
+        try
+        {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            var result = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["code"] = "const failed=tool('nav_to',{x:12,y:34}); if(failed.done!==false)throw new Error('fixture');"
+                    + "const recovery=tool('act',{steps:[{keys:['right'],until:{frames:1}}]});"
+                    + "return {handled:failed.status==='failed',recovery:recovery.outcome};"
+            }, default)));
+            Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["handled"]?.GetValue<bool>() == true
+                && recoveries == 1, "ordinary failure prevented the prepared JS recovery: " + result);
+            Check(timer.ElapsedMilliseconds < 1000 && !AgentTools.Watches.HasInterrupting,
+                "prepared recovery waited for another model turn");
+            Check(AgentTools.Watches.Snapshot()["history"].AsArray().Any(e => e["kind"]?.ToString() == "action_finished"
+                && e["evidence"]?["status"]?.ToString() == "failed"), "local recovery erased its failure evidence");
+            Console.WriteLine($"PASS: inline JS handles ordinary action failure immediately; recovery_ms={timer.ElapsedMilliseconds} model_calls=0");
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+            HttpServerSystem.Handler = previous;
+        }
+    }
     static void Check(bool condition, string message)
     { if (!condition) throw new Exception(message); }
 
@@ -302,6 +337,7 @@ static class RuntimeTests
         TestHoneyNotice();
         await TestGapContinuation();
         await TestOwnedRecovery();
+        await TestInlineFailureRecovery();
         var depthPlayer = Game.LocalPlayer;
         var oldDepth = (Game.worldSurface, Game.rockLayer, depthPlayer.ZoneSkyHeight, depthPlayer.ZoneOverworldHeight,
             depthPlayer.ZoneDirtLayerHeight, depthPlayer.ZoneRockLayerHeight, depthPlayer.ZoneUnderworldHeight);
@@ -2015,7 +2051,9 @@ static class RuntimeTests
                     Check(starts == 2, "automatic continuation replayed the same predecessor");
                     Console.WriteLine("DAG_AUTOMATIC start_ms=" + elapsed.ElapsedMilliseconds + " model_calls=0");
                 }
-                else Check(starts == 1 && AgentTools.LastContinuation == null, "automatic continuation ignored " + mode);
+                else Check(starts == 1 && (mode == "danger"
+                    ? AgentTools.LastContinuation?["status"]?.ToString() == "waiting_event_review"
+                    : AgentTools.LastContinuation == null), "automatic continuation ignored " + mode);
                 AgentTools.Stop();
                 await PumpUntil(() => !AgentTools.Actions.HasActive);
             }
@@ -2893,7 +2931,7 @@ static class RuntimeTests
         int oldHealth = Game.LocalPlayer.statLifeMax;
         try
         {
-            foreach (string ending in new[] { "yield", "oversized", "unmet" })
+            foreach (string ending in new[] { "yield", "oversized", "unmet", "notice" })
             {
                 AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask(); AgentTools.Workflows.Clear();
                 Game.LocalPlayer.statLifeMax = 100;
@@ -2921,8 +2959,15 @@ static class RuntimeTests
                 var failed = await Execute(AgentTools.Actions.Query(handle, 0, default));
                 Check(failed["status"].ToString() == "failed", "test did not produce a failed script wrapper");
                 AgentTools.Watches.Emit("action_finished", handle + ":1", failed);
+                if (ending == "notice") AgentTools.Watches.Emit("inventory_full", "handoff", new JsonObject());
                 var timer = System.Diagnostics.Stopwatch.StartNew();
                 AgentTools.ContinuePreparedNode(default);
+                if (ending == "notice")
+                {
+                    Check(starts == 1, "prepared handoff ignored an outstanding review");
+                    AgentTools.Watches.Take();
+                    AgentTools.ContinuePreparedNode(default);
+                }
                 if (ending == "unmet")
                 {
                     Check(starts == 1 && AgentTools.Plan.Snapshot()["steps"][0]["status"].ToString() != "completed"

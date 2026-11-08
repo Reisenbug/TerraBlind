@@ -144,6 +144,7 @@ public sealed class AgentTaskPlan
     {
         int index = _steps.FindIndex(s => s["id"]?.ToString() == id);
         if (index < 0 || !Ready(_steps[index])) throw new InvalidOperationException("节点不存在、已完成或前置尚未验收。");
+        if (index == _cursor && _steps[index]["status"]?.ToString() == "active") return Snapshot();
         if (Incomplete && _steps[_cursor]["status"]?.ToString() == "active") _steps[_cursor]["status"] = "pending";
         _cursor = index;
         if (_steps[index]["status"]?.ToString() == "pending") _steps[index]["status"] = "active";

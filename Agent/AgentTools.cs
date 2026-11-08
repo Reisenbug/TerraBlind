@@ -129,10 +129,16 @@ public static partial class AgentTools
         if (!verified && (workflow == null || workflow.Yielded || workflow.ReviewRequested
             || action["status"]?.ToString() != "completed")) return;
         Watches.AcknowledgeCompletion(action, nodeVerified: verified);
-        if (Watches.HasInterrupting) return;
         plan = Plan.Snapshot();
         string next = verified ? plan["current_step"]?.ToString() : owner;
         if (next == null || !plan["ready_steps"].AsArray().Any(n => n?.ToString() == next)) return;
+        if (Watches.HasInterrupting)
+        {
+            pendingNode = next;
+            LastContinuation = new JsonObject { ["after_handle"] = handle, ["task_node"] = next,
+                ["status"] = "waiting_event_review", ["tick"] = Main.GameUpdateCount };
+            return;
+        }
         StartPreparedNode(next, handle, token);
     }
 
@@ -709,10 +715,10 @@ public static partial class AgentTools
                     Watches.Observe(new JsonObject { ["hp"] = Main.LocalPlayer.statLife, ["max_hp"] = Main.LocalPlayer.statLifeMax2,
                         ["dead"] = Main.LocalPlayer.dead,
                         ["actions"] = new JsonArray(current.DeepClone()) });
+                    Watches.AcknowledgeResult(current);
                     return true;
                 }, token);
-                if (!scriptEvents) result["host_yield"] = true;
-                else result["events"] = await NativeAgent.OnMain(Watches.Take, token);
+                if (scriptEvents) result["events"] = await NativeAgent.OnMain(Watches.Take, token);
             }
             return result.ToJsonString();
         }
