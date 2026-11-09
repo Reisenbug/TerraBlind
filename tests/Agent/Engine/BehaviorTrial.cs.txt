@@ -500,6 +500,34 @@ public sealed class BehaviorTrial : ModSystem
     async Task Run()
     {
         if (DungeonTrial) { await DungeonGoalTrial(); return; }
+        if (Environment.GetEnvironmentVariable("TB_DUNGEON_MINING_PROBE") == "1")
+        {
+            await OnMain(() =>
+            {
+                Concessions.Enabled = false;
+                var cells = new List<Point>();
+                for (int x = Math.Max(10, Main.dungeonX - 500); x < Math.Min(Main.maxTilesX - 10, Main.dungeonX + 500); x++)
+                for (int y = 10; y < Main.maxTilesY - 200; y++)
+                    if (Main.tile[x, y].HasTile && Main.tileDungeon[Main.tile[x, y].TileType]) cells.Add(new Point(x, y));
+                var deep = cells.First(cell => cell.Y > Main.worldSurface && (cell.X < Main.maxTilesX * .35 || cell.X > Main.maxTilesX * .65));
+                var surface = cells.First(cell => cell.Y < Main.worldSurface);
+                var p = Main.LocalPlayer;
+                var damage = typeof(Player).GetMethod("GetPickaxeDamage", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                int NativeDamage(Point cell, int power) => (int)damage.Invoke(p, new object[] { cell.X, cell.Y, power, 0, Main.tile[cell.X, cell.Y] });
+                var weak = new Item(ItemID.CopperPickaxe); var strong = new Item(ItemID.MoltenPickaxe);
+                int weakDeep = NativeDamage(deep, weak.pick), strongDeep = NativeDamage(deep, strong.pick), weakSurface = NativeDamage(surface, weak.pick);
+                if (weakDeep != 0 || strongDeep <= 0 || weakSurface <= 0
+                    || DigTable.MineableWith(deep.X, deep.Y, weak.pick)
+                    || !DigTable.MineableWith(deep.X, deep.Y, strong.pick)
+                    || !DigTable.MineableWith(surface.X, surface.Y, weak.pick)
+                    || DigTable.CostFrames(deep.X, deep.Y, p, weak) < DigTable.Unmineable
+                    || DigTable.CostFrames(deep.X, deep.Y, p, strong) >= DigTable.Unmineable)
+                    throw new Exception($"native dungeon mining mismatch weak_deep={weakDeep} strong_deep={strongDeep} weak_surface={weakSurface}");
+                Console.WriteLine($"DUNGEON_MINING_PASS weak_power={weak.pick} weak_deep={weakDeep} strong_power={strong.pick} strong_deep={strongDeep} weak_surface={weakSurface} native_engine=true model_calls=0");
+                return true;
+            });
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_LOCKED_CHEST_PROBE") == "1")
         {
             var chestPosition = await OnMain(() =>
