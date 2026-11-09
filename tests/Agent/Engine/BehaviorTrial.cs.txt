@@ -516,6 +516,10 @@ public sealed class BehaviorTrial : ModSystem
             bool Matches(JsonNode tile) => tile["x"].GetValue<int>() == chestPosition.X && tile["y"].GetValue<int>() == chestPosition.Y;
             if (ordinary["tiles"].AsArray().Any(Matches) || !expanded["tiles"].AsArray().Any(t => Matches(t) && t["locked"]?.GetValue<bool>() == true))
                 throw new Exception("locked chest discovery did not preserve the default filter or explicit lock state");
+            query["source_area"] = new JsonObject { ["x"] = chestPosition.X, ["y"] = chestPosition.Y, ["width"] = 2, ["height"] = 2 };
+            var local = await Call("find_tiles", query);
+            if (!local["tiles"].AsArray().Any(t => Matches(t) && t["locked"]?.GetValue<bool>() == true))
+                throw new Exception("local chest query lost the lock state");
             await OnMain(() =>
             {
                 NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;

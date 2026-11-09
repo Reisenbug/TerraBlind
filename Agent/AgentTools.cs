@@ -1616,9 +1616,12 @@ public static partial class AgentTools
                             var emission = TileEmission(x, y);
                             if (args["emits_light"] != null && Bool(args, "emits_light") != emission["emits_light"].GetValue<bool>()) continue;
                             double dx = x - Main.LocalPlayer.Center.X / 16, dy = y - Main.LocalPlayer.Center.Y / 16;
-                            matches.Add(new JsonObject { ["x"] = x, ["y"] = y, ["dist"] = (float)Math.Sqrt(dx * dx + dy * dy),
+                            var match = new JsonObject { ["x"] = x, ["y"] = y, ["dist"] = (float)Math.Sqrt(dx * dx + dy * dy),
                                 ["emission"] = emission,
-                                ["tile_type"] = type, ["frame_x"] = (int)Main.tile[x, y].TileFrameX, ["frame_y"] = (int)Main.tile[x, y].TileFrameY });
+                                ["tile_type"] = type, ["frame_x"] = (int)Main.tile[x, y].TileFrameX, ["frame_y"] = (int)Main.tile[x, y].TileFrameY };
+                            if (type is Terraria.ID.TileID.Containers or Terraria.ID.TileID.Containers2)
+                                match["locked"] = Chest.IsLocked(x, y);
+                            matches.Add(match);
                         }
                 int limit = Math.Clamp(Int(args, "n", 12), 1, 100);
                 var ordered = matches.OrderBy(m => m["dist"].GetValue<float>()).ToArray();

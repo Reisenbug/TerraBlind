@@ -217,6 +217,7 @@ namespace Terraria.ID
     public static class TileID
     {
         public const int FixtureSource = 1, FixtureOther = 2;
+        public const int Containers = 21, Containers2 = 467;
         public const int PressurePlates = 135, Traps = 137, Boulder = 138, Explosives = 141;
         public const int RollingCactus = 484, BouncyBoulder = 664, LifeCrystalBoulder = 665;
         public static class Sets
