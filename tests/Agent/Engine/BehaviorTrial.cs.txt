@@ -53,6 +53,7 @@ public sealed class BehaviorTrial : ModSystem
     readonly JsonArray landingFrames = new();
     readonly JsonArray evasionFrames = new();
     bool samplingEvasion;
+    bool handoffProbeTick;
     delegate void OriginalStart(int x, int y, RecedingNav.Mode mode);
     delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
     StartHook materialNavigationHook;
@@ -436,8 +437,11 @@ public sealed class BehaviorTrial : ModSystem
             for (int i = 0; i < Main.maxNPCs; i++)
                 if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
         var p = Main.LocalPlayer;
+        if (handoffProbeTick)
+            typeof(AgentTools).GetMethod("ContinuePreparedNode", HiddenStatic).Invoke(null, new object[] { CancellationToken.None });
         if (samplingEvasion)
             evasionFrames.Add(new JsonObject { ["tick"] = Main.GameUpdateCount, ["x"] = p.Center.X / 16,
+                ["time_ms"] = Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency,
                 ["y"] = p.Center.Y / 16, ["hp"] = p.statLife, ["hurt_tile"] = Collision.HurtTiles(p.position, p.width, p.height, p).type,
                 ["left"] = p.controlLeft, ["right"] = p.controlRight, ["jump"] = p.controlJump });
         if (dungeonSampling)
@@ -557,6 +561,7 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_PREPARED_HANDOFF_PROBE") == "1") { await PreparedHandoffTrial(); return; }
         if (DungeonTrial) { await DungeonGoalTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_EVASION_TERRAIN_PROBE") == "1")
         {
@@ -2984,6 +2989,58 @@ public sealed class BehaviorTrial : ModSystem
         });
     }
 
+    async Task PreparedHandoffTrial()
+    {
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            Concessions.Enabled = false; Manual.On = false; AgentPermissions.Reset();
+            Combat.Enabled = Dodge.Enabled = false;
+            var p = Main.LocalPlayer;
+            p.inventory[2].SetDefaults(ItemID.Wood); p.inventory[2].stack = 1;
+            return true;
+        });
+        var nodes = new JsonArray();
+        for (int i = 0; i < 6; i++)
+            nodes.Add(new JsonObject { ["id"] = "leg" + i, ["description"] = "measure native input dispatch " + i,
+                ["depends_on"] = i == 0 ? new JsonArray() : new JsonArray("leg" + (i - 1)),
+                ["script"] = "return tool('act',{steps:[{keys:['" + (i % 2 == 0 ? "right" : "left") + "'],until:{frames:12}}]});",
+                ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "item", ["type"] = (int)ItemID.Wood, ["count"] = 1 }) });
+        await Call("task_plan", new JsonObject { ["goal"] = "measure already prepared action handoffs", ["mode"] = "dag", ["steps"] = nodes });
+        await Call("run_script", new JsonObject { ["task_node"] = "leg0", ["background"] = true });
+        await OnMain(() => { handoffProbeTick = samplingEvasion = true; return true; });
+        var clock = Stopwatch.StartNew();
+        JsonObject state;
+        do
+        {
+            await Task.Delay(50);
+            state = await Call("get_state", new JsonObject());
+        } while (state["task_plan"]["status"]?.ToString() != "completed" && clock.ElapsedMilliseconds < 10000);
+        await OnMain(() => { handoffProbeTick = samplingEvasion = false; return true; });
+        var handoffs = new JsonArray();
+        const string marker = "[agent_input_handoff] ";
+        foreach (string line in Directory.EnumerateFiles(Path.Combine(Main.SavePath, "TerraBlindLogs"), "*.log", SearchOption.AllDirectories).SelectMany(File.ReadLines))
+            if (line.Contains(marker)) handoffs.Add(JsonNode.Parse(line[(line.IndexOf(marker) + marker.Length)..]));
+        double? released = null;
+        double neutralMax = 0;
+        int lastDirection = 0, switches = 0;
+        foreach (var frame in evasionFrames)
+        {
+            int direction = frame["right"].GetValue<bool>() ? 1 : frame["left"].GetValue<bool>() ? -1 : 0;
+            double time = frame["time_ms"].GetValue<double>();
+            if (direction == 0) { if (switches > 0) released ??= time; continue; }
+            if (released != null) { neutralMax = Math.Max(neutralMax, time - released.Value); released = null; }
+            if (direction != lastDirection) { switches++; lastDirection = direction; }
+        }
+        var evidence = new JsonObject { ["handoffs"] = handoffs, ["native_neutral_max_ms"] = neutralMax,
+            ["native_direction_segments"] = switches, ["frames"] = evasionFrames.DeepClone(), ["plan"] = state["task_plan"].DeepClone() };
+        File.WriteAllText(Path.Combine(Main.SavePath, "prepared-handoffs.json"), evidence.ToJsonString());
+        if (handoffs.Count != 5 || switches != 6 || neutralMax > 100
+            || handoffs.Any(h => h["elapsed_ms"].GetValue<double>() > 100) || state["task_plan"]["status"]?.ToString() != "completed")
+            throw new Exception("prepared handoff exceeded 100ms or skipped actual input: " + evidence);
+        Console.WriteLine("PREPARED_HANDOFF_PASS native_engine=true model_calls=0 transitions=5 native_neutral_max_ms=" + neutralMax);
+    }
+
     async Task DungeonGoalTrial()
     {
         var locked = new Dictionary<(int X, int Y), Dictionary<int, int>>();
@@ -2998,13 +3055,13 @@ public sealed class BehaviorTrial : ModSystem
             var p = Main.LocalPlayer;
             foreach (var item in p.inventory) item.TurnToAir();
             foreach (var item in p.armor) item.TurnToAir();
-            var gear = new[] { (ItemID.Starfury, 1), (ItemID.MoltenPickaxe, 1), (ItemID.Wood, 9999),
-                (ItemID.WoodPlatform, 999), (ItemID.Cobweb, 999), (ItemID.HealingPotion, 30), (ItemID.Torch, 999) };
+            var gear = new[] { (ItemID.Starfury, 1), (ItemID.GoldPickaxe, 1), (ItemID.Wood, 999),
+                (ItemID.WoodPlatform, 200), (ItemID.Cobweb, 100), (ItemID.LesserHealingPotion, 10), (ItemID.Torch, 99) };
             for (int i = 0; i < gear.Length; i++) { p.inventory[i].SetDefaults(gear[i].Item1); p.inventory[i].stack = gear[i].Item2; }
-            var armor = new[] { ItemID.MoltenHelmet, ItemID.MoltenBreastplate, ItemID.MoltenGreaves,
-                ItemID.CloudinaBottle, ItemID.HermesBoots, ItemID.CobaltShield, ItemID.LuckyHorseshoe };
+            var armor = new[] { ItemID.IronHelmet, ItemID.IronChainmail, ItemID.IronGreaves,
+                ItemID.CloudinaBottle, ItemID.HermesBoots };
             for (int i = 0; i < armor.Length; i++) p.armor[i].SetDefaults(armor[i]);
-            p.ConsumedLifeCrystals = 15; p.statLife = p.statLifeMax = p.statLifeMax2 = 400;
+            p.ConsumedLifeCrystals = 5; p.statLife = p.statLifeMax = p.statLifeMax2 = 200;
             var entries = new List<Vector2>();
             for (int x = Math.Max(10, Main.dungeonX - 30); x <= Math.Min(Main.maxTilesX - 10, Main.dungeonX + 30); x++)
             for (int y = Math.Max(10, Main.dungeonY - 30); y <= Math.Min(Main.maxTilesY - 10, Main.dungeonY + 10); y++)
@@ -3029,6 +3086,8 @@ public sealed class BehaviorTrial : ModSystem
                 ["prompt"] = prompt, ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["classic"] = Main.GameMode == 0,
                 ["skeletron_defeated"] = NPC.downedBoss3, ["x"] = p.Center.X / 16, ["y"] = p.Center.Y / 16,
                 ["golden_keys"] = 0, ["natural_locked_gold_chests"] = locked.Count, ["navigation_stub"] = UsingNavigationStub,
+                ["starting_health"] = p.statLife, ["inventory"] = new JsonArray(gear.Select(g => (JsonNode)new JsonObject { ["type"] = (int)g.Item1, ["count"] = g.Item2 }).ToArray()),
+                ["armor"] = new JsonArray(armor.Select(type => (JsonNode)JsonValue.Create((int)type)).ToArray()),
                 ["natural_encounters"] = NaturalEncounters, ["terrain_edits"] = 0, ["model"] = "gpt-6.1-sol",
                 ["package_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
                     File.ReadAllBytes(Path.Combine(Main.SavePath, "Mods", "TerraBlind.tmod")))) }.ToJsonString());

@@ -673,7 +673,7 @@ public static partial class AgentTools
             return new JsonObject { ["error"] = "action_busy", ["detail"] = "已有任务持有角色输入，请先action_control暂停或取消。",
                 ["active_handle"] = Actions.ActiveHandle,
                 ["action_tasks"] = Actions.Summary() }.ToJsonString();
-        long lease = external ? await NativeAgent.OnMain(() => PvpDuel.BeginAction(name), token) : 0;
+        long lease = 0;
         long controlTicket = 0;
         long script = scriptInvocation.Value;
         try
@@ -682,6 +682,7 @@ public static partial class AgentTools
             {
                 var denied = await NativeAgent.OnMain(() =>
                 {
+                    if (external) lease = PvpDuel.BeginAction(name);
                     FightCoordinator.StopIdleDefense();
                     return ControlSession.Begin(name, args["control_claim"]?.ToString(), out controlTicket,
                         AgentControlSession.RequiredChannels(name, args), script);
@@ -965,7 +966,7 @@ public static partial class AgentTools
                     }
                     return saved;
                 }, token);
-                Guid eventReader = await NativeAgent.OnMain(() => localEvents ? Watches.BeginScriptDelivery() : Guid.Empty, token);
+                Guid eventReader = localEvents ? await NativeAgent.OnMain(Watches.BeginScriptDelivery, token) : Guid.Empty;
                 Interlocked.Increment(ref executingScripts);
                 long currentInvocation = Interlocked.Increment(ref invocationSequence);
                 try
@@ -993,7 +994,8 @@ public static partial class AgentTools
                 finally
                 {
                     Interlocked.Decrement(ref executingScripts);
-                    await NativeAgent.OnMain(() => { if (eventReader != Guid.Empty) Watches.EndScriptDelivery(eventReader); return true; }, default);
+                    if (eventReader != Guid.Empty)
+                        await NativeAgent.OnMain(() => { Watches.EndScriptDelivery(eventReader); return true; }, default);
                 }
                 if (transientWorkflow && workflow != null)
                     await NativeAgent.OnMain(() =>
@@ -1701,10 +1703,13 @@ public static partial class AgentTools
 
     static async Task<string> ToolFinished(string name, string output, CancellationToken token)
     {
-        await NativeAgent.OnMain(() => { DiagLog.Write($"[agent] result {name} {output}"); return true; }, token);
-        await NativeAgent.OnMain(() => { NativeAgent.Progress("执行结束：" + name + "，等待下一步决策。", "等待模型决策",
-            !PvpDuel.Active && !name.StartsWith("combat_")); return true; }, token);
-        return output;
+        return await NativeAgent.OnMain(() =>
+        {
+            DiagLog.Write($"[agent] result {name} {output}");
+            NativeAgent.Progress("执行结束：" + name + "，等待下一步决策。", "等待模型决策",
+                !PvpDuel.Active && !name.StartsWith("combat_"));
+            return output;
+        }, token);
     }
 
     internal static async Task<JsonObject> CollectTarget(int x, int y, CancellationToken token, bool nonSolidOnly = true, int requestedSlot = -1)
