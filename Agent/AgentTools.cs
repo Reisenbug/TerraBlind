@@ -117,7 +117,7 @@ public static partial class AgentTools
         }
         var action = Actions.LatestFinishedPrimary();
         string handle = action?["handle"]?.ToString(), owner = action?["task_node"]?.ToString();
-        string attempt = handle + ":" + action?["attempt"];
+        string attempt = handle + ":" + action?["attempt"] + ":" + Plan.ExecutionRevision(owner);
         if (handle == null || string.IsNullOrEmpty(owner) || continuedActions.Contains(attempt)) return;
         var plan = Plan.Snapshot();
         var previous = plan["steps"].AsArray().FirstOrDefault(s => s["id"]?.ToString() == owner);

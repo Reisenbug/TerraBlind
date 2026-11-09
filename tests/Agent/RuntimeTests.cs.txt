@@ -600,6 +600,22 @@ static class RuntimeTests
                 "continuation replayed earned work or invented goal completion");
             for (int i = 0; i < 10; i++) { AgentTools.ContinuePreparedNode(default); Agent.PostUpdateEverything(); await Task.Delay(5); }
             Check(starts == 2, "unchanged yielded script was replayed indefinitely");
+            AgentTools.ObserveContinuity();
+            AgentTools.Plan.Revise(new JsonObject { ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                ["reason"] = "late model reply prepares the next executable segment", ["nodes"] = new JsonArray(new JsonObject {
+                    ["id"] = "travel", ["script"] = patch["nodes"][0]["script"].ToString().Replace("return {status:'yield'};",
+                        "step('third',()=>{const r=tool('nav_to',{x:20,y:34});return {done:r.done};});return {status:'yield'};") }) }, _ => 0);
+            var late = System.Diagnostics.Stopwatch.StartNew();
+            await PumpUntil(() => { AgentTools.ContinuePreparedNode(default); return starts == 3; });
+            Check(late.ElapsedMilliseconds < 1000, "published continuation required another model request to start it");
+            await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl && !AgentTools.Workflows[workflow].Running);
+            AgentTools.ContinuePreparedNode(default);
+            AgentTools.Plan.Revise(new JsonObject { ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                ["reason"] = "another independent task is prepared", ["add_nodes"] = new JsonArray(new JsonObject {
+                    ["id"] = "unrelated", ["description"] = "independent preparation", ["depends_on"] = new JsonArray(),
+                    ["script"] = "return {};", ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "item", ["type"] = 9, ["count"] = 9999 }) }) }, _ => 0);
+            for (int i = 0; i < 10; i++) { AgentTools.ContinuePreparedNode(default); Agent.PostUpdateEverything(); await Task.Delay(5); }
+            Check(starts == 3, "unrelated plan revision replayed the finished segment");
             Console.WriteLine($"PASS: prepared same-node script revision continues without replay or model wait; handoff_ms={timer.ElapsedMilliseconds}");
         }
         finally
