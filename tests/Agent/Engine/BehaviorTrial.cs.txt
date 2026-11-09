@@ -561,6 +561,7 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_REPLY_COVER_PROBE") == "1") { await ReplyCoverTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_PREPARED_HANDOFF_PROBE") == "1") { await PreparedHandoffTrial(); return; }
         if (DungeonTrial) { await DungeonGoalTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_EVASION_TERRAIN_PROBE") == "1")
@@ -2987,6 +2988,85 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("edited program replayed the original task or did not use revision 2");
             return true;
         });
+    }
+
+    async Task ReplyCoverTrial()
+    {
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            Concessions.Enabled = false; Manual.On = false; AgentPermissions.Reset();
+            Combat.Enabled = Dodge.Enabled = false;
+            var p = Main.LocalPlayer;
+            int cx = Main.spawnTileX, ground = Main.spawnTileY + 2;
+            for (int x = cx - 90; x <= cx + 90; x++)
+                for (int y = ground - 12; y <= ground + 3; y++)
+                {
+                    var tile = Main.tile[x, y];
+                    tile.ClearEverything();
+                    if (y >= ground) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+                }
+            p.Teleport(new Vector2(cx * 16, ground * 16 - p.height));
+            p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = ground;
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.statLife = p.statLifeMax = p.statLifeMax2 = 100;
+            evasionFrames.Clear(); handoffProbeTick = samplingEvasion = true;
+            return true;
+        });
+        string first = "step('first',()=>{const r=tool('act',{steps:[{keys:['right'],until:{frames:180}}]});return {outcome:r.outcome};});";
+        string second = "step('second',()=>{const r=tool('act',{steps:[{keys:['left'],until:{frames:120}}]});return {outcome:r.outcome};});";
+        string third = "step('third',()=>{const r=tool('act',{steps:[{keys:['right'],until:{frames:90}}]});return {outcome:r.outcome};});";
+        await Call("task_plan", new JsonObject { ["goal"] = "cover delayed successor preparation", ["mode"] = "dag",
+            ["steps"] = new JsonArray(new JsonObject { ["id"] = "route", ["description"] = "native movement segments",
+                ["depends_on"] = new JsonArray(), ["script"] = first + "return {status:'yield'};",
+                ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "item", ["type"] = (int)ItemID.Wood, ["count"] = 9999 }) }) });
+        string workflow = (await Call("get_state", new JsonObject()))["task_plan"]["steps"][0]["workflow"].ToString();
+        await Call("run_script", new JsonObject { ["task_node"] = "route", ["background"] = true });
+        await Task.Delay(1000);
+        async Task Patch(string source)
+        {
+            var state = await Call("get_state", new JsonObject());
+            var result = await Call("task_plan_patch", new JsonObject { ["expected_revision"] = state["task_plan"]["revision"].DeepClone(),
+                ["reason"] = "simulated delayed reasoning publishes executable successor", ["nodes"] = new JsonArray(new JsonObject {
+                    ["id"] = "route", ["script"] = source + "return {status:'yield'};" }) });
+            if (result["error"] != null) throw new Exception("reply cover patch failed: " + result);
+        }
+        await Patch(first + second);
+        var clock = Stopwatch.StartNew();
+        JsonObject state;
+        do
+        {
+            await Task.Delay(50);
+            state = await Call("get_state", new JsonObject());
+        } while ((state["script_workflows"][workflow]["steps"].AsArray().Count(s => s["status"]?.ToString() == "completed") < 2
+            || state["script_workflows"][workflow]["running"]?.GetValue<bool>() == true) && clock.ElapsedMilliseconds < 12000);
+        if (clock.ElapsedMilliseconds >= 12000) throw new Exception("native prepared segment did not continue: " + state["script_workflows"][workflow]);
+        await Task.Delay(600);
+        await OnMain(() => { typeof(AgentTools).GetMethod("ObserveContinuity", HiddenStatic).Invoke(null, null); return true; });
+        double published = Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency;
+        await Patch(first + second + third);
+        clock.Restart();
+        do
+        {
+            await Task.Delay(25);
+            state = await Call("get_state", new JsonObject());
+        } while (state["script_workflows"][workflow]["steps"].AsArray().Count(s => s["status"]?.ToString() == "completed") < 3
+            && clock.ElapsedMilliseconds < 6000);
+        await OnMain(() => { handoffProbeTick = samplingEvasion = false; return true; });
+        var directions = evasionFrames.Select(frame => frame["right"].GetValue<bool>() ? 1 : frame["left"].GetValue<bool>() ? -1 : 0).ToArray();
+        int segments = 0, previous = 0;
+        foreach (int direction in directions)
+            if (direction != 0 && direction != previous) { segments++; previous = direction; }
+        var next = evasionFrames.FirstOrDefault(frame => frame["time_ms"].GetValue<double>() >= published && frame["right"].GetValue<bool>());
+        double startDelay = next == null ? double.PositiveInfinity : next["time_ms"].GetValue<double>() - published;
+        var evidence = new JsonObject { ["native_direction_segments"] = segments, ["late_publish_to_input_ms"] = startDelay,
+            ["model_calls"] = 0, ["simulated_preparation_delay_ms"] = 1000, ["intentional_uncovered_delay_ms"] = 600,
+            ["workflow"] = state["script_workflows"][workflow].DeepClone(), ["frames"] = evasionFrames.DeepClone() };
+        File.WriteAllText(Path.Combine(Main.SavePath, "reply-cover.json"), evidence.ToJsonString());
+        if (segments != 3 || startDelay > 300 || state["script_workflows"][workflow]["steps"].AsArray()
+            .Count(s => s["status"]?.ToString() == "completed") != 3)
+            throw new Exception("native reply coverage did not continue after publication: " + evidence);
+        Console.WriteLine("REPLY_COVER_PASS native_engine=true model_calls=0 segments=3 late_publish_to_input_ms=" + startDelay);
     }
 
     async Task PreparedHandoffTrial()

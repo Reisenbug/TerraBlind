@@ -586,7 +586,8 @@ static class RuntimeTests
                 ["reason"] = "next route verified while first action continues",
                 ["nodes"] = new JsonArray(new JsonObject { ["id"] = "travel", ["script"] = first
                     + "step('second',()=>{const r=tool('nav_to',{x:16,y:34});return {done:r.done};});return {status:'yield'};" }) };
-            AgentTools.Plan.Revise(patch, _ => 0);
+            var published = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", patch, default)));
+            Check(published["error"] == null, "public preparation API rejected successor publication while moving: " + published);
             Check(starts == 1 && AgentTools.Actions.HasPrimaryControl, "preparing a continuation interrupted current movement");
             finish = true;
             await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
@@ -2770,10 +2771,14 @@ static class RuntimeTests
             Check(futureEdit["error"] == null && stillWalking["status"]?.ToString() == "running"
                 && stillWalking["attempt"]?.GetValue<int>() == 1 && RecedingNav.Active,
                 "pending-node edit changed the active route or restarted its handle");
+            var liveEdit = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", Patch(), default)));
+            Check(liveEdit["error"] == null && AgentTools.Actions.ActiveHandle == walking["handle"].ToString()
+                && RecedingNav.Active, "publishing future script stopped current movement: " + liveEdit);
             int revision = AgentTools.Plan.Snapshot()["revision"].GetValue<int>();
-            var rejected = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", Patch(), default)));
+            var dependencyEdit = Patch(); dependencyEdit["nodes"][0]["depends_on"] = new JsonArray();
+            var rejected = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", dependencyEdit, default)));
             Check(rejected["error"] != null && AgentTools.Plan.Snapshot()["revision"].GetValue<int>() == revision,
-                "DAG repair changed the plan while navigation owned movement");
+                "DAG dependencies changed while navigation owned movement");
             string handle = walking["handle"].ToString();
             await Execute(AgentTools.Actions.Control(handle, "pause", null, default));
             patched = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", Patch(), default)));

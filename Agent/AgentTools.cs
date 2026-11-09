@@ -1177,9 +1177,12 @@ public static partial class AgentTools
                     {
                         var edited = (args["nodes"] as JsonArray ?? new JsonArray())
                             .Where(n => n["script"] != null || n["depends_on"] != null).Select(n => n["id"]?.ToString()).ToHashSet();
+                        var dependencies = (args["nodes"] as JsonArray ?? new JsonArray())
+                            .Where(n => n["depends_on"] != null).Select(n => n["id"]?.ToString()).ToHashSet();
                         if (Actions.Summary().Any(a => a["tool"]?.ToString() != "fight"
-                            && a["status"]?.ToString() is "running" or "queued" && edited.Contains(a["task_node"]?.ToString())))
-                            throw new InvalidOperationException("修改执行中节点须暂停其动作；修改已排队节点须先取消待执行句柄再重新排队。其他节点可在导航途中修改。");
+                            && (a["status"]?.ToString() == "running" && dependencies.Contains(a["task_node"]?.ToString())
+                                || a["status"]?.ToString() == "queued" && edited.Contains(a["task_node"]?.ToString()))))
+                            throw new InvalidOperationException("执行中节点的依赖修改须先暂停；已排队节点须先取消待执行句柄。script更新保留当前执行，从下次续接生效。");
                         Plan.Revise(AgentCatalog.ResolvePlanTypes(args), AgentTaskEvidence.Measure);
                         return Plan.Summary();
                     }, token);
