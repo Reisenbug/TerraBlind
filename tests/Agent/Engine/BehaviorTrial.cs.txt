@@ -502,14 +502,16 @@ public sealed class BehaviorTrial : ModSystem
         if (DungeonTrial) { await DungeonGoalTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_CONTACT_MINING_PROBE") == "1"
             || Environment.GetEnvironmentVariable("TB_CONTACT_AUTOMATIC_PROBE") == "1"
+            || Environment.GetEnvironmentVariable("TB_CONTACT_OWNED_PROBE") == "1"
             || Environment.GetEnvironmentVariable("TB_CONTACT_PERMISSION_PROBE") == "1")
         {
-            bool automatic = Environment.GetEnvironmentVariable("TB_CONTACT_AUTOMATIC_PROBE") == "1";
+            bool owned = Environment.GetEnvironmentVariable("TB_CONTACT_OWNED_PROBE") == "1";
+            bool automatic = Environment.GetEnvironmentVariable("TB_CONTACT_AUTOMATIC_PROBE") == "1" || owned;
             await OnMain(() =>
             {
                 NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false;
                 Concessions.Enabled = false; Manual.On = false; AgentPermissions.Reset();
-                AgentTools.NewTask(); AgentPermissions.Dodge = automatic;
+                AgentTools.NewTask(); AgentPermissions.Dodge = automatic && !owned;
                 Combat.Enabled = Dodge.Enabled = false;
                 var p = Main.LocalPlayer;
                 foreach (var item in p.inventory) item.TurnToAir();
@@ -520,6 +522,7 @@ public sealed class BehaviorTrial : ModSystem
                 for (int i = 0; i < armor.Length; i++) p.armor[i].SetDefaults(armor[i]);
                 p.ConsumedLifeCrystals = 15; p.statLife = p.statLifeMax = p.statLifeMax2 = 400;
                 p.Teleport(new Vector2(3692.625f * 16 - p.width / 2f, 781.6875f * 16 - p.height / 2f));
+                if (owned) p.Teleport(new Vector2(Main.spawnTileX * 16, Main.spawnTileY * 16 - p.height));
                 p.velocity = Vector2.Zero; p.immune = false; p.immuneTime = 0;
                 p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
                 return true;
@@ -544,6 +547,36 @@ public sealed class BehaviorTrial : ModSystem
             }
             if (automatic)
             {
+                string originalHandle = null, originalWorkflow = null;
+                if (owned)
+                {
+                    var plan = await Call("task_plan", JsonNode.Parse("""
+                        {"goal":"preserve navigation through survival takeover","mode":"dag","steps":[{"id":"contact","description":"owned route",
+                        "depends_on":[],"script":"step('before_contact',()=>({observed:true}));return step('route',()=>{const r=tool('nav_to',{x:3680,y:784});if(r.error)throw new Error(r.error);return r;});",
+                        "conditions":[{"kind":"item","type":327,"count":99}]}]}
+                        """).AsObject());
+                    originalWorkflow = plan["steps"][0]["workflow"].ToString();
+                    var action = await Call("run_script", new JsonObject { ["task_node"] = "contact", ["background"] = true });
+                    originalHandle = action["handle"].ToString();
+                    var ready = Stopwatch.StartNew();
+                    while ((await Call("get_state", new JsonObject()))["control_execution"]?["tool"]?.ToString() != "nav_to")
+                    {
+                        if (ready.ElapsedMilliseconds > 3000) throw new Exception("original route never acquired native input");
+                        await Task.Delay(10);
+                    }
+                    await OnMain(() =>
+                    {
+                        var p = Main.LocalPlayer;
+                        p.Teleport(new Vector2(3692.625f * 16 - p.width / 2f, 781.6875f * 16 - p.height / 2f));
+                        p.velocity = Vector2.Zero; p.immune = false; p.immuneTime = 0;
+                        if (Collision.HurtTiles(p.position, p.width, p.height, p).type != TileID.Spikes)
+                            throw new Exception("owned escape fixture did not contact a natural spike");
+                        AgentPermissions.Dodge = true;
+                        p.Hurt(PlayerDeathReason.ByOther(3), 60, 0);
+                        ModContent.GetInstance<AgentContactEscape>().PostUpdateEverything();
+                        return true;
+                    });
+                }
                 var clock = Stopwatch.StartNew();
                 var samples = new JsonArray();
                 long? safeSince = null;
@@ -561,6 +594,8 @@ public sealed class BehaviorTrial : ModSystem
                             ["escape"] = state["contact_escape"]?.DeepClone(), ["active"] = state["agent"]["contact_escape_active"].DeepClone() };
                     });
                     samples.Add(sample);
+                    if (owned && sample["escape"]?["status"]?.ToString() == "cancelled")
+                        throw new Exception("original route cleanup cancelled the active survival controller: " + sample);
                     bool safe = sample["hurt_tile"].GetValue<int>() < 0 && sample["grounded"].GetValue<bool>()
                         && !sample["active"].GetValue<bool>() && !sample["dead"].GetValue<bool>();
                     if (!safe) safeSince = null;
@@ -571,6 +606,16 @@ public sealed class BehaviorTrial : ModSystem
                 var last = samples.Last();
                 if (safeSince == null || clock.ElapsedMilliseconds - safeSince < 1000)
                     throw new Exception("contact escape failed to reach safe supported ground: " + last);
+                if (last["escape"]?["cleared_tiles"]?.GetValue<int>() is not > 0)
+                    throw new Exception("contact probe did not exercise contact mining");
+                if (owned)
+                {
+                    var state = await Call("get_state", new JsonObject());
+                    if (state["task_plan"]?["status"]?.ToString() != "active"
+                        || state["script_workflows"]?[originalWorkflow]?["steps"]?.AsArray().Count(s => s["status"]?.ToString() == "completed") != 1)
+                        throw new Exception("survival takeover lost original DAG checkpoint");
+                    Console.WriteLine($"CONTACT_OWNED_PASS original_handle={originalHandle} checkpoint_retained=true native_engine=true model_calls=0");
+                }
                 Console.WriteLine($"CONTACT_AUTOMATIC_PASS hp={last["hp"]} elapsed_ms={clock.ElapsedMilliseconds} escape={last["escape"]} native_engine=true model_calls=0");
                 return;
             }

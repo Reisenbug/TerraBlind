@@ -274,11 +274,11 @@ public static partial class AgentTools
     static (bool Attack, bool Dodge, float Reserve)? bossBefore;
     internal static bool HasBossControlOverride => bossBefore != null;
     internal static readonly ActionTasks Actions = new(Execute, ObserveAction,
-        owns => NativeAgent.OnMain(() => { if (owns()) StopInputs(); return true; }, default),
+        owns => NativeAgent.OnMain(() => { if (owns() && !ContactEscapeActive) StopInputs(); return true; }, default),
         (handle, owns) => NativeAgent.OnMain(() => { if (owns()) Control.EndAction(handle); return true; }, default),
         (tool, owns) => NativeAgent.OnMain(() =>
         {
-            if (owns())
+            if (owns() && !ContactEscapeActive)
             {
                 if (tool == "fight") FightCoordinator.Stop();
                 else StopInputs(preserveAttack: Actions.HasAttack);
@@ -959,6 +959,7 @@ public static partial class AgentTools
                         },
                         async cleanupToken => await NativeAgent.OnMain(() =>
                         {
+                            if (ContactEscapeActive) return true;
                             if (queuedScript) StopInputs(preserveAttack: Actions.HasAttack);
                             else Stop();
                             return true;
