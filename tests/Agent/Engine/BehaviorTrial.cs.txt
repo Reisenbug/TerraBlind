@@ -30,6 +30,8 @@ public sealed class BehaviorTrial : ModSystem
     readonly List<string> sourceInputSamples = new();
     bool samplingSources;
     bool samplingLanding;
+    bool dungeonSampling, dungeonKeyObserved;
+    int dungeonMaxKeys;
     readonly JsonArray landingFrames = new();
     delegate void OriginalStart(int x, int y, RecedingNav.Mode mode);
     delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
@@ -42,6 +44,7 @@ public sealed class BehaviorTrial : ModSystem
     Task trial;
     AcceptanceClock acceptance;
     static bool JungleHealthTrial => Environment.GetEnvironmentVariable("TB_JUNGLE_HEALTH_TRIAL") == "1";
+    static bool DungeonTrial => Environment.GetEnvironmentVariable("TB_DUNGEON_TRIAL") == "1";
     static string QueenResumeRoot => Environment.GetEnvironmentVariable("TB_QUEEN_RESUME");
     sealed class AcceptanceClock
     {
@@ -198,7 +201,7 @@ public sealed class BehaviorTrial : ModSystem
     bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
     bool NaturalEncounters => Environment.GetEnvironmentVariable("TB_NATIVE_ENCOUNTERS") == "1";
     bool FullCraftTrial => Environment.GetEnvironmentVariable("TB_FULL_CRAFT_TRIAL") == "1";
-    int FrameLimit => FullCraftTrial || Environment.GetEnvironmentVariable("TB_HIVE_BUILD") == "1" ? 111600 : Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1"
+    int FrameLimit => DungeonTrial || FullCraftTrial || Environment.GetEnvironmentVariable("TB_HIVE_BUILD") == "1" ? 111600 : Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1"
         || Environment.GetEnvironmentVariable("TB_MATERIAL_AGENT_LIVE") == "1" ? 14400
         : Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1"
             || Environment.GetEnvironmentVariable("TB_SOURCE_KNOWLEDGE_AGENT") == "1" ? 9600 : 7200;
@@ -413,6 +416,12 @@ public sealed class BehaviorTrial : ModSystem
             for (int i = 0; i < Main.maxNPCs; i++)
                 if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
         var p = Main.LocalPlayer;
+        if (dungeonSampling)
+        {
+            int keys = p.inventory.Where(i => i.type == ItemID.GoldenKey).Sum(i => i.stack);
+            dungeonKeyObserved |= keys > 0;
+            dungeonMaxKeys = Math.Max(dungeonMaxKeys, keys);
+        }
         acceptance?.Observe(p);
         if (FullCraftTrial)
         {
@@ -490,6 +499,81 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (DungeonTrial) { await DungeonGoalTrial(); return; }
+        if (Environment.GetEnvironmentVariable("TB_LOCKED_CHEST_PROBE") == "1")
+        {
+            var chestPosition = await OnMain(() =>
+            {
+                var chest = Main.chest.First(c => c != null && Chest.IsLocked(c.x, c.y)
+                    && Main.tile[c.x, c.y].TileType == TileID.Containers && Main.tile[c.x, c.y].TileFrameX / 36 == 2);
+                Main.LocalPlayer.Teleport(new Vector2(chest.x * 16, chest.y * 16 - Main.LocalPlayer.height));
+                return new Point(chest.x, chest.y);
+            });
+            var query = new JsonObject { ["name"] = "Containers", ["max_dist"] = 8, ["n"] = 32 };
+            var ordinary = await Call("find_tiles", query);
+            query["include_locked"] = true;
+            var expanded = await Call("find_tiles", query);
+            bool Matches(JsonNode tile) => tile["x"].GetValue<int>() == chestPosition.X && tile["y"].GetValue<int>() == chestPosition.Y;
+            if (ordinary["tiles"].AsArray().Any(Matches) || !expanded["tiles"].AsArray().Any(t => Matches(t) && t["locked"]?.GetValue<bool>() == true))
+                throw new Exception("locked chest discovery did not preserve the default filter or explicit lock state");
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+                var p = Main.LocalPlayer;
+                var ch = Main.chest.First(c => c != null && Chest.IsLocked(c.x, c.y)
+                    && Main.tile[c.x, c.y].TileType == TileID.Containers && Main.tile[c.x, c.y].TileFrameX / 36 == 2);
+                p.Teleport(new Vector2(ch.x * 16, ch.y * 16 - p.height));
+                p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+                for (int i = 0; i < p.inventory.Length; i++) p.inventory[i].TurnToAir();
+                for (int i = 0; i < p.bank4.item.Length; i++) p.bank4.item[i].TurnToAir();
+                int missing = TreasureGrab.OpenAt(ch.x + 1, ch.y + 1, out string missingReason);
+                if (missing != -1 || missingReason != "locked" || !Chest.IsLocked(ch.x, ch.y))
+                    throw new Exception("locked chest opened without a key: " + missingReason);
+                p.inventory[0].SetDefaults(ItemID.GoldenKey); p.inventory[0].stack = 2;
+                var contents = ch.item.Where(i => !i.IsAir).GroupBy(i => i.type).ToDictionary(g => g.Key, g => g.Sum(i => i.stack));
+                bool attempted = p.tileInteractAttempted, released = p.releaseUseTile, mouseReleased = Main.mouseRightRelease;
+                int opened = TreasureGrab.OpenAt(ch.x + 1, ch.y + 1, out string reason);
+                int keys = p.inventory.Where(i => i.type == ItemID.GoldenKey).Sum(i => i.stack);
+                if (opened < 0 || Chest.IsLocked(ch.x, ch.y) || keys != 1 || p.chest != opened
+                    || p.tileInteractAttempted != attempted || p.releaseUseTile != released || Main.mouseRightRelease != mouseReleased)
+                    throw new Exception($"native unlock failed opened={opened} reason={reason} keys={keys}");
+                Terraria.UI.ChestUI.LootAll();
+                if (!contents.Any(kv => p.inventory.Where(i => i.type == kv.Key).Sum(i => i.stack) > 0)
+                    || ch.item.Any(i => !i.IsAir)) throw new Exception("native loot did not transfer chest contents");
+                p.chest = -1; Recipe.FindRecipes();
+                if (TreasureGrab.OpenAt(ch.x, ch.y, out _) != opened
+                    || p.inventory.Where(i => i.type == ItemID.GoldenKey).Sum(i => i.stack) != 1)
+                    throw new Exception("reopening consumed another key");
+                p.chest = -1; Recipe.FindRecipes();
+                Console.WriteLine($"LOCKED_CHEST_PASS chest={ch.x},{ch.y} missing_key_refused=true consumed=1 loot_transferred=true reopened_without_key=true native_engine=true model_calls=0");
+                return true;
+            });
+            if (Environment.GetEnvironmentVariable("TB_STATELESS_RECOVERY_PROBE") != "1") return;
+        }
+        if (Environment.GetEnvironmentVariable("TB_STATELESS_RECOVERY_PROBE") == "1")
+        {
+            await OnMain(() => { NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false; return true; });
+            var plan = await Call("task_plan", JsonNode.Parse("""
+                {"goal":"retain checkpoints across temporary observations","mode":"dag","steps":[
+                  {"id":"observe","description":"preserve the owning checkpoint","depends_on":[],
+                   "script":"return step('persistent',()=>({observed:true}));",
+                   "conditions":[{"kind":"permanent_health","count":400}]}]}
+                """).AsObject());
+            string workflow = plan["steps"][0]["workflow"].ToString();
+            await Call("run_script", new JsonObject { ["task_node"] = "observe" });
+            int initial = (await Call("get_state", new JsonObject()))["script_workflows"].AsObject().Count;
+            for (int i = 0; i < 40; i++)
+            {
+                var trialResult = await Call("run_script", new JsonObject { ["task_node"] = "observe",
+                    ["workflow"] = "temporary-observation-" + i, ["code"] = "return tool('get_state',{}).permanent_max_health;" });
+                var retained = (await Call("get_state", new JsonObject()))["script_workflows"].AsObject();
+                if (trialResult["ok"]?.GetValue<bool>() != true || trialResult["workflow_retained"]?.GetValue<bool>() != false
+                    || retained.Count != initial || retained[workflow]["steps"].AsArray().Count(step => step["status"]?.ToString() == "completed") != 1)
+                    throw new Exception("native temporary recovery leaked workflow slots or original checkpoints: " + trialResult);
+            }
+            Console.WriteLine("STATELESS_RECOVERY_PASS calls=40 persistent_checkpoints=1 native_engine=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_FALL_SAFETY_PROBE") == "1")
         {
             await OnMain(() =>
@@ -2599,6 +2683,106 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("edited program replayed the original task or did not use revision 2");
             return true;
         });
+    }
+
+    async Task DungeonGoalTrial()
+    {
+        var locked = new Dictionary<(int X, int Y), Dictionary<int, int>>();
+        var initialInventory = new Dictionary<int, int>();
+        const string prompt = "/goal 探索当前已击败骷髅王的地牢，自行获得金钥匙，打开一个此前未开启的上锁金箱，并实际拾取战利品。装备和施工材料已经备好。遇到尖刺、接触后碎裂的砖和无法伤害的怪物时，结合实际地形选择绕行、施工或其他可执行办法。受阻后保留已完成进度调整方案继续。用DAG和脚本执行并核验开锁与战利品入包，超过10秒的停顿记录原因并恢复行动。";
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            Manual.On = false; Concessions.Enabled = false; AgentPermissions.Reset();
+            Combat.Enabled = Dodge.Enabled = false; materialNavigationStub = false;
+            NPC.downedBoss3 = true;
+            var p = Main.LocalPlayer;
+            foreach (var item in p.inventory) item.TurnToAir();
+            foreach (var item in p.armor) item.TurnToAir();
+            var gear = new[] { (ItemID.Starfury, 1), (ItemID.MoltenPickaxe, 1), (ItemID.Wood, 9999),
+                (ItemID.WoodPlatform, 999), (ItemID.Cobweb, 999), (ItemID.HealingPotion, 30), (ItemID.Torch, 999) };
+            for (int i = 0; i < gear.Length; i++) { p.inventory[i].SetDefaults(gear[i].Item1); p.inventory[i].stack = gear[i].Item2; }
+            var armor = new[] { ItemID.MoltenHelmet, ItemID.MoltenBreastplate, ItemID.MoltenGreaves,
+                ItemID.CloudinaBottle, ItemID.HermesBoots, ItemID.CobaltShield, ItemID.LuckyHorseshoe };
+            for (int i = 0; i < armor.Length; i++) p.armor[i].SetDefaults(armor[i]);
+            p.ConsumedLifeCrystals = 15; p.statLife = p.statLifeMax = p.statLifeMax2 = 400;
+            var entries = new List<Vector2>();
+            for (int x = Math.Max(10, Main.dungeonX - 30); x <= Math.Min(Main.maxTilesX - 10, Main.dungeonX + 30); x++)
+            for (int y = Math.Max(10, Main.dungeonY - 30); y <= Math.Min(Main.maxTilesY - 10, Main.dungeonY + 10); y++)
+            {
+                var position = new Vector2(x * 16, y * 16 - p.height);
+                var support = Main.tile[x, y];
+                if (!support.HasUnactuatedTile || !Main.tileSolid[support.TileType] || Main.tileSolidTop[support.TileType]
+                    || TileID.Sets.CrackedBricks[support.TileType] || TileID.Sets.TouchDamageImmediate[support.TileType] > 0
+                    || Collision.SolidCollision(position, p.width, p.height)) continue;
+                entries.Add(position);
+            }
+            if (!entries.Any()) throw new Exception("natural dungeon entrance has no supported starting position");
+            p.Teleport(entries.OrderBy(v => Vector2.DistanceSquared(v, new Vector2(Main.dungeonX * 16, Main.dungeonY * 16))).First());
+            p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            foreach (var ch in Main.chest.Where(c => c != null && Chest.IsLocked(c.x, c.y)
+                && Main.tile[c.x, c.y].TileType == TileID.Containers && Main.tile[c.x, c.y].TileFrameX / 36 == 2))
+                locked[(ch.x, ch.y)] = ch.item.Where(i => !i.IsAir).GroupBy(i => i.type).ToDictionary(g => g.Key, g => g.Sum(i => i.stack));
+            foreach (var group in p.inventory.Where(i => !i.IsAir).GroupBy(i => i.type)) initialInventory[group.Key] = group.Sum(i => i.stack);
+            if (initialInventory.GetValueOrDefault(ItemID.GoldenKey) != 0 || locked.Count == 0) throw new Exception("invalid natural dungeon fixture");
+            Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = "gpt-6.1-sol";
+            File.WriteAllText(Path.Combine(Main.SavePath, "dungeon-start.json"), new JsonObject {
+                ["prompt"] = prompt, ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["classic"] = Main.GameMode == 0,
+                ["skeletron_defeated"] = NPC.downedBoss3, ["x"] = p.Center.X / 16, ["y"] = p.Center.Y / 16,
+                ["golden_keys"] = 0, ["natural_locked_gold_chests"] = locked.Count, ["navigation_stub"] = UsingNavigationStub,
+                ["natural_encounters"] = NaturalEncounters, ["terrain_edits"] = 0, ["model"] = "gpt-6.1-sol",
+                ["package_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                    File.ReadAllBytes(Path.Combine(Main.SavePath, "Mods", "TerraBlind.tmod")))) }.ToJsonString());
+            dungeonSampling = true; NativeAgent.Submit(prompt);
+            return true;
+        });
+        var clock = Stopwatch.StartNew();
+        Vector2 anchor = await OnMain(() => Main.LocalPlayer.position);
+        long stationarySince = 0; bool moved = false, warned = false, wasDead = false; int deaths = 0;
+        using var journal = new StreamWriter(Path.Combine(Main.SavePath, "dungeon-samples.jsonl")) { AutoFlush = true };
+        while (true)
+        {
+            await Task.Delay(1000);
+            var state = await Call("get_state", new JsonObject());
+            var observation = await OnMain(() =>
+            {
+                var p = Main.LocalPlayer; long now = clock.ElapsedMilliseconds;
+                if (p.dead && !wasDead) deaths++; wasDead = p.dead;
+                if (Vector2.DistanceSquared(p.position, anchor) >= 16)
+                {
+                    if (warned) Console.WriteLine($"DUNGEON_RESUMED elapsed_ms={now} stationary_ms={now - stationarySince}");
+                    anchor = p.position; stationarySince = now; moved = true; warned = false;
+                }
+                if (moved && !warned && now - stationarySince >= 10000)
+                {
+                    warned = true;
+                    Console.WriteLine($"DUNGEON_STATIONARY elapsed_ms={now} duration_ms={now - stationarySince} pos={p.Center / 16} status={NativeAgent.Status} nav={RecedingNav.Active} nav_reason={RecedingNav.LastStop} item_use={ItemUseCoordinator.IsActive}");
+                }
+                var completed = locked.Where(kv => !Chest.IsLocked(kv.Key.X, kv.Key.Y)).FirstOrDefault(kv =>
+                {
+                    var ch = Main.chest.FirstOrDefault(c => c != null && c.x == kv.Key.X && c.y == kv.Key.Y);
+                    return ch != null && kv.Value.Any(item => ch.item.Where(i => i.type == item.Key).Sum(i => i.stack) < item.Value
+                        && p.inventory.Where(i => i.type == item.Key).Sum(i => i.stack) > initialInventory.GetValueOrDefault(item.Key));
+                });
+                return new JsonObject { ["elapsed_ms"] = now, ["hp"] = p.statLife, ["dead"] = p.dead, ["deaths"] = deaths,
+                    ["x"] = p.Center.X / 16, ["y"] = p.Center.Y / 16, ["in_dungeon"] = p.ZoneDungeon,
+                    ["key_observed"] = dungeonKeyObserved, ["max_keys"] = dungeonMaxKeys,
+                    ["verified_loot"] = dungeonKeyObserved && completed.Value != null,
+                    ["loot_x"] = completed.Value == null ? null : JsonValue.Create(completed.Key.X),
+                    ["loot_y"] = completed.Value == null ? null : JsonValue.Create(completed.Key.Y),
+                    ["terrain"] = TerrainInspection.Read(12), ["status"] = NativeAgent.Status };
+            });
+            observation["state"] = state;
+            journal.WriteLine(observation.ToJsonString());
+            File.WriteAllText(Path.Combine(Main.SavePath, "dungeon-latest.json"), observation.ToJsonString());
+            if (observation["verified_loot"].GetValue<bool>())
+            {
+                File.WriteAllText(Path.Combine(Main.SavePath, "dungeon-loot-result.json"), observation.ToJsonString());
+                Console.WriteLine($"DUNGEON_LOOT_VERIFIED elapsed_ms={clock.ElapsedMilliseconds} key_observed=true initially_locked=true inventory_gain=true");
+                NativeAgent.Stop(); await OnMain(() => { Halt.All(); return true; });
+                return;
+            }
+        }
     }
     async Task Opportunities()
     {
