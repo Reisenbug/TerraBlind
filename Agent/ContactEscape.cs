@@ -14,6 +14,39 @@ public class AgentContactEscape : ModSystem
     long attemptedDamageTick = -1;
     int direction, frames;
     float startX;
+    ItemUseRequest clearing;
+    bool clearingStarted;
+    int clearingType, clearedTiles;
+
+    static bool SafeAfterRemoval(Player player, int x, int y)
+    {
+        if (y * 16 < player.Bottom.Y - 1 || !Main.tileSolid[Main.tile[x, y].TileType]) return true;
+        for (int floor = y + 1; floor < Main.maxTilesY - 1; floor++)
+        {
+            var tile = Main.tile[x, floor];
+            if (tile.LiquidAmount > 0 && tile.LiquidType == LiquidID.Lava) return false;
+            if (!tile.HasUnactuatedTile || !Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType]) continue;
+            return FallSafety.LandingDamage(player, new Vector2(player.position.X, floor * 16 - player.height), player.fallStart) == 0;
+        }
+        return false;
+    }
+
+    static ItemUseRequest ClearContact(Player player)
+    {
+        if (!AgentTools.ControlAllows(ControlBehavior.Mining, ControlChannels.ItemUse)) return null;
+        var hit = Collision.HurtTiles(player.position, player.width, player.height, player);
+        if (hit.type < 0 || TileID.Sets.TouchDamageImmediate[hit.type] <= 0
+            || AgentTools.Control.CheckAt(ControlBehavior.Mining, hit.x, hit.y) != null || !SafeAfterRemoval(player, hit.x, hit.y)) return null;
+        int slot = -1, best = DigTable.Unmineable;
+        for (int i = 0; i < 50; i++)
+        {
+            var item = player.inventory[i];
+            if (item.IsAir || item.pick <= 0 || !Reach.CanMine(player, hit.x, hit.y, item)) continue;
+            int cost = DigTable.CostFrames(hit.x, hit.y, player, item);
+            if (cost < best) { slot = i; best = cost; }
+        }
+        return slot < 0 ? null : new ItemUseRequest { TargetWx = hit.x, TargetWy = hit.y, Slot = slot, Strict = true };
+    }
 
     static bool Harmful(Vector2 position, Player player, bool ignoreCurrentContact = false, bool includeLava = true)
     {
@@ -66,6 +99,8 @@ public class AgentContactEscape : ModSystem
             if (AgentTools.ContactEscapeActive)
             {
                 ActExecutor.Stop();
+                if (clearing != null) ItemUseCoordinator.Stop();
+                clearing = null;
                 AgentTools.LastContactEscape["status"] = "cancelled";
                 AgentTools.LastContactEscape["end_tick"] = (long)Main.GameUpdateCount;
                 DiagLog.Write("[agent_escape] cancelled");
@@ -80,25 +115,58 @@ public class AgentContactEscape : ModSystem
             if (damage == null || damage["tick"].GetValue<long>() == attemptedDamageTick) return;
             attemptedDamageTick = damage["tick"].GetValue<long>();
             direction = SafeSide(player, -1) ? -1 : SafeSide(player, 1) ? 1 : 0;
-            if (direction == 0)
+            clearing = direction == 0 ? ClearContact(player) : null;
+            if (direction == 0 && clearing == null)
             { DiagLog.Write("[agent_escape] no_checked_side"); return; }
             AgentTools.StopInputs();
             AgentTools.ContactEscapeActive = true;
-            frames = 0; startX = player.position.X;
-            AgentTools.LastContactEscape = new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["status"] = "moving",
-                ["reason"] = "contact_damage", ["direction"] = direction < 0 ? "left" : "right",
+            frames = clearedTiles = 0; clearingStarted = false; startX = player.position.X;
+            AgentTools.LastContactEscape = new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["status"] = clearing == null ? "moving" : "clearing_contact",
+                ["reason"] = "contact_damage", ["direction"] = direction < 0 ? "left" : direction > 0 ? "right" : "none",
                 ["start_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y }, ["hp_start"] = player.statLife,
                 ["damage_event"] = damage.DeepClone(), ["hazard_tiles"] = new JsonArray(TerrainInspection.Read(2)["near_body_tiles"].AsArray()
                     .Where(tile => tile["touch_damage"].GetValue<int>() > 0).Select(tile => tile.DeepClone()).ToArray()) };
-            Move();
+            if (clearing == null) Move();
             DiagLog.Write($"[agent_escape] start direction={direction} x={startX} hp={player.statLife}");
             return;
         }
         frames++;
+        if (clearing != null && frames < 90)
+        {
+            if (!clearingStarted)
+            {
+                if (player.itemAnimation != 0 || player.itemTime != 0) return;
+                clearingType = Main.tile[clearing.TargetWx, clearing.TargetWy].TileType;
+                ItemUseCoordinator.Start(clearing); clearingStarted = true;
+                DiagLog.Write($"[agent_escape] clear_contact x={clearing.TargetWx} y={clearing.TargetWy} type={clearingType} slot={clearing.Slot}");
+                return;
+            }
+            var tile = Main.tile[clearing.TargetWx, clearing.TargetWy];
+            if (tile.HasTile && tile.TileType == clearingType && ItemUseCoordinator.IsActive) return;
+            bool removed = !tile.HasTile || tile.TileType != clearingType;
+            ItemUseCoordinator.Stop(); clearing = null;
+            if (removed) clearedTiles++;
+            AgentTools.LastContactEscape["cleared_tiles"] = clearedTiles;
+            DiagLog.Write($"[agent_escape] clear_result removed={removed} count={clearedTiles} hp={player.statLife}");
+        }
+        if (direction == 0 && frames < 90)
+        {
+            direction = SafeSide(player, -1) ? -1 : SafeSide(player, 1) ? 1 : 0;
+            if (direction != 0)
+            {
+                startX = player.position.X; Move();
+                AgentTools.LastContactEscape["status"] = "moving";
+                AgentTools.LastContactEscape["direction"] = direction < 0 ? "left" : "right";
+            }
+            else if ((clearing = ClearContact(player)) != null)
+            { clearingStarted = false; return; }
+        }
         bool grounded = Collision.SolidCollision(player.position + new Vector2(0, 1), player.width, player.height);
         if (!touching && grounded || direction * (player.position.X - startX) >= 48 || frames >= 90)
         {
             ActExecutor.Stop();
+            if (clearing != null) ItemUseCoordinator.Stop();
+            clearing = null;
             AgentTools.ContactEscapeActive = false;
             AgentTools.LastContactEscape["status"] = "controls_released";
             AgentTools.LastContactEscape["end_tick"] = (long)Main.GameUpdateCount;
@@ -109,7 +177,7 @@ public class AgentContactEscape : ModSystem
             AgentTools.LastContactEscape["hp_end"] = player.statLife;
             DiagLog.Write($"[agent_escape] end frames={frames} clear={!touching} grounded={grounded} x={player.position.X} hp={player.statLife}");
         }
-        else if (!ActExecutor.IsActive) Move();
+        else if (direction != 0 && !ActExecutor.IsActive) Move();
     }
 
     public override void OnWorldUnload()

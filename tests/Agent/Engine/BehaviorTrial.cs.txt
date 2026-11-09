@@ -500,6 +500,113 @@ public sealed class BehaviorTrial : ModSystem
     async Task Run()
     {
         if (DungeonTrial) { await DungeonGoalTrial(); return; }
+        if (Environment.GetEnvironmentVariable("TB_CONTACT_MINING_PROBE") == "1"
+            || Environment.GetEnvironmentVariable("TB_CONTACT_AUTOMATIC_PROBE") == "1"
+            || Environment.GetEnvironmentVariable("TB_CONTACT_PERMISSION_PROBE") == "1")
+        {
+            bool automatic = Environment.GetEnvironmentVariable("TB_CONTACT_AUTOMATIC_PROBE") == "1";
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                Concessions.Enabled = false; Manual.On = false; AgentPermissions.Reset();
+                AgentTools.NewTask(); AgentPermissions.Dodge = automatic;
+                Combat.Enabled = Dodge.Enabled = false;
+                var p = Main.LocalPlayer;
+                foreach (var item in p.inventory) item.TurnToAir();
+                foreach (var item in p.armor) item.TurnToAir();
+                p.inventory[1].SetDefaults(ItemID.MoltenPickaxe);
+                var armor = new[] { ItemID.MoltenHelmet, ItemID.MoltenBreastplate, ItemID.MoltenGreaves,
+                    ItemID.CloudinaBottle, ItemID.HermesBoots, ItemID.CobaltShield, ItemID.LuckyHorseshoe };
+                for (int i = 0; i < armor.Length; i++) p.armor[i].SetDefaults(armor[i]);
+                p.ConsumedLifeCrystals = 15; p.statLife = p.statLifeMax = p.statLifeMax2 = 400;
+                p.Teleport(new Vector2(3692.625f * 16 - p.width / 2f, 781.6875f * 16 - p.height / 2f));
+                p.velocity = Vector2.Zero; p.immune = false; p.immuneTime = 0;
+                p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+                return true;
+            });
+            if (Environment.GetEnvironmentVariable("TB_CONTACT_PERMISSION_PROBE") == "1")
+            {
+                Task<bool> CanClear() => OnMain(() => typeof(AgentContactEscape).GetMethod("ClearContact", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+                    .Invoke(null, new object[] { Main.LocalPlayer }) != null);
+                if (!await CanClear()) throw new Exception("native contact fixture has no mining option");
+                var rule = await Call("control", new JsonObject { ["operation"] = "deny", ["scope"] = "task",
+                    ["behaviors"] = new JsonArray("mining"), ["reason"] = "contact permission probe" });
+                if (await CanClear()) throw new Exception("survival mining ignored global mining denial");
+                await Call("control", new JsonObject { ["operation"] = "release", ["id"] = rule["id"].DeepClone() });
+                rule = await Call("control", new JsonObject { ["operation"] = "deny", ["scope"] = "task",
+                    ["behaviors"] = new JsonArray("mining"), ["reason"] = "protect contact tile",
+                    ["region"] = new JsonObject { ["x"] = 3692, ["y"] = 783, ["width"] = 1, ["height"] = 1 } });
+                if (await CanClear()) throw new Exception("survival mining ignored protected contact tile");
+                await Call("control", new JsonObject { ["operation"] = "release", ["id"] = rule["id"].DeepClone() });
+                if (!await CanClear()) throw new Exception("released mining prohibition remained active");
+                Console.WriteLine("CONTACT_PERMISSION_PASS global_deny=true region_deny=true release_restores=true native_engine=true model_calls=0");
+                return;
+            }
+            if (automatic)
+            {
+                var clock = Stopwatch.StartNew();
+                var samples = new JsonArray();
+                long? safeSince = null;
+                while (clock.ElapsedMilliseconds < 5000)
+                {
+                    await Task.Delay(50);
+                    var state = await Call("get_state", new JsonObject());
+                    var sample = await OnMain(() =>
+                    {
+                        var p = Main.LocalPlayer;
+                        return new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["hp"] = p.statLife, ["dead"] = p.dead,
+                            ["hurt_tile"] = Collision.HurtTiles(p.position, p.width, p.height, p).type,
+                            ["grounded"] = Collision.SolidCollision(p.position + new Vector2(0, 1), p.width, p.height),
+                            ["x"] = p.Center.X / 16, ["y"] = p.Center.Y / 16,
+                            ["escape"] = state["contact_escape"]?.DeepClone(), ["active"] = state["agent"]["contact_escape_active"].DeepClone() };
+                    });
+                    samples.Add(sample);
+                    bool safe = sample["hurt_tile"].GetValue<int>() < 0 && sample["grounded"].GetValue<bool>()
+                        && !sample["active"].GetValue<bool>() && !sample["dead"].GetValue<bool>();
+                    if (!safe) safeSince = null;
+                    else safeSince ??= clock.ElapsedMilliseconds;
+                    if (safeSince != null && clock.ElapsedMilliseconds - safeSince >= 1000) break;
+                }
+                File.WriteAllText(Path.Combine(Main.SavePath, "contact-automatic-probe.json"), samples.ToJsonString());
+                var last = samples.Last();
+                if (safeSince == null || clock.ElapsedMilliseconds - safeSince < 1000)
+                    throw new Exception("contact escape failed to reach safe supported ground: " + last);
+                Console.WriteLine($"CONTACT_AUTOMATIC_PASS hp={last["hp"]} elapsed_ms={clock.ElapsedMilliseconds} escape={last["escape"]} native_engine=true model_calls=0");
+                return;
+            }
+            await Call("task_plan", JsonNode.Parse("""
+                {"goal":"measure native contact mining","mode":"dag","steps":[{"id":"clear","description":"remove contact hazards",
+                "depends_on":[],"script":"return {};","conditions":[{"kind":"item","type":327,"count":99}]}]}
+                """).AsObject());
+            var measurements = new JsonArray();
+            for (int attempt = 0; attempt < 6; attempt++)
+            {
+                await Task.Delay(100);
+                var contact = await OnMain(() =>
+                {
+                    var p = Main.LocalPlayer; var hit = Collision.HurtTiles(p.position, p.width, p.height, p);
+                    bool Side(int direction) => (bool)typeof(AgentContactEscape).GetMethod("SafeSide", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
+                        .Invoke(null, new object[] { p, direction });
+                    return new JsonObject { ["type"] = hit.type, ["x"] = hit.x, ["y"] = hit.y, ["hp"] = p.statLife,
+                        ["left_safe"] = Side(-1), ["right_safe"] = Side(1), ["dead"] = p.dead,
+                        ["position"] = new JsonObject { ["x"] = p.Center.X / 16, ["y"] = p.Center.Y / 16 } };
+                });
+                measurements.Add(contact);
+                if (contact["dead"].GetValue<bool>()) throw new Exception("contact mining probe died: " + measurements);
+                if (contact["type"].GetValue<int>() < 0)
+                {
+                    await Task.Delay(500);
+                    if (await OnMain(() => !Collision.AnyHurtingTiles(Main.LocalPlayer.position, Main.LocalPlayer.width, Main.LocalPlayer.height))) break;
+                    continue;
+                }
+                var miningResult = await Call("run_script", new JsonObject { ["task_node"] = "clear", ["workflow"] = "contact-mining-" + attempt,
+                    ["code"] = "return tool('use_item',{slot:1,x:" + contact["x"] + ",y:" + contact["y"] + "});" });
+                contact["result"] = miningResult;
+            }
+            File.WriteAllText(Path.Combine(Main.SavePath, "contact-mining-probe.json"), measurements.ToJsonString());
+            Console.WriteLine("CONTACT_MINING_MEASUREMENTS " + measurements.ToJsonString());
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_DUNGEON_MINING_PROBE") == "1")
         {
             await OnMain(() =>
