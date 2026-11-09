@@ -33,19 +33,47 @@ public class AgentContactEscape : ModSystem
 
     static ItemUseRequest ClearContact(Player player)
     {
-        if (!AgentTools.ControlAllows(ControlBehavior.Mining, ControlChannels.ItemUse)) return null;
         var hit = Collision.HurtTiles(player.position, player.width, player.height, player);
-        if (hit.type < 0 || TileID.Sets.TouchDamageImmediate[hit.type] <= 0
-            || AgentTools.Control.CheckAt(ControlBehavior.Mining, hit.x, hit.y) != null || !SafeAfterRemoval(player, hit.x, hit.y)) return null;
+        return hit.type < 0 ? null : ClearTile(player, hit.x, hit.y);
+    }
+
+    static ItemUseRequest ClearTile(Player player, int x, int y)
+    {
+        if (!AgentTools.ControlAllows(ControlBehavior.Mining, ControlChannels.ItemUse)
+            || TileID.Sets.TouchDamageImmediate[Main.tile[x, y].TileType] <= 0
+            || AgentTools.Control.CheckAt(ControlBehavior.Mining, x, y) != null || !SafeAfterRemoval(player, x, y)) return null;
         int slot = -1, best = DigTable.Unmineable;
         for (int i = 0; i < 50; i++)
         {
             var item = player.inventory[i];
-            if (item.IsAir || item.pick <= 0 || !Reach.CanMine(player, hit.x, hit.y, item)) continue;
-            int cost = DigTable.CostFrames(hit.x, hit.y, player, item);
+            if (item.IsAir || item.pick <= 0 || !Reach.CanMine(player, x, y, item)) continue;
+            int cost = DigTable.CostFrames(x, y, player, item);
             if (cost < best) { slot = i; best = cost; }
         }
-        return slot < 0 ? null : new ItemUseRequest { TargetWx = hit.x, TargetWy = hit.y, Slot = slot, Strict = true };
+        return slot < 0 ? null : new ItemUseRequest { TargetWx = x, TargetWy = y, Slot = slot, Strict = true };
+    }
+
+    static Collision.HurtTile PredictedContact(Player player)
+    {
+        var position = player.position;
+        var velocity = player.velocity;
+        bool up = Collision.up, down = Collision.down;
+        try
+        {
+            for (int frame = 0; frame < 24; frame++)
+            {
+                velocity.Y = Math.Min(player.maxFallSpeed, velocity.Y + player.gravity);
+                var movement = Collision.TileCollision(position, velocity, player.width, player.height,
+                    player.controlDown, player.controlDown, (int)player.gravDir);
+                position += movement;
+                if (movement.X != velocity.X) velocity.X = 0;
+                if (movement.Y != velocity.Y) velocity.Y = 0;
+                var hit = Collision.HurtTiles(position, player.width, player.height, player);
+                if (hit.type >= 0) return hit;
+            }
+            return new Collision.HurtTile { type = -1 };
+        }
+        finally { Collision.up = up; Collision.down = down; }
     }
 
     static bool Harmful(Vector2 position, Player player, bool ignoreCurrentContact = false, bool includeLava = true)
@@ -110,21 +138,25 @@ public class AgentContactEscape : ModSystem
         bool touching = Harmful(player.position, player, includeLava: false);
         if (!AgentTools.ContactEscapeActive)
         {
-            if (!touching) return;
+            var predicted = touching ? Collision.HurtTiles(player.position, player.width, player.height, player) : PredictedContact(player);
+            if (predicted.type < 0) return;
             var damage = AgentTools.RecentContactDamage((long)Main.GameUpdateCount);
-            if (damage == null || damage["tick"].GetValue<long>() == attemptedDamageTick) return;
-            attemptedDamageTick = damage["tick"].GetValue<long>();
-            direction = SafeSide(player, -1) ? -1 : SafeSide(player, 1) ? 1 : 0;
-            clearing = direction == 0 ? ClearContact(player) : null;
+            if (touching && damage != null && damage["tick"].GetValue<long>() == attemptedDamageTick) return;
+            if (damage != null) attemptedDamageTick = damage["tick"].GetValue<long>();
+            clearing = !touching ? ClearTile(player, predicted.x, predicted.y) : null;
+            direction = clearing != null ? 0 : SafeSide(player, -1) ? -1 : SafeSide(player, 1) ? 1 : 0;
+            clearing ??= direction == 0 ? ClearContact(player) : null;
             if (direction == 0 && clearing == null)
             { DiagLog.Write("[agent_escape] no_checked_side"); return; }
             AgentTools.StopInputs();
             AgentTools.ContactEscapeActive = true;
             frames = clearedTiles = 0; clearingStarted = false; startX = player.position.X;
             AgentTools.LastContactEscape = new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["status"] = clearing == null ? "moving" : "clearing_contact",
-                ["reason"] = "contact_damage", ["direction"] = direction < 0 ? "left" : direction > 0 ? "right" : "none",
+                ["reason"] = touching ? "contact_damage" : "predicted_contact", ["direction"] = direction < 0 ? "left" : direction > 0 ? "right" : "none",
                 ["start_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y }, ["hp_start"] = player.statLife,
-                ["damage_event"] = damage.DeepClone(), ["hazard_tiles"] = new JsonArray(TerrainInspection.Read(2)["near_body_tiles"].AsArray()
+                ["damage_event"] = damage?.DeepClone(),
+                ["predicted_tile"] = new JsonObject { ["x"] = predicted.x, ["y"] = predicted.y, ["type"] = predicted.type },
+                ["hazard_tiles"] = new JsonArray(TerrainInspection.Read(2)["near_body_tiles"].AsArray()
                     .Where(tile => tile["touch_damage"].GetValue<int>() > 0).Select(tile => tile.DeepClone()).ToArray()) };
             if (clearing == null) Move();
             DiagLog.Write($"[agent_escape] start direction={direction} x={startX} hp={player.statLife}");

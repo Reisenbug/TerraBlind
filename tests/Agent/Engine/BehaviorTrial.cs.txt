@@ -35,8 +35,13 @@ public sealed class BehaviorTrial : ModSystem
     Stopwatch dungeonClock;
     double dungeonSampleMs;
     readonly Dictionary<string, double> dungeonTimes = new();
+    readonly Dictionary<string, double> dungeonStationary = new();
     readonly JsonArray dungeonStops = new();
     string dungeonDamageKey;
+    Vector2 dungeonPreviousPosition;
+    int dungeonPreviousHp, dungeonDamageCount;
+    bool dungeonPreviouslyDead;
+    double dungeonDamageTotal, dungeonHpLost, dungeonHpRecovered, dungeonRespawnHp;
     const System.Reflection.BindingFlags HiddenStatic = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
     static readonly System.Reflection.FieldInfo DamageField = typeof(AgentTools).GetField("LastDamage", HiddenStatic);
     static readonly System.Reflection.FieldInfo EscapeField = typeof(AgentTools).GetField("ContactEscapeActive", HiddenStatic);
@@ -453,11 +458,22 @@ public sealed class BehaviorTrial : ModSystem
                 : ((ActionTasks)ActionsField.GetValue(null)).HasPrimaryControl || ((AgentControlSession)SessionField.GetValue(null)).PrimaryActive ? "tool_wait"
                 : (bool)ProcessingProperty.GetValue(null) ? "model_wait" : "idle";
             dungeonTimes[phase] = dungeonTimes.GetValueOrDefault(phase) + elapsed;
+            if (Vector2.DistanceSquared(p.position, dungeonPreviousPosition) < .01f)
+                dungeonStationary[phase] = dungeonStationary.GetValueOrDefault(phase) + elapsed;
+            if (dungeonPreviouslyDead && !p.dead) dungeonRespawnHp += Math.Max(0, p.statLife);
+            else if (!dungeonPreviouslyDead)
+            {
+                dungeonHpLost += Math.Max(0, dungeonPreviousHp - Math.Max(0, p.statLife));
+                dungeonHpRecovered += Math.Max(0, p.statLife - dungeonPreviousHp);
+            }
+            dungeonPreviousPosition = p.position; dungeonPreviousHp = p.statLife; dungeonPreviouslyDead = p.dead;
             var damage = (JsonObject)DamageField.GetValue(null);
             string damageKey = damage?["tick"] + ":" + damage?["kind"];
             if (damage != null && damageKey != dungeonDamageKey)
             {
                 dungeonDamageKey = damageKey;
+                dungeonDamageCount++;
+                dungeonDamageTotal += damage["damage"].GetValue<double>();
                 File.AppendAllText(Path.Combine(Main.SavePath, "dungeon-damage.jsonl"), new JsonObject {
                     ["elapsed_ms"] = now, ["damage"] = damage.DeepClone(),
                     ["terrain"] = TerrainInspection.Read(6) }.ToJsonString() + Environment.NewLine);
@@ -589,12 +605,14 @@ public sealed class BehaviorTrial : ModSystem
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_CONTACT_MINING_PROBE") == "1"
+            || Environment.GetEnvironmentVariable("TB_CONTACT_APPROACH_PROBE") == "1"
             || Environment.GetEnvironmentVariable("TB_CONTACT_AUTOMATIC_PROBE") == "1"
             || Environment.GetEnvironmentVariable("TB_CONTACT_OWNED_PROBE") == "1"
             || Environment.GetEnvironmentVariable("TB_CONTACT_PERMISSION_PROBE") == "1")
         {
             bool owned = Environment.GetEnvironmentVariable("TB_CONTACT_OWNED_PROBE") == "1";
-            bool automatic = Environment.GetEnvironmentVariable("TB_CONTACT_AUTOMATIC_PROBE") == "1" || owned;
+            bool approach = Environment.GetEnvironmentVariable("TB_CONTACT_APPROACH_PROBE") == "1";
+            bool automatic = Environment.GetEnvironmentVariable("TB_CONTACT_AUTOMATIC_PROBE") == "1" || owned || approach;
             await OnMain(() =>
             {
                 NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false;
@@ -610,11 +628,14 @@ public sealed class BehaviorTrial : ModSystem
                 for (int i = 0; i < armor.Length; i++) p.armor[i].SetDefaults(armor[i]);
                 p.ConsumedLifeCrystals = 15; p.statLife = p.statLifeMax = p.statLifeMax2 = 400;
                 p.Teleport(new Vector2(3692.625f * 16 - p.width / 2f, 781.6875f * 16 - p.height / 2f));
+                if (approach) p.Teleport(new Vector2(3689.4753f * 16 - p.width / 2f, 783.6875f * 16 - p.height / 2f));
                 if (owned) p.Teleport(new Vector2(Main.spawnTileX * 16, Main.spawnTileY * 16 - p.height));
                 p.velocity = Vector2.Zero; p.immune = false; p.immuneTime = 0;
                 p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
                 return true;
             });
+            if (approach)
+                await OnMain(() => { ActExecutor.Start(new List<ActStep> { new() { Right = true, UntilKind = "frames", UntilN = 120 } }, 150); return true; });
             if (Environment.GetEnvironmentVariable("TB_CONTACT_PERMISSION_PROBE") == "1")
             {
                 Task<bool> CanClear() => OnMain(() => typeof(AgentContactEscape).GetMethod("ClearContact", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)
@@ -682,6 +703,8 @@ public sealed class BehaviorTrial : ModSystem
                             ["escape"] = state["contact_escape"]?.DeepClone(), ["active"] = state["agent"]["contact_escape_active"].DeepClone() };
                     });
                     samples.Add(sample);
+                    if (approach && sample["hp"].GetValue<int>() < 400)
+                        throw new Exception("predicted contact was not cleared before actual damage: " + sample);
                     if (owned && sample["escape"]?["status"]?.ToString() == "cancelled")
                         throw new Exception("original route cleanup cancelled the active survival controller: " + sample);
                     bool safe = sample["hurt_tile"].GetValue<int>() < 0 && sample["grounded"].GetValue<bool>()
@@ -696,6 +719,8 @@ public sealed class BehaviorTrial : ModSystem
                     throw new Exception("contact escape failed to reach safe supported ground: " + last);
                 if (last["escape"]?["cleared_tiles"]?.GetValue<int>() is not > 0)
                     throw new Exception("contact probe did not exercise contact mining");
+                if (approach && last["escape"]?["reason"]?.ToString() != "predicted_contact")
+                    throw new Exception("approach probe did not exercise prediction before contact");
                 if (owned)
                 {
                     var state = await Call("get_state", new JsonObject());
@@ -705,6 +730,7 @@ public sealed class BehaviorTrial : ModSystem
                     Console.WriteLine($"CONTACT_OWNED_PASS original_handle={originalHandle} checkpoint_retained=true native_engine=true model_calls=0");
                 }
                 Console.WriteLine($"CONTACT_AUTOMATIC_PASS hp={last["hp"]} elapsed_ms={clock.ElapsedMilliseconds} escape={last["escape"]} native_engine=true model_calls=0");
+                if (approach) Console.WriteLine("CONTACT_APPROACH_PASS hp=400 damage_events=0 native_inputs=true native_mining=true model_calls=0");
                 return;
             }
             await Call("task_plan", JsonNode.Parse("""
@@ -3005,6 +3031,7 @@ public sealed class BehaviorTrial : ModSystem
                 ["natural_encounters"] = NaturalEncounters, ["terrain_edits"] = 0, ["model"] = "gpt-6.1-sol",
                 ["package_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
                     File.ReadAllBytes(Path.Combine(Main.SavePath, "Mods", "TerraBlind.tmod")))) }.ToJsonString());
+            dungeonPreviousPosition = p.position; dungeonPreviousHp = p.statLife;
             dungeonClock = Stopwatch.StartNew(); dungeonSampling = true; NativeAgent.Submit(prompt);
             return true;
         });
@@ -3063,6 +3090,11 @@ public sealed class BehaviorTrial : ModSystem
                     ["loot_y"] = completed.Value == null ? null : JsonValue.Create(completed.Key.Y),
                     ["terrain"] = TerrainInspection.Read(12), ["status"] = NativeAgent.Status,
                     ["time_ms"] = new JsonObject(dungeonTimes.Select(kv => new KeyValuePair<string, JsonNode>(kv.Key, JsonValue.Create(kv.Value)))),
+                    ["stationary_ms"] = dungeonStationary.Values.Sum(),
+                    ["stationary_by_phase_ms"] = new JsonObject(dungeonStationary.Select(kv => new KeyValuePair<string, JsonNode>(kv.Key, JsonValue.Create(kv.Value)))),
+                    ["damage_count"] = dungeonDamageCount, ["damage_total"] = dungeonDamageTotal,
+                    ["hp_lost_measured"] = dungeonHpLost, ["hp_recovered_measured"] = dungeonHpRecovered,
+                    ["respawn_hp_restored"] = dungeonRespawnHp,
                     ["stationary_segments"] = dungeonStops.DeepClone() };
             });
             observation["state"] = state;
