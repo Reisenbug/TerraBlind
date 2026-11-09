@@ -561,6 +561,7 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_NATIVE_REJECTION_PROBE") == "1") { await NativeRejectionTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_REPLY_COVER_PROBE") == "1") { await ReplyCoverTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_PREPARED_HANDOFF_PROBE") == "1") { await PreparedHandoffTrial(); return; }
         if (DungeonTrial) { await DungeonGoalTrial(); return; }
@@ -2988,6 +2989,74 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("edited program replayed the original task or did not use revision 2");
             return true;
         });
+    }
+
+    async Task NativeRejectionTrial()
+    {
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false; AgentPermissions.Reset();
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            Combat.Enabled = Dodge.Enabled = Concessions.Enabled = false;
+            var p = Main.LocalPlayer;
+            int cx = Main.spawnTileX, ground = Main.spawnTileY + 2;
+            for (int x = cx - 40; x <= cx + 40; x++)
+            for (int y = ground - 12; y <= ground + 3; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                if (y >= ground) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+            }
+            p.Teleport(new Vector2(cx * 16, ground * 16 - p.height)); p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = ground; p.statLife = p.statLifeMax = p.statLifeMax2 = 100;
+            p.itemTime = p.itemAnimation = 0; p.releaseJump = true;
+            foreach (var item in p.inventory) item.TurnToAir();
+            var native = typeof(RecedingNav).Assembly.GetType("TerraBlind.LegacyNativePrediction", true);
+            var from = ((int, int))typeof(StateSpacePlanner).GetMethod("StandCell", HiddenStatic)
+                .Invoke(null, new object[] { p.position.X, p.position.Y });
+            void Set(Type type, string name, object value) => type.GetField(name, HiddenStatic).SetValue(null, value);
+            object Get(string name) => typeof(RecedingNav).GetField(name, HiddenStatic).GetValue(null);
+            var field = new Dictionary<(int, int), int>();
+            for (int dx = -30; dx <= 30; dx++) field[(from.Item1 + dx, from.Item2)] = 100 - dx;
+            Set(typeof(MazeWand), "_cachedField", field);
+            Set(typeof(MazeWand), "_cachedGoal", (from.Item1 + 20, from.Item2));
+            Set(typeof(RecedingNav), "_goalWx", from.Item1 + 20); Set(typeof(RecedingNav), "_goalWy", from.Item2);
+            Set(typeof(RecedingNav), "_fieldReady", true);
+            VanillaNavBridge.Enabled = VanillaNavBridge.RegionsEnabled = false;
+            StateSpacePlanner.SSResult Inject(bool rejected)
+            {
+                var anchor = VanillaPrediction.Observe(p, false);
+                var sample = anchor.DeepClone().AsObject();
+                if (rejected) sample["hp"] = p.statLife - 1;
+                var candidate = new StateSpacePlanner.SSResult { Found = true, StartPx = p.position.X,
+                    StartPy = p.position.Y, GoalWx = from.Item1, GoalWy = from.Item2, CurH = 100 };
+                candidate.Steps.Add(new StateSpacePlanner.ExecStep { Frames = new() {
+                    new PhysicsSimulator.ControlInput { Px = p.position.X, Py = p.position.Y } } });
+                Set(native, "pending", Task.FromResult(new JsonObject { ["outcome"] = "complete", ["frames"] = new JsonArray(sample) }));
+                Set(native, "cancellation", new CancellationTokenSource()); Set(native, "plan", candidate);
+                Set(native, "snapshot", VanillaFrame.Capture(p, new Rectangle(cx - 30, ground - 15, 61, 20), true));
+                Set(native, "anchor", anchor); Set(native, "requestedAt", Stopwatch.GetTimestamp());
+                return candidate;
+            }
+            var valid = Inject(false);
+            object[] poll = { p, null };
+            if (!(bool)native.GetMethod("Poll", HiddenStatic).Invoke(null, poll) || !ReferenceEquals(poll[1], valid)
+                || !valid.NativeVerified) throw new Exception("valid native prediction was rejected");
+            RecedingNav.Active = true;
+            Set(typeof(RecedingNav), "_noProgressSteps", 0);
+            Set(typeof(RecedingNav), "_failureRecoveryTried", false);
+            Set(typeof(RecedingNav), "_failureRecoveryPending", false);
+            typeof(RecedingNav).GetMethod("BeginAttempt", HiddenStatic).Invoke(null, new object[] { p });
+            for (int i = 0; i < 4; i++) { Inject(true); RecedingNav.Tick(); }
+            if (!(bool)Get("_failureRecoveryTried"))
+                throw new Exception("four rejected forecasts did not enter no-progress recovery: " + Get("_noProgressSteps"));
+            Console.WriteLine("NATIVE_REJECTION_RECOVERY_PASS attempts=" + Get("_noProgressSteps") + " hp=" + p.statLife);
+            Halt.All();
+            return true;
+        });
+        int goalX = Main.spawnTileX + 12, goalY = Main.spawnTileY + 1;
+        var moved = await Call("nav_to", new JsonObject { ["x"] = goalX, ["y"] = goalY });
+        if (moved["done"]?.GetValue<bool>() != true) throw new Exception("normal flat navigation regressed: " + moved);
+        Console.WriteLine("NATIVE_REJECTION_PASS valid_forecast=true damage_rejected=true recovery_after=4 actual_flat_arrival=true model_calls=0");
     }
 
     async Task ReplyCoverTrial()

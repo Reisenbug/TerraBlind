@@ -182,6 +182,25 @@ namespace TerraBlind
             return ++_noProgressSteps >= 4;
         }
 
+        static void RecoverNoProgress(Player player, (int, int) cell, string reason)
+        {
+            EventLog.W(Ev.Fail, $"NO-PROGRESS attempts={_noProgressSteps} at={cell} reason={reason} recovery_tried={_failureRecoveryTried}");
+            if (!_failureRecoveryTried)
+            {
+                _failureRecoveryTried = true;
+                var field = MazeWand.PeekFieldOrNull(_goalWx, _goalWy);
+                if (field != null)
+                {
+                    int h = field.TryGetValue(cell, out int value) ? value : int.MaxValue;
+                    bool dispatched = TrapEscape.TryEscape(field, cell.Item1, cell.Item2, h, _goalWx, _goalWy);
+                    if (TrapEscape.Busy) { _failureRecoveryPending = true; return; }
+                    if (dispatched) { StuckSentinel.Reset(); return; }
+                }
+            }
+            LastStop = "repeated_action_failure";
+            Stop();
+        }
+
         static void PollFailureRecovery()
         {
             if (TrapEscape.Poll())
@@ -408,8 +427,13 @@ namespace TerraBlind
 
             if (LegacyNativePrediction.Poll(p, out var nativePlan))
             {
-                StuckSentinel.Reset();
-                if (nativePlan != null) DispatchLegacy(nativePlan, StateSpacePlanner.StandCell(p.position.X, p.position.Y));
+                if (nativePlan != null)
+                {
+                    StuckSentinel.Reset();
+                    DispatchLegacy(nativePlan, StateSpacePlanner.StandCell(p.position.X, p.position.Y));
+                }
+                else if (LegacyNativePrediction.Rejected && RecordAttempt(p, false))
+                    RecoverNoProgress(p, StateSpacePlanner.StandCell(p.position.X, p.position.Y), "native_prediction_rejected");
                 return;
             }
 
@@ -502,21 +526,8 @@ namespace TerraBlind
                 StateSpacePlanner.ReportEdge(f.Item1, f.Item2, t.Item1, t.Item2, cell.Item1, cell.Item2, _lastPillar);
                 if (RecordAttempt(p, hit))
                 {
-                    EventLog.W(Ev.Fail, $"NO-PROGRESS attempts={_noProgressSteps} at={cell} target={t} recovery_tried={_failureRecoveryTried}");
-                    if (!_failureRecoveryTried)
-                    {
-                        _failureRecoveryTried = true;
-                        var field = MazeWand.PeekFieldOrNull(_goalWx, _goalWy);
-                        if (field != null)
-                        {
-                            int h = field.TryGetValue(cell, out int value) ? value : int.MaxValue;
-                            bool dispatched = TrapEscape.TryEscape(field, cell.Item1, cell.Item2, h, _goalWx, _goalWy);
-                            if (TrapEscape.Busy) { _failureRecoveryPending = true; return; }
-                            if (dispatched) { StuckSentinel.Reset(); return; }
-                        }
-                    }
-                    LastStop = "repeated_action_failure";
-                    Stop(); return;
+                    RecoverNoProgress(p, cell, "execution_missed");
+                    return;
                 }
             }
             // 后台 A* 搜完了就在这儿派发(派发必须在主线程)。搜索本身在 Task 里跑,
@@ -589,6 +600,7 @@ namespace TerraBlind
             if (_altered >= RebuildAltered)
                 RebuildFieldAsync($"altered {_altered} tiles");
 
+            BeginAttempt(p);
             if (!LegacyNativePrediction.Start(p, res, _goalWx, _goalWy)) DispatchLegacy(res, cell);
         }
 

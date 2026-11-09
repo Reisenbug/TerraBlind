@@ -17,6 +17,7 @@ internal static class LegacyNativePrediction
     static long requestedAt;
     static bool searchingPlacement;
     static int fieldGoalX, fieldGoalY;
+    internal static bool Rejected { get; private set; }
 
     internal static void Reset()
     {
@@ -212,6 +213,7 @@ internal static class LegacyNativePrediction
     internal static bool Poll(Player player, out StateSpacePlanner.SSResult ready)
     {
         ready = null;
+        Rejected = false;
         if (pending == null) return false;
         if (!pending.IsCompleted && !cancellation.IsCancellationRequested) return true;
         try
@@ -273,6 +275,7 @@ internal static class LegacyNativePrediction
                 && Math.Abs(last["y"].GetValue<float>() - frames[^1].Py) <= 16;
             if (!valid)
             {
+                Rejected = true;
                 var from = StateSpacePlanner.StandCell(player.position.X, player.position.Y);
                 StateSpacePlanner.PenalizeEdges(new[] { (from.Item1, from.Item2, plan.GoalWx, plan.GoalWy) }, 200f);
                 int minHp = samples.Count > 0 ? samples.Min(frame => frame["hp"].GetValue<int>()) : -1;
