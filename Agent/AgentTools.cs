@@ -1086,11 +1086,12 @@ public static partial class AgentTools
                     if (!string.IsNullOrEmpty(ownerNode))
                     {
                         string callerNode = ActionTasks.NodeContext.Value;
-                        if (!string.IsNullOrEmpty(callerNode) && callerNode != ownerNode)
-                            throw new InvalidOperationException("不能在其他DAG节点的脚本内恢复此句柄；回到所属节点续接。");
                         await NativeAgent.OnMain(() =>
                         {
                             Plan.Script(ownerNode);
+                            if (!string.IsNullOrEmpty(callerNode) && callerNode != ownerNode
+                                && Plan.Snapshot()["ready_steps"].AsArray().Any(node => node?.ToString() == callerNode))
+                                Plan.Advance(callerNode, AgentTaskEvidence.Measure);
                             Plan.Select(ownerNode);
                             return true;
                         }, token);

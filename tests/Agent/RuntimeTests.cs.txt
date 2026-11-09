@@ -187,6 +187,70 @@ static class RuntimeTests
             if (originalWorkflow != null) AgentTools.Workflows.Remove(originalWorkflow);
         }
     }
+
+    static async Task TestDetourReturnsToOwner()
+    {
+        var handler = HttpServerSystem.Handler;
+        var inventory = Game.LocalPlayer.inventory;
+        int starts = 0;
+        try
+        {
+            Game.LocalPlayer.inventory = Enumerable.Range(0, inventory.Length).Select(_ => new Terraria.Item()).ToArray();
+            AgentTools.Plan.Reset(); AgentTools.Watches.Reset(); AgentTools.Actions.Reset();
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"collect on the way and continue travel","mode":"dag","steps":[
+                 {"id":"travel","description":"original route","depends_on":[],
+                  "script":"return step('route',()=>tool('action_start',{tool:'nav_to',args:{x:40,y:30}}));",
+                  "conditions":[{"kind":"permanent_health","count":9999}]},
+                 {"id":"detour","description":"collect nearby item","depends_on":[],"script":"return {};",
+                  "conditions":[{"kind":"item","type":9,"count":1}]}]}
+                """).AsObject(), AgentTaskEvidence.Measure);
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
+                if (path == "/loot_all") { Game.LocalPlayer.inventory[0].SetDefaults(9); Game.LocalPlayer.inventory[0].stack = 1; }
+                return (200, path == "/nav_recede_done" ? "{\"done\":false}" : "{}");
+            };
+            await Execute(AgentTools.Execute("run_script", new JsonObject { ["task_node"] = "travel" }, default));
+            await PumpUntil(() => starts == 1);
+            string handle = AgentTools.Actions.ActiveHandle;
+            await Execute(AgentTools.Execute("action_control", new JsonObject { ["handle"] = handle, ["command"] = "pause" }, default));
+            var returned = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["task_node"] = "detour", ["workflow"] = "detour-return",
+                ["code"] = "try{return tool('loot_all',{});}finally{tool('action_control',{handle:'" + handle + "',command:'resume'});}"
+            }, default)));
+            Check(returned["ok"]?.GetValue<bool>() == true && AgentTools.Actions.ActiveHandle == handle,
+                "detour could not return its original route without a model round trip: " + returned);
+            await PumpUntil(() => starts == 2);
+            Check(AgentTools.Plan.Snapshot()["current_step"].ToString() == "travel"
+                && AgentTools.Plan.Snapshot()["steps"][1]["status"].ToString() == "completed",
+                "returning from a detour failed to verify its real result or select the route owner");
+            await Execute(AgentTools.Execute("action_control", new JsonObject { ["handle"] = handle, ["command"] = "pause" }, default));
+            Game.LocalPlayer.inventory[0] = new Terraria.Item();
+            AgentTools.Plan.Revise(new JsonObject { ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                ["reason"] = "prepare another optional branch", ["add_nodes"] = new JsonArray(new JsonObject {
+                    ["id"] = "optional", ["description"] = "optional work may remain unfinished", ["depends_on"] = new JsonArray(),
+                    ["script"] = "return {};", ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "item", ["type"] = 9, ["count"] = 2 }) }) },
+                AgentTaskEvidence.Measure);
+            var skipped = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["task_node"] = "optional", ["workflow"] = "optional-return",
+                ["code"] = "return tool('action_control',{handle:'" + handle + "',command:'resume'});"
+            }, default)));
+            Check(skipped["ok"]?.GetValue<bool>() == true && AgentTools.Actions.ActiveHandle == handle
+                && AgentTools.Plan.Snapshot()["steps"][2]["status"].ToString() != "completed",
+                "returning to a route invented completion of an unfinished optional branch: " + skipped);
+            Console.WriteLine("PASS: detour returns to the original owner in one script and verifies only real completion");
+        }
+        finally
+        {
+            AgentTools.Stop();
+            await PumpUntil(() => !AgentTools.Actions.HasActive);
+            Game.LocalPlayer.inventory = inventory; HttpServerSystem.Handler = handler;
+            AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+        }
+    }
     static void TestHoneyNotice()
     {
         var watch = new AgentWatch(); watch.EnsureDefaults();
@@ -671,6 +735,7 @@ static class RuntimeTests
         TestActionNotices();
         await TestGapContinuation();
         await TestOwnedRecovery();
+        await TestDetourReturnsToOwner();
         await TestInlineFailureRecovery();
         await TestInlineCompletionHandoff();
         await TestInlinePauseResume();
