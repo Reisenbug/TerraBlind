@@ -125,6 +125,7 @@ public sealed class ScriptProgress
             last = new JsonObject { ["error"] = result["error"]?.DeepClone(), ["detail"] = result["detail"]?.DeepClone(),
                 ["value"] = result["value"]?.DeepClone(), ["tool_counts"] = result["tool_counts"]?.DeepClone(),
                 ["tool_calls"] = result["tool_calls"]?.DeepClone(), ["elapsed_ms"] = result["elapsed_ms"]?.DeepClone(),
+                ["skill_calls"] = result["skill_calls"]?.DeepClone(),
                 ["failure"] = result["failure"]?.DeepClone(), ["output_limit"] = result["output_limit"]?.DeepClone() };
             running = false; revision++;
         }
@@ -173,7 +174,7 @@ public sealed class ScriptProgress
             if (last != null)
             {
                 execution = new JsonObject();
-                foreach (string field in new[] { "error", "tool_counts", "tool_calls", "elapsed_ms", "failure", "output_limit" })
+                foreach (string field in new[] { "error", "tool_counts", "tool_calls", "elapsed_ms", "failure", "output_limit", "skill_calls" })
                     execution[field] = last[field]?.DeepClone();
                 if (last["detail"] is JsonValue detail)
                 {

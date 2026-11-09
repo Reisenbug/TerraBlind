@@ -10,7 +10,7 @@ public sealed class ScriptLibrary
     static readonly object gate = new();
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -20,6 +20,39 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "gather_route") return Template(name,
+            "参数化采集与来源暂时不可见的续接示例。保存后通过skill调用，input包含gather_args和当前世界查证的waypoints（最多8项，每项x/y及可选mode/source_area）。先收集当前位置可用来源，未达到真实库存目标且当前来源耗尽时，立即前往下一个预备位置并继续；其他失败保留证据交回。DAG按真实条件完成验收。",
+            """
+            const config=typeof input==='undefined'?null:input;
+            if(!config?.gather_args?.targets||!Array.isArray(config.waypoints)||config.waypoints.length>8)
+              throw new Error('input needs gather_args.targets and up to eight observed waypoints');
+            const targets=config.gather_args.targets;
+            const counts=()=>{
+              const inventory=tool('get_state').inventory_slots;
+              return targets.map(t=>({type:t.item_type,wanted:t.count,
+                actual:inventory.filter(i=>i.type===t.item_type).reduce((n,i)=>n+i.stack,0)}));
+            };
+            let args=config.gather_args;
+            const visited=[];
+            for(let index=0;index<=config.waypoints.length;index++){
+              const current=counts();
+              if(current.every(t=>t.actual>=t.wanted)) return {status:'collected',counts:current,visited};
+              const result=tool('gather',args);
+              if(result.outcome==='enough'){
+                const actual=counts();
+                if(actual.every(t=>t.actual>=t.wanted)) return {status:'collected',counts:actual,visited};
+                return {status:'needs_review',reason:'inventory_changed',counts:actual,result};
+              }
+              if(!['source_unavailable','source_area_exhausted'].includes(result.outcome))
+                return {status:'needs_review',reason:'collection_blocked',result,visited};
+              const point=config.waypoints[index];
+              if(!point) return {status:'needs_review',reason:'prepared_sources_exhausted',result,visited};
+              const travel=tool('nav_to',{x:point.x,y:point.y,mode:point.mode??'travel'});
+              if(travel.done!==true) return {status:'needs_review',reason:'approach_blocked',travel,visited};
+              visited.push({x:point.x,y:point.y});
+              args={...config.gather_args,source_area:point.source_area};
+            }
+            """);
         if (name == "recover_pressure_plate") return Template(name,
             "写入DAG节点on_failure的局部恢复示例。先按任务权限填写allow_trigger_removal、实际pick_slot/pick_type；宿主提供failure。依据原动作失败证据和当前机关变体拆除压力板，核验后恢复原句柄；未覆盖或修复失败交回审阅。原脚本与采集进度保留。",
             """

@@ -81,7 +81,7 @@ public static class AgentScript
         programs["parameters"]["properties"]["operation"]["enum"].AsArray().Add("example");
         programs["description"] = programs["description"].ToString()
             + "list包含内置技能模板(template:true,revision:0)和已保存技能。get读取模板源码，填写config后save(expected_revision:0)，再以返回版本执行；模板不是实机验证通过的技能。navigate_observe保持导航与观察并行；collect_detour采集后恢复原路线；use_life_crystals验证永久生命增长；recover_pressure_plate可按权限和当前工具配置后写入节点on_failure。"
-            + "example返回可编辑JS示例，name为空列出名称；sample_tile_variants演示按现场变体试采、保存所得、同句柄恢复及事件交回。示例不执行；先读源码，按任务修改config与策略，再save和run_script。";
+            + "example返回可编辑JS示例，name为空列出名称；gather_route在来源暂不可见或本区域采尽时，按预备路点立即续采；sample_tile_variants演示按现场变体试采、保存所得、同句柄恢复及事件交回。示例不执行；先读源码，按任务修改config与策略，再save和run_script。";
         var events = tools.First(t => t["function"]?["name"]?.ToString() == "script_events")["function"];
         events["parameters"]["properties"]["max_events"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1,
             ["maximum"] = 16, ["description"] = "每次读取数量，默认4。remaining_events表示队列剩余数；可继续读取，未读事件不会丢弃。" };
@@ -212,6 +212,12 @@ public static class AgentScript
         string Clip(string text, int limit) => text.Length <= limit ? text : text[..limit] + "…";
         JsonObject Report(string error, string detail, JsonNode value = null, int? omittedOutputChars = null)
         {
+            foreach (var call in skillCalls.Where(call => call["status"]?.ToString() == "running"))
+            {
+                call["status"] = "interrupted";
+                call["elapsed_ms"] = clock.ElapsedMilliseconds - call["started_ms"].GetValue<long>();
+                call["tool_calls"] = calls - call["tool_calls_before"].GetValue<int>();
+            }
             var result = new JsonObject
             {
                 ["ok"] = error == null, ["error"] = error, ["detail"] = detail,

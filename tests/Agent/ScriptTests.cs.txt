@@ -436,6 +436,8 @@ static class ScriptTests
                 && skillFirst["skill_calls"][0]["input"]["x"].GetValue<int>() == 100
                 && skillFirst["skill_calls"][0]["status"].ToString() == "returned",
                 "parameterized skills lost fresh inputs, call evidence or isolated step ids");
+            Check(JsonNode.DeepEquals(skillProgress.Summary()["last_execution"]["skill_calls"], skillFirst["skill_calls"]),
+                "workflow query lost actual skill invocation evidence");
             var skillResume = await AgentScript.Run(twoTargets, 5, (_, _) => { }, SkillEffect,
                 _ => Task.CompletedTask, default, skillProgress, programs: library.Callable());
             Check(skillResume["ok"].GetValue<bool>() && skillTargets.Count == 2,
@@ -456,12 +458,33 @@ static class ScriptTests
                 new ScriptProgress(), programs: library.Callable());
             Check(!deniedSkill["ok"].GetValue<bool>() && skillTargets.Count == 3,
                 "skill bypassed ordinary tool validation");
+            Check(deniedSkill["skill_calls"][0]["status"].ToString() == "interrupted",
+                "failed skill was left falsely marked as running");
             library.Save("budgeted", "for(let i=0;i<input.n;i++) tool('effect',{x:i});", 0);
             var sharedBudget = await AgentScript.Run("skill('budgeted',1,{n:60});skill('budgeted',1,{n:60});", 5,
                 (_, _) => { }, SkillEffect, _ => Task.CompletedTask, default, programs: library.Callable());
             Check(!sharedBudget["ok"].GetValue<bool>() && sharedBudget["tool_calls"].GetValue<int>() == 100,
                 "skill invocation reset the parent tool budget");
             Console.WriteLine("PASS: parameterized saved skills share validation and budgets, isolate checkpoints and audit fresh inputs across worlds");
+            library.Save("gather_route", ScriptLibrary.Example("gather_route")["code"].ToString(), 0);
+            int collectedCount = 0, gatherCalls = 0, recoveryMoves = 0;
+            Task<string> RouteGather(string name, JsonObject args, CancellationToken token)
+            {
+                if (name == "get_state") return Task.FromResult("{\"inventory_slots\":[{\"type\":42,\"stack\":" + collectedCount + "}]}");
+                if (name == "nav_to") { recoveryMoves++; return Task.FromResult("{\"done\":true}"); }
+                Check(name == "gather", "source recovery dispatched an unrelated action");
+                gatherCalls++;
+                if (recoveryMoves == 0) return Task.FromResult("{\"ok\":false,\"outcome\":\"source_unavailable\"}");
+                Check(args["source_area"] == null, "source recovery kept the exhausted area's bounds at a new location");
+                collectedCount = 1;
+                return Task.FromResult("{\"ok\":true,\"outcome\":\"enough\"}");
+            }
+            var sourceRecovery = await AgentScript.Run("return skill('gather_route',1,{gather_args:{targets:[{item_type:42,count:1}],source_area:{x:10,y:10,width:10,height:10}},waypoints:[{x:30,y:40}]},'collect');",
+                5, (_, _) => { }, RouteGather, _ => Task.CompletedTask, default, programs: library.Callable());
+            Check(sourceRecovery["ok"].GetValue<bool>() && sourceRecovery["value"]["status"].ToString() == "collected"
+                && gatherCalls == 2 && recoveryMoves == 1 && sourceRecovery["value"]["counts"][0]["actual"].GetValue<int>() == 1,
+                "prepared source recovery waited for a model, ignored actual inventory or lost the selected waypoint");
+            Console.WriteLine("PASS: prepared source recovery moves and resumes collection in the same script using real returned inventory counts");
             bool escaped = false;
             try { library.Save("../outside", "return 1;", 0); }
             catch (ArgumentException) { escaped = true; }

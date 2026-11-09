@@ -448,7 +448,8 @@ public sealed class BehaviorTrial : ModSystem
             double now = dungeonClock.Elapsed.TotalMilliseconds, elapsed = now - dungeonSampleMs;
             dungeonSampleMs = now;
             string phase = p.dead ? "respawn" : RecedingNav.Active && !(bool)FieldReadyProperty.GetValue(null) ? "navigation_compute"
-                : FightCoordinator.AttackAnimationActive ? "combat_animation"
+                : FightCoordinator.AttackAnimationActive || p.HeldItem.damage > 0 && p.HeldItem.pick == 0
+                    && p.HeldItem.axe == 0 && p.HeldItem.hammer == 0 && (p.itemAnimation > 0 || p.controlUseItem) ? "combat_animation"
                 : p.itemAnimation > 0 || p.itemTime > 0 || p.controlUseItem
                     ? p.HeldItem.pick > 0 || p.HeldItem.axe > 0 ? "mining"
                         : p.HeldItem.createTile >= 0 ? "placement" : "other_animation"

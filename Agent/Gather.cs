@@ -168,6 +168,8 @@ public static class Gather
             ["source_area"] = area?.Snapshot(),
             ["actions"] = actions, ["elapsed_ms"] = timer.ElapsedMilliseconds, ["last_result"] = last,
             ["source_error"] = sourceError,
+            ["recovery_skill"] = outcome is "source_unavailable" or "source_area_exhausted"
+                ? new JsonObject { ["tool"] = "script_program", ["operation"] = "example", ["name"] = "gather_route" } : null,
             ["blocked_sources"] = blockedSources,
             ["targets"] = new JsonArray(targets.Select(t => (JsonNode)new JsonObject
                 { ["item_type"] = t.ItemType, ["wanted"] = t.Count, ["actual"] = Count(t),
