@@ -543,6 +543,16 @@ static class GatherTests
             Check(!p.controlLeft && !p.controlRight, "stopped strafe retained movement");
             FightCoordinator.Stop(); FightCoordinator.Start(40); FightCoordinator.Tick(p);
             Check(Cursor.X == Main.npc[0].Center.X, "target filter leaked into ordinary fight");
+            foreach (string immunity in new[] { "dontTakeDamage", "immortal", "unchaseable" })
+            {
+                FightCoordinator.Stop();
+                Main.npc[0].dontTakeDamage = immunity == "dontTakeDamage";
+                Main.npc[0].immortal = immunity == "immortal";
+                Main.npc[0].chaseable = immunity != "unchaseable";
+                FightCoordinator.Start(40); FightCoordinator.Tick(p);
+                Check(Cursor.X == Main.npc[1].Center.X, "automatic attack selected " + immunity + " NPC");
+            }
+            Main.npc[0].dontTakeDamage = Main.npc[0].immortal = false; Main.npc[0].chaseable = true;
             p.controlRight = p.controlJump = true;
             FightCoordinator.Tick(p);
             Check(p.controlRight && p.controlJump && p.controlUseItem, "attack overwrote navigation controls");

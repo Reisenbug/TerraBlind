@@ -85,7 +85,12 @@ namespace Terraria
         public static readonly List<string> Chat = new();
         public static void NewText(string text) => Chat.Add(text);
     }
-    public class Chest { public int x, y; public Item[] item = Enumerable.Range(0, 40).Select(_ => new Item()).ToArray(); }
+    public class Chest
+    {
+        public int x, y; public bool locked;
+        public Item[] item = Enumerable.Range(0, 40).Select(_ => new Item()).ToArray();
+        public static bool IsLocked(int x, int y) => Main.chest.FirstOrDefault(c => c != null && c.x == x && c.y == y)?.locked == true;
+    }
     public class Player
     {
         public Item trashItem = new();
@@ -131,7 +136,9 @@ namespace Terraria
     {
         public int whoAmI;
         public int type, life = 100, lifeMax = 100, damage = 10, width = 20, height = 20;
-        public bool active, friendly, townNPC, boss;
+        public bool active, friendly, townNPC, boss, dontTakeDamage, immortal, chaseable = true;
+        public bool CanBeChasedBy(object attacker = null, bool ignoreDontTakeDamage = false)
+            => active && chaseable && lifeMax > 5 && (!dontTakeDamage || ignoreDontTakeDamage) && !friendly && !immortal;
         public Microsoft.Xna.Framework.Vector2 velocity;
         public Microsoft.Xna.Framework.Vector2 position;
         public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
@@ -214,7 +221,7 @@ namespace Terraria.ID
         public const int RollingCactus = 484, BouncyBoulder = 664, LifeCrystalBoulder = 665;
         public static class Sets
         {
-            public static bool[] Falling = new bool[1000], Suffocate = new bool[1000];
+            public static bool[] Falling = new bool[1000], Suffocate = new bool[1000], CrackedBricks = new bool[1000];
             public static int[] TouchDamageImmediate = new int[1000];
         }
     }

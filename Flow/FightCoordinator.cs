@@ -271,7 +271,7 @@ namespace TerraBlind
             for (int i = 0; i < Main.maxNPCs; i++)
             {
                 NPC npc = Main.npc[i];
-                if (npc == null || !npc.active) continue;
+                if (npc == null || !npc.CanBeChasedBy(p)) continue;
                 if (idle ? npc.damage <= 0 : _types != null && !_types.Contains(npc.type)) continue;
                 if (npc.townNPC || npc.friendly) continue;
                 if (npc.lifeMax <= 5 && npc.damage == 0) continue;
