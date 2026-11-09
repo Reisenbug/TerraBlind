@@ -561,6 +561,7 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_NATIVE_REJECTION_NATURAL") == "1") { await NativeRejectionNaturalTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_NATIVE_REJECTION_PROBE") == "1") { await NativeRejectionTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_REPLY_COVER_PROBE") == "1") { await ReplyCoverTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_PREPARED_HANDOFF_PROBE") == "1") { await PreparedHandoffTrial(); return; }
@@ -2989,6 +2990,62 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("edited program replayed the original task or did not use revision 2");
             return true;
         });
+    }
+
+    async Task NativeRejectionNaturalTrial()
+    {
+        var start = new Vector2(22354.605f, 9062f);
+        var warming = Stopwatch.StartNew();
+        while (!await OnMain(() => (bool)typeof(VanillaNavigationDemo).GetProperty("WorkerReady", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .GetValue(VanillaNavigationDemo.Instance)))
+        {
+            if (warming.ElapsedMilliseconds > 30000) throw new Exception("native worker did not warm before route replay");
+            await Task.Delay(100);
+        }
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false; AgentPermissions.Reset();
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            Combat.Enabled = Dodge.Enabled = Concessions.Enabled = false;
+            VanillaNavBridge.Enabled = VanillaNavBridge.RegionsEnabled = false;
+            var p = Main.LocalPlayer;
+            if (Collision.SolidCollision(start, p.width, p.height))
+                throw new Exception("recorded starting body is blocked in this world copy");
+            p.Teleport(start); p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)(p.Bottom.Y / 16);
+            p.ConsumedLifeCrystals = 4; p.statLifeMax = p.statLifeMax2 = 180; p.statLife = 112;
+            p.itemTime = p.itemAnimation = 0; p.releaseJump = true;
+            foreach (var item in p.inventory) item.TurnToAir();
+            foreach (var item in p.armor) item.TurnToAir();
+            p.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+            p.inventory[2].SetDefaults(ItemID.CopperAxe);
+            p.inventory[3].SetDefaults(ItemID.Wood); p.inventory[3].stack = 9999;
+            p.inventory[4].SetDefaults(ItemID.Starfury);
+            p.inventory[5].SetDefaults(ItemID.WoodPlatform); p.inventory[5].stack = 100;
+            p.selectedItem = 1;
+            p.AddBuff(BuffID.Gills, 36000); p.AddBuff(BuffID.Shine, 36000);
+            evasionFrames.Clear(); samplingEvasion = true;
+            return true;
+        });
+        var clock = Stopwatch.StartNew();
+        JsonNode result;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        try { result = JsonNode.Parse(await AgentTools.Execute("nav_to", new JsonObject { ["x"] = 1418, ["y"] = 638 }, deadline.Token)); }
+        catch (OperationCanceledException) { result = new JsonObject { ["error"] = "probe_deadline" }; }
+        var after = await OnMain(() =>
+        {
+            samplingEvasion = false;
+            var p = Main.LocalPlayer;
+            var state = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y, ["hp"] = p.statLife, ["dead"] = p.dead };
+            Halt.All(); return state;
+        });
+        File.WriteAllText(Path.Combine(Main.SavePath, "native-rejection-natural.json"), new JsonObject {
+            ["elapsed_ms"] = clock.ElapsedMilliseconds, ["start_x"] = start.X, ["start_y"] = start.Y,
+            ["goal_x"] = 1418, ["goal_y"] = 638, ["terrain_edits_before_start"] = 0,
+            ["model_calls"] = 0, ["result"] = result, ["after"] = after, ["frames"] = evasionFrames.DeepClone() }.ToJsonString());
+        if (result?["done"]?.GetValue<bool>() != true)
+            throw new Exception("native natural route did not arrive: " + result);
+        Console.WriteLine("NATIVE_REJECTION_NATURAL_PASS actual_arrival=true terrain_edits_before_start=0 model_calls=0 elapsed_ms=" + clock.ElapsedMilliseconds);
     }
 
     async Task NativeRejectionTrial()
