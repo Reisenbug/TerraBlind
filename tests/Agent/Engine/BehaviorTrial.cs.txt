@@ -2768,10 +2768,24 @@ public sealed class BehaviorTrial : ModSystem
                     return ch != null && kv.Value.Any(item => ch.item.Where(i => i.type == item.Key).Sum(i => i.stack) < item.Value
                         && p.inventory.Where(i => i.type == item.Key).Sum(i => i.stack) > initialInventory.GetValueOrDefault(item.Key));
                 });
+                string unlockEvidence = null;
+                bool keyConsumed = false;
+                if (completed.Value != null)
+                {
+                    string prefix = $"[chest_unlock] ({completed.Key.X},{completed.Key.Y}) native_tile_interaction=true locked_after=False consumed=";
+                    unlockEvidence = Directory.EnumerateFiles(Path.Combine(Main.SavePath, "TerraBlindLogs"), "*.log", SearchOption.AllDirectories)
+                        .SelectMany(File.ReadLines).LastOrDefault(line => line.Contains(prefix));
+                    if (unlockEvidence != null)
+                    {
+                        var consumed = JsonNode.Parse(unlockEvidence[(unlockEvidence.IndexOf(prefix) + prefix.Length)..]).AsObject();
+                        keyConsumed = consumed[ItemID.GoldenKey.ToString()]?.GetValue<int>() == 1;
+                    }
+                }
                 return new JsonObject { ["elapsed_ms"] = now, ["hp"] = p.statLife, ["dead"] = p.dead, ["deaths"] = deaths,
                     ["x"] = p.Center.X / 16, ["y"] = p.Center.Y / 16, ["in_dungeon"] = p.ZoneDungeon,
                     ["key_observed"] = dungeonKeyObserved, ["max_keys"] = dungeonMaxKeys,
-                    ["verified_loot"] = dungeonKeyObserved && completed.Value != null,
+                    ["verified_loot"] = dungeonKeyObserved && completed.Value != null && keyConsumed,
+                    ["golden_key_consumed"] = keyConsumed, ["unlock_evidence"] = unlockEvidence,
                     ["loot_x"] = completed.Value == null ? null : JsonValue.Create(completed.Key.X),
                     ["loot_y"] = completed.Value == null ? null : JsonValue.Create(completed.Key.Y),
                     ["terrain"] = TerrainInspection.Read(12), ["status"] = NativeAgent.Status };

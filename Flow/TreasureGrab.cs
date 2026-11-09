@@ -1,5 +1,6 @@
 using Terraria;
 using Terraria.ObjectData;
+using System.Linq;
 
 namespace TerraBlind
 {
@@ -107,6 +108,8 @@ namespace TerraBlind
 			if (!Reach.CanInteract(p, ax, ay)) { why = "out_of_reach"; return -1; }
 			if (Chest.IsLocked(ax, ay))
 			{
+				var before = p.inventory.Concat(p.bank4.item).Where(item => !item.IsAir).GroupBy(item => item.type)
+					.ToDictionary(group => group.Key, group => group.Sum(item => item.stack));
 				bool attempted = p.tileInteractAttempted, released = p.releaseUseTile, mouseReleased = Main.mouseRightRelease;
 				try
 				{
@@ -117,6 +120,10 @@ namespace TerraBlind
 				{
 					p.tileInteractAttempted = attempted; p.releaseUseTile = released; Main.mouseRightRelease = mouseReleased;
 				}
+				var consumed = before.Select(item => (item.Key, Count: item.Value - p.inventory.Concat(p.bank4.item)
+					.Where(current => current.type == item.Key).Sum(current => current.stack)))
+					.Where(item => item.Count > 0).ToDictionary(item => item.Key, item => item.Count);
+				DiagLog.Write($"[chest_unlock] ({ax},{ay}) native_tile_interaction=true locked_after={Chest.IsLocked(ax, ay)} consumed={System.Text.Json.JsonSerializer.Serialize(consumed)}");
 				if (Chest.IsLocked(ax, ay)) { why = "locked"; return -1; }
 			}
 			if (Main.netMode == Terraria.ID.NetmodeID.MultiplayerClient)
