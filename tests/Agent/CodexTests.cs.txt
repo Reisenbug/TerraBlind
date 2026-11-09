@@ -23,6 +23,7 @@ static class CodexTests
         await GoalProtocol();
         await NativeGoalProtocol();
         await NativeExecutionSteering();
+        await NativeExecutionSteering(script: true);
         await NativeBackgroundReview();
         var launch = new System.Diagnostics.ProcessStartInfo();
         launch.Environment.Clear();
@@ -290,7 +291,7 @@ static class CodexTests
         }
     }
 
-    static async Task NativeExecutionSteering()
+    static async Task NativeExecutionSteering(bool script = false)
     {
         var native = new NativeAgent();
         var server = new Server { HoldFinalReply = true };
@@ -305,7 +306,8 @@ static class CodexTests
         HttpServerSystem.Handler = (path, _) =>
         {
             if (path == "/nav_recede") starts++;
-            return (200, path == "/nav_recede_done" ? fail ? "{\"done\":false,\"status\":\"failed\",\"reason\":\"fixture_blocked\"}"
+            return (200, path == "/nav_recede_done" ? fail ? new JsonObject { ["done"] = false,
+                ["status"] = "failed", ["reason"] = "fixture_blocked", ["detail"] = new string('x', 10000) }.ToJsonString()
                 : "{\"done\":false}" : "{}");
         };
         server.AfterTool = calls =>
@@ -315,11 +317,13 @@ static class CodexTests
             {
                 AgentTools.Plan.Create(JsonNode.Parse("""
                     {"goal":"prepare during a delayed reply","mode":"dag","steps":[
-                     {"id":"travel","description":"keep moving while preparing","depends_on":[],"script":"return {};",
+                     {"id":"travel","description":"keep moving while preparing","depends_on":[],
+                      "script":"return step('move',()=>{const r=tool('nav_to',{x:900,y:100});if(!r.done)throw new Error('blocked');return r;});",
                       "conditions":[{"kind":"permanent_health","count":9999}]}]}
                     """).AsObject(), AgentTaskEvidence.Measure);
                 ActionTasks.NodeContext.Value = "travel";
-                try { handle = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 900, ["y"] = 100 }, default)["handle"].ToString(); }
+                try { handle = AgentTools.Actions.Start(script ? "run_script" : "nav_to", script
+                    ? new JsonObject { ["task_node"] = "travel" } : new JsonObject { ["x"] = 900, ["y"] = 100 }, default)["handle"].ToString(); }
                 finally { ActionTasks.NodeContext.Value = null; }
                 return true;
             }, default);
@@ -349,6 +353,9 @@ static class CodexTests
             Check(server.Steers[1]["input"][0]["text"].ToString().Contains("execution_gap")
                 && server.Inputs.Count == 1 && server.Interrupts == 0,
                 "failed execution waited for final text and a new reasoning turn before reporting its gap");
+            string failureNotice = server.Steers[1]["input"][0]["text"].ToString();
+            Check(failureNotice.Contains("fixture_blocked") && failureNotice.Contains("900") && failureNotice.Length < 2500,
+                "execution notice omitted the actual failed tool and target, or resent an oversized result: " + failureNotice[..Math.Min(500, failureNotice.Length)]);
             Console.WriteLine("PASS: active-turn execution steering prepares successors and delivers uncovered failure before final reply");
         }
         finally

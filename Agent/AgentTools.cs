@@ -93,9 +93,32 @@ public static partial class AgentTools
         var notice = new JsonObject { ["kind"] = kind, ["handle"] = action["handle"]?.DeepClone(),
             ["tool"] = action["tool"]?.DeepClone(), ["status"] = action["status"]?.DeepClone(), ["task_node"] = node,
             ["plan_revision"] = Plan.Snapshot()["revision"]?.DeepClone() };
-        if (action["result"] is JsonObject result)
-            notice["result"] = new JsonObject { ["outcome"] = result["outcome"]?.DeepClone(),
-                ["reason"] = result["reason"]?.DeepClone(), ["error"] = result["error"]?.DeepClone() };
+        int evidenceBudget = 1600;
+        JsonObject Brief(JsonObject source, int depth = 0)
+        {
+            var facts = new JsonObject();
+            foreach (string field in new[] { "error", "outcome", "reason", "status", "done", "tool", "x", "y", "type", "slot", "item_type", "count", "hp", "dist", "detail",
+                "args", "evidence", "failure", "navigation", "contact_escape", "predicted_tile", "state", "pos", "value", "blocked", "collection", "last_result", "result" })
+            {
+                if (source[field] is JsonValue value)
+                {
+                    JsonNode copy = value.TryGetValue<string>(out string text) && text.Length > 192
+                        ? JsonValue.Create(text[..192] + "…") : value.DeepClone();
+                    int cost = field.Length + copy.ToJsonString(ModelJson).Length + 4;
+                    if (cost > evidenceBudget) continue;
+                    evidenceBudget -= cost; facts[field] = copy;
+                }
+                else if (depth < 6 && source[field] is JsonObject nested && evidenceBudget > field.Length + 8)
+                {
+                    evidenceBudget -= field.Length + 5;
+                    var child = Brief(nested, depth + 1);
+                    if (child.Count > 0) facts[field] = child;
+                }
+            }
+            return facts;
+        }
+        if (action["args"] is JsonObject args) notice["args"] = Brief(args);
+        if (action["result"] is JsonObject result) notice["result"] = Brief(result);
         string instruction = kind == "prepare_successor"
             ? "宿主执行变化：当前后台动作继续运行。趁本轮准备已查证的后继script及适用的on_failure；准备和只读查询保持当前动作运行。已有充分准备则沿用。"
             : "宿主执行变化：当前动作已经结束且没有后续动作运行。结合最新句柄与现场优先恢复有效行动；保留已完成进度，修改后续script或准备恢复，随后执行。";
