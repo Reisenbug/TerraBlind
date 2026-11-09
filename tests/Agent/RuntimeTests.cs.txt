@@ -765,6 +765,7 @@ static class RuntimeTests
         }
         finally { Game.LocalPlayer.inventory[20] = previousHealingItem; }
         var previousSnapshot = HttpServerSystem.LatestSnapshot;
+        var previousObservedNpc = Game.npc[0];
         try
         {
             var snapshot = JsonNode.Parse("{\"tiles\":{\"origin\":{\"x\":10,\"y\":20},\"w\":2,\"h\":1,\"rows\":[[[59,3,2]]]},\"objects\":[{\"type\":\"chest\",\"x\":11,\"y\":20}]}").AsObject();
@@ -775,8 +776,17 @@ static class RuntimeTests
                 "compact state lost near terrain or opportunities, or presented unreported map as empty");
             var full = JsonNode.Parse(await Execute(AgentTools.Execute("get_state", new JsonObject { ["include_tiles"] = true }, default)));
             Check(JsonNode.DeepEquals(full["tiles"], snapshot["tiles"]), "explicit map request changed original tile encoding");
+            Game.npc[0] = new Terraria.NPC { type = 42, active = true, immortal = true, damage = 50 };
+            snapshot["enemies"] = new JsonArray(new JsonObject { ["who"] = 0, ["type"] = 42 });
+            var immuneEnemy = JsonNode.Parse(await Execute(AgentTools.State(default)))["enemies"][0];
+            Check(immuneEnemy["attackable"].GetValue<bool>() == false && immuneEnemy["contact_damage"].GetValue<int>() == 50,
+                "invulnerable contact threat was presented as an ordinary attack target");
+            Game.npc[0].type = 43;
+            var changedEnemy = JsonNode.Parse(await Execute(AgentTools.State(default)))["enemies"][0];
+            Check(changedEnemy["observation_stale"].GetValue<bool>() && changedEnemy["attackable"] == null,
+                "reused NPC slot inherited old target combat facts");
         }
-        finally { HttpServerSystem.LatestSnapshot = previousSnapshot; }
+        finally { HttpServerSystem.LatestSnapshot = previousSnapshot; Game.npc[0] = previousObservedNpc; }
         var previousGatherNpc = Game.npc[0];
         try
         {

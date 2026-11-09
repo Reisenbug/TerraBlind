@@ -366,6 +366,18 @@ public static partial class AgentTools
         }
         state["terrain"] = TerrainInspection.Read(6);
         var healthPlayer = Main.LocalPlayer;
+        if (state["enemies"] is JsonArray enemies)
+            foreach (var enemy in enemies.OfType<JsonObject>())
+            {
+                int who = Int(enemy, "who", -1);
+                if (who < 0 || who >= Main.maxNPCs) continue;
+                var npc = Main.npc[who];
+                if (!npc.active || npc.type != Int(enemy, "type", -1)) { enemy["observation_stale"] = true; continue; }
+                enemy["attackable"] = npc.CanBeChasedBy(healthPlayer);
+                enemy["contact_damage"] = npc.damage;
+                enemy["dont_take_damage"] = npc.dontTakeDamage;
+                enemy["immortal"] = npc.immortal;
+            }
         state["movement_capabilities"] = new JsonObject
         {
             ["no_fall_damage"] = healthPlayer.noFallDmg, ["fall_start_tile_y"] = healthPlayer.fallStart,
