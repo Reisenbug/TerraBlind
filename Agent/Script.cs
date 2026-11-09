@@ -21,7 +21,7 @@ public static class AgentScript
             ["description"] = "配合task_node启动持续后台脚本并立即返回句柄；Agent可同时查询和准备后续。脚本内直接顺序调用动作，不嵌套action_start。" };
         run["description"] = run["description"].ToString()
             + "多动作连续执行可用background:true，脚本拥有主动作句柄，内部直接tool('nav_to',...)、tool('gather',...)及条件循环；action_control暂停/取消，原workflow保留。运行中可准备下一段源码；立即改变正在执行的动作时先暂停。"
-            + "临时恢复可传task_node、code及独立workflow，动作仍归属该节点，恢复进度单独保存，原节点script和workflow保留；恢复后可继续原句柄或节点。临时脚本使用前台模式。task_node也可与tool/args组合执行所属节点下的单工具，原script和workflow保留。";
+            + "临时恢复可传task_node、code及独立workflow，动作仍归属该节点，step检查点单独保存，原节点script和workflow保留；无检查点的临时代码执行后释放workflow槽位，返回workflow_retained=false，结果保留在本次返回中。恢复后可继续原句柄或节点。临时脚本使用前台模式。task_node也可与tool/args组合执行所属节点下的单工具，原script和workflow保留。";
         run["description"] = run["description"].ToString()
             + "普通动作失败直接返回失败结果，JS可在同轮按现场执行已准备的恢复分支；step仍会拒绝把失败记录为完成。"
             + "只有一个就绪DAG节点时，带code和独立workflow的临时恢复自动归属该节点，返回task_node；多个就绪节点时显式指定。";

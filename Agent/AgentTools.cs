@@ -868,6 +868,7 @@ public static partial class AgentTools
                         finally { ActionTasks.NodeContext.Value = previous; }
                     }, token)).ToJsonString();
                 }
+                bool transientWorkflow = Text(args, "task_node") != "" && args["code"] != null;
                 if (Text(args, "task_node") != "")
                 {
                     bool temporary = args["code"] != null || args["tool"] != null;
@@ -957,6 +958,16 @@ public static partial class AgentTools
                     Interlocked.Decrement(ref executingScripts);
                     await NativeAgent.OnMain(() => { if (eventReader != Guid.Empty) Watches.EndScriptDelivery(eventReader); return true; }, default);
                 }
+                if (transientWorkflow && workflow != null)
+                    await NativeAgent.OnMain(() =>
+                    {
+                        string id = Text(args, "workflow");
+                        bool retained = Workflows.TryGetValue(id, out var saved) && ReferenceEquals(saved, workflow);
+                        if (retained && !workflow.Running && workflow.Snapshot()["steps"].AsArray().Count == 0)
+                        { Workflows.Remove(id); retained = false; }
+                        result["workflow_retained"] = retained;
+                        return true;
+                    }, token);
                 if (program != null)
                     result["program"] = new JsonObject { ["name"] = program["name"].DeepClone(), ["revision"] = program["revision"].DeepClone() };
                 if (Text(args, "task_node") != "") result["task_node"] = args["task_node"].DeepClone();
