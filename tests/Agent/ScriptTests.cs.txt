@@ -423,6 +423,45 @@ static class ScriptTests
                 (_, _, _) => { entryCalls++; return Task.FromResult("{\"hp\":60}"); }, _ => Task.CompletedTask, default);
             Check(entryCalls == 1 && entryResult["value"]["hp"].GetValue<int>() == 60,
                 "explicit function invocation was rejected or executed during save");
+            library.Save("parameterized", "return step('effect',()=>tool('effect',input));", 0);
+            var skillProgress = new ScriptProgress();
+            var skillTargets = new List<int>();
+            Task<string> SkillEffect(string name, JsonObject args, CancellationToken token)
+            { skillTargets.Add(args["x"].GetValue<int>()); return Task.FromResult(args.ToJsonString()); }
+            const string twoTargets = "return [skill('parameterized',1,{x:100},'first'),skill('parameterized',1,{x:200},'second')];";
+            var skillFirst = await AgentScript.Run(twoTargets, 5, (_, _) => { }, SkillEffect,
+                _ => Task.CompletedTask, default, skillProgress, programs: library.Callable());
+            Check(skillFirst["ok"].GetValue<bool>() && skillTargets.SequenceEqual(new[] { 100, 200 })
+                && skillFirst["skill_calls"].AsArray().Count == 2
+                && skillFirst["skill_calls"][0]["input"]["x"].GetValue<int>() == 100
+                && skillFirst["skill_calls"][0]["status"].ToString() == "returned",
+                "parameterized skills lost fresh inputs, call evidence or isolated step ids");
+            var skillResume = await AgentScript.Run(twoTargets, 5, (_, _) => { }, SkillEffect,
+                _ => Task.CompletedTask, default, skillProgress, programs: library.Callable());
+            Check(skillResume["ok"].GetValue<bool>() && skillTargets.Count == 2,
+                "skill continuation replayed completed input effects");
+            var skillNextWorld = await AgentScript.Run("return skill('parameterized',1,{x:900},'first');", 5,
+                (_, _) => { }, SkillEffect, _ => Task.CompletedTask, default, new ScriptProgress(),
+                programs: new ScriptLibrary(programDirectory).Callable());
+            Check(skillNextWorld["ok"].GetValue<bool>() && skillTargets.SequenceEqual(new[] { 100, 200, 900 })
+                && skillNextWorld["skill_calls"][0]["source_sha256"].ToString() == skillFirst["skill_calls"][0]["source_sha256"].ToString(),
+                "reopened skill did not reuse the same source with new-world inputs");
+            var staleSkill = await AgentScript.Run("return skill('parameterized',2,{x:901});", 5,
+                (_, _) => { }, SkillEffect, _ => Task.CompletedTask, default, programs: library.Callable());
+            Check(!staleSkill["ok"].GetValue<bool>() && skillTargets.Count == 3
+                && staleSkill["detail"].ToString().Contains("program_revision_conflict"),
+                "stale skill revision executed input effects");
+            var deniedSkill = await AgentScript.Run("return skill('parameterized',1,{x:902});", 5,
+                (_, _) => throw new ArgumentException("denied"), SkillEffect, _ => Task.CompletedTask, default,
+                new ScriptProgress(), programs: library.Callable());
+            Check(!deniedSkill["ok"].GetValue<bool>() && skillTargets.Count == 3,
+                "skill bypassed ordinary tool validation");
+            library.Save("budgeted", "for(let i=0;i<input.n;i++) tool('effect',{x:i});", 0);
+            var sharedBudget = await AgentScript.Run("skill('budgeted',1,{n:60});skill('budgeted',1,{n:60});", 5,
+                (_, _) => { }, SkillEffect, _ => Task.CompletedTask, default, programs: library.Callable());
+            Check(!sharedBudget["ok"].GetValue<bool>() && sharedBudget["tool_calls"].GetValue<int>() == 100,
+                "skill invocation reset the parent tool budget");
+            Console.WriteLine("PASS: parameterized saved skills share validation and budgets, isolate checkpoints and audit fresh inputs across worlds");
             bool escaped = false;
             try { library.Save("../outside", "return 1;", 0); }
             catch (ArgumentException) { escaped = true; }

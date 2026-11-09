@@ -231,6 +231,15 @@ public sealed class ScriptLibrary
         }
     }
 
+    public JsonArray Callable()
+    {
+        lock (gate)
+            return new JsonArray((Directory.Exists(directory)
+                ? Directory.EnumerateFiles(directory, "*.json").OrderBy(path => path)
+                    .Select(path => (JsonNode)Get(Path.GetFileNameWithoutExtension(path)))
+                : Enumerable.Empty<JsonNode>()).ToArray());
+    }
+
     public JsonObject Save(string name, string code, int expectedRevision)
     {
         if (string.IsNullOrWhiteSpace(code) || code.Length > 16000)

@@ -142,6 +142,7 @@ public static class AgentScript
         "\n源码是同步JavaScript函数体，tool()直接返回结果；不使用顶层await，不返回Promise。"
         + "find_biome负责辨认群系方向和大致位置，实际路线结合特殊知识、当前位置和现场环境选择。进入地下丛林优先利用find_descent/descent_route查证的主道，这是原有算法计算的高效下降道路。沿主道利用现有洞穴前进；遇红木、神庙、蜂巢等阻挡时，结合现场选择挖掘、绕行或接回主道，以行动效率为依据。"
         + "需要复用或修改的行为先用script_program保存源码，再用run_script的program、expected_revision和稳定workflow运行。"
+        + "DAG或普通JS可直接skill(name,expected_revision,input,key)调用已保存技能。技能函数体通过input读取本次参数，共用tool/print/step、权限、语句和100次工具调用预算。key为本次逻辑调用的稳定标识，内部step按key隔离；不同目标使用不同key。先get核对版本，参数来自当前世界观察。脚本启动时固定技能版本，修改在下一段脚本生效。skill_calls由宿主记录实际调用版本、源码哈希、参数和耗时；returned仅表示函数返回，效果仍由游戏状态验收。"
         + "将script_program作为可持续积累的技能库：任务开始先list并get相关技能，优先复用适用的已保存程序。把重复的行进、短支线采集和恢复行为抽成参数化JS；源码写明适用条件、配置、完成证据和失败返回。实际跑通后保存验证条件与结果，失败则修订同一技能，不把未经执行的程序宣称为验证通过。不保存旧世界坐标或句柄作为下次任务的默认参数。"
         + "长导航写入节点script，以run_script({task_node:id,background:true})启动，立即使用宿主返回的句柄进行并行观察和后续准备。后台脚本顺序调用动作，连续主路线串联已查证路点；普通机会通过passive_events观察，由策略决定插入行动，短程躲避由独立实时控制器响应。"
         + "赶路期间为当前节点补齐on_failure恢复代码，提前处理可预见的局部故障。宿主在失败后直接执行已准备代码，failure包含原动作完整结果；局部修复核验后在同段JS恢复原handle。可从recover_pressure_plate示例按实际权限和工具配置准备机关恢复。"
@@ -189,7 +190,7 @@ public static class AgentScript
         Action<string, JsonObject> validate,
         Func<string, JsonObject, CancellationToken, Task<string>> execute,
         Func<CancellationToken, Task> stop, CancellationToken token, ScriptProgress progress = null,
-        Func<CancellationToken, Task<JsonObject>> observeEvent = null)
+        Func<CancellationToken, Task<JsonObject>> observeEvent = null, JsonArray programs = null)
     {
         if (string.IsNullOrWhiteSpace(source) || source.Length > 16000)
             throw new ArgumentException("code必须是1..16000字符的JavaScript函数体，使用return返回结果。");
@@ -200,6 +201,8 @@ public static class AgentScript
         var logs = new JsonArray();
         var logTruncations = new JsonArray();
         var toolCounts = new JsonObject();
+        var skillCalls = new JsonArray();
+        var skills = (programs ?? new JsonArray()).ToDictionary(p => p["name"].ToString(), p => p.AsObject());
         int calls = 0;
         bool inTool = false;
         bool inputEffects = false;
@@ -215,6 +218,7 @@ public static class AgentScript
                 ["value"] = value, ["tool_calls"] = calls, ["elapsed_ms"] = clock.ElapsedMilliseconds,
                 ["input_effects"] = inputEffects,
                 ["tool_counts"] = toolCounts.DeepClone(),
+                ["skill_calls"] = skillCalls,
                 ["trace"] = new JsonArray(trace.ToArray()), ["logs"] = logs, ["log_truncations"] = logTruncations,
                 ["failure"] = lastFailure?.DeepClone()
             };
@@ -314,12 +318,37 @@ public static class AgentScript
                     (progress ?? throw new InvalidOperationException("step需要run_script.workflow。 ")).Enter(id).ToJsonString()));
                 engine.SetValue("__stepComplete", new Action<string, string>((id, json) =>
                     progress.Complete(id, JsonNode.Parse(json)?["value"])));
+                engine.SetValue("__skillEnter", new Func<string, string, string, int>((name, input, key) =>
+                {
+                    budget.Token.ThrowIfCancellationRequested();
+                    if (skillCalls.Count >= 64 || input.Length > 8000)
+                        throw hostFailure = new InvalidOperationException("技能调用最多64次，单次input最多8000字符。");
+                    var saved = skills[name];
+                    skillCalls.Add(new JsonObject { ["name"] = name, ["revision"] = saved["revision"].DeepClone(),
+                        ["source_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                            System.Text.Encoding.UTF8.GetBytes(saved["code"].ToString()))),
+                        ["input"] = JsonNode.Parse(input), ["key"] = key, ["status"] = "running",
+                        ["started_ms"] = clock.ElapsedMilliseconds, ["tool_calls_before"] = calls });
+                    return skillCalls.Count - 1;
+                }));
+                engine.SetValue("__skillExit", new Action<int>(index =>
+                {
+                    var call = skillCalls[index];
+                    call["status"] = "returned";
+                    call["elapsed_ms"] = clock.ElapsedMilliseconds - call["started_ms"].GetValue<long>();
+                    call["tool_calls"] = calls - call["tool_calls_before"].GetValue<int>();
+                }));
+                string skillSource = string.Join(",", skills.Select(pair =>
+                    System.Text.Json.JsonSerializer.Serialize(pair.Key) + ":{revision:" + pair.Value["revision"]
+                    + ",run:function(input){\n" + pair.Value["code"].ToString() + "\n}}"));
                 string wrapper = """
-                    (function(call, log, enter, complete) {
+                    (function(call, log, enter, complete, enterSkill, exitSkill) {
                         delete globalThis.__gameTool;
                         delete globalThis.__gamePrint;
                         delete globalThis.__stepEnter;
                         delete globalThis.__stepComplete;
+                        delete globalThis.__skillEnter;
+                        delete globalThis.__skillExit;
                         const stringify = JSON.stringify;
                         const parse = JSON.parse;
                         const tool = (name, args = {}) => {
@@ -335,7 +364,9 @@ public static class AgentScript
                             });
                         };
                         const print = value => log(typeof value === 'string' ? value : stringify(value));
+                        let stepPrefix = '';
                         const step = (id, action) => {
+                            id = stepPrefix + id;
                             const saved = parse(enter(id));
                             if (!saved.execute) return saved.value;
                             const value = action();
@@ -345,6 +376,24 @@ public static class AgentScript
                             complete(id, json);
                             return value;
                         };
+                        const programs = {
+                    """ + skillSource + """
+                        };
+                        const skill = (name, revision, input = {}, key = name) => {
+                            if (!Object.hasOwn(programs, name)) throw new Error('unknown_saved_skill: ' + name);
+                            const program = programs[name];
+                            if (program.revision !== revision) throw new Error('program_revision_conflict: ' + name + ' actual=' + program.revision);
+                            if (typeof key !== 'string' || !key.length) throw new Error('skill key needs a stable nonempty string');
+                            const previous = stepPrefix;
+                            stepPrefix += key + '/';
+                            const index = enterSkill(name, stringify(input), stepPrefix);
+                            try {
+                                const value = program.run(input);
+                                if (value && typeof value.then === 'function') throw new Error('skill不支持Promise');
+                                exitSkill(index);
+                                return value;
+                            } finally { stepPrefix = previous; }
+                        };
                         const value = (function() {
                     """ + source + """
 
@@ -352,7 +401,7 @@ public static class AgentScript
                         if (value && typeof value.then === 'function') throw new Error('使用同步tool调用，不支持Promise返回');
                         const result = stringify({value});
                         return result;
-                    })(__gameTool, __gamePrint, __stepEnter, __stepComplete)
+                    })(__gameTool, __gamePrint, __stepEnter, __stepComplete, __skillEnter, __skillExit)
                     """;
                 var output = engine.Evaluate(wrapper).AsString();
                 if (hostFailure != null) throw hostFailure;

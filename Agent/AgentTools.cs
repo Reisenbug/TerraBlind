@@ -964,7 +964,8 @@ public static partial class AgentTools
                             else Stop();
                             return true;
                         }, cleanupToken), token, workflow,
-                        localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasRecoveryBlocker ? Watches.Pending(recoveryOnly: true) : null, checkToken));
+                        localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasRecoveryBlocker ? Watches.Pending(recoveryOnly: true) : null, checkToken),
+                        new ScriptLibrary(System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent", "programs")).Callable());
                 }
                 finally
                 {
