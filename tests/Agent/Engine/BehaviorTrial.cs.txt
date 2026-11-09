@@ -3032,6 +3032,9 @@ public sealed class BehaviorTrial : ModSystem
             if (result["error"] != null) throw new Exception("reply cover patch failed: " + result);
         }
         await Patch(first + second);
+        var joined = await Call("run_script", new JsonObject { ["task_node"] = "route", ["background"] = true });
+        if (joined["already_running"]?.GetValue<bool>() != true)
+            throw new Exception("duplicate publication did not join the live native script: " + joined);
         var clock = Stopwatch.StartNew();
         JsonObject state;
         do

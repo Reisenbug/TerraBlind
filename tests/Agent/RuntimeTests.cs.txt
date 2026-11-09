@@ -589,6 +589,14 @@ static class RuntimeTests
             var published = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", patch, default)));
             Check(published["error"] == null, "public preparation API rejected successor publication while moving: " + published);
             Check(starts == 1 && AgentTools.Actions.HasPrimaryControl, "preparing a continuation interrupted current movement");
+            foreach (bool background in new[] { true, false })
+            {
+                var joined = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                    { ["task_node"] = "travel", ["background"] = background }, default)));
+                Check(joined["ok"]?.GetValue<bool>() == true && joined["already_running"]?.GetValue<bool>() == true
+                    && AgentTools.Actions.ActiveHandle == started["handle"].ToString() && starts == 1,
+                    "explicit start raced an already executing node or disturbed its controls: " + joined);
+            }
             finish = true;
             await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
             var finished = await Execute(AgentTools.Actions.Query(started["handle"].ToString(), 0, default));

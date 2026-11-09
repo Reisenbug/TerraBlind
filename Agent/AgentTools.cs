@@ -21,6 +21,7 @@ public static partial class AgentTools
     static Task continuation = Task.CompletedTask;
     static int executingScripts;
     static readonly AsyncLocal<(string Id, ScriptProgress Progress)?> recoveryContext = new();
+    static readonly AsyncLocal<bool> preparedDispatch = new();
     static string pendingNode;
     internal static JsonObject LastContinuation;
     static readonly HashSet<(int, int)> routeChests = new();
@@ -199,6 +200,7 @@ public static partial class AgentTools
         if (recovery != null) report["mode"] = "recovery";
         continuation = Task.Run(async () =>
         {
+            preparedDispatch.Value = true;
             ScriptProgress recoveryProgress = null;
             try
             {
@@ -913,6 +915,30 @@ public static partial class AgentTools
                     {
                         args = (JsonObject)args.DeepClone();
                         args["task_node"] = owner;
+                    }
+                }
+                if (!Actions.RunningScript && !preparedDispatch.Value
+                    && Text(args, "task_node") != "" && args["code"] == null && args["tool"] == null
+                    && args["program"] == null && args["workflow"] == null)
+                {
+                    var joined = await NativeAgent.OnMain(() =>
+                    {
+                        string node = Text(args, "task_node");
+                        string workflowId = Plan.Script(node)["workflow"].ToString();
+                        bool running = Workflows.TryGetValue(workflowId, out var existing) && existing.Running;
+                        bool dispatching = !continuation.IsCompleted && LastContinuation?["task_node"]?.ToString() == node
+                            && LastContinuation?["status"]?.ToString() == "starting";
+                        var active = Actions.Summary().FirstOrDefault(action => action["task_node"]?.ToString() == node
+                            && action["tool"]?.ToString() != "fight" && action["status"]?.ToString() == "running");
+                        if (!running && !dispatching && active?["tool"]?.ToString() != "run_script") return null;
+                        return new JsonObject { ["ok"] = true, ["already_running"] = true, ["input_effects"] = false,
+                            ["task_node"] = node, ["workflow"] = workflowId, ["handle"] = active?["handle"]?.DeepClone(),
+                            ["status"] = active != null || running ? "running" : "starting" };
+                    }, token);
+                    if (joined != null)
+                    {
+                        DiagLog.Write("[agent_script_join] " + joined.ToJsonString());
+                        return joined.ToJsonString();
                     }
                 }
                 if (Bool(args, "background"))
