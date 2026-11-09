@@ -276,6 +276,8 @@ static class RuntimeTests
         };
         try
         {
+            ThreadPool.GetMinThreads(out int workerMinimum, out _);
+            int threadsBefore = ThreadPool.ThreadCount;
             var timer = System.Diagnostics.Stopwatch.StartNew();
             var result = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
             {
@@ -285,8 +287,9 @@ static class RuntimeTests
             }, default)));
             Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["handled"]?.GetValue<bool>() == true
                 && recoveries == 1, "ordinary failure prevented the prepared JS recovery: " + result);
+            Console.WriteLine($"INLINE_RECOVERY_TIMING total_ms={timer.ElapsedMilliseconds} script_ms={result["elapsed_ms"]} threads_before={threadsBefore} threads_after={ThreadPool.ThreadCount} minimum={workerMinimum} pending={ThreadPool.PendingWorkItemCount} pump={lastPump} trace={result["trace"]}");
             Check(timer.ElapsedMilliseconds < 1000 && !AgentTools.Watches.HasInterrupting,
-                "prepared recovery waited for another model turn");
+                $"prepared recovery waited for another model turn elapsed_ms={timer.ElapsedMilliseconds} pending={AgentTools.Watches.PendingCount} interrupting={AgentTools.Watches.HasInterrupting}");
             Check(AgentTools.Watches.Snapshot()["history"].AsArray().Any(e => e["kind"]?.ToString() == "action_finished"
                 && e["evidence"]?["status"]?.ToString() == "failed"), "local recovery erased its failure evidence");
             Console.WriteLine($"PASS: inline JS handles ordinary action failure immediately; recovery_ms={timer.ElapsedMilliseconds} model_calls=0");
@@ -545,6 +548,7 @@ static class RuntimeTests
     static void Check(bool condition, string message)
     { if (!condition) throw new Exception(message); }
 
+    static string lastPump;
     static async Task PumpUntil(Func<bool> done)
     {
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
@@ -562,9 +566,11 @@ static class RuntimeTests
             for (int frame = 0; frame < 10; frame++) PlayerCombat.Tick(Game.LocalPlayer);
             updateMs += elapsed.Elapsed.TotalMilliseconds - started;
             started = elapsed.Elapsed.TotalMilliseconds;
-            await Task.Delay(5);
+            do { await Task.Yield(); }
+            while (elapsed.Elapsed.TotalMilliseconds - started < 5);
             waitMs += elapsed.Elapsed.TotalMilliseconds - started;
         }
+        lastPump = $"elapsed_ms={elapsed.ElapsedMilliseconds} pumps={pumps} update_ms={updateMs:F1} wait_ms={waitMs:F1}";
         if (elapsed.Elapsed.TotalSeconds >= 5)
             Console.WriteLine($"SLOW_TEST_PUMP elapsed_ms={elapsed.ElapsedMilliseconds} pumps={pumps} update_ms={updateMs:F1} wait_ms={waitMs:F1} status={NativeAgent.Status}");
     }

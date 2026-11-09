@@ -312,15 +312,17 @@ static class CodexTests
         try
         {
             NativeAgent.Submit("/goal observe while navigation remains active");
+            var movement = System.Diagnostics.Stopwatch.StartNew();
+            void AdvanceMovement() => Terraria.Main.LocalPlayer.position.X = 1600 + (float)movement.Elapsed.TotalSeconds * 50;
             var deadline = DateTime.UtcNow.AddSeconds(25);
             while (server.Inputs.Count < 2)
             {
                 Check(DateTime.UtcNow < deadline, "background observation waited for navigation completion");
-                Terraria.Main.LocalPlayer.position.X += .25f;
+                AdvanceMovement();
                 native.PostUpdateEverything(); await Task.Delay(5);
             }
             Check(server.Inputs[1].Contains("并行观察") && server.Inputs[1].Contains("on_failure") && AgentTools.Actions.ActiveHandle == handle,
-                "model was not woken with the original active navigation handle");
+                $"model was not woken with the original active navigation handle expected={handle} active={AgentTools.Actions.ActiveHandle} input={server.Inputs[1][..Math.Min(1200, server.Inputs[1].Length)]}");
             var action = AgentTools.Actions.Summary().First(a => a["handle"].ToString() == handle);
             Check(action["status"].ToString() == "running" && action["attempt"].GetValue<int>() == 1,
                 "background review paused or restarted navigation");
@@ -331,7 +333,7 @@ static class CodexTests
             var quietUntil = DateTime.UtcNow.AddSeconds(60);
             while (DateTime.UtcNow < quietUntil)
             {
-                Terraria.Main.LocalPlayer.position.X += .25f;
+                AdvanceMovement();
                 native.PostUpdateEverything(); await Task.Delay(5);
                 Check(server.Inputs.Count == 2, "unchanged background action caused another periodic model request: "
                     + AgentTools.Actions.Summary().ToJsonString() + " input=" + server.Inputs.Last()[..Math.Min(1000, server.Inputs.Last().Length)]);
@@ -345,7 +347,7 @@ static class CodexTests
                 while (!work.IsCompleted)
                 {
                     Check(DateTime.UtcNow < until, "resumed-action fixture did not release input");
-                    Terraria.Main.LocalPlayer.position.X += .25f;
+                    AdvanceMovement();
                     native.PostUpdateEverything(); await Task.Delay(5);
                 }
                 await work;
@@ -360,7 +362,7 @@ static class CodexTests
             while (!server.Inputs.Skip(2).Any(input => input.Contains("并行观察")))
             {
                 Check(DateTime.UtcNow < deadline, "resuming the same handle did not prepare its new execution attempt");
-                Terraria.Main.LocalPlayer.position.X += .25f;
+                AdvanceMovement();
                 native.PostUpdateEverything(); await Task.Delay(5);
             }
             Check(AgentTools.Actions.ActiveHandle == handle
@@ -373,7 +375,7 @@ static class CodexTests
             while (server.Inputs.Count < preparedRequests + 1)
             {
                 Check(DateTime.UtcNow < deadline, "low health did not wake the waiting model");
-                Terraria.Main.LocalPlayer.position.X += .25f;
+                AdvanceMovement();
                 native.PostUpdateEverything(); await Task.Delay(5);
             }
             Check(AgentTools.Actions.ActiveHandle == handle, "health notification paused the ongoing action");
@@ -386,12 +388,12 @@ static class CodexTests
             while (server.Inputs.Count < preparedRequests + 2)
             {
                 Check(DateTime.UtcNow < deadline, "new passive resource did not wake the waiting model");
-                Terraria.Main.LocalPlayer.position.X += .25f;
+                AdvanceMovement();
                 native.PostUpdateEverything(); await Task.Delay(5);
             }
-            for (int i = 0; i < 50; i++) { native.PostUpdateEverything(); await Task.Delay(5); }
+            for (int i = 0; i < 50; i++) { AdvanceMovement(); native.PostUpdateEverything(); await Task.Delay(5); }
             Check(server.Inputs.Count == preparedRequests + 2 && !AgentTools.Watches.HasAdvisories && AgentTools.Actions.ActiveHandle == handle,
-                "reported resource repeatedly woke the model or stopped navigation");
+                $"reported resource repeatedly woke the model or stopped navigation inputs={server.Inputs.Count} expected={preparedRequests + 2} advisories={AgentTools.Watches.HasAdvisories} active={AgentTools.Actions.ActiveHandle} expected_handle={handle} pending={AgentTools.Watches.Pending()} last_input={server.Inputs.Last()[..Math.Min(1200, server.Inputs.Last().Length)]}");
         }
         finally
         {
