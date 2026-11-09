@@ -11,6 +11,8 @@ public sealed class AgentControlSession
     string tool, claim;
     long attackTicket;
     string attackClaim;
+    long scriptInvocation, releasedScript, releasedAt;
+    string releasedTool;
     ControlBehavior[] delegates = Array.Empty<ControlBehavior>();
 
     public AgentControlSession(AgentControlPolicy policy) { this.policy = policy; }
@@ -44,7 +46,7 @@ public sealed class AgentControlSession
         _ => ControlBehavior.Direct
     };
 
-    public JsonObject Begin(string name, string controlClaim, out long ticket, ControlChannels channels = ControlChannels.All)
+    public JsonObject Begin(string name, string controlClaim, out long ticket, ControlChannels channels = ControlChannels.All, long script = 0)
     {
         ticket = 0;
         if (name == "fight")
@@ -58,6 +60,11 @@ public sealed class AgentControlSession
         if (current != 0) return new JsonObject { ["error"] = "control_action_busy", ["owner"] = tool };
         var denied = policy.Check(Behavior(name), channels, controlClaim);
         if (denied != null) return denied;
+        if (releasedAt != 0)
+            DiagLog.Write("[agent_input_handoff] " + new JsonObject { ["from"] = releasedTool, ["to"] = name,
+                ["elapsed_ms"] = System.Diagnostics.Stopwatch.GetElapsedTime(releasedAt).TotalMilliseconds,
+                ["prepared_in_same_script"] = script != 0 && script == releasedScript }.ToJsonString());
+        scriptInvocation = script;
         tool = name; claim = controlClaim; current = ticket = ++sequence;
         delegates = name switch
         {
@@ -107,11 +114,13 @@ public sealed class AgentControlSession
     public void End(long ticket)
     {
         if (ticket != 0 && ticket == attackTicket) { attackTicket = 0; attackClaim = null; return; }
-        if (ticket != current) return;
+        if (ticket == 0 || ticket != current) return;
+        releasedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        releasedScript = scriptInvocation; releasedTool = tool;
         current = 0; tool = claim = null; delegates = Array.Empty<ControlBehavior>();
     }
 
-    public void Reset() { End(current); End(attackTicket); sequence++; }
+    public void Reset() { End(current); End(attackTicket); sequence++; releasedAt = releasedScript = scriptInvocation = 0; releasedTool = null; }
     public JsonObject Snapshot() => new()
     {
         ["tool"] = tool, ["claim"] = claim, ["execution"] = current,

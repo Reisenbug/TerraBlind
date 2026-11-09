@@ -1700,6 +1700,28 @@ static class RuntimeTests
                 var corrected = await Execute(AgentTools.CollectTarget(12, 34, default));
                 Check(approaches == 2 && corrected?["outcome"]?.ToString() == "removed",
                     "interaction arrival handed a mining-range correction back to the model: " + corrected);
+                Game.LocalPlayer.position = new(192, 480);
+                Game.tile[12, 34] = new Terraria.Tile { HasUnactuatedTile = true, TileType = Terraria.ID.TileID.PressurePlates };
+                approachedForMining = false;
+                Reach.MineTest = (_, _, _) => approachedForMining;
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    if (path == "/nav_recede") approachedForMining = true;
+                    return (200, path == "/nav_recede_done" ? "{\"done\":true}" : path == "/item_use_status"
+                        ? "{\"active\":false,\"outcome\":\"removed\"}" : "{\"ok\":true}");
+                };
+                var removedTrigger = await Execute(AgentTools.CollectTarget(12, 34, default));
+                Check(approachedForMining && removedTrigger?["outcome"]?.ToString() == "removed",
+                    "intentional pressure-plate removal was blocked by its own approach guard");
+                Game.tile[13, 34] = new Terraria.Tile { HasUnactuatedTile = true, TileType = Terraria.ID.TileID.PressurePlates };
+                try
+                {
+                    approachedForMining = false;
+                    var otherTrigger = await Execute(AgentTools.CollectTarget(12, 34, default));
+                    Check(!approachedForMining && otherTrigger?["navigation"]?["error"]?.ToString() == "navigation_near_trap",
+                        "intended trigger removal also accepted an unrelated nearby trap");
+                }
+                finally { Game.tile[13, 34] = default; }
             }
             finally
             {

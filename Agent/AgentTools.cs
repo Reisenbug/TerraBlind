@@ -594,7 +594,26 @@ public static partial class AgentTools
         }
     }
 
+    static long invocationSequence;
+    internal static int QueriesInFlight;
+    static readonly AsyncLocal<long> scriptInvocation = new();
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
+    {
+        long id = Interlocked.Increment(ref invocationSequence);
+        long started = Stopwatch.GetTimestamp();
+        bool query = name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
+            or "terrain_map" or "opportunity_assess" or "nearby_drops" or "item_info" or "wiki_search" or "wiki_page" or "recipe" or "script_program";
+        if (query) Interlocked.Increment(ref QueriesInFlight);
+        DiagLog.Write($"[agent_tool_begin] id={id} name={name} timestamp={started} node={ActionTasks.NodeContext.Value}");
+        try { return await ExecuteObserved(name, args, token); }
+        finally
+        {
+            if (query) Interlocked.Decrement(ref QueriesInFlight);
+            DiagLog.Write($"[agent_tool_end] id={id} name={name} elapsed_ms={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}");
+        }
+    }
+
+    static async Task<string> ExecuteObserved(string name, JsonObject args, CancellationToken token)
     {
         string taskNode = ActionTasks.NodeContext.Value;
         if (name == "action_control" && Text(args, "command") == "resume")
@@ -656,6 +675,7 @@ public static partial class AgentTools
                 ["action_tasks"] = Actions.Summary() }.ToJsonString();
         long lease = external ? await NativeAgent.OnMain(() => PvpDuel.BeginAction(name), token) : 0;
         long controlTicket = 0;
+        long script = scriptInvocation.Value;
         try
         {
             if (action)
@@ -664,7 +684,7 @@ public static partial class AgentTools
                 {
                     FightCoordinator.StopIdleDefense();
                     return ControlSession.Begin(name, args["control_claim"]?.ToString(), out controlTicket,
-                        AgentControlSession.RequiredChannels(name, args));
+                        AgentControlSession.RequiredChannels(name, args), script);
                 }, token);
                 if (denied != null) return denied.ToJsonString();
             }
@@ -947,15 +967,18 @@ public static partial class AgentTools
                 }, token);
                 Guid eventReader = await NativeAgent.OnMain(() => localEvents ? Watches.BeginScriptDelivery() : Guid.Empty, token);
                 Interlocked.Increment(ref executingScripts);
+                long currentInvocation = Interlocked.Increment(ref invocationSequence);
                 try
                 {
                     result = await AgentScript.Run(source, Int(args, "seconds", 120), NativeAgent.ValidateTool,
                         async (child, childArgs, childToken) =>
                         {
                             string previousNode = ActionTasks.NodeContext.Value;
+                            long previousInvocation = scriptInvocation.Value;
+                            scriptInvocation.Value = currentInvocation;
                             ActionTasks.NodeContext.Value = Text(args, "task_node") is string owner && owner.Length > 0 ? owner : previousNode;
                             try { return await ExecuteScriptTool(child, childArgs, token, childToken, localEvents); }
-                            finally { ActionTasks.NodeContext.Value = previousNode; }
+                            finally { ActionTasks.NodeContext.Value = previousNode; scriptInvocation.Value = previousInvocation; }
                         },
                         async cleanupToken => await NativeAgent.OnMain(() =>
                         {
@@ -1702,14 +1725,19 @@ public static partial class AgentTools
                 finally { Main.LocalPlayer.selectedItem = previous; }
             }
             return new JsonObject { ["slot"] = slot, ["in_reach"] = canMine,
-                ["solid"] = Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType] };
+                ["solid"] = Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType],
+                ["accepted_traps"] = tile.TileType == Terraria.ID.TileID.PressurePlates && slot >= 0
+                    && Power(Main.LocalPlayer.inventory[slot]) > 0 ? new JsonArray(new JsonObject {
+                        ["x"] = x, ["y"] = y, ["type"] = (int)tile.TileType,
+                        ["frame_x"] = (int)tile.TileFrameX, ["frame_y"] = (int)tile.TileFrameY }) : null };
         }, token);
         if (target == null) return null;
         if (Int(target, "slot", -1) < 0) return new JsonObject { ["error"] = "no_collect_tool" };
         if (!Bool(target, "in_reach"))
         {
-            var approach = await Navigate(new JsonObject { ["x"] = x, ["y"] = y,
-                ["mode"] = Bool(target, "solid") ? "mine" : "interact" }, token);
+            JsonObject Approach(string mode) => new() { ["x"] = x, ["y"] = y, ["mode"] = mode,
+                ["accepted_traps"] = target["accepted_traps"]?.DeepClone() };
+            var approach = await Navigate(Approach(Bool(target, "solid") ? "mine" : "interact"), token);
             if (approach["done"]?.GetValue<bool>() != true)
                 return new JsonObject { ["error"] = "cannot_reach_collect_target", ["navigation"] = approach };
             if (await NativeAgent.OnMain(() => !Main.tile[x, y].HasUnactuatedTile, token))
@@ -1727,7 +1755,7 @@ public static partial class AgentTools
             bool reachable = await NativeAgent.OnMain(InMiningRange, token);
             if (!reachable && !Bool(target, "solid"))
             {
-                approach = await Navigate(new JsonObject { ["x"] = x, ["y"] = y, ["mode"] = "stand" }, token);
+                approach = await Navigate(Approach("stand"), token);
                 if (approach["done"]?.GetValue<bool>() != true)
                     return new JsonObject { ["error"] = "cannot_reach_collect_target", ["navigation"] = approach };
                 reachable = await NativeAgent.OnMain(InMiningRange, token);

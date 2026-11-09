@@ -32,6 +32,19 @@ public sealed class BehaviorTrial : ModSystem
     bool samplingLanding;
     bool dungeonSampling, dungeonKeyObserved;
     int dungeonMaxKeys;
+    Stopwatch dungeonClock;
+    double dungeonSampleMs;
+    readonly Dictionary<string, double> dungeonTimes = new();
+    readonly JsonArray dungeonStops = new();
+    string dungeonDamageKey;
+    const System.Reflection.BindingFlags HiddenStatic = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+    static readonly System.Reflection.FieldInfo DamageField = typeof(AgentTools).GetField("LastDamage", HiddenStatic);
+    static readonly System.Reflection.FieldInfo EscapeField = typeof(AgentTools).GetField("ContactEscapeActive", HiddenStatic);
+    static readonly System.Reflection.FieldInfo QueryField = typeof(AgentTools).GetField("QueriesInFlight", HiddenStatic);
+    static readonly System.Reflection.FieldInfo ActionsField = typeof(AgentTools).GetField("Actions", HiddenStatic);
+    static readonly System.Reflection.FieldInfo SessionField = typeof(AgentTools).GetField("ControlSession", HiddenStatic);
+    static readonly System.Reflection.PropertyInfo FieldReadyProperty = typeof(RecedingNav).GetProperty("FieldReady", HiddenStatic);
+    static readonly System.Reflection.PropertyInfo ProcessingProperty = typeof(NativeAgent).GetProperty("Processing", HiddenStatic);
     readonly JsonArray landingFrames = new();
     readonly JsonArray evasionFrames = new();
     bool samplingEvasion;
@@ -427,6 +440,28 @@ public sealed class BehaviorTrial : ModSystem
             int keys = p.inventory.Where(i => i.type == ItemID.GoldenKey).Sum(i => i.stack);
             dungeonKeyObserved |= keys > 0;
             dungeonMaxKeys = Math.Max(dungeonMaxKeys, keys);
+            double now = dungeonClock.Elapsed.TotalMilliseconds, elapsed = now - dungeonSampleMs;
+            dungeonSampleMs = now;
+            string phase = p.dead ? "respawn" : RecedingNav.Active && !(bool)FieldReadyProperty.GetValue(null) ? "navigation_compute"
+                : FightCoordinator.AttackAnimationActive ? "combat_animation"
+                : p.itemAnimation > 0 || p.itemTime > 0 || p.controlUseItem
+                    ? p.HeldItem.pick > 0 || p.HeldItem.axe > 0 ? "mining"
+                        : p.HeldItem.createTile >= 0 ? "placement" : "other_animation"
+                : p.velocity.LengthSquared() > .04f ? "travel"
+                : (bool)EscapeField.GetValue(null) ? "survival_recovery"
+                : (int)QueryField.GetValue(null) > 0 ? "tool_query"
+                : ((ActionTasks)ActionsField.GetValue(null)).HasPrimaryControl || ((AgentControlSession)SessionField.GetValue(null)).PrimaryActive ? "tool_wait"
+                : (bool)ProcessingProperty.GetValue(null) ? "model_wait" : "idle";
+            dungeonTimes[phase] = dungeonTimes.GetValueOrDefault(phase) + elapsed;
+            var damage = (JsonObject)DamageField.GetValue(null);
+            string damageKey = damage?["tick"] + ":" + damage?["kind"];
+            if (damage != null && damageKey != dungeonDamageKey)
+            {
+                dungeonDamageKey = damageKey;
+                File.AppendAllText(Path.Combine(Main.SavePath, "dungeon-damage.jsonl"), new JsonObject {
+                    ["elapsed_ms"] = now, ["damage"] = damage.DeepClone(),
+                    ["terrain"] = TerrainInspection.Read(6) }.ToJsonString() + Environment.NewLine);
+            }
         }
         acceptance?.Observe(p);
         if (FullCraftTrial)
@@ -2926,7 +2961,7 @@ public sealed class BehaviorTrial : ModSystem
     {
         var locked = new Dictionary<(int X, int Y), Dictionary<int, int>>();
         var initialInventory = new Dictionary<int, int>();
-        const string prompt = "/goal 探索当前已击败骷髅王的地牢，自行获得金钥匙，打开一个此前未开启的上锁金箱，并实际拾取战利品。装备和施工材料已经备好。遇到尖刺、接触后碎裂的砖和无法伤害的怪物时，结合实际地形选择绕行、施工或其他可执行办法。受阻后保留已完成进度调整方案继续。用DAG和脚本执行并核验开锁与战利品入包，超过10秒的停顿记录原因并恢复行动。";
+        const string prompt = "/goal 探索当前已击败骷髅王的地牢，自行获得金钥匙，打开一个此前未开启的上锁金箱，并实际拾取战利品。装备和施工材料已经备好。遇到尖刺、接触后碎裂的砖和无法伤害的怪物时，结合实际地形选择绕行、施工或其他可执行办法。受阻后保留已完成进度调整方案继续。用DAG和脚本执行并核验开锁与战利品入包，超过10秒的停顿记录原因并恢复行动。将接近、取物或局部恢复等可复用行为保存到script_program，并用skill(name,revision,input,key)在DAG脚本中实际调用。已有适用技能优先复用，参数通过当前世界的观察取得。技能效果由实际游戏状态核验。";
         await OnMain(() =>
         {
             NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false;
@@ -2970,7 +3005,7 @@ public sealed class BehaviorTrial : ModSystem
                 ["natural_encounters"] = NaturalEncounters, ["terrain_edits"] = 0, ["model"] = "gpt-6.1-sol",
                 ["package_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
                     File.ReadAllBytes(Path.Combine(Main.SavePath, "Mods", "TerraBlind.tmod")))) }.ToJsonString());
-            dungeonSampling = true; NativeAgent.Submit(prompt);
+            dungeonClock = Stopwatch.StartNew(); dungeonSampling = true; NativeAgent.Submit(prompt);
             return true;
         });
         var clock = Stopwatch.StartNew();
@@ -2987,7 +3022,12 @@ public sealed class BehaviorTrial : ModSystem
                 if (p.dead && !wasDead) deaths++; wasDead = p.dead;
                 if (Vector2.DistanceSquared(p.position, anchor) >= 16)
                 {
-                    if (warned) Console.WriteLine($"DUNGEON_RESUMED elapsed_ms={now} stationary_ms={now - stationarySince}");
+                    if (warned)
+                    {
+                        Console.WriteLine($"DUNGEON_RESUMED elapsed_ms={now} stationary_ms={now - stationarySince}");
+                        dungeonStops.Add(new JsonObject { ["started_ms"] = stationarySince, ["ended_ms"] = now,
+                            ["duration_ms"] = now - stationarySince, ["resumed_status"] = NativeAgent.Status });
+                    }
                     anchor = p.position; stationarySince = now; moved = true; warned = false;
                 }
                 if (moved && !warned && now - stationarySince >= 10000)
@@ -3021,7 +3061,9 @@ public sealed class BehaviorTrial : ModSystem
                     ["golden_key_consumed"] = keyConsumed, ["unlock_evidence"] = unlockEvidence,
                     ["loot_x"] = completed.Value == null ? null : JsonValue.Create(completed.Key.X),
                     ["loot_y"] = completed.Value == null ? null : JsonValue.Create(completed.Key.Y),
-                    ["terrain"] = TerrainInspection.Read(12), ["status"] = NativeAgent.Status };
+                    ["terrain"] = TerrainInspection.Read(12), ["status"] = NativeAgent.Status,
+                    ["time_ms"] = new JsonObject(dungeonTimes.Select(kv => new KeyValuePair<string, JsonNode>(kv.Key, JsonValue.Create(kv.Value)))),
+                    ["stationary_segments"] = dungeonStops.DeepClone() };
             });
             observation["state"] = state;
             journal.WriteLine(observation.ToJsonString());
@@ -3029,6 +3071,8 @@ public sealed class BehaviorTrial : ModSystem
             if (observation["verified_loot"].GetValue<bool>())
             {
                 File.WriteAllText(Path.Combine(Main.SavePath, "dungeon-loot-result.json"), observation.ToJsonString());
+                File.WriteAllText(Path.Combine(Main.SavePath, "dungeon-skills.json"),
+                    await AgentTools.Execute("script_program", new JsonObject { ["operation"] = "list" }, default));
                 Console.WriteLine($"DUNGEON_LOOT_VERIFIED elapsed_ms={clock.ElapsedMilliseconds} key_observed=true initially_locked=true inventory_gain=true");
                 NativeAgent.Stop(); await OnMain(() => { Halt.All(); return true; });
                 return;
