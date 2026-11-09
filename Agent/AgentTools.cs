@@ -1148,6 +1148,7 @@ public static partial class AgentTools
                     result = await Call("/collect_treasure", args, token);
                     if (!Rejected(result)) result = await Wait("/collect_treasure_status", "running", "/collect_treasure_stop", 35, token);
                     result["new_chest_loot_verified"] = await NativeAgent.OnMain(() => AgentTaskEvidence.VerifyChest(chestBefore), token);
+                    result["chest_was_locked"] = chestBefore?.Locked;
                 }
                 finally
                 {
@@ -1298,6 +1299,8 @@ public static partial class AgentTools
                     }
                     var terrain = PvpTerrain.Observe(player, npc.Center);
                     return new JsonObject { ["npc"] = who, ["npc_type"] = npc.type, ["hp"] = npc.life,
+                        ["attackable"] = npc.CanBeChasedBy(player), ["contact_damage"] = npc.damage,
+                        ["dont_take_damage"] = npc.dontTakeDamage, ["immortal"] = npc.immortal,
                         ["clear_line"] = terrain["direct_line"]["clear"].DeepClone(),
                         ["requested_stances"] = requestedStances,
                         ["target_pos"] = new JsonObject { ["x"] = npc.Center.X, ["y"] = npc.Center.Y },

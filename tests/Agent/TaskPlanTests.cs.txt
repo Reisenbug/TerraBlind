@@ -152,6 +152,20 @@ static class TaskPlanTests
               "conditions":[{"kind":"chests_looted","count":1}]}]}
             """), AgentTaskEvidence.Measure);
         Check(!plan.Advance("loot", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "new plan reused historical chest loot");
+        plan.Create(Parse("""
+            {"goal":"unlock and loot","replace":true,"steps":[{"id":"loot","description":"loot a previously locked chest",
+              "conditions":[{"kind":"chests_looted","initially_locked":true,"count":1}]}]}
+            """), AgentTaskEvidence.Measure);
+        chest.locked = true; chest.item[0].stack = 1;
+        var lockedBefore = AgentTaskEvidence.ObserveChest(20, 30);
+        chest.locked = false; chest.item[0].stack = 0; Main.LocalPlayer.inventory[0].stack = 2;
+        Check(!AgentTaskEvidence.VerifyChest(lockedBefore), "previously counted chest counted twice after relocking");
+        Check(!plan.Advance("loot", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "ordinary chest satisfied locked-chest objective");
+        chest.x = 22; chest.locked = true; chest.item[0].stack = 1;
+        lockedBefore = AgentTaskEvidence.ObserveChest(22, 30);
+        chest.locked = false; chest.item[0].stack = 0; Main.LocalPlayer.inventory[0].stack = 3;
+        Check(AgentTaskEvidence.VerifyChest(lockedBefore)
+            && plan.Advance("loot", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), "actual unlocked transfer did not satisfy locked-chest objective");
         Main.chest[0] = null; Main.LocalPlayer.inventory[0] = new Item(); AgentTaskEvidence.Reset();
         Console.WriteLine("PASS: chest conditions verify fresh unique container-to-inventory transfers without guessing contents");
     }

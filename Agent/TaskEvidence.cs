@@ -12,16 +12,17 @@ public class AgentTaskEvidence : GlobalNPC
 {
     static readonly Dictionary<int, int> Kills = new();
     static readonly HashSet<(int X, int Y)> LootedChests = new();
-    internal static void Reset() { Kills.Clear(); LootedChests.Clear(); }
+    static readonly HashSet<(int X, int Y)> UnlockedLootedChests = new();
+    internal static void Reset() { Kills.Clear(); LootedChests.Clear(); UnlockedLootedChests.Clear(); }
 
-    internal sealed record ChestObservation(int X, int Y, Dictionary<int, int> Contents, Dictionary<int, int> Inventory);
+    internal sealed record ChestObservation(int X, int Y, bool Locked, Dictionary<int, int> Contents, Dictionary<int, int> Inventory);
     static Dictionary<int, int> Counts(IEnumerable<Item> items) => items.Where(i => i != null && !i.IsAir)
         .GroupBy(i => i.type).ToDictionary(g => g.Key, g => g.Sum(i => i.stack));
 
     internal static ChestObservation ObserveChest(int x, int y)
     {
         var chest = Main.chest.FirstOrDefault(c => c != null && x >= c.x && x < c.x + 2 && y >= c.y && y < c.y + 2);
-        return chest == null ? null : new ChestObservation(chest.x, chest.y, Counts(chest.item), Counts(Main.LocalPlayer.inventory));
+        return chest == null ? null : new ChestObservation(chest.x, chest.y, Chest.IsLocked(chest.x, chest.y), Counts(chest.item), Counts(Main.LocalPlayer.inventory));
     }
 
     internal static bool VerifyChest(ChestObservation before)
@@ -31,7 +32,9 @@ public class AgentTaskEvidence : GlobalNPC
         if (after == null) return false;
         bool transferred = before.Contents.Any(item => item.Value > after.Contents.GetValueOrDefault(item.Key)
             && after.Inventory.GetValueOrDefault(item.Key) > before.Inventory.GetValueOrDefault(item.Key));
-        return transferred && LootedChests.Add((before.X, before.Y));
+        if (!transferred || !LootedChests.Add((before.X, before.Y))) return false;
+        if (before.Locked && !after.Locked) UnlockedLootedChests.Add((before.X, before.Y));
+        return true;
     }
 
     public override void OnKill(NPC npc)
@@ -63,7 +66,8 @@ public class AgentTaskEvidence : GlobalNPC
             "npc_alive" => Main.npc.Count(npc => npc != null && npc.active && npc.life > 0 && npc.type == type),
             "npc_kills" when Main.netMode == NetmodeID.SinglePlayer => Kills.GetValueOrDefault(type),
             "npc_kills" => throw new InvalidOperationException("当前本次击杀证据仅支持单人游戏；联机需要服务器确认，不能用历史Boss进度代替。"),
-            "chests_looted" when Main.netMode == NetmodeID.SinglePlayer => LootedChests.Count,
+            "chests_looted" when Main.netMode == NetmodeID.SinglePlayer => condition["initially_locked"]?.GetValue<bool>() == true
+                ? UnlockedLootedChests.Count : LootedChests.Count,
             "chests_looted" => throw new InvalidOperationException("开箱转移证据目前仅支持单人游戏。"),
             _ => throw new InvalidOperationException("未知完成条件。")
         };

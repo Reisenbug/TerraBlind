@@ -13,6 +13,12 @@ public static class AgentScript
 {
     public static void DescribePrograms(JsonArray tools)
     {
+        var findTiles = tools.First(t => t["function"]?["name"]?.ToString() == "find_tiles")["function"];
+        findTiles["parameters"]["properties"]["include_locked"] = new JsonObject { ["type"] = "boolean", ["default"] = false,
+            ["description"] = "查箱子时可设true以包含上锁箱；结果locked给出当前锁状态。" };
+        findTiles["description"] = findTiles["description"].ToString() + "include_locked:true可发现上锁箱，返回locked当前锁状态。";
+        var treasure = tools.First(t => t["function"]?["name"]?.ToString() == "collect_treasure")["function"];
+        treasure["description"] = treasure["description"].ToString() + "上锁箱复用原版右键交互检查钥匙与解锁条件并消耗钥匙，再开箱取物；chest_was_locked记录采集前锁状态。";
         var navigation = tools.First(t => t["function"]?["name"]?.ToString() == "nav_to")["function"];
         navigation["description"] = navigation["description"].ToString()
             + "默认travel进入请求路点附近的交接范围；mine接近待挖实心目标，interact按交互距离接近目标，stand搜索精确落脚位置。";
@@ -48,11 +54,14 @@ public static class AgentScript
             conditions["kind"]["enum"].AsArray().Add("tiles");
             conditions["width"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 4096 };
             conditions["height"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 4096 };
+            conditions["initially_locked"] = new JsonObject { ["type"] = "boolean",
+                ["description"] = "chests_looted专用：true只计数采集前上锁、解锁后箱内物品实际入包的新箱子。" };
             conditions["name"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("jungle", "desert", "snow", "ocean", "dungeon", "corruption", "crimson", "hallow") };
             conditions["depth"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("any", "sky", "surface", "below_surface", "underground", "cavern", "underworld"), ["default"] = "any" };
             definition["description"] = definition["description"].ToString()
                 + "biome条件按原生人物群系与深度验收，count=1，name为群系名，depth=below_surface涵盖地下层和洞穴层。结束时身处某群系的要求使用biome条件，可在群系内任意位置验证。"
-                + "施工使用tiles条件：x/y为矩形左上世界格，width/height为大小，count=面积且面积<=4096，type为原版方块编号或内部名称，-1为空格。宿主逐格读取真实世界验收，不规则图形可拆成若干矩形条件。";
+                + "施工使用tiles条件：x/y为矩形左上世界格，width/height为大小，count=面积且面积<=4096，type为原版方块编号或内部名称，-1为空格。宿主逐格读取真实世界验收，不规则图形可拆成若干矩形条件。"
+                + "chests_looted可设initially_locked:true，宿主核对采集前上锁、采集后解锁且战利品入包；每个箱子只计一次。";
             definition["parameters"]["properties"][field]["items"]["properties"]["conditions"]["items"]["properties"]["type"] = new JsonObject
             {
                 ["anyOf"] = new JsonArray(new JsonObject { ["type"] = "integer", ["minimum"] = -1 },

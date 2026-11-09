@@ -105,6 +105,20 @@ namespace TerraBlind
 			// 而那条路绕过右键,引线根本不触发,是作弊。一律不开。按锚点判:它同样看 frameX
 			if (HttpServerSystem.IsFakeChestPublic(ax, ay)) { why = "trapped_chest"; return -1; }
 			if (!Reach.CanInteract(p, ax, ay)) { why = "out_of_reach"; return -1; }
+			if (Chest.IsLocked(ax, ay))
+			{
+				bool attempted = p.tileInteractAttempted, released = p.releaseUseTile, mouseReleased = Main.mouseRightRelease;
+				try
+				{
+					p.tileInteractAttempted = p.releaseUseTile = true;
+					p.TileInteractionsCheck(ax, ay);
+				}
+				finally
+				{
+					p.tileInteractAttempted = attempted; p.releaseUseTile = released; Main.mouseRightRelease = mouseReleased;
+				}
+				if (Chest.IsLocked(ax, ay)) { why = "locked"; return -1; }
+			}
 			if (Main.netMode == Terraria.ID.NetmodeID.MultiplayerClient)
 			{
 				if (Chest.IsLocked(ax, ay)) { why = "locked"; return -1; }

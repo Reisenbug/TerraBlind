@@ -2459,6 +2459,7 @@ namespace TerraBlind
 				var frameYM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"frame_y\"\\s*:\\s*(\\d+)");
 				int? frameX = frameXM.Success ? int.Parse(frameXM.Groups[1].Value) : null;
 				int? frameY = frameYM.Success ? int.Parse(frameYM.Groups[1].Value) : null;
+				bool includeLocked = System.Text.RegularExpressions.Regex.IsMatch(reqBody, "\"include_locked\"\\s*:\\s*true");
 				var pl = Main.LocalPlayer;
 				if (!nameM.Success || pl == null)
 				{
@@ -2494,7 +2495,7 @@ namespace TerraBlind
 								if (wantType == Terraria.ID.TileID.Containers || wantType == Terraria.ID.TileID.Containers2)
 								{
 									if (t.TileFrameX % 36 != 0 || t.TileFrameY % 36 != 0) continue;
-									if (Terraria.Chest.IsLocked(x, y)) continue;
+									if (!includeLocked && Terraria.Chest.IsLocked(x, y)) continue;
 									if (wantType == Terraria.ID.TileID.Containers && t.TileFrameX / 36 == 16) continue;
 									found.Add((x, y, ChestKindName(wantType, t.TileFrameX / 36)));
 								}
@@ -2521,6 +2522,7 @@ namespace TerraBlind
 						fsb.Append($"{{\"x\":{found[i].x},\"y\":{found[i].y},\"dist\":{System.Math.Abs(found[i].x - pcx) + System.Math.Abs(found[i].y - pcy)}");
 						fsb.Append(",\"near_hive_wall\":").Append(InHive(found[i].x, found[i].y) ? "true" : "false");
 						if (found[i].kind != null) fsb.Append($",\"kind\":\"{JsonEsc(found[i].kind)}\"");
+						if (found[i].kind != null) fsb.Append(",\"locked\":").Append(Terraria.Chest.IsLocked(found[i].x, found[i].y) ? "true" : "false");
 						fsb.Append("}");
 					}
 					fsb.Append(']');

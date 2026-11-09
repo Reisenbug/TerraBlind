@@ -68,6 +68,8 @@ public sealed class AgentTaskPlan
                     || kind is not ("permanent_health" or "position" or "biome" or "tiles" or "chests_looted") && check["type"]?.GetValue<int>() is not > 0)
                     throw new InvalidOperationException("条件支持 permanent_health、position、biome、tiles、item、equipped、npc_kills、npc_alive、chests_looted；count及物品/NPC的type必须为正数。");
                 var verified = new JsonObject { ["kind"] = kind, ["count"] = check["count"].DeepClone() };
+                if (kind == "chests_looted" && check["initially_locked"] != null)
+                    verified["initially_locked"] = check["initially_locked"].GetValue<bool>();
                 if (kind == "position")
                 {
                     int radius = check["radius"]?.GetValue<int>() ?? 2;
