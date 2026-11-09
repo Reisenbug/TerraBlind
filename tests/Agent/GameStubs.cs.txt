@@ -191,6 +191,16 @@ namespace Terraria
         => x >= margin && y >= margin && x < Main.maxTilesX - margin && y < Main.maxTilesY - margin; }
     public static class Collision
     {
+        public static bool up, down;
+        public struct HurtTile { public int type; }
+        public static Func<Microsoft.Xna.Framework.Vector2, int, int, Player, bool> HurtTest;
+        public static HurtTile HurtTiles(Microsoft.Xna.Framework.Vector2 position, int width, int height, Player player)
+            => new() { type = HurtTest?.Invoke(position, width, height, player) == true ? 48 : -1 };
+        public static HurtTile HurtTiles(System.Numerics.Vector2 position, int width, int height, Player player)
+            => HurtTiles(new Microsoft.Xna.Framework.Vector2(position.X, position.Y), width, height, player);
+        public static Microsoft.Xna.Framework.Vector2 TileCollision(Microsoft.Xna.Framework.Vector2 position,
+            Microsoft.Xna.Framework.Vector2 velocity, int width, int height, bool fallThrough = false, bool fall2 = false, int gravDir = 1)
+            => SolidCollision(position + velocity, width, height) ? Microsoft.Xna.Framework.Vector2.Zero : velocity;
         public static bool Clear = true;
         public static Func<Microsoft.Xna.Framework.Vector2, Microsoft.Xna.Framework.Vector2, bool> LineTest;
         public static bool CanHitLine(Microsoft.Xna.Framework.Vector2 a, int w, int h, Microsoft.Xna.Framework.Vector2 b, int w2, int h2) => LineTest?.Invoke(a, b) ?? Clear;

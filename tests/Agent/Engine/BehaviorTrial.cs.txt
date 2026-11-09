@@ -33,6 +33,8 @@ public sealed class BehaviorTrial : ModSystem
     bool dungeonSampling, dungeonKeyObserved;
     int dungeonMaxKeys;
     readonly JsonArray landingFrames = new();
+    readonly JsonArray evasionFrames = new();
+    bool samplingEvasion;
     delegate void OriginalStart(int x, int y, RecedingNav.Mode mode);
     delegate void StartHook(OriginalStart original, int x, int y, RecedingNav.Mode mode);
     StartHook materialNavigationHook;
@@ -416,6 +418,10 @@ public sealed class BehaviorTrial : ModSystem
             for (int i = 0; i < Main.maxNPCs; i++)
                 if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
         var p = Main.LocalPlayer;
+        if (samplingEvasion)
+            evasionFrames.Add(new JsonObject { ["tick"] = Main.GameUpdateCount, ["x"] = p.Center.X / 16,
+                ["y"] = p.Center.Y / 16, ["hp"] = p.statLife, ["hurt_tile"] = Collision.HurtTiles(p.position, p.width, p.height, p).type,
+                ["left"] = p.controlLeft, ["right"] = p.controlRight, ["jump"] = p.controlJump });
         if (dungeonSampling)
         {
             int keys = p.inventory.Where(i => i.type == ItemID.GoldenKey).Sum(i => i.stack);
@@ -500,6 +506,53 @@ public sealed class BehaviorTrial : ModSystem
     async Task Run()
     {
         if (DungeonTrial) { await DungeonGoalTrial(); return; }
+        if (Environment.GetEnvironmentVariable("TB_EVASION_TERRAIN_PROBE") == "1")
+        {
+            var decision = await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                Concessions.Enabled = false; Manual.On = false; AgentPermissions.Reset();
+                Combat.Enabled = Dodge.Enabled = false;
+                var p = Main.LocalPlayer;
+                foreach (var item in p.inventory) item.TurnToAir();
+                foreach (var item in p.armor) item.TurnToAir();
+                p.armor[3].SetDefaults(ItemID.CobaltShield);
+                p.ConsumedLifeCrystals = 15; p.statLife = p.statLifeMax = p.statLifeMax2 = 400;
+                p.Teleport(new Vector2(3689.4753f * 16 - p.width / 2f, 783.6875f * 16 - p.height / 2f));
+                p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+                if (Collision.HurtTiles(p.position, p.width, p.height, p).type >= 0
+                    || Collision.SolidCollision(p.position, p.width, p.height))
+                    throw new Exception("evasion fixture must start clear of natural terrain damage");
+                int shot = Projectile.NewProjectile(new EntitySource_Misc("EvasionTerrainTrial"),
+                    p.Center + new Vector2(0, -120), new Vector2(0, 5), ProjectileID.DeathLaser, 20, 0);
+                Main.projectile[shot].tileCollide = false;
+                Main.projectile[shot].hostile = true;
+                Main.projectile[shot].friendly = false;
+                p.controlRight = true;
+                var method = typeof(FightCoordinator).GetMethod("Evade", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+                bool up = Collision.up, down = Collision.down;
+                var watch = Stopwatch.StartNew();
+                var choice = ((int Direction, bool Jump, bool Apply))method.Invoke(null, new object[] { p, null, false });
+                double elapsed = watch.Elapsed.TotalMilliseconds;
+                if (Collision.up != up || Collision.down != down) throw new Exception("forecast changed native collision flags");
+                FightCoordinator.Start(20);
+                samplingEvasion = true;
+                return new JsonObject { ["direction"] = choice.Direction, ["jump"] = choice.Jump,
+                    ["apply"] = choice.Apply, ["elapsed_ms"] = elapsed, ["terrain_edited"] = false,
+                    ["collision_flags_preserved"] = true };
+            });
+            int start = await OnMain(() => frames);
+            while (await OnMain(() => frames - start) < 36) await Task.Delay(10);
+            await OnMain(() => { samplingEvasion = false; FightCoordinator.Stop(); return true; });
+            var evasionResult = new JsonObject { ["decision"] = decision, ["frames"] = evasionFrames.DeepClone() };
+            File.WriteAllText(Path.Combine(Main.SavePath, "evasion-terrain.json"), evasionResult.ToJsonString());
+            if (!decision["apply"].GetValue<bool>() || evasionFrames.Count < 30
+                || evasionFrames.Any(f => f["hurt_tile"].GetValue<int>() >= 0)
+                || !evasionFrames.Any(f => f["jump"].GetValue<bool>() || f["left"].GetValue<bool>() || f["right"].GetValue<bool>()))
+                throw new Exception("native evasion entered a contact hazard or failed to move: " + evasionResult);
+            Console.WriteLine("EVASION_TERRAIN_PASS native_engine=true model_calls=0 frames=" + evasionFrames.Count + " decision=" + decision);
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CONTACT_MINING_PROBE") == "1"
             || Environment.GetEnvironmentVariable("TB_CONTACT_AUTOMATIC_PROBE") == "1"
             || Environment.GetEnvironmentVariable("TB_CONTACT_OWNED_PROBE") == "1"

@@ -70,6 +70,8 @@ namespace TerraBlind
             float Risk(int direction, bool jump)
             {
                 Vector2 position = p.Center, velocity = p.velocity;
+                var halfSize = new Vector2(p.width / 2f, p.height / 2f);
+                bool clearingContact = Collision.HurtTiles(p.position, p.width, p.height, p).type >= 0;
                 if (jump) velocity.Y = -Player.jumpSpeed - p.jumpSpeedBoost;
                 int hold = jump ? 12 : 0;
                 float score = direction == currentDirection ? 0 : .01f;
@@ -78,15 +80,21 @@ namespace TerraBlind
                 {
                     float desired = direction * Math.Max(p.maxRunSpeed, p.accRunSpeed);
                     velocity.X += Math.Clamp(desired - velocity.X, -p.runAcceleration, p.runAcceleration);
-                    var next = position + new Vector2(velocity.X, 0);
-                    if (!Collision.SolidCollision(next - new Vector2(p.width / 2f, p.height / 2f), p.width, p.height)) position = next;
-                    else velocity.X = 0;
                     if (hold > 0 && velocity.Y < 0)
                     { velocity.Y = -Player.jumpSpeed - p.jumpSpeedBoost; hold--; }
                     velocity.Y += p.gravity;
-                    next = position + new Vector2(0, velocity.Y);
-                    if (!Collision.SolidCollision(next - new Vector2(p.width / 2f, p.height / 2f), p.width, p.height)) position = next;
-                    else velocity.Y = 0;
+                    bool up = Collision.up, down = Collision.down;
+                    Vector2 movement;
+                    try { movement = Collision.TileCollision(position - halfSize, velocity, p.width, p.height,
+                        p.controlDown, p.controlDown, (int)p.gravDir); }
+                    finally { Collision.up = up; Collision.down = down; }
+                    position += movement;
+                    if (movement.X != velocity.X) velocity.X = 0;
+                    if (movement.Y != velocity.Y) velocity.Y = 0;
+                    bool contact = Collision.HurtTiles(position - halfSize, p.width, p.height, p).type >= 0;
+                    if (contact && !clearingContact) return float.PositiveInfinity;
+                    if (contact) score += (25 - frame) * 1000;
+                    else clearingContact = false;
                     if (!AgentTools.Control.BoundsAllowed(ControlBehavior.Dodge,
                         (position.X - p.width / 2f) / 16, (position.Y - p.height / 2f) / 16, p.width / 16f, p.height / 16f))
                         return float.PositiveInfinity;

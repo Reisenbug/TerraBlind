@@ -375,6 +375,11 @@ static class GatherTests
                 Center = p.Center + new Microsoft.Xna.Framework.Vector2(0, -120), velocity = new(0, 5) };
             Main.projectile = new[] { shot };
             Check(FightCoordinator.Evade(p).Direction != 0, "incoming vertical projectile did not trigger lateral evasion");
+            Collision.HurtTest = (position, _, _, _) => position.X < p.position.X - 1;
+            Check(FightCoordinator.Evade(p).Direction > 0, "evasion selected terrain that deals contact damage");
+            Collision.HurtTest = (position, _, _, _) => position.X >= p.position.X - 1;
+            Check(FightCoordinator.Evade(p).Direction < 0, "contact hazard prevented choosing an escape out of existing damage");
+            Collision.HurtTest = null;
             string boundary = AgentTools.Control.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null,
                 "stay inside arena", ((int)MathF.Floor(p.position.X / 16), 0, 20, 1000), outside: true);
             try
@@ -442,7 +447,7 @@ static class GatherTests
             FightCoordinator.Stop();
             Main.projectile = oldShots; Main.npc = oldNpcs;
             p.position = oldPosition; p.velocity = oldVelocity; p.gravity = oldGravity; Manual.On = oldManual;
-            Dodge.Enabled = oldDodge; Collision.SolidTest = null;
+            Dodge.Enabled = oldDodge; Collision.SolidTest = null; Collision.HurtTest = null;
         }
         Console.WriteLine("PASS: NPC evasion reacts to hostile trajectories, avoids blocked movement and ignores friendly or distant shots");
     }
