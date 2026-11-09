@@ -243,6 +243,7 @@ public class NativeAgent : ModSystem
                         : "宿主实时危险观察，原目标和进度保留。低血量仅通知，当前动作继续；不得单凭低血量暂停、取消、原地回血或等待审阅。仅任务明确约束死亡时按该约束处理。请在行动期间调整后续方案：";
                     _dangerDelivery = _codex.Steer(instruction + observation.ToJsonString(AgentTools.ModelJson), _cancel.Token);
                 }
+                else _dangerDelivery = AgentTools.NotifyExecution(_codex, _cancel.Token);
             }
         }
         if (Status == "后台动作执行中" && !AgentTools.Actions.HasActive) Status = "idle";

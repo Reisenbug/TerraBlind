@@ -67,8 +67,45 @@ public static partial class AgentTools
         }
     }
     internal static JsonObject ExecutionContinuity;
+    static string lastExecutionNotice;
     static ulong? gapStarted;
     static bool gapReported;
+
+    internal static Task NotifyExecution(CodexAgent codex, CancellationToken token)
+    {
+        if (!codex.HasActiveTurn || token.IsCancellationRequested || !Plan.Incomplete) return Task.CompletedTask;
+        var action = Actions.HasPrimaryControl ? Actions.Summary().FirstOrDefault(item => item["tool"]?.ToString() != "fight"
+            && item["status"]?.ToString() == "running") : null;
+        string kind = action != null ? "prepare_successor" : "execution_gap";
+        if (action == null)
+        {
+            if (Watches.LocalDelivery || ExecutionContinuity?["reason"]?.ToString() is not ("no_executable_action" or "event_review_without_action"))
+                return Task.CompletedTask;
+            action = Actions.LatestFinishedPrimary();
+        }
+        if (action == null) return Task.CompletedTask;
+        string node = action["task_node"]?.ToString();
+        string key = kind + ":" + action["handle"] + ":" + action["attempt"]
+            + ":" + (kind == "execution_gap" ? Plan.ExecutionRevision(node) : 0);
+        if (lastExecutionNotice == key) return Task.CompletedTask;
+        lastExecutionNotice = key;
+        var notice = new JsonObject { ["kind"] = kind, ["handle"] = action["handle"]?.DeepClone(),
+            ["tool"] = action["tool"]?.DeepClone(), ["status"] = action["status"]?.DeepClone(), ["task_node"] = node,
+            ["plan_revision"] = Plan.Snapshot()["revision"]?.DeepClone() };
+        if (action["result"] is JsonObject result)
+            notice["result"] = new JsonObject { ["outcome"] = result["outcome"]?.DeepClone(),
+                ["reason"] = result["reason"]?.DeepClone(), ["error"] = result["error"]?.DeepClone() };
+        string instruction = kind == "prepare_successor"
+            ? "宿主执行变化：当前后台动作继续运行。趁本轮准备已查证的后继script及适用的on_failure；准备和只读查询保持当前动作运行。已有充分准备则沿用。"
+            : "宿主执行变化：当前动作已经结束且没有后续动作运行。结合最新句柄与现场优先恢复有效行动；保留已完成进度，修改后续script或准备恢复，随后执行。";
+        return Send();
+        async Task Send()
+        {
+            bool accepted = await codex.Steer(instruction + notice.ToJsonString(ModelJson), token);
+            if (!accepted && lastExecutionNotice == key) lastExecutionNotice = null;
+            DiagLog.Write($"[agent_execution_notice] kind={kind} handle={notice["handle"]} accepted={accepted}");
+        }
+    }
 
     internal static void ObserveContinuity()
     {
@@ -305,7 +342,7 @@ public static partial class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); pendingNode = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
+    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); pendingNode = lastExecutionNotice = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
         Actions.CancelAll();

@@ -22,6 +22,7 @@ static class CodexTests
         ContextChanges();
         await GoalProtocol();
         await NativeGoalProtocol();
+        await NativeExecutionSteering();
         await NativeBackgroundReview();
         var launch = new System.Diagnostics.ProcessStartInfo();
         launch.Environment.Clear();
@@ -286,6 +287,75 @@ static class CodexTests
                 samples++;
             }
             Console.WriteLine($"CONTEXT_REPLAY samples={samples} original_chars={before} delta_chars={after}");
+        }
+    }
+
+    static async Task NativeExecutionSteering()
+    {
+        var native = new NativeAgent();
+        var server = new Server { HoldFinalReply = true };
+        var handler = HttpServerSystem.Handler;
+        bool fail = false;
+        int starts = 0;
+        string handle = null;
+        Config.I.AgentUseCodex = true;
+        native.Load();
+        typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .SetValue(native, new CodexAgent((_, _) => server.Connect()));
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/nav_recede") starts++;
+            return (200, path == "/nav_recede_done" ? fail ? "{\"done\":false,\"status\":\"failed\",\"reason\":\"fixture_blocked\"}"
+                : "{\"done\":false}" : "{}");
+        };
+        server.AfterTool = calls =>
+        {
+            if (calls != 1) return;
+            _ = NativeAgent.OnMain(() =>
+            {
+                AgentTools.Plan.Create(JsonNode.Parse("""
+                    {"goal":"prepare during a delayed reply","mode":"dag","steps":[
+                     {"id":"travel","description":"keep moving while preparing","depends_on":[],"script":"return {};",
+                      "conditions":[{"kind":"permanent_health","count":9999}]}]}
+                    """).AsObject(), AgentTaskEvidence.Measure);
+                ActionTasks.NodeContext.Value = "travel";
+                try { handle = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 900, ["y"] = 100 }, default)["handle"].ToString(); }
+                finally { ActionTasks.NodeContext.Value = null; }
+                return true;
+            }, default);
+        };
+        async Task Until(Func<bool> condition)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(3);
+            while (!condition())
+            {
+                Check(DateTime.UtcNow < deadline, "active execution was not delivered before the delayed reply finished");
+                native.PostUpdateEverything(); await Task.Delay(5);
+            }
+        }
+        try
+        {
+            NativeAgent.Submit("prepare the next operation while this one executes");
+            await Until(() => server.Steers.Count == 1 && starts == 1);
+            Check(server.Inputs.Count == 1 && server.Interrupts == 0 && AgentTools.Actions.ActiveHandle == handle,
+                "preparation steering started another turn, paused or replaced the route");
+            Check(server.Steers[0]["input"][0]["text"].ToString().Contains("prepare_successor"),
+                "action start did not request preparation in the current reasoning turn");
+            var quiet = DateTime.UtcNow.AddMilliseconds(700);
+            while (DateTime.UtcNow < quiet) { native.PostUpdateEverything(); await Task.Delay(5); }
+            Check(server.Steers.Count == 1, "unchanged action repeatedly steered the same delayed reply");
+            fail = true;
+            await Until(() => server.Steers.Count == 2);
+            Check(server.Steers[1]["input"][0]["text"].ToString().Contains("execution_gap")
+                && server.Inputs.Count == 1 && server.Interrupts == 0,
+                "failed execution waited for final text and a new reasoning turn before reporting its gap");
+            Console.WriteLine("PASS: active-turn execution steering prepares successors and delivers uncovered failure before final reply");
+        }
+        finally
+        {
+            NativeAgent.Stop(); native.OnWorldUnload(); native.Unload();
+            Config.I.AgentUseCodex = false; HttpServerSystem.Handler = handler;
+            AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
         }
     }
 
@@ -713,7 +783,7 @@ static class CodexTests
         readonly Lines _input = new();
         public int Threads, Interrupts;
         int _turn;
-        public bool Stopped, LoggedIn = true, FailTurn, EmitCompaction;
+        public bool Stopped, LoggedIn = true, FailTurn, EmitCompaction, HoldFinalReply;
         public string ToolName = "get_state";
         public Action<int> AfterTool;
         public JsonObject ThreadArgs;
@@ -776,6 +846,7 @@ static class CodexTests
                             ["tool"] = ToolName, ["arguments"] = new JsonObject() } });
                     return;
                 }
+                if (HoldFinalReply) return;
                 var completed = new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
                 { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["item"] = new JsonObject
                 { ["id"] = "reply" + _turn, ["type"] = "agentMessage", ["text"] = "完成了" } } };

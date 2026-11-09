@@ -116,6 +116,7 @@ public sealed class CodexAgent : IDisposable
     CodexConnection _rpc;
     string _thread, _signature;
     volatile string _activeTurn;
+    internal bool HasActiveTurn => _activeTurn != null;
     JsonObject _usage;
     JsonObject _goal;
     readonly object _goalGate = new();
