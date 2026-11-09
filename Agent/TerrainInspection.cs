@@ -56,6 +56,7 @@ public static class TerrainInspection
             if (active && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType] && approachCells.Contains((ix, iy)))
                 solids.Add(Fact("solid"));
             if (active && TileID.Sets.Falling[tile.TileType]) hazards.Add(Fact("falling_block"));
+            if (active && TileID.Sets.CrackedBricks[tile.TileType]) hazards.Add(Fact("breaks_on_contact"));
             if (active && TileID.Sets.TouchDamageImmediate[tile.TileType] > 0) hazards.Add(Fact("contact_damage"));
             if (tile.LiquidAmount > 0)
             {
@@ -141,6 +142,7 @@ public static class TerrainInspection
         int bodyRight = (int)Math.Floor((player.position.X + player.width - 1) / 16);
         int bodyBottom = (int)Math.Floor((player.position.Y + player.height - 1) / 16);
         var rows = new JsonArray(); var nearby = new JsonArray(); var hazards = new JsonArray(); var shapes = new JsonArray();
+        var unstable = new JsonArray(); var contacts = new JsonArray();
         for (int y = top; y <= bottom; y++)
         {
             var row = new StringBuilder();
@@ -151,6 +153,11 @@ public static class TerrainInspection
                 bool falling = active && TileID.Sets.Falling[tile.TileType];
                 bool solid = active && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
                 int touchDamage = active ? TileID.Sets.TouchDamageImmediate[tile.TileType] : 0;
+                bool fragile = active && TileID.Sets.CrackedBricks[tile.TileType];
+                if (fragile) unstable.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
+                    ["kind"] = "breaks_on_contact" });
+                if (touchDamage > 0) contacts.Add(new JsonObject { ["x"] = x, ["y"] = y,
+                    ["type"] = tile.TileType, ["damage"] = touchDamage });
                 if (active && ((int)tile.Slope != 0 || tile.IsHalfBlock))
                     shapes.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
                         ["solid"] = solid, ["slope"] = (int)tile.Slope, ["half_block"] = tile.IsHalfBlock });
@@ -160,11 +167,12 @@ public static class TerrainInspection
                         ["active"] = active, ["frame_x"] = tile.TileFrameX, ["frame_y"] = tile.TileFrameY,
                         ["red_wire"] = tile.RedWire, ["blue_wire"] = tile.BlueWire,
                         ["green_wire"] = tile.GreenWire, ["yellow_wire"] = tile.YellowWire });
-                row.Append(touchDamage > 0 ? 'H' : falling ? 'F' : solid ? '#' : active && Main.tileSolidTop[tile.TileType] ? '='
+                row.Append(touchDamage > 0 ? 'H' : fragile ? 'C' : falling ? 'F' : solid ? '#' : active && Main.tileSolidTop[tile.TileType] ? '='
                     : tile.LiquidAmount > 0 ? tile.LiquidType == LiquidID.Lava ? 'L' : '~' : active ? '*' : '.');
                 if (tile.HasTile && x >= bodyLeft - 1 && x <= bodyRight + 1 && y >= bodyTop - 1 && y <= bodyBottom + 1)
                     nearby.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
-                        ["solid"] = solid, ["falling"] = falling, ["suffocates"] = TileID.Sets.Suffocate[tile.TileType], ["touch_damage"] = touchDamage,
+                        ["solid"] = solid, ["falling"] = falling, ["breaks_on_contact"] = fragile,
+                        ["suffocates"] = TileID.Sets.Suffocate[tile.TileType], ["touch_damage"] = touchDamage,
                         ["slope"] = (int)tile.Slope, ["half_block"] = tile.IsHalfBlock,
                         ["in_body"] = x >= bodyLeft && x <= bodyRight && y >= bodyTop && y <= bodyBottom });
             }
@@ -174,6 +182,7 @@ public static class TerrainInspection
             ["suffocating"] = player.suffocating, ["origin"] = new JsonObject { ["x"] = left, ["y"] = top },
             ["player_bounds"] = new JsonObject { ["left"] = bodyLeft, ["top"] = bodyTop, ["right"] = bodyRight, ["bottom"] = bodyBottom },
             ["rows"] = rows, ["near_body_tiles"] = nearby, ["trap_tiles"] = hazards, ["shaped_tiles"] = shapes,
-            ["legend"] = "rows从上往下，每行从左往右，坐标=origin+下标；H原生接触伤害方块，F掉落方块，#实心，=平台/实心顶面，L岩浆，~其他液体，*非实心物件，.空气。#不保证完整平顶，整个观察范围的斜砖/半砖见shaped_tiles；slope是游戏原始枚举值，0无斜坡。人物范围见player_bounds；不是未来碰撞预测或家具放置许可。" };
+            ["unstable_tiles"] = unstable, ["contact_damage_tiles"] = contacts,
+            ["legend"] = "rows从上往下，每行从左往右，坐标=origin+下标；H原生接触伤害方块，C接触后碎裂方块，F掉落方块，#实心，=平台/实心顶面，L岩浆，~其他液体，*非实心物件，.空气。#不保证完整平顶，整个观察范围的斜砖/半砖见shaped_tiles；slope是游戏原始枚举值，0无斜坡。人物范围见player_bounds；不是未来碰撞预测或家具放置许可。" };
     }
 }

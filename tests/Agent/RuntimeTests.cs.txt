@@ -1268,11 +1268,18 @@ static class RuntimeTests
                     "terrain grid lost world coordinates or falling/liquid semantics");
                 var buried = terrain["near_body_tiles"].AsArray().Single(t => t["x"].GetValue<int>() == 2 && t["y"].GetValue<int>() == 2);
                 Check(buried["in_body"].GetValue<bool>() && buried["suffocates"].GetValue<bool>(), "buried tile was shown as free space");
+                Terraria.ID.TileID.Sets.CrackedBricks[1] = true;
+                var fragile = TerrainInspection.Read(2);
+                Check(fragile["unstable_tiles"].AsArray().Any(t => t["x"].GetValue<int>() == 2 && t["y"].GetValue<int>() == 2)
+                    && fragile["rows"][1].ToString()[1] == 'C'
+                    && TerrainInspection.Opportunity(2, 2, null)["hazards"].AsArray().Any(h => h["kind"].ToString() == "breaks_on_contact"),
+                    "fragile support was reported as stable terrain");
             }
             finally
             {
                 Game.LocalPlayer.position = savedPosition; Game.tile[2, 2] = oldSand; Game.tile[3, 3] = oldLava;
                 Terraria.ID.TileID.Sets.Falling[1] = Terraria.ID.TileID.Sets.Suffocate[1] = false;
+                Terraria.ID.TileID.Sets.CrackedBricks[1] = false;
             }
             Console.WriteLine("PASS: terrain inspection reports exact body overlap, falling blocks and lava without editing tiles");
 
