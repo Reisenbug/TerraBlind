@@ -466,14 +466,15 @@ static class RuntimeTests
     static async Task TestPreparedFailureRecovery()
     {
         var previous = HttpServerSystem.Handler;
-        foreach (string mode in new[] { "recovered", "unhandled", "danger", "disabled", "capacity" })
+        foreach (string mode in new[] { "recovered", "unhandled", "danger", "disabled", "capacity", "busy" })
         {
             AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
             var existingWorkflows = AgentTools.Workflows.Keys.ToHashSet();
             if (mode == "capacity")
                 for (int i = AgentTools.Workflows.Count; i < 32; i++) AgentTools.Workflows.Add("recovery-capacity-" + i, new ScriptProgress());
             var recoveryBaseKeys = AgentTools.Workflows.Keys.ToHashSet();
-            bool shouldRecover = mode is "recovered" or "capacity";
+            bool shouldRecover = mode is "recovered" or "capacity" or "busy";
+            long busyTicket = 0;
             int starts = 0, repairs = 0;
             bool fail = false;
             string detail = new('x', 20000);
@@ -518,6 +519,15 @@ static class RuntimeTests
                 AgentTools.ObserveContinuity();
                 if (mode == "danger") AgentTools.Watches.Emit("suffocating", "live-danger", new JsonObject());
                 var timer = System.Diagnostics.Stopwatch.StartNew();
+                if (mode == "busy")
+                {
+                    var busy = AgentTools.ControlSession.Begin("place_at", null, out busyTicket);
+                    Check(busy == null, "fixture placement did not acquire control");
+                    for (int i = 0; i < 10; i++) { AgentTools.ContinuePreparedNode(default); Agent.PostUpdateEverything(); await Task.Delay(5); }
+                    Check(AgentTools.LastContinuation == null && repairs == 0,
+                        "prepared recovery started while an existing placement still held the input channels");
+                    AgentTools.ControlSession.End(busyTicket); busyTicket = 0;
+                }
                 if (mode is "danger" or "disabled")
                 {
                     for (int i = 0; i < 10; i++) { AgentTools.ContinuePreparedNode(default); Agent.PostUpdateEverything(); await Task.Delay(5); }
@@ -582,8 +592,13 @@ static class RuntimeTests
             }
             finally
             {
+                if (busyTicket != 0) AgentTools.ControlSession.End(busyTicket);
                 ActionTasks.NodeContext.Value = null;
-                AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+                var dispatch = (Task)typeof(AgentTools).GetField("continuation", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+                await PumpUntil(() => dispatch.IsCompleted); await dispatch;
+                AgentTools.Stop();
+                await PumpUntil(() => !AgentTools.Actions.HasActive && !AgentTools.ControlSession.PrimaryActive);
+                AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
                 await PumpUntil(() => AgentTools.Workflows.Where(w => !existingWorkflows.Contains(w.Key)).All(w => !w.Value.Running));
                 foreach (string id in AgentTools.Workflows.Keys.Where(id => !existingWorkflows.Contains(id)).ToArray())
                     AgentTools.Workflows.Remove(id);

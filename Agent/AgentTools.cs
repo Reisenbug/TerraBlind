@@ -168,7 +168,7 @@ public static partial class AgentTools
     }
     internal static void ContinuePreparedNode(CancellationToken token)
     {
-        if (token.IsCancellationRequested || !continuation.IsCompleted || Actions.HasPrimaryControl || Volatile.Read(ref executingScripts) > 0
+        if (token.IsCancellationRequested || !continuation.IsCompleted || Actions.HasPrimaryControl || ControlSession.PrimaryActive || Volatile.Read(ref executingScripts) > 0
             || !Plan.RequiresNodeExecution || Main.LocalPlayer.dead || ContactEscapeActive) return;
         if (pendingNode != null)
         {
