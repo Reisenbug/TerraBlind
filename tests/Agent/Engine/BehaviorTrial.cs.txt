@@ -561,6 +561,7 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_DESERT_CONTACT_PROBE") == "1") { await DesertContactTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_NATIVE_REJECTION_NATURAL") == "1") { await NativeRejectionNaturalTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_NATIVE_REJECTION_PROBE") == "1") { await NativeRejectionTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_REPLY_COVER_PROBE") == "1") { await ReplyCoverTrial(); return; }
@@ -2990,6 +2991,82 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("edited program replayed the original task or did not use revision 2");
             return true;
         });
+    }
+
+    async Task DesertContactTrial()
+    {
+        var before = await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false; AgentPermissions.Reset();
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            Combat.Enabled = Dodge.Enabled = Concessions.Enabled = false;
+            VanillaNavBridge.Enabled = VanillaNavBridge.RegionsEnabled = false;
+            Main.dontStarveWorld = false;
+            var p = Main.LocalPlayer;
+            p.Teleport(new Vector2(35629.824f, 4852.176f)); p.velocity = new Vector2(2.8f, -2.8f);
+            p.ConsumedLifeCrystals = 0; p.statLife = p.statLifeMax = p.statLifeMax2 = 100;
+            p.fallStart = p.fallStart2 = (int)(p.Bottom.Y / 16);
+            foreach (var item in p.inventory) item.TurnToAir();
+            foreach (var item in p.armor) item.TurnToAir();
+            p.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+            p.inventory[2].SetDefaults(ItemID.CopperAxe);
+            p.inventory[3].SetDefaults(ItemID.Wood); p.inventory[3].stack = 9999;
+            p.selectedItem = 1;
+            if (!Main.tile[2234, 305].HasTile || Main.tile[2234, 305].TileType != TileID.Cactus)
+                throw new Exception("natural desert fixture cactus is missing");
+            int Damage() => TerrainInspection.Read(12)["contact_damage_tiles"].AsArray()
+                .Where(t => t["type"].GetValue<ushort>() == TileID.Cactus).Select(t => t["damage"].GetValue<int>()).FirstOrDefault();
+            int classicDamage = Damage();
+            var predicted = (Collision.HurtTile)typeof(AgentContactEscape).GetMethod("PredictedContact", HiddenStatic)
+                .Invoke(null, new object[] { p });
+            Main.dontStarveWorld = true;
+            int specialDamage = Damage(); Main.dontStarveWorld = false;
+            var facts = new JsonObject { ["classic_cactus_damage"] = classicDamage,
+                ["special_cactus_damage"] = specialDamage, ["predicted_contact_type"] = predicted.type };
+            File.WriteAllText(Path.Combine(Main.SavePath, "desert-contact-before.json"), facts.ToJsonString());
+            if (classicDamage != 0 || specialDamage <= 0 || predicted.type >= 0)
+                throw new Exception("passable desert terrain was classified as contact damage: " + facts);
+            var tiles = new JsonArray();
+            for (int x = 2220; x <= 2265; x++)
+            for (int y = 295; y <= 320; y++)
+                if (Main.tile[x, y].HasTile && Main.tile[x, y].TileType is TileID.Sand or TileID.Cactus)
+                    tiles.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = (int)Main.tile[x, y].TileType });
+            p.velocity = Vector2.Zero;
+            evasionFrames.Clear(); samplingEvasion = true;
+            return tiles;
+        });
+        await Call("watch", new JsonObject { ["events"] = new JsonArray("suffocating", "low_health") });
+        var clock = Stopwatch.StartNew();
+        var result = await Call("nav_to", new JsonObject { ["x"] = 2256, ["y"] = 310 });
+        var route = await OnMain(() =>
+        {
+            samplingEvasion = false;
+            int changed = before.AsArray().Count(t => !Main.tile[t["x"].GetValue<int>(), t["y"].GetValue<int>()].HasTile
+                || Main.tile[t["x"].GetValue<int>(), t["y"].GetValue<int>()].TileType != t["type"].GetValue<int>());
+            var facts = new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["result"] = result.DeepClone(),
+                ["sand_or_cactus_removed"] = changed, ["escape"] = EscapeField.GetValue(null) is true,
+                ["frames"] = evasionFrames.DeepClone(), ["model_calls"] = 0 };
+            File.WriteAllText(Path.Combine(Main.SavePath, "desert-contact-route.json"), facts.ToJsonString());
+            Halt.All(); return facts;
+        });
+        if (result["done"]?.GetValue<bool>() != true || route["sand_or_cactus_removed"].GetValue<int>() != 0)
+            throw new Exception("desert crossing required clearing passable terrain: " + result);
+        await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            int cx = (int)(p.Center.X / 16), cy = (int)(p.Center.Y / 16);
+            for (int x = cx - 1; x <= cx + 1; x++)
+            for (int y = cy - 2; y <= cy + 2; y++)
+            { var tile = Main.tile[x, y]; tile.ClearEverything(); tile.HasTile = true; tile.TileType = TileID.Sand; }
+            p.velocity = Vector2.Zero;
+            return true;
+        });
+        await Task.Delay(400);
+        var buried = await Call("get_state", new JsonObject());
+        if (buried["player"]["suffocating"]?.GetValue<bool>() != true) throw new Exception("native burial did not trigger suffocation");
+        var stopped = await Call("nav_to", new JsonObject { ["x"] = 2260, ["y"] = 310 });
+        if (stopped["error"]?.ToString() != "navigation_suffocating") throw new Exception("burial guard was lost: " + stopped);
+        Console.WriteLine("DESERT_CONTACT_PASS classic_cactus_damage=0 special_cactus_damage=true actual_arrival=true sand_or_cactus_removed=0 burial_guard=true model_calls=0");
     }
 
     async Task NativeRejectionNaturalTrial()

@@ -192,6 +192,7 @@ namespace Terraria
     public static class Collision
     {
         public static bool up, down;
+        public static bool CanTileHurt(int type, int x, int y, Player player) => true;
         public struct HurtTile { public int type; }
         public static Func<Microsoft.Xna.Framework.Vector2, int, int, Player, bool> HurtTest;
         public static HurtTile HurtTiles(Microsoft.Xna.Framework.Vector2 position, int width, int height, Player player)

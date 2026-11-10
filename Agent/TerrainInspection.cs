@@ -11,6 +11,13 @@ namespace TerraBlind;
 
 public static class TerrainInspection
 {
+    internal static int ContactDamage(Player player, int x, int y)
+    {
+        var tile = Main.tile[x, y];
+        int damage = tile.HasUnactuatedTile ? TileID.Sets.TouchDamageImmediate[tile.TileType] : 0;
+        return damage > 0 && Collision.CanTileHurt(tile.TileType, x, y, player) ? damage : 0;
+    }
+
     public static JsonObject Opportunity(int x, int y, JsonObject destination)
     {
         var clock = Stopwatch.StartNew();
@@ -57,7 +64,7 @@ public static class TerrainInspection
                 solids.Add(Fact("solid"));
             if (active && TileID.Sets.Falling[tile.TileType]) hazards.Add(Fact("falling_block"));
             if (active && TileID.Sets.CrackedBricks[tile.TileType]) hazards.Add(Fact("breaks_on_contact"));
-            if (active && TileID.Sets.TouchDamageImmediate[tile.TileType] > 0) hazards.Add(Fact("contact_damage"));
+            if (ContactDamage(player, x, y) > 0) hazards.Add(Fact("contact_damage"));
             if (tile.LiquidAmount > 0)
             {
                 var liquid = Fact(tile.LiquidType switch
@@ -152,7 +159,7 @@ public static class TerrainInspection
                 bool active = tile.HasUnactuatedTile;
                 bool falling = active && TileID.Sets.Falling[tile.TileType];
                 bool solid = active && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
-                int touchDamage = active ? TileID.Sets.TouchDamageImmediate[tile.TileType] : 0;
+                int touchDamage = ContactDamage(player, x, y);
                 bool fragile = active && TileID.Sets.CrackedBricks[tile.TileType];
                 if (fragile) unstable.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
                     ["kind"] = "breaks_on_contact" });

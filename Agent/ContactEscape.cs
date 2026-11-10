@@ -40,7 +40,7 @@ public class AgentContactEscape : ModSystem
     static ItemUseRequest ClearTile(Player player, int x, int y)
     {
         if (!AgentTools.ControlAllows(ControlBehavior.Mining, ControlChannels.ItemUse)
-            || TileID.Sets.TouchDamageImmediate[Main.tile[x, y].TileType] <= 0
+            || TerrainInspection.ContactDamage(player, x, y) <= 0
             || AgentTools.Control.CheckAt(ControlBehavior.Mining, x, y) != null || !SafeAfterRemoval(player, x, y)) return null;
         int slot = -1, best = DigTable.Unmineable;
         for (int i = 0; i < 50; i++)
@@ -69,7 +69,7 @@ public class AgentContactEscape : ModSystem
                 if (movement.X != velocity.X) velocity.X = 0;
                 if (movement.Y != velocity.Y) velocity.Y = 0;
                 var hit = Collision.HurtTiles(position, player.width, player.height, player);
-                if (hit.type >= 0) return hit;
+                if (hit.type >= 0 && (!TileID.Sets.Suffocate[hit.type] || TileID.Sets.TouchDamageImmediate[hit.type] > 0)) return hit;
             }
             return new Collision.HurtTile { type = -1 };
         }
@@ -88,7 +88,7 @@ public class AgentContactEscape : ModSystem
             bool previous = ignoreCurrentContact && x >= Math.Floor((player.position.X - 1) / 16)
                 && x <= Math.Floor((player.position.X + player.width) / 16)
                 && y >= Math.Floor((player.position.Y - 1) / 16) && y <= Math.Floor((player.position.Y + player.height) / 16);
-            if (!previous && tile.HasUnactuatedTile && TileID.Sets.TouchDamageImmediate[tile.TileType] > 0
+            if (!previous && TerrainInspection.ContactDamage(player, x, y) > 0
                 || includeLava && tile.LiquidAmount > 0 && tile.LiquidType == LiquidID.Lava) return true;
         }
         return false;
