@@ -793,7 +793,6 @@ public static partial class AgentTools
                     return output;
                 }, token);
             if (name is not ("get_state" or "say") && JsonNode.Parse(output) is JsonObject response
-                && response["error"] == null && response["ok"]?.ToString() != "false"
                 && response["task_plan"] is JsonObject plan)
             {
                 var brief = new JsonObject { ["detail_tool"] = "get_state" };

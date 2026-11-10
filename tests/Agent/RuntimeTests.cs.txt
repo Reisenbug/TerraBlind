@@ -2308,6 +2308,7 @@ static class RuntimeTests
             await TestQueryRecovery();
             await TestPartialProgress();
             await TestPreparation();
+            await TestFailurePlanPayload();
             await TestToolFailureEvidence();
 
             await TestNetwork();
@@ -3338,6 +3339,33 @@ static class RuntimeTests
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(
                 new JsonObject { ["choices"] = new JsonArray(new JsonObject { ["message"] = message }) }.ToJsonString()) };
         }
+    }
+
+    static async Task TestFailurePlanPayload()
+    {
+        var previous = HttpServerSystem.Handler;
+        AgentTools.Plan.Reset(); AgentTools.NewTask();
+        try
+        {
+            string source = "return {status:'yield',note:'" + new string('x', 6000) + "'};";
+            var steps = new JsonArray();
+            foreach (string id in new[] { "a", "b", "c" })
+                steps.Add(new JsonObject { ["id"] = id, ["description"] = id, ["depends_on"] = new JsonArray(),
+                    ["script"] = source, ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "permanent_health", ["count"] = 9999 }) });
+            AgentTools.Plan.Create(new JsonObject { ["goal"] = "retain failure facts without repeated scripts", ["mode"] = "dag", ["steps"] = steps }, AgentTaskEvidence.Measure);
+            HttpServerSystem.Handler = (_, _) => (200, "{\"error\":\"fixture_blocked\",\"outcome\":\"no_progress\",\"crafted\":0,\"wanted\":1}");
+            var response = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject {
+                ["task_node"] = "a", ["tool"] = "craft", ["args"] = new JsonObject { ["name"] = "fixture" } }, default)));
+            Check(response["value"]?["error"]?.ToString() == "fixture_blocked" && response["output_limit"] == null
+                && response["value"]["crafted"]?.GetValue<int>() == 0 && response["value"]["wanted"]?.GetValue<int>() == 1,
+                "failure query overflow hid the actual failed action: " + response);
+            Check(response["value"]["task_plan"]?["detail_tool"]?.ToString() == "get_state"
+                && response["value"]["task_plan"]?["steps"] == null
+                && AgentTools.Plan.Snapshot()["steps"].AsArray().All(step => step["script"]?.ToString() == source)
+                && AgentTools.Plan.Incomplete, "failure payload lost the full host plan or completed an unverified goal");
+            Console.WriteLine("PASS: failed actions retain failure facts and host scripts without overflowing returned DAG text; chars=" + response.ToJsonString().Length);
+        }
+        finally { HttpServerSystem.Handler = previous; AgentTools.Plan.Reset(); AgentTools.Watches.Reset(); }
     }
 
     static async Task TestToolFailureEvidence()
