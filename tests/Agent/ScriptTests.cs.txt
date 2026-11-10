@@ -464,6 +464,13 @@ static class ScriptTests
             Check(recorded["calls"].GetValue<int>() == 3 && recorded["returned"].GetValue<int>() == 2
                 && recorded["interrupted"].GetValue<int>() == 1 && recorded["recent"][2]["world"].ToString() == "world-b",
                 "skill evidence did not persist actual invocation outcomes across library instances");
+            var unchanged = library.Save("parameterized", library.Get("parameterized")["code"].ToString(), 1);
+            Check(unchanged["revision"].GetValue<int>() == 1 && unchanged["unchanged"]?.GetValue<bool>() == true,
+                "saving identical skill code created a new version that obscures its execution history");
+            var unchangedPatch = library.Patch("parameterized", "tool('effect',input)", "tool('effect',input)", 1);
+            Check(unchangedPatch["revision"].GetValue<int>() == 1 && unchangedPatch["unchanged"]?.GetValue<bool>() == true
+                && reopened.Get("parameterized")["runtime"][0]["calls"].GetValue<int>() == 3,
+                "an unchanged patch bumped the skill revision or lost its real invocation evidence");
             library.Save("parameterized", "const r=tool('blocked',{});return {status:'needs_review',reason:r.reason};", 1);
             var reviewSkill = await AgentScript.Run("return skill('parameterized',2);", 5, (_, _) => { },
                 (_, _, _) => Task.FromResult("{\"outcome\":\"no_progress\",\"reason\":\"fixture_blocked\"}"),

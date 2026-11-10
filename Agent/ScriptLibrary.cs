@@ -342,6 +342,11 @@ public sealed class ScriptLibrary
             if (revision != expectedRevision)
                 return new JsonObject { ["error"] = "program_revision_conflict", ["name"] = name,
                     ["expected_revision"] = expectedRevision, ["revision"] = revision };
+            if (previous["template"]?.GetValue<bool>() != true && previous["code"]?.ToString() == code)
+            {
+                previous["unchanged"] = true;
+                return previous;
+            }
             try
             {
                 string wrapped = "(function() {\n" + code + "\n});";
