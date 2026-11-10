@@ -247,7 +247,71 @@ static class CodexTests
         await ModelResults();
         ContextChanges();
         ContextPatches();
+        await HistoryCompaction();
+        await NativeBackgroundReview(compact: true);
         InputReplay();
+    }
+
+    static async Task HistoryCompaction()
+    {
+        var server = new Server { InputTokens = CodexAgent.ContextTokenLimit + 1000 };
+        using var agent = new CodexAgent((_, _) => server.Connect());
+        Task<string> Execute(string _, JsonObject __, CancellationToken ___) => Task.FromResult("{\"hp\":100}");
+        var options = new JsonObject { ["request"] = "same-goal", ["objective"] = "retain collected progress" };
+        await agent.RunAsync("initial snapshot", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default, options);
+        await agent.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+        Check(server.Compactions == 1 && server.Threads == 1 && agent.ContextRevision == 1 && agent.Compactions == 1
+            && agent.GoalState["native"]["status"].ToString() == "active" && agent.GoalState["host_tokens_used"].GetValue<long>() == 150,
+            "large history did not compact on the same thread or reset goal/usage accounting");
+        await agent.RunAsync("fresh host snapshot", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default, options);
+        await agent.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+        Check(server.Compactions == 1 && server.GoalSets == 1, "small compacted history immediately repeated compaction or recreated the goal");
+        server.InputTokens = CodexAgent.ContextTokenLimit + 5000;
+        server.InputTokensAfterCompaction = CodexAgent.ContextTokenLimit + 10000;
+        await agent.RunAsync("new history", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default, options);
+        await agent.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+        await agent.RunAsync("large retained prefix", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default, options);
+        await agent.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+        Check(server.Compactions == 2, "large retained prefix caused an immediate compaction loop");
+        server.InputTokens = 120000; server.FailCompaction = true;
+        await agent.RunAsync("growth after retained prefix", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default, options);
+        await agent.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+        Check(server.Compactions == 3 && agent.Compactions == 2 && agent.LastCompactionError != null
+            && agent.GoalState["native"]["status"].ToString() == "active",
+            "failed compaction was marked complete or stopped the active goal");
+        await agent.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+        Check(server.Compactions == 3, "failed unchanged history entered a tight compaction retry loop");
+        var automatic = new Server { EmitCompaction = true };
+        using var automaticAgent = new CodexAgent((_, _) => automatic.Connect());
+        int refreshes = 0;
+        await automaticAgent.RunAsync("observe", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default,
+            refreshContext: () => { refreshes++; return Task.FromResult("{\"mode\":\"snapshot\",\"hp\":77}"); });
+        Check(refreshes == 1 && automatic.Steers.Count == 1 && automatic.Steers[0]["input"][0]["text"].ToString().Contains("\"hp\":77"),
+            "automatic in-turn compaction did not receive the current host snapshot before continuing");
+        var held = new Server { InputTokens = CodexAgent.ContextTokenLimit + 1000, HoldCompaction = true };
+        using var interrupted = new CodexAgent((_, _) => held.Connect());
+        await interrupted.RunAsync("observe", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default);
+        using var cancellation = new CancellationTokenSource();
+        var waiting = interrupted.PrepareContext("mock", "/tmp", "", "game instructions", Tools, false, cancellation.Token);
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (held.Compactions == 0) { Check(DateTime.UtcNow < deadline, "compaction did not start"); await Task.Delay(1); }
+        await Task.Delay(20); cancellation.Cancel();
+        try { await waiting.WaitAsync(TimeSpan.FromSeconds(4)); throw new Exception("compaction ignored stop"); }
+        catch (OperationCanceledException) { }
+        Check(held.Interrupts == 1 && interrupted.Compactions == 0 && interrupted.TurnsStarted == 1,
+            "stopped compaction remained active, launched another turn or was marked successful");
+        var limitedServer = new Server { InputTokens = CodexAgent.ContextTokenLimit + 1000 };
+        using var limited = new CodexAgent((_, _) => limitedServer.Connect());
+        var budget = (JsonObject)options.DeepClone(); budget["tokenBudget"] = 125;
+        await limited.RunAsync("observe", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default, budget);
+        try
+        {
+            await limited.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+            throw new Exception("compaction bypassed goal token budget");
+        }
+        catch (GoalBudgetExceededException) { }
+        Check(limited.GoalState["native"]["status"].ToString() == "budgetLimited", "compaction cost was not charged to the unfinished goal");
+        Console.WriteLine("PASS: history compacts at measured input size, preserves thread/goal/usage and avoids repeated retained-prefix or failure loops");
     }
 
     static void InputReplay()
@@ -580,16 +644,27 @@ static class CodexTests
         }
     }
 
-    static async Task NativeBackgroundReview()
+    static async Task NativeBackgroundReview(bool compact = false)
     {
         var native = new NativeAgent();
-        var server = new Server();
+        var server = new Server { InputTokens = compact ? CodexAgent.ContextTokenLimit + 1000 : 0 };
         var originalPosition = Terraria.Main.LocalPlayer.position;
+        int originalHealth = Terraria.Main.LocalPlayer.statLife;
         Config.I.AgentUseCodex = true;
         native.Load();
         typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
             .SetValue(native, new CodexAgent((_, _) => server.Connect()));
         string handle = null;
+        server.AfterCompaction = () =>
+        {
+            _ = NativeAgent.OnMain(() =>
+            {
+                Check(AgentTools.Actions.ActiveHandle == handle, "history compaction replaced the running action");
+                Terraria.Main.LocalPlayer.statLife = 77;
+                AgentTools.Watches.Emit("inventory_full", "during-compaction", new JsonObject { ["fixture"] = true });
+                return true;
+            }, default);
+        };
         Terraria.Main.LocalPlayer.position = new(1600, 1600);
         HttpServerSystem.Handler = (_, _) => (200, "{\"done\":false}");
         server.AfterTool = calls =>
@@ -617,6 +692,15 @@ static class CodexTests
             var action = AgentTools.Actions.Summary().First(a => a["handle"].ToString() == handle);
             Check(action["status"].ToString() == "running" && action["attempt"].GetValue<int>() == 1,
                 "background review paused or restarted navigation");
+            if (compact)
+            {
+                Check(server.Compactions == 1 && server.Threads == 1 && server.Inputs[1].Contains("\"mode\":\"snapshot\"")
+                    && server.Inputs[1].Contains("\"hp\":77") && server.Inputs[1].Contains(handle)
+                    && AgentTools.Watches.Pending()["events"].AsArray().Any(e => e["key"]?.ToString() == "during-compaction"),
+                    "post-compaction input reused a partial/stale snapshot or discarded events raised while navigation continued");
+                Console.WriteLine("PASS: native compaction keeps the running handle/attempt and sends fresh health, ownership and pending events");
+                return;
+            }
             AgentTools.Watches.Configure(new JsonObject { ["events"] = new JsonArray("nearby_tile", "low_health", "nearby_chest"),
                 ["tile_types"] = new JsonArray(61), ["background_events"] = new JsonArray("nearby_chest") });
             var localReader = AgentTools.Watches.BeginScriptDelivery();
@@ -701,6 +785,7 @@ static class CodexTests
         {
             NativeAgent.Stop(); native.OnWorldUnload(); native.Unload();
             Terraria.Main.LocalPlayer.position = originalPosition;
+            Terraria.Main.LocalPlayer.statLife = originalHealth;
             HttpServerSystem.Handler = null; Config.I.AgentUseCodex = false;
         }
         Console.WriteLine("PASS: host wakes model during navigation without pausing or restarting its handle");
@@ -1014,6 +1099,10 @@ static class CodexTests
     {
         readonly Lines _input = new();
         public int Threads, Interrupts;
+        public int Compactions, InputTokens, InputTokensAfterCompaction = 20000;
+        public bool FailCompaction, HoldCompaction;
+        string compactTurn;
+        public Action AfterCompaction;
         int _turn;
         public bool Stopped, LoggedIn = true, FailTurn, EmitCompaction, HoldFinalReply, RejectSteer;
         public string ToolName = "get_state";
@@ -1048,6 +1137,29 @@ static class CodexTests
             else if (method == "config/read") Reply(message["id"], JsonNode.Parse("{\"config\":{\"mcp_servers\":{\"unrelated\":{}}}}").AsObject());
             else if (method == "thread/start")
             { Threads++; ThreadArgs = message["params"].AsObject(); Reply(message["id"], JsonNode.Parse("{\"thread\":{\"id\":\"thread\"}}").AsObject()); }
+            else if (method == "thread/compact/start")
+            {
+                Compactions++;
+                string turn = "compact" + Compactions;
+                compactTurn = turn;
+                Reply(message["id"], new JsonObject());
+                Send(new JsonObject { ["method"] = "turn/started", ["params"] = new JsonObject
+                    { ["threadId"] = "thread", ["turn"] = new JsonObject { ["id"] = turn } } });
+                if (HoldCompaction) return;
+                if (!FailCompaction)
+                {
+                    Send(new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
+                        { ["threadId"] = "thread", ["turnId"] = turn, ["item"] = new JsonObject { ["type"] = "contextCompaction" } } });
+                    Send(new JsonObject { ["method"] = "thread/tokenUsage/updated", ["params"] = new JsonObject
+                        { ["threadId"] = "thread", ["tokenUsage"] = new JsonObject
+                            { ["total"] = new JsonObject { ["totalTokens"] = _turn * 100 + Compactions * 50 } } } });
+                    InputTokens = InputTokensAfterCompaction;
+                    AfterCompaction?.Invoke();
+                }
+                Send(new JsonObject { ["method"] = "turn/completed", ["params"] = new JsonObject
+                    { ["threadId"] = "thread", ["turn"] = new JsonObject { ["id"] = turn, ["status"] = FailCompaction ? "failed" : "completed" } } });
+                compactTurn = null;
+            }
             else if (method == "thread/goal/set")
             {
                 GoalSets++; Goal ??= new JsonObject();
@@ -1067,7 +1179,17 @@ static class CodexTests
                 Send(new JsonObject { ["method"] = "item/tool/call", ["id"] = "tool" + _turn, ["params"] = new JsonObject
                 { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["callId"] = "call" + _turn, ["tool"] = ToolName, ["arguments"] = new JsonObject() } });
             }
-            else if (method == "turn/interrupt") { Interrupts++; Reply(message["id"], new JsonObject()); Completed("interrupted"); }
+            else if (method == "turn/interrupt")
+            {
+                Interrupts++; Reply(message["id"], new JsonObject());
+                if (compactTurn == null) Completed("interrupted");
+                else
+                {
+                    Send(new JsonObject { ["method"] = "turn/completed", ["params"] = new JsonObject
+                        { ["threadId"] = "thread", ["turn"] = new JsonObject { ["id"] = compactTurn, ["status"] = "interrupted" } } });
+                    compactTurn = null;
+                }
+            }
             else if (method == "turn/steer")
             {
                 Steers.Add(message["params"].AsObject());
@@ -1080,7 +1202,8 @@ static class CodexTests
                 AfterTool?.Invoke(ToolResponses.Count);
                 var usage = new JsonObject { ["method"] = "thread/tokenUsage/updated", ["params"] = new JsonObject
                     { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["tokenUsage"] = new JsonObject
-                        { ["total"] = new JsonObject { ["totalTokens"] = _turn * 100 } } } };
+                        { ["total"] = new JsonObject { ["totalTokens"] = _turn * 100 + Compactions * 50 },
+                          ["last"] = new JsonObject { ["inputTokens"] = InputTokens } } } };
                 Send(usage); Send(usage);
                 if (ToolResponses.Count < RepeatedToolCalls)
                 {

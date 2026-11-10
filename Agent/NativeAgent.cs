@@ -290,6 +290,7 @@ public class NativeAgent : ModSystem
                 int contextRevision = 0;
                 async Task<string> Context()
                 {
+                    if (useCodex) await codex.PrepareContext(codexPath, cwd, codexModel, system, entrySchemas, goalOptions != null, token);
                     if (useCodex && contextRevision != codex.ContextRevision)
                     { modelContext.Reset(); contextRevision = codex.ContextRevision; }
                     string result = modelContext.Capture(JsonNode.Parse(await AgentTools.State(token)).AsObject()).ToJsonString(AgentTools.ModelJson);
@@ -311,7 +312,7 @@ public class NativeAgent : ModSystem
                     int discoveriesBefore = await OnMain(() => AgentTools.DiscoveryRevision, token);
                     var workflowBefore = await OnMain(() => AgentTools.Workflows.ToDictionary(w => w.Key, w => w.Value.Segment), token);
                     if (useCodex)
-                        await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token, goalOptions);
+                        await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token, goalOptions, Context);
                     else
                         await _conversation.RunAsync(input, url, key, model, system, entrySchemas, AgentTools.Execute, Say, token);
                     bool scriptYielded = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.Yielded
