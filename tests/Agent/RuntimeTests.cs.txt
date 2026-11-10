@@ -798,6 +798,68 @@ static class RuntimeTests
         return await task;
     }
 
+    public static async Task SkillLearningModel()
+    {
+        Agent.Load(); AgentTools.NewTask(); AgentTools.Plan.Reset();
+        string previousRoot = Game.SavePath;
+        var previousHandler = HttpServerSystem.Handler;
+        var previousPosition = Game.LocalPlayer.position;
+        string root = Path.Combine(Path.GetTempPath(), "terrablind-skill-learning-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root); Game.SavePath = root;
+        var targets = new JsonArray(); var events = new JsonArray();
+        var library = new ScriptLibrary(Path.Combine(root, "TerraBlindAgent", "programs"));
+        library.Save("travel_segment", "const config=null;if(!config)return {status:'needs_review',reason:'configuration_missing'};return tool('nav_to',config);", 0);
+        HttpServerSystem.Handler = (path, text) =>
+        {
+            if (path == "/nav_recede")
+            {
+                var args = JsonNode.Parse(text);
+                int x = args["gx"].GetValue<int>(), y = args["gy"].GetValue<int>();
+                targets.Add(new JsonObject { ["x"] = x, ["y"] = y });
+                Game.LocalPlayer.position = new(x * 16, y * 16);
+            }
+            return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{}");
+        };
+        using var model = new CodexAgent();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await Execute(AgentTools.Execute("run_script", new JsonObject
+                { ["code"] = "return skill('travel_segment',1,{x:20,y:20});" }, timeout.Token));
+            var schemas = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
+            AgentControlSession.DescribeClaims(schemas); AgentScript.DescribePrograms(schemas);
+            await model.RunAsync("这是一轮技能积累测试。依次到(30,20)、(40,20)。先查看已有技能和宿主记录的runtime，"
+                + "根据真实失败证据修订适用技能，再用本次坐标作为参数复用修订版本完成两段移动。回复真实执行结果。",
+                "", root, "gpt-6.1-sol", AgentScript.Instructions("你是游戏内Agent，使用提供的工具执行任务。世界由测试宿主模拟，工具记录是验收依据。", schemas),
+                AgentScript.EntryTools(schemas), async (name, args, token) =>
+                {
+                    if (events.Count >= 20) throw new InvalidOperationException("skill learning probe exceeded its tool-call bound");
+                    var response = await Execute(AgentTools.Execute(name, args, token));
+                    events.Add(new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["result"] = response });
+                    return response;
+                }, text => events.Add(new JsonObject { ["reply"] = text }), timeout.Token);
+            var saved = library.Get("travel_segment");
+            Check(saved["revision"].GetValue<int>() > 1 && targets.Count == 2
+                && targets[0]["x"].GetValue<int>() == 30 && targets[1]["x"].GetValue<int>() == 40,
+                "model did not repair and reuse the existing skill with fresh goal inputs: " + targets);
+            var current = saved["runtime"].AsArray().Last();
+            Check(current["revision"].ToString() == saved["revision"].ToString()
+                && current["calls"].GetValue<int>() == 2 && current["returned"].GetValue<int>() == 2,
+                "repaired skill invocations were not persisted under their actual source revision: " + saved);
+            Console.WriteLine($"SKILL_LEARNING_MODEL_PASS elapsed_ms={clock.ElapsedMilliseconds} actual_model=true mock_world=true revision={saved["revision"]}");
+        }
+        finally
+        {
+            File.WriteAllText(Path.Combine(root, "result.json"), new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds,
+                ["mock_world"] = true, ["model"] = "gpt-6.1-sol", ["events"] = events, ["targets"] = targets,
+                ["usage"] = model.TokenUsage, ["skill"] = library.Get("travel_segment") }.ToJsonString());
+            Console.WriteLine("SKILL_LEARNING_MODEL_REPORT " + root);
+            AgentTools.Stop(); AgentTools.Workflows.Clear(); Game.SavePath = previousRoot;
+            Game.LocalPlayer.position = previousPosition; HttpServerSystem.Handler = previousHandler;
+        }
+    }
+
     public static async Task EntryModel()
     {
         Agent.Load(); AgentTools.NewTask();

@@ -47,6 +47,7 @@ static class Tests
             Console.WriteLine("CONTROL_CONTRACTS_COMPLETE model_calls=0"); return;
         }
         if (args.Contains("--planning-probe")) { await CodexTests.PlanningProbe(); return; }
+        if (args.Contains("--skill-learning-model")) { await RuntimeTests.SkillLearningModel(); return; }
         if (args.Contains("--goal-smoke")) { await CodexTests.GoalSmoke(); return; }
         if (args.Contains("--goal-control-smoke")) { await CodexTests.GoalControlSmoke(); return; }
         if (args.Contains("--plan-repair-model")) { await PlanRepairModel.Run(); return; }
