@@ -543,6 +543,41 @@ static class RuntimeTests
                     "temporary failure recovery overwrote the main script or completed the goal");
                 if (shouldRecover)
                     Check(AgentTools.Actions.ActiveHandle == handle, "recovery lost the original action handle");
+                if (mode == "unhandled")
+                {
+                    var handled = AgentTools.LastContinuation;
+                    var updated = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", new JsonObject
+                    {
+                        ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                        ["reason"] = "replace the blocked route with a newly checked segment",
+                        ["nodes"] = new JsonArray(new JsonObject { ["id"] = "travel",
+                            ["script"] = "return tool('nav_to',{x:16,y:34});" })
+                    }, default)));
+                    Check(updated["error"] == null, "prepared route repair was rejected: " + updated);
+                    for (int i = 0; i < 10; i++) { AgentTools.ContinuePreparedNode(default); Agent.PostUpdateEverything(); await Task.Delay(5); }
+                    Check(ReferenceEquals(handled, AgentTools.LastContinuation),
+                        "updating the main script replayed the same failure policy for the same failed attempt");
+                    AgentTools.Plan.Revise(new JsonObject
+                    {
+                        ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                        ["reason"] = "replace the uncovered policy using fresh failure evidence",
+                        ["nodes"] = new JsonArray(new JsonObject { ["id"] = "travel",
+                            ["on_failure"] = "return {status:'needs_review',reason:'revised_policy'};" })
+                    }, _ => 0);
+                    await PumpUntil(() =>
+                    {
+                        AgentTools.ContinuePreparedNode(default);
+                        return AgentTools.LastContinuation?["recovery_reason"]?.ToString() == "revised_policy";
+                    });
+                    Check(AgentTools.LastContinuation["failed_attempt"]?.GetValue<int>() == 1,
+                        "a newly prepared failure policy lost its original failure evidence");
+                    fail = false;
+                    var restarted = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                        new JsonObject { ["task_node"] = "travel", ["background"] = true }, default)));
+                    Check(restarted["already_running"]?.GetValue<bool>() != true && restarted["handle"] != null,
+                        "newly prepared script was joined to the obsolete recovery instead of starting: " + restarted);
+                    await PumpUntil(() => starts == 2);
+                }
                 Console.WriteLine($"PREPARED_FAILURE mode={mode} handoff_ms={timer.ElapsedMilliseconds} model_calls=0");
             }
             finally

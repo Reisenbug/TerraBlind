@@ -18,6 +18,7 @@ public static partial class AgentTools
     internal static readonly AgentTaskPlan Plan = new();
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
     static readonly HashSet<string> continuedActions = new();
+    static readonly Dictionary<string, string> recoveredActions = new();
     static Task continuation = Task.CompletedTask;
     static int executingScripts;
     static readonly AsyncLocal<(string Id, ScriptProgress Progress)?> recoveryContext = new();
@@ -180,7 +181,8 @@ public static partial class AgentTools
         }
         var action = Actions.LatestFinishedPrimary();
         string handle = action?["handle"]?.ToString(), owner = action?["task_node"]?.ToString();
-        string attempt = handle + ":" + action?["attempt"] + ":" + Plan.ExecutionRevision(owner);
+        string execution = handle + ":" + action?["attempt"];
+        string attempt = execution + ":" + Plan.ExecutionRevision(owner);
         if (handle == null || string.IsNullOrEmpty(owner) || continuedActions.Contains(attempt)) return;
         var plan = Plan.Snapshot();
         var previous = plan["steps"].AsArray().FirstOrDefault(s => s["id"]?.ToString() == owner);
@@ -192,9 +194,11 @@ public static partial class AgentTools
             || Plan.Advance(owner, AgentTaskEvidence.Measure)["verified"]?.GetValue<bool>() == true;
         bool prepared = !verified && workflow?.HasPreparedContinuation(previous["script"]?.ToString()) == true;
         string recovery = previous["on_failure"]?.ToString();
-        if (!verified && action["status"]?.ToString() == "failed" && !string.IsNullOrWhiteSpace(recovery))
+        if (!verified && action["status"]?.ToString() == "failed" && !string.IsNullOrWhiteSpace(recovery)
+            && (!recoveredActions.TryGetValue(execution, out string recovered) || recovered != recovery))
         {
             if (Watches.HasRecoveryBlocker || Main.LocalPlayer.suffocating) return;
+            recoveredActions[execution] = recovery;
             continuedActions.Add(attempt);
             StartPreparedNode(owner, handle, token, recovery);
             return;
@@ -369,7 +373,7 @@ public static partial class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedAttempt = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
+    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedAttempt = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
         Actions.CancelAll();
