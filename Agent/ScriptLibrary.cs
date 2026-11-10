@@ -148,11 +148,11 @@ public sealed class ScriptLibrary
             return {status:'collected_route_resumed',collection:result.result,route:resumed};
             """);
         if (name == "use_life_crystals") return Template(name,
-            "配置target_health和可选gather_args。在所属DAG后台节点内连续采集、使用生命水晶并核对永久生命；gather_args采用已查证的来源和采集区域。每颗水晶使用后立即继续下一颗，采集结果需要审阅时返回现场证据。仅使用背包水晶时提供target_health即可。",
+            "保存原模板后，通过skill(name,revision,{target_health,gather_args},key)传入本次目标与可选采集配置。入参采用当前世界已查证的来源和区域。所属DAG后台节点连续采集、使用生命水晶并核对永久生命；每颗使用后继续下一颗，采集需要审阅时返回证据。仅使用背包水晶时提供target_health即可。",
             """
-            const config = null;
+            const config = typeof input==='undefined'?null:input;
             if(!config||!Number.isInteger(config.target_health)||config.target_health<100||config.target_health>400)
-              throw new Error('Fill config.target_health between 100 and 400');
+              throw new Error('Pass input.target_health between 100 and 400');
             let state=tool('get_state',{});
             while(state.permanent_max_health<config.target_health){
               let crystal=state.inventory_slots.find(i=>i.type===29&&i.stack>0);

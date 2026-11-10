@@ -309,20 +309,18 @@ static class ScriptTests
                 }
                 throw new Exception("unexpected crystal skill operation " + name);
             }
-            string crystalCode = library.Get("use_life_crystals")["code"].ToString()
-                .Replace("const config = null;", "const config = {target_health:160};");
+            string crystalCode = "return skill('use_life_crystals',1,{target_health:160},'health');";
             var crystalProgress = new ScriptProgress();
-            var consumed = await AgentScript.Run(crystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, crystalProgress);
+            var consumed = await AgentScript.Run(crystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, crystalProgress, programs: library.Callable());
             Check(consumed["ok"].GetValue<bool>() && health == 160 && uses == 3, "crystal skill failed to verify permanent growth");
-            await AgentScript.Run(crystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, crystalProgress);
+            await AgentScript.Run(crystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, crystalProgress, programs: library.Callable());
             Check(uses == 3, "crystal skill consumed again after reaching target");
-            string collectCrystalCode = library.Get("use_life_crystals")["code"].ToString()
-                .Replace("const config = null;", "const config = {target_health:220,gather_args:{targets:[{item_type:29,count:1,tile_names:['Heart']}]}};");
-            var collectedCrystals = await AgentScript.Run(collectCrystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, new ScriptProgress());
+            string collectCrystalCode = "return skill('use_life_crystals',1,{target_health:220,gather_args:{targets:[{item_type:29,count:1,tile_names:['Heart']}]}},'health');";
+            var collectedCrystals = await AgentScript.Run(collectCrystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, new ScriptProgress(), programs: library.Callable());
             Check(collectedCrystals["value"]?["status"]?.ToString() == "target_met" && health == 220
                 && uses == 6 && crystalCollections == 3, "crystal skill failed to continue collection and use in one script");
             health = 200; crystalSourceAvailable = false;
-            var unavailableCrystal = await AgentScript.Run(collectCrystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, new ScriptProgress());
+            var unavailableCrystal = await AgentScript.Run(collectCrystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, new ScriptProgress(), programs: library.Callable());
             Check(unavailableCrystal["value"]?["collection"]?["outcome"]?.ToString() == "source_unavailable"
                 && crystalCollections == 4 && uses == 6, "crystal skill retried an unavailable source or lost collection evidence");
             string recipe = ScriptLibrary.Example("sample_tile_variants")["code"].ToString();
