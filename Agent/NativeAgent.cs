@@ -290,7 +290,11 @@ public class NativeAgent : ModSystem
                 int contextRevision = 0;
                 async Task<string> Context()
                 {
-                    if (useCodex) await codex.PrepareContext(codexPath, cwd, codexModel, system, entrySchemas, goalOptions != null, token);
+                    if (useCodex)
+                    {
+                        bool executing = await OnMain(() => AgentTools.ControlSession.PrimaryActive, token);
+                        await codex.PrepareContext(codexPath, cwd, codexModel, system, entrySchemas, goalOptions != null, token, compact: executing);
+                    }
                     if (useCodex && contextRevision != codex.ContextRevision)
                     { modelContext.Reset(); contextRevision = codex.ContextRevision; }
                     string result = modelContext.Capture(JsonNode.Parse(await AgentTools.State(token)).AsObject()).ToJsonString(AgentTools.ModelJson);

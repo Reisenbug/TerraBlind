@@ -250,6 +250,7 @@ static class CodexTests
         ContextPatches();
         await HistoryCompaction();
         await NativeBackgroundReview(compact: true);
+        await NativeGoalProtocol(largeHistory: true);
         InputReplay();
     }
 
@@ -839,10 +840,10 @@ static class CodexTests
         Console.WriteLine("PASS: host wakes model during navigation without pausing or restarting its handle");
     }
 
-    static async Task NativeGoalProtocol()
+    static async Task NativeGoalProtocol(bool largeHistory = false)
     {
         var native = new NativeAgent();
-        var server = new Server();
+        var server = new Server { InputTokens = largeHistory ? CodexAgent.ContextTokenLimit + 1000 : 0 };
         Config.I.AgentUseCodex = true;
         native.Load();
         typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
@@ -860,6 +861,7 @@ static class CodexTests
                 }
             }
             await WaitCalls(3);
+            if (largeHistory) Check(server.Compactions == 0, "idle goal handoff waited for compaction before starting its next action");
             Check(server.Goal["status"].ToString() == "active" && server.Threads == 1,
                 "model final reply completed missing game conditions or failed to preserve goal");
             Check(NativeAgent.Status != "needs_repair" && NativeAgent.GoalState["host_tokens_used"].GetValue<long>() >= 300,

@@ -170,11 +170,11 @@ public sealed class CodexAgent : IDisposable
     }
 
     internal async Task PrepareContext(string executable, string cwd, string model, string system, JsonArray tools,
-        bool managedGoal, CancellationToken token)
+        bool managedGoal, CancellationToken token, bool compact = true)
     {
         if (HasActiveTurn) return;
         await Ensure(executable, cwd, model, system, tools, token, managedGoal);
-        await CompactContext(token);
+        if (compact) await CompactContext(token);
     }
 
     internal async Task<bool> CompactContext(CancellationToken token, bool force = false)
