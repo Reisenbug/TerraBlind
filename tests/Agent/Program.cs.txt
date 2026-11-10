@@ -41,6 +41,7 @@ static class Tests
 
     static async Task Main(string[] args)
     {
+        if (args.Contains("--input-optimization-model")) { await CodexTests.InputOptimizationModel(); return; }
         if (args.Contains("--input-optimization-checks"))
         {
             await CodexTests.InputOptimizations();

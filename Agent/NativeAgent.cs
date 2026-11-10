@@ -342,16 +342,11 @@ public class NativeAgent : ModSystem
                         preparedAttempt = preparingAttempt;
                         var healthNotices = await OnMain(AgentTools.Watches.TakeHealthNotices, token);
                         var opportunities = await OnMain(AgentTools.Watches.Advisories, token);
-                        input = "继续原目标。后台动作仍在执行，本轮是并行观察，没有暂停输入。"
-                            + "\n待补齐行动的节点：" + preparation.Nodes.ToJsonString()
-                            + "低血量仅唤醒观察，不能因此暂停、取消原动作或原地等回血；继续行动并调整后续方案，任务明确规定死亡限制时才按其限制处理。\n健康通知：" + healthNotices.ToJsonString()
-                            + "\n新增沿途机会：" + opportunities.ToJsonString(AgentTools.ModelJson)
-                            + "本轮先检查当前节点on_failure：按已有权限、工具与已查证故障，将适用的局部恢复写入task_plan_patch nodes，保持当前动作运行；可从技能库复用recover_pressure_plate并填写实际工具配置。随后准备当前动作结束后立即执行的下一段：检查task_plan中的后继节点，把已查证的目标、坐标、来源落实到可执行script。"
-                            + "后继只有yield或调查占位时，趁当前动作仍在执行补齐；未知事实先查询，查到后在本轮写入脚本，不把查询结果留到抵达后再处理。"
-                            + "若当前后台动作独立运行、所属节点脚本已经退出，用action_queue把该节点的run_script排在当前handle后，args只填task_node。先补齐该节点剩余script并核对uncertain步骤，再排队；父脚本仍在运行则由原脚本继续。"
-                            + "宿主会在前置验收后直接执行后继script，无需等你再次回复。可以继续查证资源和评估沿途机会；准备后继不暂停当前动作，也不提前启动它抢占当前移动。"
-                            + "只有确需改变当前行动时才暂停原句柄，处理后恢复。没有新决定就结束本轮，后台动作继续。\n现状："
-                            + await Context();
+                        input = "并行观察：后台动作继续。补齐当前节点on_failure和后继script；独立动作的父脚本已退出时用action_queue衔接。"
+                            + "\n待补齐节点：" + preparation.Nodes.ToJsonString()
+                            + "\n健康通知：" + healthNotices.ToJsonString()
+                            + "\n沿途机会：" + opportunities.ToJsonString(AgentTools.ModelJson)
+                            + "\n现状：" + await Context();
                         await OnMain(() => { DiagLog.Write("[agent] background_review active_handle=" + AgentTools.Actions.ActiveHandle
                             + " prepare=" + prepareNext + " health=" + healthNotices.Count
                             + " opportunities=" + string.Join(",", opportunities.Select(e => e["kind"]?.ToString()))); return true; }, token);
@@ -364,7 +359,7 @@ public class NativeAgent : ModSystem
                         if (handle != null) await AgentTools.Actions.Control(handle, "pause", null, token);
                         if (goalOptions == null && await OnMain(() => AgentTools.Recovery.Exhausted, token)) break;
                         var events = await OnMain(() => AgentTools.Watches.TakeModelInterrupts(8), token);
-                        input = "原目标：" + goal + "\n宿主事件已暂停原后台动作并释放输入。根据实际事件调整剩余代码；已完成step不重复，uncertain先核对。"
+                        input = "宿主事件已暂停原后台动作并释放输入。根据事件调整剩余代码；已完成step保留，uncertain先核对。"
                             + "临时参数仅属于该动作，不能放宽玩家权限；需要继续时恢复同一handle。\n事件：" + events.ToJsonString()
                             + "\n现状：" + await Context();
                         continue;
@@ -398,25 +393,26 @@ public class NativeAgent : ModSystem
                     if (await OnMain(() => AgentTools.Recovery.Exhausted, token)) canContinue = false;
                     if (canContinue && await OnMain(() => AgentTools.Recovery.Offer(), token))
                     {
-                        input = "原目标：" + goal + "\n最近工具失败，先修正实际错误，再继续原任务。参数歧义请选返回的精确internal重试，缺来源请换区域；不能把错误打印出来就结束。"
-                            + "长导航不因耗时失败，不重复启动已有句柄。修复最多3轮，同一失败参数最多3次。\n失败证据与完整候选："
+                        input = "工具失败：按证据修正参数、来源或局部方案，继续原任务。"
+                            + "修复最多3轮，同一失败参数最多3次。\n失败证据："
                             + (await OnMain(() => AgentTools.Recovery.Snapshot(), token)).ToJsonString(AgentTools.ModelJson) + "\n现状：" + await Context();
                         continue;
                     }
                     bool discovered = await OnMain(() => AgentTools.DiscoveryRevision > discoveriesBefore, token);
                     if (canContinue && (progressed || discovered && preparationContinuations++ < 4 || noProgressContinuations++ < 1))
                     {
-                        input = "原目标：" + goal + "\n计划尚未完成或脚本主动yield，请结合script_workflows和当前状态续写剩余代码。不要重做已完成step；uncertain步骤先核对。不能只建立计划或说准备行动就结束；无可执行办法则明确报告阻塞，不再yield空转。新查证资料仅允许最多4轮准备续接，重复查询不增加准备机会；没有新资料或实际进展时仅额外续接一次。请执行采集、移动或制作。\n现状："
+                        input = "计划未完成或脚本yield：结合当前workflow续写并执行剩余步骤，uncertain先核对。"
+                            + "新查证资料仅允许最多4轮准备续接，重复查询不增加准备机会；没有新资料或实际进展时仅额外续接一次。请执行采集、移动或制作；无可执行办法则明确报告阻塞，不再yield空转。\n现状："
                             + await Context();
                         continue;
                     }
                     if (goalOptions != null && !await OnMain(() => AgentTools.Plan.VerifyFinal(AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), token))
                     {
                         await OnMain(() => { Progress("目标未完成，继续调整方案。", "目标续接中", false); return true; }, token);
-                        input = "原目标：" + goal + "\n目标尚未通过宿主验收，继续执行。不要结束等待玩家resume。"
-                            + "已有后台动作则等待它或处理真实事件；已失败动作依据最新证据换方案，不重放相同失败参数。"
-                            + "当前步骤blocked不等于永久放弃：调查实际阻塞，修复后继续原计划，不清空既有进度。"
-                            + "普通探索按已有权限处理可达障碍；只有必须由玩家决定的问题才ask。\n现状：" + await Context();
+                        input = "目标尚未通过宿主验收，按当前阻塞调整并继续原计划。"
+                            + "已有后台动作保持执行；失败按新证据换方案。"
+                            + "修复blocked节点并保留既有进度。"
+                            + "\n现状：" + await Context();
                         continue;
                     }
                     JsonObject report;
@@ -437,7 +433,7 @@ public class NativeAgent : ModSystem
                         await Task.Delay(250, token);
                     }
                     if (report["ended"] != null) break;
-                    input = "原目标：" + goal + "\n按玩家补充或本会话唯一一次自动受阻求助处理。完成具体操作或说明限制后结束本轮，不轮询、不等待、不重启战斗；Jev会继续控制。\n战况：" + report.ToJsonString();
+                    input = "PvP新要求或本会话一次受阻求助：处理后结束本轮，Jev继续控制。\n战况：" + report.ToJsonString();
                 }
                 if (goalOptions != null)
                 {

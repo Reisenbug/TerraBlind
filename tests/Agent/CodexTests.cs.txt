@@ -244,12 +244,46 @@ static class CodexTests
 
     public static async Task InputOptimizations()
     {
+        await PromptContinuity();
         await ModelResults();
         ContextChanges();
         ContextPatches();
         await HistoryCompaction();
         await NativeBackgroundReview(compact: true);
         InputReplay();
+    }
+
+    static async Task PromptContinuity()
+    {
+        var server = new Server();
+        using var agent = new CodexAgent((_, _) => server.Connect());
+        var options = new JsonObject { ["request"] = "brief", ["objective"] = "retain note and original handle" };
+        Task Run() => agent.RunAsync("continue", "mock", "/tmp", "", "game", Tools,
+            (_, _, _) => Task.FromResult("{}"), _ => { }, default, options);
+        await Run();
+        Check(server.ThreadArgs["dynamicTools"][0]["description"].ToString().Contains("JSON文本(string)")
+            && server.ThreadArgs["developerInstructions"].ToString().Contains("JSON.parse(await tools.get_state({}))"),
+            "short transport hints lost the outer string/in-game object distinction");
+        server.Goal["tokensUsed"] = 1000; server.Goal["updatedAt"] = 42;
+        await Run();
+        Check(server.Inputs[0].Contains("retain note and original handle") && !server.Inputs[1].Contains("宿主目标")
+            && !server.Inputs[0].Contains("host_tokens_used") && !server.Inputs[0].Contains("history"),
+            "unchanged goal or cumulative accounting was appended again");
+        await agent.CompactContext(default, force: true);
+        await Run();
+        Check(server.Inputs[2].Contains("retain note and original handle") && !server.Inputs[2].Contains("tokensUsed"),
+            "compaction lost objective or resent changing accounting fields");
+        options["request"] = "new"; options["objective"] = "changed goal";
+        await Run();
+        Check(server.Inputs[3].Contains("changed goal") && agent.GoalState["native"]["tokensUsed"].GetValue<int>() == 1000,
+            "new goal was omitted or host accounting was removed");
+        string system = "original-system-marker";
+        string prompt = AgentScript.Instructions(system, Tools);
+        Check(prompt.Contains(system) && prompt.Contains("game_api") && prompt.Contains("on_failure")
+            && prompt.Contains("action_queue") && prompt.Contains("uncertain") && prompt.Contains("script_report")
+            && prompt.Contains("低血量仅唤醒观察") && !prompt.Contains("\"parameters\":"),
+            "prompt cleanup lost executable, recovery or lookup contracts");
+        Console.WriteLine("PASS: prompts retain runtime contracts; goals are sent on first/change/compaction without repeated accounting");
     }
 
     static async Task HistoryCompaction()
@@ -323,9 +357,20 @@ static class CodexTests
         var state = new JsonObject();
         int messages = 0, reports = 0;
         long before = 0, after = 0;
+        bool replacePrompt = Environment.GetEnvironmentVariable("TB_INPUT_REPLAY_PROMPTS") == "1";
         foreach (var entry in exported["items"].AsArray())
         {
             var item = entry["item"];
+            if (replacePrompt && item["type"]?.ToString() == "message" && item["role"]?.ToString() == "developer")
+                foreach (var part in item["content"].AsArray())
+                    if (part["text"]?.ToString().StartsWith("单次游戏API用run_script(") == true)
+                    {
+                        string old = part["text"].ToString();
+                        string persona = old.Split("回复语言风格：").Skip(1).FirstOrDefault()?.Split('\n')[0] ?? "";
+                        var definitions = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
+                        AgentScript.DescribePrograms(definitions);
+                        part["text"] = AgentScript.Instructions(File.ReadAllText("Agent/System.txt") + "\n回复语言风格：" + persona, definitions);
+                    }
             if (item["type"]?.ToString() == "custom_tool_call_output" && item["output"] is JsonArray parts)
                 foreach (var part in parts.Where(part => part["type"]?.ToString() == "input_text"))
                 {
@@ -879,6 +924,64 @@ static class CodexTests
         Check(executions == 33 && repeated.Threads == 1 && repeated.Goal["status"].ToString() == "active",
             "next turn failed to continue on the same goal and thread");
         Console.WriteLine("PASS: managed goal keeps the per-turn effect bound and continues on the same thread after budget handoff");
+    }
+
+    public static async Task InputOptimizationModel()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "terrablind-input-model-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var definitions = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
+        AgentScript.DescribePrograms(definitions);
+        string system = AgentScript.Instructions(File.ReadAllText("Agent/System.txt"), definitions)
+            + "\n本轮是只读协议验收，模拟世界只开放get_state。只查询并回答，宿主验证目标。";
+        var entry = AgentScript.EntryTools(definitions);
+        var events = new JsonArray();
+        string note = "note-" + Guid.NewGuid().ToString("N")[..10];
+        const string handle = "retained-navigation-17";
+        int hp = 100, reads = 0, effects = 0;
+        JsonObject State() => new() { ["player"] = new JsonObject { ["hp"] = hp },
+            ["fixture_note"] = hp == 100 ? note : null,
+            ["action_tasks"] = new JsonArray(new JsonObject { ["handle"] = handle, ["tool"] = "nav_to", ["status"] = "running", ["attempt"] = 1 }) };
+        Task<string> Execute(string name, JsonObject args, CancellationToken token)
+        {
+            events.Add(new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
+            if (name == "get_state") { reads++; return Task.FromResult(State().ToJsonString()); }
+            if (name == "game_api") return Task.FromResult(AgentScript.DescribeApi(definitions, args).ToJsonString());
+            if (name == "run_script" && args["tool"]?.ToString() == "get_state") return Execute("get_state", new JsonObject(), token);
+            effects++; throw new InvalidOperationException("read-only probe rejected " + name);
+        }
+        var options = new JsonObject { ["request"] = "input-probe", ["objective"] = "只读核对记忆、最新现场与原动作，完成由宿主验收" };
+        using var agent = new CodexAgent();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(180));
+        var times = new JsonObject();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await agent.RunAsync("调用get_state一次，记住fixture_note和正在执行的原handle，在后续轮次保留。回复这两项和hp，结束本轮。",
+            "", root, "gpt-6.1-sol", system, entry, Execute, text => events.Add(new JsonObject { ["text"] = text }), deadline.Token, options);
+        times["initial_ms"] = clock.ElapsedMilliseconds;
+        var before = agent.TokenUsage;
+        Check(reads == 1 && events.Any(e => e["text"]?.ToString().Contains(note) == true), "model did not read and retain initial note");
+        clock.Restart();
+        Check(await agent.CompactContext(deadline.Token, force: true), "real app-server compaction failed: " + agent.LastCompactionError);
+        times["compaction_ms"] = clock.ElapsedMilliseconds;
+        Check(agent.Compactions == 1 && agent.GoalState["native"]["status"]?.ToString() == "active", "compaction lost active host goal");
+        hp = 77;
+        var context = new AgentContext();
+        string snapshot = context.Capture(State()).ToJsonString();
+        clock.Restart();
+        int replyStart = events.Count;
+        await agent.RunAsync("并行观察：原动作继续。调用get_state一次核对新hp。然后只回复之前记住的fixture_note、原handle、新hp；这是核对，无需恢复任何动作。\n现状：" + snapshot,
+            "", root, "gpt-6.1-sol", system, entry, Execute, text => events.Add(new JsonObject { ["text"] = text }), deadline.Token, options);
+        times["after_compaction_ms"] = clock.ElapsedMilliseconds;
+        string reply = string.Join("\n", events.Skip(replyStart).Select(e => e["text"]?.ToString()));
+        Check(reads == 2 && effects == 0 && reply.Contains(note) && reply.Contains(handle) && reply.Contains("77"),
+            "real compacted model lost memory/current state or attempted game action");
+        var completed = await agent.CompleteGoal(_ => Task.FromResult(new JsonObject { ["verified"] = true,
+            ["retained_note"] = note, ["hp"] = hp, ["handle"] = handle, ["effects"] = effects }), deadline.Token);
+        string report = Path.Combine(root, "result.json");
+        File.WriteAllText(report, new JsonObject { ["model"] = "gpt-6.1-sol", ["mock_world"] = true, ["events"] = events,
+            ["timings"] = times, ["before_usage"] = before, ["after_usage"] = agent.TokenUsage,
+            ["compactions"] = agent.Compactions, ["goal"] = completed, ["prompt_chars"] = system.Length }.ToJsonString());
+        Console.WriteLine("INPUT_MODEL_COMPLETE actual_codex=true mock_world=true game_actions=0 report=" + report);
     }
 
     public static async Task GoalSmoke()

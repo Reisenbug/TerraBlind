@@ -121,6 +121,8 @@ public sealed class CodexAgent : IDisposable
     JsonObject _goal;
     readonly object _goalGate = new();
     string _goalRequest;
+    string _deliveredGoal;
+    int _deliveredGoalRevision = -1;
     long _goalTokenBaseline;
     readonly JsonArray _goalHistory = new();
     public JsonObject GoalState
@@ -142,6 +144,18 @@ public sealed class CodexAgent : IDisposable
     bool measureAfterCompaction;
     internal int Compactions { get; private set; }
     internal string LastCompactionError { get; private set; }
+
+    string GoalNotice()
+    {
+        if (_goal == null) return "";
+        var brief = new JsonObject();
+        foreach (string key in new[] { "threadId", "objective", "status", "tokenBudget" })
+            if (_goal.ContainsKey(key)) brief[key] = _goal[key]?.DeepClone();
+        string value = brief.ToJsonString();
+        if (_deliveredGoal == value && _deliveredGoalRevision == ContextRevision) return "";
+        _deliveredGoal = value; _deliveredGoalRevision = ContextRevision;
+        return "\n宿主目标：" + value + "\n宿主按task_plan最终条件验收完成。";
+    }
 
     void RecordUsage(JsonObject usage)
     {
@@ -306,6 +320,7 @@ public sealed class CodexAgent : IDisposable
         _usage = null; UsageUpdates = TurnsStarted = ContextRevision = 0;
         compactAtInput = ContextTokenLimit; measureAfterCompaction = false; Compactions = 0; LastCompactionError = null;
         lock (_goalGate) { _goal = null; _goalRequest = null; _goalHistory.Clear(); }
+        _deliveredGoal = null; _deliveredGoalRevision = -1;
         _rpc = _connect(executable, cwd);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
@@ -330,8 +345,7 @@ public sealed class CodexAgent : IDisposable
                 var function = tool["function"];
                 string description = function["description"]?.ToString() ?? "";
                 if (function["name"]?.ToString() is "get_state" or "game_api" or "run_script" or "ask")
-                    description = "Codex exec调用返回JSON文本(string)，不是对象。直接text(await tools." + function["name"]
-                        + "(参数))可读取全文；需在exec访问字段时先JSON.parse返回文本。不要对原始文本再JSON.stringify。\n" + description;
+                    description = "返回JSON文本(string)；外层访问字段先JSON.parse。\n" + description;
                 if (function["name"]?.ToString() == "terrain_map")
                     description = "Codex exec返回字符串：JSON元数据后换行接data:image/图片URI。显示方式：const r=await tools.terrain_map(参数); const i=r.indexOf('\\ndata:image/'); if(i>=0){text(r.slice(0,i));image(r.slice(i+1).trim());}else text(r);\n" + description;
                 dynamicTools.Add(new JsonObject { ["type"] = "function", ["name"] = function["name"].DeepClone(),
@@ -350,6 +364,7 @@ public sealed class CodexAgent : IDisposable
             if (!string.IsNullOrWhiteSpace(model)) args["model"] = model;
             var thread = await _rpc.Request("thread/start", args, deadline.Token);
             _thread = thread["thread"]?["id"]?.GetValue<string>() ?? throw new IOException("Codex 没有返回会话编号。");
+            DiagLog.Write($"[agent-thread] id={_thread} model={thread["model"]} service_tier={thread["serviceTier"]} instruction_sources={thread["instructionSources"]?.AsArray().Count ?? 0}");
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { Dispose(); throw new TimeoutException("Codex 初始化超时。"); }
@@ -381,8 +396,7 @@ public sealed class CodexAgent : IDisposable
                 }
                 await ReadGoal(token);
                 if (_goal?["status"]?.ToString() != "active") throw new InvalidOperationException("Codex目标当前不是active：" + _goal?["status"]);
-                input += "\n游戏宿主持有的Codex goal：" + GoalState.ToJsonString()
-                    + "\n继续同一目标；完成只能由宿主按真实task_plan最终条件验收。不要另建或自行标完成目标。";
+                input += GoalNotice();
             }
             var started = await _rpc.Request("turn/start", new JsonObject
             {
@@ -427,7 +441,7 @@ public sealed class CodexAgent : IDisposable
                 if (method == "item/completed" && args["item"]?["type"]?.ToString() == "contextCompaction")
                 {
                     ContextRevision++; Compactions++; measureAfterCompaction = true;
-                    if (refreshContext != null && !await Steer("宿主当前工作状态：" + await refreshContext(), token)) ContextRevision++;
+                    if (refreshContext != null && !await Steer("宿主当前工作状态：" + await refreshContext() + GoalNotice(), token)) ContextRevision++;
                 }
                 if (args["turnId"] != null && args["turnId"].ToString() != turn) continue;
                 if (method == "thread/tokenUsage/updated" && args["tokenUsage"] is JsonObject usage)
