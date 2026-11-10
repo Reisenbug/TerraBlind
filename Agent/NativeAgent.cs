@@ -320,7 +320,8 @@ public class NativeAgent : ModSystem
                         && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
                     var backgroundReview = System.Diagnostics.Stopwatch.StartNew();
                     string preparingAttempt = AgentTools.Actions.ActiveAttempt;
-                    bool prepareNext = preparingAttempt != null && preparingAttempt != preparedAttempt;
+                    bool prepareNext = preparingAttempt != null && preparingAttempt != preparedAttempt
+                        && preparingAttempt != AgentTools.PreparationNotifiedAttempt;
                     double reviewDelay = await OnMain(() => AgentTools.Plan.RequiresNodeExecution, token) ? 0 : 15;
                     while (!reviewRequested && (!prepareNext || backgroundReview.Elapsed.TotalSeconds < reviewDelay)
                         && await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
@@ -328,7 +329,8 @@ public class NativeAgent : ModSystem
                     {
                         await Task.Delay(100, token);
                         preparingAttempt = AgentTools.Actions.ActiveAttempt;
-                        prepareNext = preparingAttempt != null && preparingAttempt != preparedAttempt;
+                        prepareNext = preparingAttempt != null && preparingAttempt != preparedAttempt
+                            && preparingAttempt != AgentTools.PreparationNotifiedAttempt;
                     }
                     if (!reviewRequested && (prepareNext
                         || await OnMain(() => AgentTools.Watches.HasHealthNotice || AgentTools.Watches.HasAdvisories, token))

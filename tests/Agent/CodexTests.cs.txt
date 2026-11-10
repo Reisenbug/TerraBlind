@@ -24,6 +24,8 @@ static class CodexTests
         await NativeGoalProtocol();
         await NativeExecutionSteering();
         await NativeExecutionSteering(script: true);
+        await NativeExecutionSteering(preparedReview: true);
+        await NativeExecutionSteering(preparedReview: true, rejectSteer: true);
         await NativeBackgroundReview();
         var launch = new System.Diagnostics.ProcessStartInfo();
         launch.Environment.Clear();
@@ -291,10 +293,10 @@ static class CodexTests
         }
     }
 
-    static async Task NativeExecutionSteering(bool script = false)
+    static async Task NativeExecutionSteering(bool script = false, bool preparedReview = false, bool rejectSteer = false)
     {
         var native = new NativeAgent();
-        var server = new Server { HoldFinalReply = true };
+        var server = new Server { HoldFinalReply = true, RejectSteer = rejectSteer };
         var handler = HttpServerSystem.Handler;
         bool fail = false;
         int starts = 0;
@@ -340,14 +342,36 @@ static class CodexTests
         try
         {
             NativeAgent.Submit("prepare the next operation while this one executes");
-            await Until(() => server.Steers.Count == 1 && starts == 1);
+            await Until(() => server.Steers.Count >= 1 && starts == 1);
             Check(server.Inputs.Count == 1 && server.Interrupts == 0 && AgentTools.Actions.ActiveHandle == handle,
                 "preparation steering started another turn, paused or replaced the route");
             Check(server.Steers[0]["input"][0]["text"].ToString().Contains("prepare_successor"),
                 "action start did not request preparation in the current reasoning turn");
             var quiet = DateTime.UtcNow.AddMilliseconds(700);
             while (DateTime.UtcNow < quiet) { native.PostUpdateEverything(); await Task.Delay(5); }
-            Check(server.Steers.Count == 1, "unchanged action repeatedly steered the same delayed reply");
+            Check(rejectSteer || server.Steers.Count == 1, "unchanged action repeatedly steered the same delayed reply");
+            if (preparedReview)
+            {
+                server.FinishReply();
+                if (rejectSteer)
+                {
+                    await Until(() => server.Inputs.Count == 2);
+                    Check(AgentTools.Actions.ActiveHandle == handle && starts == 1,
+                        "fallback preparation replaced the action after steering was rejected");
+                    Console.WriteLine("PASS: rejected preparation steering retains the normal background preparation turn");
+                    return;
+                }
+                quiet = DateTime.UtcNow.AddMilliseconds(700);
+                while (DateTime.UtcNow < quiet) { native.PostUpdateEverything(); await Task.Delay(5); }
+                Check(server.Inputs.Count == 1 && AgentTools.Actions.ActiveHandle == handle && starts == 1,
+                    "accepted in-turn preparation was repeated in another model turn");
+                AgentTools.Watches.Emit("low_health", "new-health-after-preparation", new JsonObject { ["hp"] = 20 });
+                await Until(() => server.Inputs.Count == 2);
+                Check(server.Inputs[1].Contains("new-health-after-preparation") && AgentTools.Actions.ActiveHandle == handle && starts == 1,
+                    "preparation deduplication suppressed a new health observation or replaced the running action");
+                Console.WriteLine("PASS: accepted preparation avoids a duplicate turn while new health evidence still wakes the model");
+                return;
+            }
             fail = true;
             await Until(() => server.Steers.Count == 2);
             Check(server.Steers[1]["input"][0]["text"].ToString().Contains("execution_gap")
@@ -790,7 +814,7 @@ static class CodexTests
         readonly Lines _input = new();
         public int Threads, Interrupts;
         int _turn;
-        public bool Stopped, LoggedIn = true, FailTurn, EmitCompaction, HoldFinalReply;
+        public bool Stopped, LoggedIn = true, FailTurn, EmitCompaction, HoldFinalReply, RejectSteer;
         public string ToolName = "get_state";
         public Action<int> AfterTool;
         public JsonObject ThreadArgs;
@@ -806,6 +830,13 @@ static class CodexTests
         void Reply(JsonNode id, JsonObject result) => Send(new JsonObject { ["id"] = id.DeepClone(), ["result"] = result });
         void Completed(string status) => Send(new JsonObject { ["method"] = "turn/completed", ["params"] = new JsonObject
         { ["threadId"] = "thread", ["turn"] = new JsonObject { ["id"] = "turn" + _turn, ["status"] = status } } });
+        public void FinishReply()
+        {
+            var completed = new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
+            { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["item"] = new JsonObject
+            { ["id"] = "reply" + _turn, ["type"] = "agentMessage", ["text"] = "完成了" } } };
+            Send(completed); Send(completed); Completed("completed");
+        }
         void Receive(string line)
         {
             var message = JsonNode.Parse(line).AsObject();
@@ -837,7 +868,11 @@ static class CodexTests
             }
             else if (method == "turn/interrupt") { Interrupts++; Reply(message["id"], new JsonObject()); Completed("interrupted"); }
             else if (method == "turn/steer")
-            { Steers.Add(message["params"].AsObject()); Reply(message["id"], new JsonObject { ["turnId"] = "turn" + _turn }); }
+            {
+                Steers.Add(message["params"].AsObject());
+                if (RejectSteer) Send(new JsonObject { ["id"] = message["id"].DeepClone(), ["error"] = new JsonObject { ["message"] = "fixture steering rejected" } });
+                else Reply(message["id"], new JsonObject { ["turnId"] = "turn" + _turn });
+            }
             else if (method == null)
             {
                 ToolResponses.Add(message["result"].AsObject());
@@ -854,10 +889,7 @@ static class CodexTests
                     return;
                 }
                 if (HoldFinalReply) return;
-                var completed = new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
-                { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["item"] = new JsonObject
-                { ["id"] = "reply" + _turn, ["type"] = "agentMessage", ["text"] = "完成了" } } };
-                Send(completed); Send(completed); Completed("completed");
+                FinishReply();
             }
         }
     }

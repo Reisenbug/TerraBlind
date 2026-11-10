@@ -69,6 +69,7 @@ public static partial class AgentTools
     }
     internal static JsonObject ExecutionContinuity;
     static string lastExecutionNotice;
+    internal static string PreparationNotifiedAttempt { get; private set; }
     static ulong? gapStarted;
     static bool gapReported;
 
@@ -126,6 +127,7 @@ public static partial class AgentTools
         async Task Send()
         {
             bool accepted = await codex.Steer(instruction + notice.ToJsonString(ModelJson), token);
+            if (accepted && kind == "prepare_successor") PreparationNotifiedAttempt = action["handle"] + ":" + action["attempt"];
             if (!accepted && lastExecutionNotice == key) lastExecutionNotice = null;
             DiagLog.Write($"[agent_execution_notice] kind={kind} handle={notice["handle"]} accepted={accepted}");
         }
@@ -367,7 +369,7 @@ public static partial class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); pendingNode = lastExecutionNotice = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
+    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedAttempt = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
         Actions.CancelAll();
