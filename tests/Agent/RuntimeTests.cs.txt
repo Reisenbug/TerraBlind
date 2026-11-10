@@ -593,6 +593,66 @@ static class RuntimeTests
         Console.WriteLine("PASS: prepared failure policies update during travel, receive full evidence and recover locally; danger and uncovered failures retain review");
     }
 
+    static async Task TestScriptAfterRunningRecovery()
+    {
+        var previous = HttpServerSystem.Handler;
+        AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
+        var existingWorkflows = AgentTools.Workflows.Keys.ToHashSet();
+        int starts = 0, repairs = 0;
+        bool hold = true;
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/nav_recede") starts++;
+            if (path == "/act") repairs++;
+            return (200, path == "/nav_recede_done" ? starts == 1
+                ? "{\"done\":false,\"status\":\"failed\",\"reason\":\"fixture_blocked\"}" : "{\"done\":false}"
+                : path == "/act_status" ? new JsonObject { ["active"] = hold }.ToJsonString() : "{}");
+        };
+        try
+        {
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"continue after an in-flight recovery","mode":"dag","steps":[
+                 {"id":"travel","description":"keep the replacement route",
+                  "depends_on":[],"script":"return {};",
+                  "on_failure":"tool('act',{steps:[{keys:['right'],until:{frames:1}}]});return {status:'needs_review'};",
+                  "conditions":[{"kind":"item","type":191,"count":9999}]}]}
+                """).AsObject(), _ => 0);
+            ActionTasks.NodeContext.Value = "travel";
+            AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 12, ["y"] = 34 }, default);
+            ActionTasks.NodeContext.Value = null;
+            await PumpUntil(() => starts == 1 && !AgentTools.Actions.HasPrimaryControl);
+            AgentTools.ContinuePreparedNode(default);
+            await PumpUntil(() => repairs == 1);
+            AgentTools.Plan.Revise(new JsonObject
+            {
+                ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                ["reason"] = "publish the route while local recovery is still executing",
+                ["nodes"] = new JsonArray(new JsonObject { ["id"] = "travel",
+                    ["script"] = "return tool('nav_to',{x:16,y:34});" })
+            }, _ => 0);
+            var requested = AgentTools.Execute("run_script", new JsonObject { ["task_node"] = "travel", ["background"] = true }, default);
+            for (int i = 0; i < 10; i++) { Agent.PostUpdateEverything(); await Task.Delay(5); }
+            Check(!requested.IsCompleted && starts == 1,
+                "replacement request was reported as already running while only its recovery was running");
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            hold = false;
+            var result = JsonNode.Parse(await Execute(requested));
+            await PumpUntil(() => starts == 2);
+            Check(result["already_running"]?.GetValue<bool>() != true && result["handle"] != null && repairs == 1,
+                "replacement script was lost or replayed recovery after the original recovery returned: " + result);
+            Check(timer.ElapsedMilliseconds < 1000, "prepared replacement waited for another model turn");
+            Console.WriteLine($"RECOVERY_HANDOFF handoff_ms={timer.ElapsedMilliseconds} model_calls=0 replacement_started=true");
+        }
+        finally
+        {
+            hold = false; ActionTasks.NodeContext.Value = null;
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+            await PumpUntil(() => AgentTools.Workflows.Where(w => !existingWorkflows.Contains(w.Key)).All(w => !w.Value.Running));
+            foreach (string id in AgentTools.Workflows.Keys.Where(id => !existingWorkflows.Contains(id)).ToArray()) AgentTools.Workflows.Remove(id);
+            HttpServerSystem.Handler = previous;
+        }
+    }
+
     static async Task TestPreparedScriptRevision()
     {
         var previous = HttpServerSystem.Handler;
@@ -800,6 +860,7 @@ static class RuntimeTests
         await TestInlineCompletionHandoff();
         await TestInlinePauseResume();
         await TestPreparedFailureRecovery();
+        await TestScriptAfterRunningRecovery();
         await TestPreparedScriptRevision();
         var depthPlayer = Game.LocalPlayer;
         var oldDepth = (Game.worldSurface, Game.rockLayer, depthPlayer.ZoneSkyHeight, depthPlayer.ZoneOverworldHeight,
@@ -3708,6 +3769,8 @@ static class RuntimeTests
                     && !AgentTools.Watches.HasInterrupting, "handoff erased the wrapper failure or retained its blocking notice");
                 Console.WriteLine($"VERIFIED_NODE_HANDOFF ending={ending} handoff_ms={timer.ElapsedMilliseconds} model_calls=0");
                 AgentTools.Stop(); await PumpUntil(() => !AgentTools.Actions.HasActive);
+                var dispatch = (Task)typeof(AgentTools).GetField("continuation", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+                await PumpUntil(() => dispatch.IsCompleted); await dispatch;
             }
         }
         finally
