@@ -561,6 +561,7 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_FALL_PLACEMENT_PROBE") == "1") { await FallPlacementTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_CONSUMABLE_HANDOFF_PROBE") == "1") { await ConsumableHandoffTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_DESERT_CONTACT_PROBE") == "1") { await DesertContactTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_NATIVE_REJECTION_NATURAL") == "1") { await NativeRejectionNaturalTrial(); return; }
@@ -2992,6 +2993,63 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("edited program replayed the original task or did not use revision 2");
             return true;
         });
+    }
+
+    async Task FallPlacementTrial()
+    {
+        int x = Main.spawnTileX, y = Main.spawnTileY + 7;
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false; Config.I.AgentEnabled = true;
+            Concessions.Enabled = false; AgentPermissions.Reset();
+            Combat.Enabled = Dodge.Enabled = false;
+            var p = Main.LocalPlayer;
+            foreach (var item in p.inventory) item.TurnToAir();
+            foreach (var item in p.armor) item.TurnToAir();
+            for (int tx = x - 3; tx <= x + 4; tx++)
+            {
+                for (int ty = y - 10; ty <= y + 3; ty++) Main.tile[tx, ty].ClearEverything();
+                Main.tile[tx, y + 4].ResetToType(TileID.Stone);
+            }
+            Main.tile[x - 1, y].ResetToType(TileID.Stone);
+            p.inventory[4].SetDefaults(ItemID.Starfury);
+            p.inventory[5].SetDefaults(ItemID.WoodPlatform); p.inventory[5].stack = 20;
+            p.position = new Vector2(x * 16 + 2, (y - 4) * 16 - p.height);
+            p.velocity = new Vector2(0, .4f); p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+            p.statLife = p.statLifeMax = p.statLifeMax2 = 100;
+            p.selectedItem = 4; p.itemTime = p.itemAnimation = 5; p.controlUseItem = false; p.releaseUseItem = true;
+            var replay = new List<PhysicsSimulator.ControlInput> { new() { Px = p.position.X, Py = p.position.Y,
+                Vx = 0, Vy = .4f, Place = true, PlaceCx = x, PlaceCy = y } };
+            typeof(StateSpacePlanner).GetField("_execFrames", HiddenStatic).SetValue(null, replay);
+            typeof(StateSpacePlanner).GetField("_execIdx", HiddenStatic).SetValue(null, 0);
+            return true;
+        });
+        var clock = Stopwatch.StartNew();
+        var samples = new JsonArray();
+        while (clock.Elapsed.TotalSeconds < 8)
+        {
+            await Task.Delay(16);
+            var sample = await OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                return new JsonObject { ["tick"] = Main.GameUpdateCount, ["y"] = p.position.Y, ["vy"] = p.velocity.Y,
+                    ["hp"] = p.statLife, ["animation"] = p.itemAnimation, ["item_time"] = p.itemTime,
+                    ["active"] = StateSpacePlanner.IsActive, ["platforms"] = p.inventory[5].stack,
+                    ["placed"] = Main.tile[x, y].HasTile && Main.tile[x, y].TileType == TileID.Platforms,
+                    ["inventory_open"] = Main.playerInventory };
+            });
+            samples.Add(sample);
+            if (sample["placed"].GetValue<bool>() && sample["platforms"].GetValue<int>() == 19
+                && sample["vy"].GetValue<float>() == 0 && !sample["active"].GetValue<bool>())
+            {
+                if (sample["hp"].GetValue<int>() != 100) throw new Exception("placement trial lost health");
+                File.WriteAllText(Path.Combine(Main.SavePath, "fall-placement-live.json"), samples.ToJsonString());
+                Console.WriteLine($"FALL_PLACEMENT_LIVE_PASS elapsed_ms={clock.ElapsedMilliseconds} real_item_use=true platforms_consumed=1 hp=100");
+                return;
+            }
+        }
+        File.WriteAllText(Path.Combine(Main.SavePath, "fall-placement-live.json"), samples.ToJsonString());
+        throw new Exception("actual platform placement and landing did not complete within eight seconds");
     }
 
     async Task ConsumableHandoffTrial()
