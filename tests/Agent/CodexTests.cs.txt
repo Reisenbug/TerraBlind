@@ -696,14 +696,15 @@ static class CodexTests
     static async Task NativeBackgroundReview(bool compact = false)
     {
         var native = new NativeAgent();
-        var server = new Server { InputTokens = compact ? CodexAgent.ContextTokenLimit + 1000 : 0 };
+        var server = new Server { InputTokens = compact ? CodexAgent.ContextTokenLimit + 1000 : 0, HoldCompaction = compact };
         var originalPosition = Terraria.Main.LocalPlayer.position;
         int originalHealth = Terraria.Main.LocalPlayer.statLife;
         Config.I.AgentUseCodex = true;
         native.Load();
         typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
             .SetValue(native, new CodexAgent((_, _) => server.Connect()));
-        string handle = null;
+        string handle = null, queued = null;
+        bool completeFirst = false;
         server.AfterCompaction = () =>
         {
             _ = NativeAgent.OnMain(() =>
@@ -715,12 +716,18 @@ static class CodexTests
             }, default);
         };
         Terraria.Main.LocalPlayer.position = new(1600, 1600);
-        HttpServerSystem.Handler = (_, _) => (200, "{\"done\":false}");
+        HttpServerSystem.Handler = (path, payload) =>
+        {
+            if (compact && path == "/nav_recede" && JsonNode.Parse(payload)?["gx"]?.GetValue<int>() == 950) completeFirst = false;
+            return (200, completeFirst ? "{\"done\":true}" : "{\"done\":false}");
+        };
         server.AfterTool = calls =>
         {
             if (calls == 1) _ = NativeAgent.OnMain(() =>
             {
                 handle = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 900, ["y"] = 100 }, default)["handle"].ToString();
+                if (compact) queued = AgentTools.Actions.Enqueue(handle, "nav_to",
+                    new JsonObject { ["x"] = 950, ["y"] = 100 }, null, default)["handle"].ToString();
                 return true;
             }, default);
         };
@@ -728,13 +735,31 @@ static class CodexTests
         {
             NativeAgent.Submit("/goal observe while navigation remains active");
             var movement = System.Diagnostics.Stopwatch.StartNew();
-            void AdvanceMovement() => Terraria.Main.LocalPlayer.position.X = 1600 + (float)movement.Elapsed.TotalSeconds * 50;
+            bool handedOff = false;
+            void AdvanceMovement()
+            {
+                if (!compact || server.Compactions == 0)
+                    Terraria.Main.LocalPlayer.position.X = 1600 + (float)movement.Elapsed.TotalSeconds * 50;
+            }
             var deadline = DateTime.UtcNow.AddSeconds(25);
             while (server.Inputs.Count < 2)
             {
                 Check(DateTime.UtcNow < deadline, "background observation waited for navigation completion");
                 AdvanceMovement();
                 native.PostUpdateEverything(); await Task.Delay(5);
+                if (compact && server.Compactions > 0 && !handedOff)
+                {
+                    Terraria.Main.LocalPlayer.position = new(900 * 16 - 10, 100 * 16 - 20);
+                    completeFirst = true;
+                    while (AgentTools.Actions.ActiveHandle != queued)
+                    {
+                        Check(DateTime.UtcNow < deadline, "prepared action waited for history compaction to finish");
+                        native.PostUpdateEverything(); await Task.Delay(5);
+                    }
+                    Check(server.Inputs.Count == 1, "another model turn was required for the prepared action");
+                    handedOff = true; handle = queued;
+                    server.FinishCompaction();
+                }
             }
             Check(server.Inputs[1].Contains("并行观察") && server.Inputs[1].Contains("on_failure") && AgentTools.Actions.ActiveHandle == handle,
                 $"model was not woken with the original active navigation handle expected={handle} active={AgentTools.Actions.ActiveHandle} input={server.Inputs[1][..Math.Min(1200, server.Inputs[1].Length)]}");
@@ -747,7 +772,8 @@ static class CodexTests
                     && server.Inputs[1].Contains("\"hp\":77") && server.Inputs[1].Contains(handle)
                     && AgentTools.Watches.Pending()["events"].AsArray().Any(e => e["key"]?.ToString() == "during-compaction"),
                     "post-compaction input reused a partial/stale snapshot or discarded events raised while navigation continued");
-                Console.WriteLine("PASS: native compaction keeps the running handle/attempt and sends fresh health, ownership and pending events");
+                Check(handedOff, "compaction handoff scenario was skipped");
+                Console.WriteLine("PASS: prepared navigation starts during held compaction; refreshed input retains new handle, health and pending events");
                 return;
             }
             AgentTools.Watches.Configure(new JsonObject { ["events"] = new JsonArray("nearby_tile", "low_health", "nearby_chest"),
@@ -1235,6 +1261,23 @@ static class CodexTests
             { ["id"] = "reply" + _turn, ["type"] = "agentMessage", ["text"] = "完成了" } } };
             Send(completed); Send(completed); Completed("completed");
         }
+        public void FinishCompaction()
+        {
+            string turn = compactTurn;
+            if (!FailCompaction)
+            {
+                Send(new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
+                    { ["threadId"] = "thread", ["turnId"] = turn, ["item"] = new JsonObject { ["type"] = "contextCompaction" } } });
+                Send(new JsonObject { ["method"] = "thread/tokenUsage/updated", ["params"] = new JsonObject
+                    { ["threadId"] = "thread", ["tokenUsage"] = new JsonObject
+                        { ["total"] = new JsonObject { ["totalTokens"] = _turn * 100 + Compactions * 50 } } } });
+                InputTokens = InputTokensAfterCompaction;
+                AfterCompaction?.Invoke();
+            }
+            Send(new JsonObject { ["method"] = "turn/completed", ["params"] = new JsonObject
+                { ["threadId"] = "thread", ["turn"] = new JsonObject { ["id"] = turn, ["status"] = FailCompaction ? "failed" : "completed" } } });
+            compactTurn = null;
+        }
         void Receive(string line)
         {
             var message = JsonNode.Parse(line).AsObject();
@@ -1254,19 +1297,7 @@ static class CodexTests
                 Send(new JsonObject { ["method"] = "turn/started", ["params"] = new JsonObject
                     { ["threadId"] = "thread", ["turn"] = new JsonObject { ["id"] = turn } } });
                 if (HoldCompaction) return;
-                if (!FailCompaction)
-                {
-                    Send(new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
-                        { ["threadId"] = "thread", ["turnId"] = turn, ["item"] = new JsonObject { ["type"] = "contextCompaction" } } });
-                    Send(new JsonObject { ["method"] = "thread/tokenUsage/updated", ["params"] = new JsonObject
-                        { ["threadId"] = "thread", ["tokenUsage"] = new JsonObject
-                            { ["total"] = new JsonObject { ["totalTokens"] = _turn * 100 + Compactions * 50 } } } });
-                    InputTokens = InputTokensAfterCompaction;
-                    AfterCompaction?.Invoke();
-                }
-                Send(new JsonObject { ["method"] = "turn/completed", ["params"] = new JsonObject
-                    { ["threadId"] = "thread", ["turn"] = new JsonObject { ["id"] = turn, ["status"] = FailCompaction ? "failed" : "completed" } } });
-                compactTurn = null;
+                FinishCompaction();
             }
             else if (method == "thread/goal/set")
             {
