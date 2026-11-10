@@ -672,7 +672,7 @@ public static partial class AgentTools
         long id = Interlocked.Increment(ref invocationSequence);
         long started = Stopwatch.GetTimestamp();
         bool query = name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
-            or "terrain_map" or "opportunity_assess" or "nearby_drops" or "item_info" or "wiki_search" or "wiki_page" or "recipe" or "script_program" or "script_report";
+            or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "item_info" or "wiki_search" or "wiki_page" or "recipe" or "script_program" or "script_report";
         if (query) Interlocked.Increment(ref QueriesInFlight);
         DiagLog.Write($"[agent_tool_begin] id={id} name={name} timestamp={started} node={ActionTasks.NodeContext.Value}");
         try { return await ExecuteObserved(name, args, token); }
@@ -845,6 +845,15 @@ public static partial class AgentTools
 
     static async Task<string> ExecuteScriptTool(string name, JsonObject args, CancellationToken root, CancellationToken token, bool scriptEvents = false)
     {
+        var reactions = AgentScript.CurrentReactions.Value;
+        if (reactions?.Handling == true && name is "action_control" or "action_start" or "action_queue" or "control")
+            return new JsonObject { ["error"] = "reaction_action_lifecycle",
+                ["detail"] = "事件中直接调用nav_to/gather/use_item等，宿主交接并恢复原动作。任务句柄控制交回Agent执行。" }.ToJsonString();
+        if (reactions?.Handling == true && AgentControlSession.ActionTool(name) && reactions.BeforeAction != null)
+            await reactions.BeforeAction(name, token);
+        else if (reactions?.Handling == false)
+            await ReactAtBoundary(token);
+        if (reactions?.Handling == true) return await Execute(name, args, token);
         if (!ActionTasks.Supports(name))
             return await Execute(name, args, name is "action_start" or "action_queue" || name == "action_control" && Text(args, "command") == "resume" ? root : token);
         if (name != "fight" && string.IsNullOrEmpty(ActionTasks.NodeContext.Value)
@@ -885,6 +894,57 @@ public static partial class AgentTools
         }
     }
 
+    internal static async Task ReactAtBoundary(CancellationToken token,
+        Func<CancellationToken, Task> pause = null, Func<CancellationToken, Task> resume = null)
+    {
+        var reactions = AgentScript.CurrentReactions.Value;
+        if (reactions == null || reactions.Handling || reactions.Kinds.Length == 0) return;
+        var notices = await NativeAgent.OnMain(() => Watches.TakeForScript(reactions.Kinds), token);
+        if (notices.Count == 0 && reactions.Has("tick") && reactions.TickDue()) notices.Add(new JsonObject { ["kind"] = "tick" });
+        if (notices.Count == 0) return;
+        bool paused = false;
+        Action restore = null;
+        var previous = reactions.BeforeAction;
+        reactions.BeforeAction = async (name, ct) =>
+        {
+            if (name == "fight") return;
+            bool changesRoute = name is "nav_to" or "gather" or "mine" or "mine_vein" or "chop_wood" or "use_item"
+                or "place_at" or "act" or "collect_treasure" or "combat_reposition";
+            if (changesRoute && !paused && pause != null) { await pause(ct); paused = true; }
+            if (restore != null) return;
+            while (await NativeAgent.OnMain(() => Main.LocalPlayer.itemAnimation > 0, ct)) await NativeAgent.NextUpdate(ct);
+            restore = await NativeAgent.OnMain(ControlSession.SuspendPrimary, ct);
+        };
+        try
+        {
+            foreach (var notice in notices.OfType<JsonObject>())
+            {
+                long started = Stopwatch.GetTimestamp();
+                var decision = await reactions.Dispatch(notice, token);
+                if (decision?["handled"]?.GetValue<bool>() != true)
+                {
+                    reactions.Remove(notice["kind"].ToString());
+                    await NativeAgent.OnMain(() =>
+                    {
+                        if (notice["kind"]?.ToString() == "tick") Watches.Request("script_tick_requires_review", decision);
+                        else Watches.ReturnToAgent(notice);
+                        return true;
+                    }, token);
+                }
+                DiagLog.Write("[script-reaction] " + new JsonObject { ["kind"] = notice["kind"]?.DeepClone(),
+                    ["elapsed_ms"] = Stopwatch.GetElapsedTime(started).TotalMilliseconds, ["took_control"] = paused,
+                    ["handled"] = decision?["handled"]?.DeepClone() });
+            }
+        }
+        finally
+        {
+            reactions.BeforeAction = previous;
+            if (restore != null) await NativeAgent.OnMain(() => { restore(); return true; }, default);
+            if (paused && resume != null && !token.IsCancellationRequested
+                && !await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token)) await resume(token);
+        }
+    }
+
     static async Task<string> ExecuteCore(string name, JsonObject args, CancellationToken token)
     {
         var before = await NativeAgent.OnMain(() =>
@@ -910,6 +970,8 @@ public static partial class AgentTools
                 return NativeAgent.DescribeApi(args).ToJsonString(ModelJson);
             case "nearby_drops":
                 return new JsonObject { ["drops"] = await NativeAgent.OnMain(() => NearbyDrops.Read(Int(args, "radius", 25)), token) }.ToJsonString();
+            case "combat_assess":
+                return (await NativeAgent.OnMain(() => CombatAssessment(Int(args, "radius", 25)), token)).ToJsonString();
             case "jev_judge":
                 string decisionKey = await NativeAgent.OnMain(() => Config.I.TypeSafeKey?.Trim(), token);
                 return (await ScriptDecision.Judge(HarvestHttp, decisionKey, args, token)).ToJsonString();
@@ -1091,6 +1153,7 @@ public static partial class AgentTools
                     return saved;
                 }, token);
                 Guid eventReader = localEvents ? await NativeAgent.OnMain(Watches.BeginScriptDelivery, token) : Guid.Empty;
+                Guid handlerReader = Guid.NewGuid();
                 Interlocked.Increment(ref executingScripts);
                 long currentInvocation = Interlocked.Increment(ref invocationSequence);
                 try
@@ -1113,11 +1176,13 @@ public static partial class AgentTools
                             return true;
                         }, cleanupToken), token, workflow,
                         localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasRecoveryBlocker ? Watches.Pending(recoveryOnly: true) : null, checkToken),
-                        new ScriptLibrary(System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent", "programs")).Callable(), RecordSkills);
+                        new ScriptLibrary(System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent", "programs")).Callable(), RecordSkills,
+                        kind => NativeAgent.OnMain(() => { Watches.RegisterHandler(handlerReader, kind); return true; }, token).GetAwaiter().GetResult());
                 }
                 finally
                 {
                     Interlocked.Decrement(ref executingScripts);
+                    await NativeAgent.OnMain(() => { Watches.EndHandlers(handlerReader); return true; }, default);
                     if (eventReader != Guid.Empty)
                         await NativeAgent.OnMain(() => { Watches.EndScriptDelivery(eventReader); return true; }, default);
                 }
@@ -1968,7 +2033,21 @@ public static partial class AgentTools
         var progress = new NavigationProgress();
         bool? lastPlanning = null;
         var result = await Wait("/nav_recede_done", "nav", "/nav_recede_stop", seconds, token,
-            elapsed => NativeAgent.OnMain(() =>
+            async elapsed =>
+            {
+                await ReactAtBoundary(token,
+                        async ct =>
+                        {
+                            var stopped = await Call("/nav_recede_stop", null, ct);
+                            if (Rejected(stopped)) throw new InvalidOperationException(stopped.ToJsonString());
+                        },
+                        async ct =>
+                        {
+                            var restarted = await Call("/nav_recede", request, ct);
+                            if (Rejected(restarted)) throw new InvalidOperationException(restarted.ToJsonString());
+                            progress = new NavigationProgress();
+                        });
+                return await NativeAgent.OnMain(() =>
             {
                 var player = Main.LocalPlayer;
                 bool planning = !RecedingNav.FieldReady;
@@ -2005,7 +2084,8 @@ public static partial class AgentTools
                 double distance = Math.Abs(player.Center.X - Int(args, "x") * 16)
                     + Math.Abs(player.Center.Y - Int(args, "y") * 16);
                 return progress.Observe(elapsed, player.position.X, player.position.Y, distance, terrain, planning);
-            }, token));
+                }, token);
+            });
         return await NativeAgent.OnMain(() =>
         {
             var p = Main.LocalPlayer;
@@ -2023,6 +2103,33 @@ public static partial class AgentTools
             if (!Bool(result, "done") && !Rejected(result)) result["error"] = "navigation_incomplete";
             return result;
         }, token);
+    }
+
+    static JsonObject CombatAssessment(int radius)
+    {
+        if (radius is < 1 or > 60) throw new ArgumentException("radius需要1..60格。");
+        var p = Main.LocalPlayer;
+        var targets = Main.npc.Where(n => n != null && n.active && !n.friendly && !n.townNPC && n.life > 0
+            && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) <= radius * 16)
+            .OrderBy(n => Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center)).Take(8);
+        return new JsonObject { ["tick"] = Main.GameUpdateCount, ["recent_damage"] = LastDamage?.DeepClone(),
+            ["player"] = new JsonObject { ["hp"] = p.statLife,
+                ["pos"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y } },
+            ["targets"] = new JsonArray(targets.Select(n => (JsonNode)new JsonObject
+            {
+                ["who"] = n.whoAmI, ["type"] = n.type, ["hp"] = n.life, ["contact_damage"] = n.damage,
+                ["x"] = n.Center.X / 16, ["y"] = n.Center.Y / 16,
+                ["distance_tiles"] = Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) / 16,
+                ["attackable"] = n.CanBeChasedBy(p) && FightCoordinator.TempleTargetAllowed(p, n),
+                ["weapons"] = new JsonArray(p.inventory.Take(10).Select((item, slot) => (item, slot))
+                    .Where(entry => CombatLoadout.Usable(entry.item)).Select(entry => (JsonNode)new JsonObject
+                    {
+                        ["slot"] = entry.slot, ["type"] = entry.item.type, ["damage"] = p.GetWeaponDamage(entry.item),
+                        ["has_ammo"] = entry.item.useAmmo <= 0 || p.HasAmmo(entry.item),
+                        ["mana_available"] = entry.item.mana * p.manaCost <= p.statMana,
+                        ["line_or_reach_passed"] = FightCoordinator.CanHitTarget(p, entry.item, n.Center, n.width / 2f)
+                    }).ToArray())
+            }).ToArray()) };
     }
 
     static async Task<JsonObject> Place(JsonObject args, CancellationToken token)

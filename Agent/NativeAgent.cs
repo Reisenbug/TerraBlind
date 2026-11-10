@@ -194,7 +194,8 @@ public class NativeAgent : ModSystem
             AgentTools.ObserveContinuity();
             AgentTools.LootPassingChest();
         }
-        if (!Main.gameMenu && (AgentTools.Watches.LocalDelivery || _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false)
+        if (!Main.gameMenu && (AgentTools.Watches.LocalDelivery || AgentTools.Watches.HasScriptHandlers
+                || _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false)
             && AgentTools.Watches.Armed && DateTime.UtcNow - _lastWatch >= TimeSpan.FromMilliseconds(250))
         {
             _lastWatch = DateTime.UtcNow;

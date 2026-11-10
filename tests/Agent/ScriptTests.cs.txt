@@ -60,6 +60,9 @@ static class ScriptTests
 
     public static async Task Run()
     {
+        await ReactiveHandlers();
+        await ReactiveTravelExample();
+        await ReactiveHostIntegration();
         var helperProgress = new ScriptProgress();
         var watchProgress = new ScriptProgress();
         var savedWatch = new JsonObject { ["events"] = new JsonArray("nearby_tile", "nearby_chest"),
@@ -960,5 +963,227 @@ static class ScriptTests
         catch (OperationCanceledException) { }
         Check(stopped == 0, "old script cleanup could stop a replacement task after parent cancellation");
         Console.WriteLine("PASS: long game tools outlive legacy script deadlines; parent cancellation still stops execution without stale cleanup");
+    }
+
+    static async Task ReactiveHandlers()
+    {
+        int collected = 0, routes = 0;
+        var progress = new ScriptProgress();
+        async Task<string> Execute(string name, JsonObject args, CancellationToken token)
+        {
+            if (name == "nav_to")
+            {
+                routes++;
+                ActionTasks.NodeContext.Value = "navigation-owner";
+                await Task.Delay(1, token);
+                var decision = await AgentScript.CurrentReactions.Value.Dispatch(
+                    new JsonObject { ["kind"] = "nearby_drop", ["evidence"] = new JsonObject { ["item_type"] = 209 } }, token);
+                Check(decision["handled"].GetValue<bool>(), "local drop handler did not handle the event");
+                return "{\"done\":true}";
+            }
+            Check(name == "pickup" && ActionTasks.NodeContext.Value == "navigation-owner",
+                "reaction lost the suspended action ownership or called an unexpected tool");
+            collected++;
+            return "{\"got\":1}";
+        }
+        const string code = """
+            on('nearby_drop',event=>{
+              step('pickup',()=>tool('pickup',{type:event.evidence.item_type}));
+              return {handled:true};
+            });
+            step('route',()=>tool('nav_to',{x:10,y:20}));
+            return {done:true};
+            """;
+        for (int i = 0; i < 2; i++)
+        {
+            var result = await AgentScript.Run(code, 5, (_, _) => { }, Execute, _ => Task.CompletedTask, default, progress);
+            Check(result["ok"].GetValue<bool>(), "event handler failed inside a running route: " + result);
+        }
+        Check(collected == 1 && routes == 1 && progress.Completed == 1,
+            "reaction checkpoints collided with the main step or replayed a completed route");
+
+        int repaired = 0, tries = 0;
+        var pressure = await AgentScript.Run("""
+            on('action_failed',event=>{
+              if(event.result.error!=='navigation_near_trap') return {retry:false};
+              const r=tool('remove_plate');
+              return {retry:r.removed===true};
+            });
+            return tool('nav_to',{x:10,y:20});
+            """, 5, (_, _) => { }, (name, args, token) => Task.FromResult(name == "remove_plate"
+                ? (++repaired > 0 ? "{\"removed\":true}" : "{}")
+                : (++tries == 1 ? "{\"error\":\"navigation_near_trap\"}" : "{\"done\":true}")),
+            _ => Task.CompletedTask, default);
+        Check(pressure["ok"].GetValue<bool>() && pressure["value"]["done"].GetValue<bool>() && repaired == 1 && tries == 2,
+            "prepared pressure plate repair failed to retry in the same script");
+
+        int observations = 0;
+        var sustained = await AgentScript.Run("on('tick',()=>{let n=0;for(let i=0;i<20;i++)n+=i;tool('get_state');return {handled:true,n};});return tool('nav_to');",
+            5, (_, _) => { }, async (name, args, token) =>
+            {
+                if (name == "get_state") { observations++; return "{}"; }
+                for (int i = 0; i < 1100; i++)
+                    await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject { ["kind"] = "tick" }, token);
+                return "{\"done\":true}";
+            }, _ => Task.CompletedTask, default);
+        Check(sustained["ok"].GetValue<bool>() && observations == 1100 && sustained["reaction_count"].GetValue<int>() == 1100,
+            "routine event handling exhausted the main program budget: " + sustained);
+
+        var watch = new AgentWatch();
+        watch.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") });
+        var reader = Guid.NewGuid(); watch.RegisterHandler(reader, "nearby_chest");
+        watch.Observe(JsonNode.Parse("{\"hp\":100,\"pos\":{\"x\":0,\"y\":0},\"chests\":[{\"x\":1,\"y\":1}]}").AsObject());
+        Check(!watch.HasModelInterrupting && !watch.HasAdvisories && !watch.HasRecoveryBlocker,
+            "script-owned opportunity still interrupted or woke the model");
+        var notice = watch.TakeForScript(new[] { "nearby_chest" })[0].AsObject();
+        watch.ReturnToAgent(notice);
+        Check(watch.HasAdvisories && !watch.HasModelInterrupting,
+            "unhandled opportunity was lost or stopped movement instead of requesting parallel Agent review");
+        watch.EndHandlers(reader);
+        Console.WriteLine("PASS: live JS event handlers preserve action ownership, isolate steps, repair locally and retain unhandled evidence");
+    }
+
+    static async Task ReactiveTravelExample()
+    {
+        var stock = new Dictionary<int, int>();
+        var effects = new List<string>();
+        bool plate = true, full = true, dropJunk = false, thorn = false, blockedEnemy = false;
+        int navStarts = 0;
+        JsonObject Config() => JsonNode.Parse("""
+            {"destination":{"x":100,"y":100},"resources":[
+              {"item_type":331,"count":6,"tile_type":61,"tile_name":"JunglePlants","frame_x":144,"frame_y":0},
+              {"item_type":209,"count":9}],"weapon_order":[3507,65],"trash_types":[2],"drop_types":[3],
+              "max_detour_tiles":8,"health_reserve":100,"contact_pass_types":[69],"allow_trigger_removal":true}
+            """).AsObject();
+        JsonObject Plate() => JsonNode.Parse("{\"x\":12,\"y\":12,\"type\":135,\"frame_x\":0,\"frame_y\":126,\"kind\":\"pressure_plate\"}").AsObject();
+        async Task<string> Execute(string name, JsonObject args, CancellationToken token)
+        {
+            if (name == "get_state") return new JsonObject { ["player"] = JsonNode.Parse("{\"hp\":260,\"pos\":{\"x\":160,\"y\":160}}"),
+                ["agent"] = JsonNode.Parse("{\"auto_attack\":true,\"combat_weapon_type\":0}"),
+                ["inventory_slots"] = new JsonArray(stock.Select(pair => (JsonNode)new JsonObject { ["type"] = pair.Key, ["stack"] = pair.Value }).ToArray()) }.ToJsonString();
+            if (name == "inventory_review") return new JsonObject
+            {
+                ["empty_slots"] = full ? new JsonArray() : new JsonArray(10), ["trash"] = JsonNode.Parse("{\"type\":0,\"prefix\":0,\"stack\":0}"),
+                ["inventory"] = new JsonArray(JsonNode.Parse("{\"slot\":1,\"type\":3509,\"pick\":35,\"stack\":1}"),
+                    new JsonObject { ["slot"] = 2, ["type"] = dropJunk ? 3 : 2, ["prefix"] = 0, ["stack"] = 10 })
+            }.ToJsonString();
+            if (name is "inventory_trash" or "inventory_drop") { full = false; effects.Add(name); return "{}"; }
+            if (name == "inspect_terrain") return new JsonObject { ["trap_tiles"] = plate ? new JsonArray(Plate()) : new JsonArray(),
+                ["player_bounds"] = JsonNode.Parse("{\"left\":10,\"right\":11}"), ["near_body_tiles"] = thorn
+                    ? JsonNode.Parse("[{\"x\":12,\"y\":10,\"type\":69,\"touch_damage\":10,\"in_body\":false}]") : new JsonArray() }.ToJsonString();
+            if (name == "use_item") { plate = false; effects.Add("remove_plate"); return "{\"outcome\":\"removed\"}"; }
+            if (name == "opportunity_assess") return new JsonObject { ["ok"] = true,
+                ["approach_direct_distance"] = args["x"].GetValue<int>() == 90 ? 40 : 2,
+                ["route_relation"] = JsonNode.Parse("{\"extra_direct_distance\":2}"), ["hazards"] = new JsonArray() }.ToJsonString();
+            if (name == "gather")
+            {
+                int type = args["targets"][0]["item_type"].GetValue<int>(); stock[type] = stock.GetValueOrDefault(type) + 1;
+                effects.Add("collect:" + type); return "{\"outcome\":\"enough\"}";
+            }
+            if (name == "nearby_drops") return "{\"drops\":[{\"who\":1,\"generation\":1,\"item_type\":209,\"x\":12,\"y\":12},{\"who\":2,\"generation\":1,\"item_type\":209,\"x\":13,\"y\":12,\"liquid_type\":1,\"liquid_amount\":255},{\"who\":3,\"generation\":1,\"item_type\":8,\"x\":12,\"y\":12}]}";
+            if (name == "collect_treasure") { effects.Add("chest"); return "{\"new_chest_loot_verified\":true}"; }
+            if (name == "combat_assess") return "{\"tick\":100,\"player\":{\"hp\":260,\"pos\":{\"x\":160,\"y\":160}},\"recent_damage\":{\"tick\":99,\"attacker\":{\"npc_index\":1,\"npc_type\":42}},\"targets\":[{\"who\":1,\"type\":42,\"attackable\":true,\"distance_tiles\":5,\"weapons\":[{\"type\":3507,\"has_ammo\":true,\"mana_available\":true,\"line_or_reach_passed\":false},{\"type\":65,\"has_ammo\":true,\"mana_available\":true,\"line_or_reach_passed\":" + (!blockedEnemy ? "true" : "false") + "}]}]}";
+            if (name == "set_combat") { effects.Add(args["auto_attack"].GetValue<bool>() ? "weapon:" + args["weapon_type"] : "no_futile_attack"); return "{}"; }
+            if (name == "act") { effects.Add("pass_thorn"); return "{}"; }
+            if (name == "watch") return "{}";
+            Check(name == "nav_to", "unexpected reactive travel API: " + name);
+            if (++navStarts == 1) return new JsonObject { ["error"] = "navigation_near_trap", ["trap_tiles"] = new JsonArray(Plate()) }.ToJsonString();
+            async Task Send(string kind, string evidence)
+            {
+                var result = await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject { ["kind"] = kind,
+                    ["evidence"] = JsonNode.Parse(evidence) }, token);
+                Check(result["handled"].GetValue<bool>(), "prepared travel policy returned an ordinary event to the model: " + result);
+            }
+            await Send("nearby_tile", "{\"tile_type\":61,\"frame_x\":144,\"frame_y\":0,\"x\":12,\"y\":12}");
+            await Send("nearby_drop", "{\"who\":1,\"generation\":1,\"item_type\":209}");
+            await Send("nearby_chest", "{\"x\":12,\"y\":12}");
+            await Send("nearby_chest", "{\"x\":90,\"y\":90}");
+            await Send("nearby_drop", "{\"who\":2,\"generation\":1,\"item_type\":209}");
+            await Send("nearby_drop", "{\"who\":3,\"generation\":1,\"item_type\":8}");
+            full = dropJunk = true; await Send("inventory_full", "{}");
+            thorn = true; await Send("tick", "{}");
+            thorn = false; blockedEnemy = true; await Send("tick", "{}");
+            return "{\"done\":true}";
+        }
+        string code = "const input=" + Config().ToJsonString() + ";\n" + ScriptLibrary.Example("reactive_travel")["code"];
+        var result = await AgentScript.Run(code, 5, (_, _) => { }, Execute, _ => Task.CompletedTask, default, new ScriptProgress());
+        Check(result["ok"].GetValue<bool>() && result["value"]["done"].GetValue<bool>(), "reactive travel example failed: " + result);
+        Check(effects.SequenceEqual(new[] { "remove_plate", "inventory_trash", "collect:331", "collect:209", "chest", "inventory_drop", "weapon:65", "pass_thorn", "no_futile_attack", "weapon:0" })
+            && navStarts == 2 && stock[331] == 1 && stock[209] == 1,
+            "reactive travel missed a branch, chased an unwanted/lava drop or looted a distant chest: " + string.Join(',', effects));
+        Console.WriteLine("PASS: unchanged travel policy handles spores, stingers, chests, bag trash/drop, plates, thorns and target-aware weapons");
+    }
+
+    static async Task ReactiveHostIntegration()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var http = HttpServerSystem.Handler;
+        var player = Terraria.Main.LocalPlayer;
+        var position = player.position;
+        bool dead = player.dead, suffocating = player.suffocating;
+        int starts = 0, polls = 0, stops = 0;
+        bool readingWhileMoving = false, actingAfterStop = false;
+        string original = null;
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset();
+            player.position = new System.Numerics.Vector2(160, 160); player.dead = player.suffocating = false;
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
+                if (path == "/nav_recede_stop") { stops++; RecedingNav.Active = false; }
+                if (path == "/act") actingAfterStop = !RecedingNav.Active && stops == 1;
+                if (path == "/nav_recede_done")
+                {
+                    polls++;
+                    original ??= AgentTools.Actions.ActiveHandle;
+                    if (polls <= 2) AgentTools.Watches.Emit("nearby_chest", "case:" + polls,
+                        new JsonObject { ["x"] = polls, ["y"] = 10 });
+                    else
+                    {
+                        player.position = new System.Numerics.Vector2(320, 160);
+                        return (200, "{\"done\":true}");
+                    }
+                    if (polls == 2) readingWhileMoving = RecedingNav.Active && stops == 0;
+                    return (200, "{\"done\":false}");
+                }
+                return (200, "{}");
+            };
+            var task = AgentTools.Execute("run_script", new JsonObject { ["workflow"] = "reactive-host-" + Guid.NewGuid().ToString("N"),
+                ["code"] = """
+                    on('nearby_chest',event=>{
+                      if(event.evidence.x===1) tool('inventory_review');
+                      else tool('act',{steps:[{keys:['right'],until:{frames:1}}]});
+                      return {handled:true};
+                    });
+                    tool('watch',{events:['nearby_chest']});
+                    return step('travel',()=>tool('nav_to',{x:20,y:10}));
+                    """ }, default);
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            {
+                Check(timer.Elapsed.TotalSeconds < 10, "reactive host navigation deadlocked");
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+            var result = JsonNode.Parse(await task);
+            Check(result["ok"].GetValue<bool>() && result["value"]["done"].GetValue<bool>()
+                && starts == 2 && readingWhileMoving && actingAfterStop,
+                "production reaction dispatch failed query/movement handoff: " + result + " starts=" + starts + " stops=" + stops);
+            var action = AgentTools.Actions.Summary().First(a => a["handle"]?.ToString() == original);
+            Check(action["attempt"].GetValue<int>() == 1 && action["status"].ToString() == "completed" && !AgentTools.ControlSession.Active,
+                "reaction replaced the original action or leaked its controls");
+
+            var session = new AgentControlSession(new AgentControlPolicy());
+            Check(session.Begin("nav_to", null, out long ticket) == null, "could not acquire test navigation");
+            var restore = session.SuspendPrimary(); session.Reset(); restore();
+            Check(!session.Active, "cancelled reaction restored an obsolete navigation claim");
+            Console.WriteLine("PASS: production navigation keeps moving during observation, hands off effects and resumes the same action without leaked controls");
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Watches.Reset(); AgentTools.Plan.Reset();
+            player.position = position; player.dead = dead; player.suffocating = suffocating;
+            HttpServerSystem.Handler = http; agent.Unload();
+        }
     }
 }

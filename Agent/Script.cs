@@ -11,6 +11,69 @@ namespace TerraBlind;
 
 public static class AgentScript
 {
+    internal static readonly AsyncLocal<Reactions> CurrentReactions = new();
+
+    internal sealed class Reactions
+    {
+        sealed record Request(JsonObject Event, TaskCompletionSource<JsonObject> Completion, ExecutionContext Context);
+        readonly object gate = new();
+        readonly Dictionary<string, Func<JsonObject, JsonObject>> handlers = new();
+        readonly Queue<Request> requests = new();
+        TaskCompletionSource<bool> signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool Handling { get; set; }
+        public Func<string, CancellationToken, Task> BeforeAction;
+        long lastTick;
+        public bool TickDue()
+        {
+            if (Stopwatch.GetElapsedTime(lastTick).TotalMilliseconds < 250) return false;
+            lastTick = Stopwatch.GetTimestamp();
+            return true;
+        }
+        public string[] Kinds { get { lock (gate) return handlers.Keys.ToArray(); } }
+        public bool Has(string kind) { lock (gate) return handlers.ContainsKey(kind); }
+        public void Remove(string kind) { lock (gate) handlers.Remove(kind); }
+        public void Register(string kind, Func<JsonObject, JsonObject> handler)
+        { lock (gate) handlers[kind] = handler; }
+
+        public async Task<JsonObject> Dispatch(JsonObject notice, CancellationToken token)
+        {
+            var completion = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var cancellation = token.Register(() => completion.TrySetCanceled(token));
+            lock (gate) { requests.Enqueue(new Request(notice, completion, ExecutionContext.Capture())); signal.TrySetResult(true); }
+            return await completion.Task;
+        }
+
+        public string Await(Task<string> task)
+        {
+            while (true)
+            {
+                Request request;
+                Task ready;
+                lock (gate)
+                {
+                    request = requests.TryDequeue(out var pending) ? pending : null;
+                    if (requests.Count == 0) signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    ready = signal.Task;
+                }
+                if (request != null)
+                {
+                    if (request.Completion.Task.IsCompleted) continue;
+                    Handling = true;
+                    try
+                    {
+                        ExecutionContext.Run(request.Context, _ => request.Completion.TrySetResult(
+                            handlers[request.Event["kind"].ToString()](request.Event)), null);
+                    }
+                    catch (Exception error) { request.Completion.TrySetException(error); }
+                    finally { Handling = false; }
+                    continue;
+                }
+                if (task.IsCompleted) return task.GetAwaiter().GetResult();
+                Task.WhenAny(task, ready).GetAwaiter().GetResult();
+            }
+        }
+    }
+
     internal static bool PreparationOnly(string source)
     {
         try
@@ -29,7 +92,7 @@ public static class AgentScript
                 {
                     if (call.Arguments.Count > 0 && call.Arguments[0] is Acornima.Ast.StringLiteral name
                         && name.Value is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
-                            or "terrain_map" or "opportunity_assess" or "nearby_drops" or "item_info" or "wiki_search" or "wiki_page"
+                            or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "item_info" or "wiki_search" or "wiki_page"
                             or "recipe" or "script_program" or "find_biome" or "tile_names" or "find_descent" or "descent_route"
                             or "equipment_list" or "inventory_review" or "npc_find" or "npc_drop_sources" or "script_progress" or "script_report") queries++;
                     else dynamicOrAction = true;
@@ -44,6 +107,13 @@ public static class AgentScript
 
     public static void DescribePrograms(JsonArray tools)
     {
+        tools.Add(new JsonObject { ["type"] = "function", ["function"] = new JsonObject
+        {
+            ["name"] = "combat_assess",
+            ["description"] = "只读观察附近普通敌怪和快捷栏武器对各目标的当前检查：距离、接触伤害、可攻击性、弹药、魔力、射界/近战距离。recent_damage为实际最近受伤证据。line_or_reach_passed复用现有战斗检查，不代表弹道一定命中。供脚本选择威胁、武器、继续移动或调整位置。",
+            ["parameters"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject
+                { ["radius"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 60 } } }
+        } });
         var findTiles = tools.First(t => t["function"]?["name"]?.ToString() == "find_tiles")["function"];
         findTiles["parameters"]["properties"]["include_locked"] = new JsonObject { ["type"] = "boolean", ["default"] = false,
             ["description"] = "查箱子时可设true以包含上锁箱；结果locked给出当前锁状态。" };
@@ -164,6 +234,8 @@ public static class AgentScript
         "\n运行约定：源码是同步JS函数体，tool直接返回对象；step保存可独立核验的小效果，跨段变量存于step返回值。"
         + "每step结果限8000字符，return限16000字符；print每条限1000字符，log_truncations记录截断。只返回决策字段，完整执行轨迹按report_id用script_report查询。tool_counts表示请求次数，效果用真实状态核验。"
         + "\nDAG执行：第一步目的地与验收明确后建立最小计划，从ready节点后台启动；最终要求从初始conditions保留，末端包含仍需持有物品。调查、后继script和on_failure在行进期间补齐，前置通过宿主验收后自动派发。依赖表示已验收，输入互斥由执行器管理。"
+        + "\n途中反应：先用on(kind,event=>{...;return {handled:true};})注册本次脚本的处理函数，再执行主任务。watch订阅nearby_tile/nearby_chest/nearby_drop/nearby_npc_killed/inventory_full等现场事件；tick每250ms提供一次本地检查机会，适合检查受伤、威胁和武器，combat_assess提供事实。导航及gather内部导航会执行处理函数，原脚本和主动作句柄保持；只读和背包操作保持路线运行，需要移动/挖掘/放置时交接控制，结束后按当前位置重启原目的地。处理函数可调用tool/skill/step，步骤与主任务隔离。返回handled:false交回Agent；未注册事件沿用原交付。注册仅本次脚本有效，重新执行源码会使用新处理函数。"
+        + "on('action_failed',event=>...)接收tool/args/result；查证并完成修复后返回{retry:true}，宿主仅立即重试原调用一次，原失败保留记录；压力板、背包满等可在本地处理。处理失败返回证据给主脚本或显式decision_point。技能reactive_travel提供机会、背包、压力板、荆棘和战斗策略的可编辑示例。"
         + "task_plan_patch带expected_revision和reason，nodes更新现节点，add_nodes插入机会或恢复节点；保留原意图、workflow、handle和step id。当前片段正常yield后续跑已保存新版本；already_running保留原执行，派发中的handle可为空。"
         + "父脚本运行时由它续接；脚本已退出且主动作独立运行时，action_queue在当前handle后排同节点run_script，args填task_node。"
         + "\n程序与技能：script_program list/get查询现有技能和runtime证据，save/patch修订同一程序，用program、expected_revision、workflow执行。"
@@ -189,7 +261,8 @@ public static class AgentScript
         Action<string, JsonObject> validate,
         Func<string, JsonObject, CancellationToken, Task<string>> execute,
         Func<CancellationToken, Task> stop, CancellationToken token, ScriptProgress progress = null,
-        Func<CancellationToken, Task<JsonObject>> observeEvent = null, JsonArray programs = null, Action<JsonObject> onResult = null)
+        Func<CancellationToken, Task<JsonObject>> observeEvent = null, JsonArray programs = null, Action<JsonObject> onResult = null,
+        Action<string> registerReaction = null)
     {
         if (string.IsNullOrWhiteSpace(source) || source.Length > 16000)
             throw new ArgumentException("code必须是1..16000字符的JavaScript函数体，使用return返回结果。");
@@ -203,6 +276,9 @@ public static class AgentScript
         var skillCalls = new JsonArray();
         var skills = (programs ?? new JsonArray()).ToDictionary(p => p["name"].ToString(), p => p.AsObject());
         int calls = 0;
+        int mainCalls = 0, handlerCalls = 0, reactionCount = 0;
+        ScriptProgress handlerProgress = null;
+        var reactionReports = new Queue<JsonNode>();
         bool inTool = false;
         bool inputEffects = false;
         Exception hostFailure = null;
@@ -224,6 +300,7 @@ public static class AgentScript
                 ["value"] = value, ["tool_calls"] = calls, ["elapsed_ms"] = clock.ElapsedMilliseconds,
                 ["input_effects"] = inputEffects,
                 ["tool_counts"] = toolCounts.DeepClone(),
+                ["reaction_count"] = reactionCount, ["reactions"] = new JsonArray(reactionReports.ToArray()),
                 ["skill_calls"] = skillCalls,
                 ["trace"] = new JsonArray(trace.ToArray()), ["logs"] = logs, ["log_truncations"] = logTruncations,
                 ["failure"] = lastFailure?.DeepClone()
@@ -239,6 +316,8 @@ public static class AgentScript
         {
             return await Task.Run(() =>
             {
+                var reactions = new Reactions();
+                CurrentReactions.Value = reactions;
                 using var engine = new Engine(options =>
                 {
                     options.Strict().LimitMemory(32_000_000).MaxStatements(50000)
@@ -248,6 +327,31 @@ public static class AgentScript
                     options.Constraints.MaxArraySize = 100000;
                     options.Constraints.RegexTimeout = TimeSpan.FromMilliseconds(100);
                 });
+                engine.SetValue("__gameOn", new Action<string, Jint.Native.JsValue>((kind, handler) =>
+                {
+                    if (kind is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "nearby_npc_killed"
+                        or "inventory_full" or "target_acquired" or "low_health" or "honey_slowdown" or "tick" or "action_failed"))
+                        throw new ArgumentException("on不支持此事件：" + kind);
+                    if (reactions.Handling) throw new InvalidOperationException("事件处理期间不能注册处理函数。");
+                    reactions.Register(kind, notice => JsonNode.Parse(engine.Invoke(handler, notice.ToJsonString()).AsString())?.AsObject());
+                    registerReaction?.Invoke(kind);
+                }));
+                engine.SetValue("__gameHandling", new Action<bool, string>((value, facts) =>
+                {
+                    reactions.Handling = value;
+                    if (value)
+                    {
+                        handlerCalls = 0; reactionCount++;
+                        handlerProgress = new ScriptProgress(); handlerProgress.Begin();
+                    }
+                    else if (handlerProgress != null)
+                    {
+                        handlerProgress.End(new JsonObject { ["value"] = JsonNode.Parse(facts) });
+                        reactionReports.Enqueue(handlerProgress.Summary());
+                        if (reactionReports.Count > 8) reactionReports.Dequeue();
+                        handlerProgress = null;
+                    }
+                }));
                 engine.SetValue("__gameTool", new Func<string, string, string>((name, json) =>
                 {
                     budget.Token.ThrowIfCancellationRequested();
@@ -269,7 +373,8 @@ public static class AgentScript
                         else lastFailure["validation_failure"] = validationFailure;
                         throw;
                     }
-                    if (calls >= 100) throw hostFailure = new InvalidOperationException("脚本达到100次工具调用上限。");
+                    if ((reactions.Handling ? handlerCalls++ : mainCalls++) >= 100)
+                        throw hostFailure = new InvalidOperationException("脚本或单次事件处理达到100次工具调用上限。");
                     calls++;
                     string activity = name == "action_control" ? name + "." + args["command"]
                         : name == "script_program" ? name + "." + args["operation"] : name;
@@ -280,8 +385,8 @@ public static class AgentScript
                     long started = clock.ElapsedMilliseconds;
                     inputEffects |= AgentControlSession.ActionTool(name) || name == "control";
                     inTool = true;
-                    string result = execute(name, args, budget.Token).GetAwaiter().GetResult();
-                    progress?.Record(name, args, result);
+                    string result = reactions.Await(execute(name, args, budget.Token));
+                    (reactions.Handling ? handlerProgress : progress)?.Record(name, args, result);
                     inTool = false;
                     JsonObject toolResult = null;
                     try { toolResult = JsonNode.Parse(result) as JsonObject; }
@@ -325,9 +430,9 @@ public static class AgentScript
                     logs.Add(Clip(text ?? "null", 1000));
                 }));
                 engine.SetValue("__stepEnter", new Func<string, string>(id =>
-                    (progress ?? throw new InvalidOperationException("step需要run_script.workflow。 ")).Enter(id).ToJsonString()));
+                    ((reactions.Handling ? handlerProgress : progress) ?? throw new InvalidOperationException("step需要run_script.workflow。 ")).Enter(id).ToJsonString()));
                 engine.SetValue("__stepComplete", new Action<string, string>((id, json) =>
-                    progress.Complete(id, JsonNode.Parse(json)?["value"])));
+                    (reactions.Handling ? handlerProgress : progress).Complete(id, JsonNode.Parse(json)?["value"])));
                 engine.SetValue("__skillEnter", new Func<string, string, string, int>((name, input, key) =>
                 {
                     budget.Token.ThrowIfCancellationRequested();
@@ -353,18 +458,39 @@ public static class AgentScript
                     System.Text.Json.JsonSerializer.Serialize(pair.Key) + ":{revision:" + pair.Value["revision"]
                     + ",run:function(input){\n" + pair.Value["code"].ToString() + "\n}}"));
                 string wrapper = """
-                    (function(call, log, enter, complete, enterSkill, exitSkill) {
+                    (function(call, log, enter, complete, enterSkill, exitSkill, register, setHandling) {
                         delete globalThis.__gameTool;
                         delete globalThis.__gamePrint;
                         delete globalThis.__stepEnter;
                         delete globalThis.__stepComplete;
                         delete globalThis.__skillEnter;
                         delete globalThis.__skillExit;
+                        delete globalThis.__gameOn;
+                        delete globalThis.__gameHandling;
                         const stringify = JSON.stringify;
                         const parse = JSON.parse;
+                        const handlers = new Map();
+                        let handling = false;
+                        const dispatch = event => {
+                            handling = true;
+                            setHandling(true, '{}');
+                            let value;
+                            try { value = handlers.get(event.kind)(event); return value; }
+                            finally { handling = false; setHandling(false, stringify(value) ?? '{}'); }
+                        };
+                        const on = (kind, handler) => {
+                            if (typeof handler !== 'function') throw new Error('on需要事件名和处理函数');
+                            handlers.set(kind, handler);
+                            register(kind, json => stringify(dispatch(parse(json))) ?? '{}');
+                        };
                         const tool = (name, args = {}) => {
                             if (name === 'step') throw new Error('step是JS内置函数，不是游戏API。请直接写step(id, () => valueOrAction)，不要写tool("step", ...)。修正调用并沿用原workflow，已完成步骤不会重做。');
-                            const result = parse(call(name, stringify(args)));
+                            let result = parse(call(name, stringify(args)));
+                            if (!handling && handlers.has('action_failed') && result &&
+                                (result.error || result.ok === false || ['interrupted','interrupted_by_death','no_progress','inventory_full'].includes(result.outcome))) {
+                                const decision = dispatch({kind:'action_failed',tool:name,args,result});
+                                if (decision?.retry === true) result = parse(call(name, stringify(args)));
+                            }
                             if (name !== 'get_state' || result === null || typeof result !== 'object') return result;
                             return new Proxy(result, {
                                 get(target, key, receiver) {
@@ -416,7 +542,7 @@ public static class AgentScript
                         if (value && typeof value.then === 'function') throw new Error('使用同步tool调用，不支持Promise返回');
                         const result = stringify({value});
                         return result;
-                    })(__gameTool, __gamePrint, __stepEnter, __stepComplete, __skillEnter, __skillExit)
+                    })(__gameTool, __gamePrint, __stepEnter, __stepComplete, __skillEnter, __skillExit, __gameOn, __gameHandling)
                     """;
                 var output = engine.Evaluate(wrapper).AsString();
                 if (hostFailure != null) throw hostFailure;

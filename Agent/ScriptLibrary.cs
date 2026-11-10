@@ -10,7 +10,7 @@ public sealed class ScriptLibrary
     static readonly object gate = new();
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -20,6 +20,129 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "reactive_travel") return Template(name,
+            "途中事件策略示例。input提供destination、resources（item_type/count/tile_type/tile_name及可选frame_x/frame_y）、weapon_order、trash_types/drop_types、max_detour_tiles、health_reserve、contact_pass_types、allow_trigger_removal。资源编号与来源由Agent提前查证，丢弃名单由任务需要决定。注册on后执行原导航；处理机会、背包、压力板、可承受的植物接触伤害和当前威胁，处理后继续原目的地。近距与直线绕行量是本示例的可改策略，实际路线仍由导航验证。",
+            """
+            const config=typeof input==='undefined'?null:input;
+            if(!config?.destination||!Array.isArray(config.resources)||!Array.isArray(config.weapon_order)
+                ||!Number.isFinite(config.max_detour_tiles)||!Number.isFinite(config.health_reserve))
+              throw new Error('Fill destination, resources, weapon_order, max_detour_tiles and health_reserve');
+            const handled=()=>({handled:true});
+            const state=()=>tool('get_state');
+            const originalCombat=state().agent;
+            const count=type=>state().inventory_slots.filter(i=>i.type===type).reduce((n,i)=>n+i.stack,0);
+            const same=(a,b)=>a.x===b.x&&a.y===b.y&&a.type===b.type&&a.frame_x===b.frame_x&&a.frame_y===b.frame_y;
+            const protectedTypes=new Set([...config.resources.map(r=>r.item_type),...config.weapon_order,...(config.protected_types??[])]);
+            const makeSpace=()=>{
+              const bag=tool('inventory_review');
+              if(bag.empty_slots.length) return true;
+              for(const item of bag.inventory){
+                if(item.favorited||item.pick||item.axe||item.hammer||protectedTypes.has(item.type)) continue;
+                const expected={type:item.type,prefix:item.prefix,stack:item.stack};
+                let result;
+                if((config.trash_types??[]).includes(item.type)
+                    &&(bag.trash.type===0||(config.trash_types??[]).includes(bag.trash.type)))
+                  result=tool('inventory_trash',{slot:item.slot,expected,expected_trash:bag.trash});
+                else if((config.drop_types??[]).includes(item.type))
+                  result=tool('inventory_drop',{slot:item.slot,expected});
+                else continue;
+                if(!result.error) return tool('inventory_review').empty_slots.length>0;
+              }
+              return false;
+            };
+            const worthwhile=point=>{
+              const a=tool('opportunity_assess',{x:point.x,y:point.y,destination:config.destination});
+              if(!a.ok||a.approach_direct_distance>config.max_detour_tiles
+                  ||(a.route_relation?.extra_direct_distance??Infinity)>config.max_detour_tiles) return false;
+              return !a.hazards.some(h=>h.on_direct_corridor&&['lava','falling_block','trap_tile'].includes(h.kind));
+            };
+            const collect=(resource,point,drop)=>{
+              if(count(resource.item_type)>=resource.count||!worthwhile(point)) return handled();
+              if(!makeSpace()) return {handled:false,reason:'inventory_policy_needs_review'};
+              const target={item_type:resource.item_type,count:Math.min(resource.count,count(resource.item_type)+1)};
+              if(!drop){
+                target.tile_names=[resource.tile_name];
+                if(resource.frame_x!=null) target.tile_frame_x=resource.frame_x;
+                if(resource.frame_y!=null) target.tile_frame_y=resource.frame_y;
+              }
+              const r=tool('gather',{targets:[target],source_area:{x:point.x-2,y:point.y-2,width:6,height:6}});
+              return {handled:r.outcome==='enough',result:r.outcome};
+            };
+            on('nearby_tile',event=>{
+              const tile=event.evidence;
+              const resource=config.resources.find(r=>r.tile_type===tile.tile_type
+                &&(r.frame_x==null||r.frame_x===tile.frame_x)&&(r.frame_y==null||r.frame_y===tile.frame_y));
+              return resource?collect(resource,tile,false):handled();
+            });
+            on('nearby_drop',event=>{
+              const observed=event.evidence;
+              const drop=tool('nearby_drops',{radius:60}).drops.find(d=>d.who===observed.who
+                &&d.generation===observed.generation&&d.item_type===observed.item_type);
+              if(!drop||drop.liquid_type===1&&drop.liquid_amount>0) return handled();
+              const resource=config.resources.find(r=>r.item_type===drop.item_type);
+              return resource?collect(resource,drop,true):handled();
+            });
+            on('nearby_chest',event=>{
+              if(!worthwhile(event.evidence)) return handled();
+              if(!makeSpace()) return {handled:false,reason:'inventory_policy_needs_review'};
+              const r=tool('collect_treasure',{x:event.evidence.x,y:event.evidence.y});
+              return {handled:r.new_chest_loot_verified===true};
+            });
+            on('inventory_full',()=>({handled:makeSpace()}));
+            on('action_failed',event=>{
+              if(event.result.outcome==='inventory_full') return {retry:makeSpace()};
+              const nav=event.result.last_result?.result?.navigation??event.result.navigation??event.result;
+              const traps=nav.trap_tiles;
+              if(nav.error!=='navigation_near_trap'||!config.allow_trigger_removal
+                  ||!traps?.length||traps.some(t=>t.kind!=='pressure_plate')) return {retry:false};
+              const pick=tool('inventory_review').inventory.filter(i=>i.pick>0).sort((a,b)=>b.pick-a.pick)[0];
+              if(!pick) return {retry:false};
+              for(const trap of traps){
+                if(!tool('inspect_terrain').trap_tiles.some(t=>same(t,trap))) return {retry:false};
+                const r=tool('use_item',{slot:pick.slot,x:trap.x,y:trap.y});
+                if(r.outcome!=='removed'||tool('inspect_terrain').trap_tiles.some(t=>same(t,trap))) return {retry:false};
+              }
+              return {retry:true};
+            });
+            let combatChoice='';
+            on('tick',()=>{
+              const combat=tool('combat_assess',{radius:25});
+              const attacker=combat.recent_damage?.attacker;
+              const recent=attacker&&combat.tick-combat.recent_damage.tick<=120;
+              const threats=combat.targets.filter(n=>n.attackable&&(n.distance_tiles<=8
+                ||recent&&n.who===attacker.npc_index&&n.type===attacker.npc_type));
+              threats.sort((a,b)=>(recent&&a.who===attacker.npc_index?-1:0)-(recent&&b.who===attacker.npc_index?-1:0)
+                ||a.distance_tiles-b.distance_tiles);
+              let choice=null;
+              for(const target of threats){
+                const weapon=config.weapon_order.map(type=>target.weapons.find(w=>w.type===type
+                  &&w.has_ammo&&w.mana_available&&w.line_or_reach_passed)).find(Boolean);
+                if(weapon){choice={target,weapon};break;}
+              }
+              const key=choice?choice.weapon.type+':'+choice.target.who:'none';
+              if(key!==combatChoice){
+                const r=tool('set_combat',choice?{auto_attack:true,weapon_type:choice.weapon.type}:{auto_attack:false});
+                if(r.error) return {handled:false,reason:r.error};
+                combatChoice=key;
+              }
+              const terrain=tool('inspect_terrain');
+              const thorn=terrain.near_body_tiles.find(t=>(config.contact_pass_types??[]).includes(t.type)
+                &&t.touch_damage>0&&(t.in_body||t.x===terrain.player_bounds.right+1&&config.destination.x>t.x
+                  ||t.x===terrain.player_bounds.left-1&&config.destination.x<t.x));
+              if(thorn&&combat.player.hp-thorn.touch_damage>=config.health_reserve){
+                const direction=config.destination.x>=combat.player.pos.x/16?'right':'left';
+                const r=tool('act',{steps:[{keys:[direction],until:{frames:6}}]});
+                if(r.error) return {handled:false,reason:r.error};
+              }
+              return handled();
+            });
+            const tileTypes=[...new Set(config.resources.map(r=>r.tile_type).filter(Number.isInteger))];
+            tool('watch',{events:[...(tileTypes.length?['nearby_tile']:[]),'nearby_drop','nearby_chest','inventory_full'],
+              tile_types:tileTypes,
+              radius:25,loot_chests_in_reach:true});
+            try { return step('travel',()=>tool('nav_to',config.destination)); }
+            finally { tool('set_combat',{auto_attack:originalCombat.auto_attack,weapon_type:originalCombat.combat_weapon_type}); }
+            """);
         if (name == "gather_route") return Template(name,
             "参数化采集与来源暂时不可见的续接示例。保存后通过skill调用，input包含gather_args和当前世界查证的waypoints（最多8项，每项x/y及可选mode/source_area）。先收集当前位置可用来源，未达到真实库存目标且当前来源耗尽时，立即前往下一个预备位置并继续；其他失败保留证据交回。DAG按真实条件完成验收。",
             """

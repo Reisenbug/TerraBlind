@@ -8,6 +8,7 @@ public sealed class AgentControlSession
 {
     readonly AgentControlPolicy policy;
     long sequence, current;
+    int resetGeneration;
     string tool, claim;
     long attackTicket;
     string attackClaim;
@@ -120,7 +121,23 @@ public sealed class AgentControlSession
         current = 0; tool = claim = null; delegates = Array.Empty<ControlBehavior>();
     }
 
-    public void Reset() { End(current); End(attackTicket); sequence++; releasedAt = releasedScript = scriptInvocation = 0; releasedTool = null; }
+    internal Action SuspendPrimary()
+    {
+        long saved = current, savedScript = scriptInvocation;
+        int generation = resetGeneration;
+        string savedTool = tool, savedClaim = claim;
+        var savedDelegates = delegates;
+        current = 0; tool = claim = null; delegates = Array.Empty<ControlBehavior>();
+        return () =>
+        {
+            if (generation != resetGeneration) return;
+            if (current != 0) throw new InvalidOperationException("事件动作尚未释放控制权。");
+            current = saved; scriptInvocation = savedScript;
+            tool = savedTool; claim = savedClaim; delegates = savedDelegates;
+        };
+    }
+
+    public void Reset() { End(current); End(attackTicket); sequence++; resetGeneration++; releasedAt = releasedScript = scriptInvocation = 0; releasedTool = null; }
     public JsonObject Snapshot() => new()
     {
         ["tool"] = tool, ["claim"] = claim, ["execution"] = current,

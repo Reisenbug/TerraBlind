@@ -20,6 +20,7 @@ public sealed class GameGather : IGatherWorld
 
     public async Task<JsonObject> Observe(CancellationToken token)
     {
+        await AgentTools.ReactAtBoundary(token);
         var scene = await NativeAgent.OnMain(() =>
         {
             var p = Main.LocalPlayer;

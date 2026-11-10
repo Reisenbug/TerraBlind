@@ -30,6 +30,28 @@ public sealed class AgentWatch
     int issued, wakeCount;
     bool localDelivery;
     readonly HashSet<Guid> scriptReaders = new();
+    readonly Dictionary<Guid, HashSet<string>> scriptHandlers = new();
+    internal bool HasScriptHandlers => scriptHandlers.Count > 0;
+    internal void RegisterHandler(Guid reader, string kind)
+    {
+        if (!scriptHandlers.TryGetValue(reader, out var kinds)) scriptHandlers[reader] = kinds = new();
+        kinds.Add(kind);
+    }
+    internal void EndHandlers(Guid reader) => scriptHandlers.Remove(reader);
+    bool HandledByScript(JsonObject notice) => scriptHandlers.Values.Any(kinds => kinds.Contains(notice["kind"]?.ToString()));
+    internal JsonArray TakeForScript(string[] kinds) => TakeMatching(1, notice => kinds.Contains(notice["kind"]?.ToString()));
+    internal void ReturnToAgent(JsonObject notice)
+    {
+        string kind = notice["kind"]?.ToString();
+        foreach (var kinds in scriptHandlers.Values) kinds.Remove(kind);
+        if (kind is "nearby_tile" or "nearby_chest" or "nearby_drop")
+        {
+            passive.Add(kind); background.Add(kind);
+            notice["wake_deferred"] = false;
+            nextOpportunityReview = clock();
+        }
+        pending.Enqueue(notice);
+    }
     public Guid BeginScriptDelivery()
     {
         var reader = Guid.NewGuid();
@@ -79,10 +101,10 @@ public sealed class AgentWatch
     public int PendingCount => pending.Count;
     public bool HasInterrupting => pending.Any(Interrupting);
     internal bool HasModelInterrupting => pending.Any(ModelInterrupting);
-    bool ModelInterrupting(JsonObject e) => Interrupting(e)
+    bool ModelInterrupting(JsonObject e) => !HandledByScript(e) && Interrupting(e)
         && (!LocalDelivery || e["kind"]?.ToString() is not ("nearby_tile" or "nearby_chest" or "nearby_drop"));
     internal bool HasRecoveryBlocker => pending.Any(RecoveryBlocker);
-    bool RecoveryBlocker(JsonObject e) => e["kind"]?.ToString() != "execution_gap" && Interrupting(e);
+    bool RecoveryBlocker(JsonObject e) => !HandledByScript(e) && e["kind"]?.ToString() != "execution_gap" && Interrupting(e);
     bool Interrupting(JsonObject e) => e["wake_deferred"]?.GetValue<bool>() != true
         && e["kind"]?.ToString() != "low_health"
         && e["kind"]?.ToString() != "honey_slowdown"
@@ -382,6 +404,7 @@ public sealed class AgentWatch
 
     bool IsAdvisory(JsonObject item)
     {
+        if (HandledByScript(item)) return false;
         string kind = item["kind"]?.ToString();
         if (kind is "nearby_chest" or "nearby_tile" or "nearby_drop"
             && (clock() < nextOpportunityReview || item["wake_deferred"]?.GetValue<bool>() == true)) return false;
@@ -473,6 +496,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); background.Clear(); advised.Clear(); verifiedCompletions.Clear(); continuedAttempts.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; nextOpportunityReview = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; honeySince = null; }
-    public void End() { events.Clear(); pending.Clear(); LootChestsInReach = false; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); background.Clear(); advised.Clear(); verifiedCompletions.Clear(); continuedAttempts.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); scriptHandlers.Clear(); issued = wakeCount = samples = 0; nextOpportunityReview = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; honeySince = null; }
+    public void End() { events.Clear(); pending.Clear(); scriptHandlers.Clear(); LootChestsInReach = false; }
 }
