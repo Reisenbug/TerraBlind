@@ -16,6 +16,33 @@ using Game = Terraria.Main;
 static class RuntimeTests
 {
     static readonly NativeAgent Agent = new();
+    static void TestPassiveOpportunityWake()
+    {
+        long now = 0;
+        var watch = new AgentWatch(clock: () => now);
+        watch.Configure(JsonNode.Parse("""
+            {"events":["nearby_tile","nearby_chest"],"tile_types":[61],"passive_events":["nearby_tile","nearby_chest"]}
+            """).AsObject());
+        for (int i = 0; i < 30; i++)
+        {
+            watch.Emit("nearby_tile", "61:" + i + ",10", new JsonObject { ["tile_type"] = 61, ["x"] = i, ["y"] = 10 });
+            now += 15000;
+            Check(!watch.HasAdvisories && !watch.HasInterrupting,
+                "record-only plant notifications requested model turns or interrupted action");
+        }
+        Check(watch.PendingCount == 30 && watch.Advisories().Count == 4 && watch.PendingCount == 30,
+            "record-only opportunities were dropped instead of remaining available to scripts and active model turns");
+        watch.Configure(JsonNode.Parse("""
+            {"events":["nearby_tile","nearby_chest"],"tile_types":[61],"passive_events":["nearby_tile"],"background_events":["nearby_chest"]}
+            """).AsObject());
+        watch.Emit("nearby_chest", "1,2", new JsonObject { ["x"] = 1, ["y"] = 2 });
+        Check(watch.HasAdvisories && !watch.HasInterrupting, "explicit background opportunity review paused input or failed to wake the model");
+        var automatic = new AgentWatch(); automatic.EnsureDefaults();
+        automatic.Emit("nearby_chest", "3,4", new JsonObject { ["x"] = 3, ["y"] = 4 });
+        Check(automatic.HasAdvisories && !automatic.HasInterrupting, "default chest background observation was lost");
+        Console.WriteLine("PASS: record-only opportunities preserve evidence without model wakes, while explicit/default background review keeps input running");
+    }
+
     static async Task TestGapContinuation()
     {
         Agent.Load();
@@ -300,7 +327,7 @@ static class RuntimeTests
         long now = 1000;
         var local = new AgentWatch(clock: () => now);
         local.Configure(new JsonObject { ["events"] = new JsonArray("nearby_tile"),
-            ["tile_types"] = new JsonArray(1), ["passive_events"] = new JsonArray("nearby_tile"), ["radius"] = 25 });
+            ["tile_types"] = new JsonArray(1), ["background_events"] = new JsonArray("nearby_tile"), ["radius"] = 25 });
         JsonObject Position(int x) => new() { ["pos"] = new JsonObject { ["x"] = x * 16, ["y"] = 0 } };
         local.Observe(Position(0));
         local.Emit("nearby_tile", "old-local-cell", new JsonObject { ["x"] = 2, ["y"] = 2 });
@@ -981,6 +1008,7 @@ static class RuntimeTests
     public static async Task Run()
     {
         TestHoneyNotice();
+        TestPassiveOpportunityWake();
         TestInventoryNotice();
         TestActionNotices();
         await TestGapContinuation();

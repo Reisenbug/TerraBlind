@@ -21,6 +21,7 @@ public sealed class AgentWatch
     readonly HashSet<string> visibleBosses = new();
     readonly HashSet<int> tileTypes = new();
     readonly HashSet<string> passive = new();
+    readonly HashSet<string> background = new();
     readonly HashSet<int> advised = new();
     readonly HashSet<string> verifiedCompletions = new();
     readonly HashSet<string> continuedAttempts = new();
@@ -105,6 +106,7 @@ public sealed class AgentWatch
         {
             events.Add("nearby_chest");
             passive.Add("nearby_chest");
+            background.Add("nearby_chest");
         }
     }
 
@@ -194,7 +196,11 @@ public sealed class AgentWatch
         var passiveEvents = args["passive_events"]?.AsArray().Select(x => x.GetValue<string>()).ToArray() ?? Array.Empty<string>();
         if (passiveEvents.Any(x => !requested.Contains(x) || x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "target_acquired" or "low_health" or "honey_slowdown")))
             throw new ArgumentException("passive_events仅支持已订阅的nearby_tile/nearby_chest/nearby_drop/target_acquired/low_health/honey_slowdown；low_health与honey_slowdown始终只通知，不暂停动作。");
-        passive.Clear(); passive.UnionWith(passiveEvents);
+        var backgroundEvents = args["background_events"]?.AsArray().Select(x => x.GetValue<string>()).ToArray() ?? Array.Empty<string>();
+        if (backgroundEvents.Any(x => !requested.Contains(x) || x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "target_acquired")))
+            throw new ArgumentException("background_events仅支持已订阅的nearby_tile/nearby_chest/nearby_drop/target_acquired。");
+        passive.Clear(); passive.UnionWith(passiveEvents); passive.UnionWith(backgroundEvents);
+        background.Clear(); background.UnionWith(backgroundEvents);
         LootChestsInReach = requested.Contains("nearby_chest")
             && (args["loot_chests_in_reach"]?.GetValue<bool>() ?? LootChestsInReach);
         currentChestTarget = null;
@@ -368,7 +374,7 @@ public sealed class AgentWatch
                 ["key"] = item["key"]?.DeepClone(), ["evidence"] = item["evidence"]?.DeepClone(),
                 ["navigation"] = item["navigation"]?.DeepClone() });
         }
-        if (result.Any(item => item["kind"]?.ToString() is "nearby_chest" or "nearby_tile" or "nearby_drop"))
+        if (result.Any(item => item["kind"]?.ToString() is "nearby_chest" or "nearby_tile" or "nearby_drop" && WakesModel(item)))
             nextOpportunityReview = clock() + 15000;
         return result;
     }
@@ -390,11 +396,13 @@ public sealed class AgentWatch
         return !advised.Contains(item["id"].GetValue<int>())
             && (kind is "nearby_chest" or "nearby_tile" or "nearby_drop" or "honey_slowdown" or "inventory_full"
                 || item["wake_deferred"]?.GetValue<bool>() != true
-                    && (kind == "target_acquired" && !passive.Contains(kind)
+                    && (kind == "target_acquired" && (!passive.Contains(kind) || background.Contains(kind))
                         || kind == "action_finished" && item["evidence"]?["status"]?.ToString() == "failed"));
     }
 
-    internal bool HasAdvisories => !LocalDelivery && pending.Any(IsAdvisory);
+    bool WakesModel(JsonNode item) => item["kind"]?.ToString() is not ("nearby_chest" or "nearby_tile" or "nearby_drop")
+        || !passive.Contains(item["kind"].ToString()) || background.Contains(item["kind"].ToString());
+    internal bool HasAdvisories => !LocalDelivery && pending.Any(item => IsAdvisory(item) && WakesModel(item));
 
     public JsonObject Reconsider(string kind, string key, string reason)
     {
@@ -435,6 +443,7 @@ public sealed class AgentWatch
     {
         ["loot_chests_in_reach"] = LootChestsInReach,
         ["passive_events"] = new JsonArray(passive.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
+        ["background_events"] = new JsonArray(background.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["tile_types"] = new JsonArray(tileTypes.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = wakeCount, ["wake_limit"] = 6, ["event_count"] = issued,
@@ -453,6 +462,7 @@ public sealed class AgentWatch
     {
         ["loot_chests_in_reach"] = LootChestsInReach,
         ["passive_events"] = new JsonArray(passive.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
+        ["background_events"] = new JsonArray(background.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["tile_types"] = new JsonArray(tileTypes.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = wakeCount, ["wake_limit"] = 6, ["event_count"] = issued,
@@ -462,6 +472,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); advised.Clear(); verifiedCompletions.Clear(); continuedAttempts.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; nextOpportunityReview = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; honeySince = null; }
+    { events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); background.Clear(); advised.Clear(); verifiedCompletions.Clear(); continuedAttempts.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); issued = wakeCount = samples = 0; nextOpportunityReview = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; honeySince = null; }
     public void End() { events.Clear(); pending.Clear(); LootChestsInReach = false; }
 }

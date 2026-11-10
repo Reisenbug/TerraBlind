@@ -452,7 +452,7 @@ static class CodexTests
             Check(action["status"].ToString() == "running" && action["attempt"].GetValue<int>() == 1,
                 "background review paused or restarted navigation");
             AgentTools.Watches.Configure(new JsonObject { ["events"] = new JsonArray("nearby_tile", "low_health", "nearby_chest"),
-                ["tile_types"] = new JsonArray(61), ["passive_events"] = new JsonArray("nearby_chest") });
+                ["tile_types"] = new JsonArray(61), ["background_events"] = new JsonArray("nearby_chest") });
             var localReader = AgentTools.Watches.BeginScriptDelivery();
             AgentTools.Watches.Emit("nearby_tile", "script-owned-plant", new JsonObject { ["tile_type"] = 61 });
             var quietUntil = DateTime.UtcNow.AddSeconds(60);
@@ -466,6 +466,17 @@ static class CodexTests
             Check(AgentTools.Actions.ActiveHandle == handle && AgentTools.Watches.PendingCount == 1,
                 "model loop paused script-owned movement or consumed its event queue");
             AgentTools.Watches.Take(); AgentTools.Watches.EndScriptDelivery(localReader);
+            AgentTools.Watches.Configure(new JsonObject { ["events"] = new JsonArray("nearby_tile", "low_health", "nearby_chest"),
+                ["tile_types"] = new JsonArray(61), ["passive_events"] = new JsonArray("nearby_tile"),
+                ["background_events"] = new JsonArray("nearby_chest") });
+            for (int i = 0; i < 3; i++) AgentTools.Watches.Emit("nearby_tile", "passive-plant-" + i,
+                new JsonObject { ["tile_type"] = 61 });
+            var passiveUntil = DateTime.UtcNow.AddMilliseconds(700);
+            while (DateTime.UtcNow < passiveUntil)
+            { AdvanceMovement(); native.PostUpdateEverything(); await Task.Delay(5); }
+            Check(server.Inputs.Count == 2 && AgentTools.Actions.ActiveHandle == handle && AgentTools.Watches.PendingCount == 3,
+                "record-only plants woke the native model loop, interrupted navigation or lost their pending evidence");
+            AgentTools.Watches.Take();
             async Task Pump(Task work)
             {
                 var until = DateTime.UtcNow.AddSeconds(3);

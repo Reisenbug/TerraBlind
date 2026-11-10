@@ -176,6 +176,7 @@ public static class AgentScript
         + "DAG或普通JS可直接skill(name,expected_revision,input,key)调用已保存技能。技能函数体通过input读取本次参数，共用tool/print/step、权限、语句和100次工具调用预算。key为本次逻辑调用的稳定标识，内部step按key隔离；不同目标使用不同key。先get核对版本，参数来自当前世界观察。脚本启动时固定技能版本，修改在下一段脚本生效。skill_calls由宿主记录实际调用版本、源码哈希、参数和耗时；returned仅表示函数返回，效果仍由游戏状态验收。"
         + "将script_program作为可持续积累的技能库：任务开始先list并get相关技能，优先复用适用的已保存程序。把重复的行进、短支线采集和恢复行为抽成参数化JS；源码写明适用条件、配置、完成证据和失败返回。宿主自动记录各版本的真实调用、耗时、返回状态和工具失败，list给当前版统计，get给最近6版、每版4条现场记录。结合runtime和本轮实际效果决定复用或修订同一技能；returned只表示函数返回。利用行进期间分析失败并patch，下一段用新版本执行。下次调用的坐标和句柄来自当前世界观察。"
         + "长导航写入节点script，以run_script({task_node:id,background:true})启动，立即使用宿主返回的句柄进行并行观察和后续准备。后台脚本顺序调用动作，连续主路线串联已查证路点；普通机会通过passive_events观察，由策略决定插入行动，短程躲避由独立实时控制器响应。"
+        + "watch.passive_events只记录机会；需要行进期间唤醒模型评估的类型放background_events，宿主保持原动作。普通未确认环境物件可先记录，通过script_events或其他有效轮次读取；确认收益与条件后再调整观察策略。"
         + "赶路期间为当前节点补齐on_failure恢复代码，提前处理可预见的局部故障。宿主在失败后直接执行已准备代码，failure包含原动作完整结果；局部修复核验后在同段JS恢复原handle。可从recover_pressure_plate示例按实际权限和工具配置准备机关恢复。"
         + "永久生命上限低于160时，生命水晶具有更高优先级；获得后及时使用并核对永久上限增加，除非玩家明确要求保留。优先级不代表无视地形或为遥远水晶无限绕路。"
         + "workflow.watch_policy保留该工作流最后成功设置的watch参数，是历史策略而非当前生效状态。续接先对照get_state.watch，按当前目标选择恢复或修改观察范围；需要恢复时用tool('watch', policy)，不会自动覆盖你新设的策略。"
