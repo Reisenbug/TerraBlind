@@ -261,6 +261,9 @@ static class CodexTests
         Task Run() => agent.RunAsync("continue", "mock", "/tmp", "", "game", Tools,
             (_, _, _) => Task.FromResult("{}"), _ => { }, default, options);
         await Run();
+        Check(server.ThreadArgs["serviceTier"]?.ToString() == "fast"
+            && server.ThreadArgs["config"]?["features.fast_mode"]?.GetValue<bool>() == true,
+            "game agent did not explicitly request Fast mode on its own thread");
         Check(server.ThreadArgs["dynamicTools"][0]["description"].ToString().Contains("JSON文本(string)")
             && server.ThreadArgs["developerInstructions"].ToString().Contains("JSON.parse(await tools.get_state({}))"),
             "short transport hints lost the outer string/in-game object distinction");
