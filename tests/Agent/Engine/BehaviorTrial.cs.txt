@@ -561,6 +561,7 @@ public sealed class BehaviorTrial : ModSystem
     }
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CONSUMABLE_HANDOFF_PROBE") == "1") { await ConsumableHandoffTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_DESERT_CONTACT_PROBE") == "1") { await DesertContactTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_NATIVE_REJECTION_NATURAL") == "1") { await NativeRejectionNaturalTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_NATIVE_REJECTION_PROBE") == "1") { await NativeRejectionTrial(); return; }
@@ -2991,6 +2992,59 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("edited program replayed the original task or did not use revision 2");
             return true;
         });
+    }
+
+    async Task ConsumableHandoffTrial()
+    {
+        var results = new JsonArray();
+        foreach (bool mining in new[] { false, true })
+        {
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); Manual.On = false; AgentPermissions.Reset();
+                Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                Combat.Enabled = Dodge.Enabled = Concessions.Enabled = false;
+                var p = Main.LocalPlayer;
+                int cx = Main.spawnTileX, floor = Main.spawnTileY + 2;
+                for (int x = cx - 12; x <= cx + 12; x++)
+                for (int y = floor - 8; y <= floor + 2; y++)
+                {
+                    var tile = Main.tile[x, y]; tile.ClearEverything();
+                    if (y >= floor) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+                }
+                var stone = Main.tile[cx + 3, floor - 2]; stone.HasTile = true; stone.TileType = TileID.Stone;
+                p.Teleport(new Vector2(cx * 16, floor * 16 - p.height)); p.velocity = Vector2.Zero;
+                p.ConsumedLifeCrystals = 0; p.statLife = p.statLifeMax = p.statLifeMax2 = 100;
+                p.itemAnimation = p.itemTime = 0; p.releaseUseItem = true;
+                foreach (var item in p.inventory) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.LifeCrystal); p.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+                p.selectedItem = 1; sourceInputSamples.Clear(); samplingSources = true;
+                if (mining) ItemUseCoordinator.Start(new ItemUseRequest { Slot = 1, TargetWx = cx + 3, TargetWy = floor - 2, Strict = true });
+                return true;
+            });
+            var clock = Stopwatch.StartNew();
+            if (mining)
+                while (!await OnMain(() => Main.LocalPlayer.itemAnimation > 0))
+                {
+                    if (clock.ElapsedMilliseconds > 3000) throw new Exception("native mining animation never started");
+                    await Task.Delay(5);
+                }
+            var animation = await OnMain(() =>
+            { ItemUseCoordinator.Stop(); return Main.LocalPlayer.itemAnimation; });
+            var used = await Call("use_item", new JsonObject { ["slot"] = 0,
+                ["x"] = Main.spawnTileX, ["y"] = Main.spawnTileY, ["duration_ticks"] = 30 });
+            var state = await Call("get_state", new JsonObject());
+            await OnMain(() => { samplingSources = false; return true; });
+            File.WriteAllLines(Path.Combine(Main.SavePath, "consumable-handoff-" + mining + ".csv"),
+                new[] { "tick,active,outcome,x,y,has_tile,use,animation,item_time,item_type" }.Concat(sourceInputSamples));
+            results.Add(new JsonObject { ["mining_before"] = mining, ["animation_before"] = animation,
+                ["elapsed_ms"] = clock.ElapsedMilliseconds, ["result"] = used.DeepClone(),
+                ["health_after"] = state["permanent_max_health"].DeepClone() });
+        }
+        File.WriteAllText(Path.Combine(Main.SavePath, "consumable-handoff.json"), results.ToJsonString());
+        if (results.Any(r => r["health_after"].GetValue<int>() != 120 || r["result"]["verified"]?.GetValue<bool>() != true))
+            throw new Exception("consumable handoff failed: " + results);
+        Console.WriteLine("CONSUMABLE_HANDOFF_PASS idle=true mining_animation=true duration_ticks=30 actual_health=120 model_calls=0");
     }
 
     async Task DesertContactTrial()
