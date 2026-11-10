@@ -593,6 +593,39 @@ static class RuntimeTests
         Console.WriteLine("PASS: prepared failure policies update during travel, receive full evidence and recover locally; danger and uncovered failures retain review");
     }
 
+    static async Task TestSkillRuntimeEvidence()
+    {
+        string previousRoot = Game.SavePath;
+        string root = Path.Combine(Path.GetTempPath(), "terrablind-skill-evidence-" + Guid.NewGuid().ToString("N"));
+        var previousWorkflows = AgentTools.Workflows.Keys.ToHashSet();
+        try
+        {
+            Game.SavePath = root;
+            var saved = JsonNode.Parse(await Execute(AgentTools.Execute("script_program", new JsonObject
+            { ["operation"] = "save", ["name"] = "observed", ["expected_revision"] = 0,
+                ["code"] = "return {status:'needs_review',reason:'fixture_observed'};" }, default)));
+            Check(saved["revision"]?.GetValue<int>() == 1, "fixture skill was not saved through the public tool");
+            await Execute(AgentTools.Execute("run_script", new JsonObject
+            { ["program"] = "observed", ["expected_revision"] = 1, ["workflow"] = "runtime-program-fixture" }, default));
+            await Execute(AgentTools.Execute("run_script", new JsonObject
+            { ["code"] = "return skill('observed',1);" }, default));
+            var observed = JsonNode.Parse(await Execute(AgentTools.Execute("script_program", new JsonObject
+            { ["operation"] = "get", ["name"] = "observed" }, default)));
+            var evidence = observed["runtime"][0];
+            Check(evidence["calls"].GetValue<int>() == 2 && evidence["returned"].GetValue<int>() == 2
+                && evidence["review_returns"].GetValue<int>() == 2
+                && evidence["recent"][0]["result"]["reason"].ToString() == "fixture_observed",
+                "public program and skill invocations did not retain their actual non-completion outcomes: " + observed);
+            Console.WriteLine("PASS: public skill tools retain per-version evidence for program and nested calls without asserting task completion");
+        }
+        finally
+        {
+            Game.SavePath = previousRoot;
+            foreach (string id in AgentTools.Workflows.Keys.Where(id => !previousWorkflows.Contains(id)).ToArray()) AgentTools.Workflows.Remove(id);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
     static async Task TestScriptAfterRunningRecovery()
     {
         var previous = HttpServerSystem.Handler;
@@ -861,6 +894,7 @@ static class RuntimeTests
         await TestInlinePauseResume();
         await TestPreparedFailureRecovery();
         await TestScriptAfterRunningRecovery();
+        await TestSkillRuntimeEvidence();
         await TestPreparedScriptRevision();
         var depthPlayer = Game.LocalPlayer;
         var oldDepth = (Game.worldSurface, Game.rockLayer, depthPlayer.ZoneSkyHeight, depthPlayer.ZoneOverworldHeight,

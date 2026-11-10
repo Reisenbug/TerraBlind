@@ -460,6 +460,27 @@ static class ScriptTests
                 "skill bypassed ordinary tool validation");
             Check(deniedSkill["skill_calls"][0]["status"].ToString() == "interrupted",
                 "failed skill was left falsely marked as running");
+            library.RecordCalls(skillFirst["skill_calls"].AsArray(), "world-a");
+            library.RecordCalls(deniedSkill["skill_calls"].AsArray(), "world-b");
+            var recorded = new ScriptLibrary(programDirectory).Get("parameterized")["runtime"][0];
+            Check(recorded["calls"].GetValue<int>() == 3 && recorded["returned"].GetValue<int>() == 2
+                && recorded["interrupted"].GetValue<int>() == 1 && recorded["recent"][2]["world"].ToString() == "world-b",
+                "skill evidence did not persist actual invocation outcomes across library instances");
+            library.Save("parameterized", "const r=tool('blocked',{});return {status:'needs_review',reason:r.reason};", 1);
+            var reviewSkill = await AgentScript.Run("return skill('parameterized',2);", 5, (_, _) => { },
+                (_, _, _) => Task.FromResult("{\"outcome\":\"no_progress\",\"reason\":\"fixture_blocked\"}"),
+                _ => Task.CompletedTask, default, programs: library.Callable());
+            for (int i = 0; i < 6; i++) library.RecordCalls(reviewSkill["skill_calls"].AsArray(), "world-c");
+            var reviewed = reopened.Get("parameterized")["runtime"].AsArray();
+            Check(reviewed.Count == 2 && reviewed[0]["calls"].GetValue<int>() == 3
+                && reviewed[1]["review_returns"].GetValue<int>() == 6 && reviewed[1]["calls_with_tool_failure"].GetValue<int>() == 6
+                && reviewed[1]["recent"].AsArray().Count == 4
+                && reviewed[1]["recent"][0]["result"]["reason"].ToString() == "fixture_blocked",
+                "revised skill mixed version evidence, concealed blocked returns or accumulated unbounded samples");
+            var listed = library.List().First(v => v["name"].ToString() == "parameterized")["runtime"];
+            Check(listed["revision"].GetValue<int>() == 2 && listed["recent"] == null
+                && library.Callable().All(v => v["runtime"] == null),
+                "skill listing or callable source snapshots included bulky runtime history");
             library.Save("budgeted", "for(let i=0;i<input.n;i++) tool('effect',{x:i});", 0);
             var sharedBudget = await AgentScript.Run("skill('budgeted',1,{n:60});skill('budgeted',1,{n:60});", 5,
                 (_, _) => { }, SkillEffect, _ => Task.CompletedTask, default, programs: library.Callable());

@@ -237,12 +237,18 @@ public sealed class ScriptLibrary
         return Path.Combine(directory, name + ".json");
     }
 
-    public JsonObject Get(string name)
+    public JsonObject Get(string name, bool includeRuntime = true)
     {
         lock (gate)
         {
             string path = FilePath(name);
-            if (File.Exists(path)) return JsonNode.Parse(File.ReadAllText(path)).AsObject();
+            if (File.Exists(path))
+            {
+                var entry = JsonNode.Parse(File.ReadAllText(path)).AsObject();
+                string runtime = Path.Combine(directory, "runtime", name + ".json");
+                if (includeRuntime && File.Exists(runtime)) entry["runtime"] = JsonNode.Parse(File.ReadAllText(runtime));
+                return entry;
+            }
             if (Templates.Contains(name))
             {
                 var example = Example(name);
@@ -260,7 +266,16 @@ public sealed class ScriptLibrary
         {
             var saved = Directory.Exists(directory) ? Directory.EnumerateFiles(directory, "*.json").Select(Path.GetFileNameWithoutExtension) : Enumerable.Empty<string>();
             return new JsonArray(Templates.Concat(saved).Distinct().OrderBy(name => name)
-                .Select(name => { var entry = Get(name); entry.Remove("code"); return (JsonNode)entry; }).ToArray());
+                .Select(name =>
+                {
+                    var entry = Get(name); entry.Remove("code");
+                    if (entry["runtime"] is JsonArray versions)
+                    {
+                        entry["runtime"] = versions.LastOrDefault(v => v["revision"]?.ToString() == entry["revision"]?.ToString())?.DeepClone();
+                        entry["runtime"]?.AsObject().Remove("recent");
+                    }
+                    return (JsonNode)entry;
+                }).ToArray());
         }
     }
 
@@ -269,8 +284,51 @@ public sealed class ScriptLibrary
         lock (gate)
             return new JsonArray((Directory.Exists(directory)
                 ? Directory.EnumerateFiles(directory, "*.json").OrderBy(path => path)
-                    .Select(path => (JsonNode)Get(Path.GetFileNameWithoutExtension(path)))
+                    .Select(path => (JsonNode)Get(Path.GetFileNameWithoutExtension(path), includeRuntime: false))
                 : Enumerable.Empty<JsonNode>()).ToArray());
+    }
+
+    public void RecordCalls(JsonArray calls, string world)
+    {
+        lock (gate)
+        {
+            foreach (var group in calls.GroupBy(call => call["name"].ToString()))
+            {
+                if (!File.Exists(FilePath(group.Key))) continue;
+                string folder = Path.Combine(directory, "runtime"), path = Path.Combine(folder, group.Key + ".json");
+                var versions = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path)).AsArray() : new JsonArray();
+                foreach (var call in group)
+                {
+                    var version = versions.FirstOrDefault(v => v["revision"]?.ToString() == call["revision"]?.ToString()
+                        && v["source_sha256"]?.ToString() == call["source_sha256"]?.ToString())?.AsObject();
+                    if (version == null)
+                    {
+                        version = new JsonObject { ["revision"] = call["revision"].DeepClone(),
+                            ["source_sha256"] = call["source_sha256"].DeepClone(), ["calls"] = 0, ["returned"] = 0,
+                            ["interrupted"] = 0, ["review_returns"] = 0, ["calls_with_tool_failure"] = 0,
+                            ["total_elapsed_ms"] = 0L, ["recent"] = new JsonArray() };
+                        versions.Add(version);
+                    }
+                    version["calls"] = version["calls"].GetValue<int>() + 1;
+                    string status = call["status"].ToString();
+                    if (status is "returned" or "interrupted") version[status] = version[status].GetValue<int>() + 1;
+                    if (call["result"]?["status"]?.ToString() == "needs_review")
+                        version["review_returns"] = version["review_returns"].GetValue<int>() + 1;
+                    if (call["last_failure"] != null)
+                        version["calls_with_tool_failure"] = version["calls_with_tool_failure"].GetValue<int>() + 1;
+                    version["total_elapsed_ms"] = version["total_elapsed_ms"].GetValue<long>() + call["elapsed_ms"].GetValue<long>();
+                    var sample = new JsonObject { ["utc"] = DateTime.UtcNow.ToString("O"), ["world"] = world };
+                    foreach (string field in new[] { "status", "elapsed_ms", "tool_calls", "result", "last_failure" })
+                        if (call[field] != null) sample[field] = call[field].DeepClone();
+                    var recent = version["recent"].AsArray(); recent.Add(sample);
+                    while (recent.Count > 4) recent.RemoveAt(0);
+                }
+                while (versions.Count > 6) versions.RemoveAt(0);
+                Directory.CreateDirectory(folder);
+                File.WriteAllText(path + ".tmp", versions.ToJsonString());
+                File.Move(path + ".tmp", path, true);
+            }
+        }
     }
 
     public JsonObject Save(string name, string code, int expectedRevision)
@@ -279,7 +337,7 @@ public sealed class ScriptLibrary
             throw new ArgumentException("code必须是1..16000字符的JavaScript函数体。");
         lock (gate)
         {
-            var previous = Get(name);
+            var previous = Get(name, includeRuntime: false);
             int revision = previous["revision"].GetValue<int>();
             if (revision != expectedRevision)
                 return new JsonObject { ["error"] = "program_revision_conflict", ["name"] = name,
@@ -317,7 +375,7 @@ public sealed class ScriptLibrary
         if (string.IsNullOrEmpty(oldText) || newText == null) throw new ArgumentException("patch需要非空old_text和new_text。");
         lock (gate)
         {
-            var previous = Get(name);
+            var previous = Get(name, includeRuntime: false);
             int revision = previous["revision"].GetValue<int>();
             if (revision != expectedRevision)
                 return new JsonObject { ["error"] = "program_revision_conflict", ["name"] = name, ["revision"] = revision };

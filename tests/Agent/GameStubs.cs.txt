@@ -65,6 +65,8 @@ namespace Terraria
     {
         public static bool dedServ, gameMenu, playerInventory;
         public static string SavePath = "/tmp/terrablind-agent-test-world";
+        public static string worldName = "test";
+        public static int worldID;
         public static int netMode, myPlayer, maxPlayers = 8, maxTilesX = 1000, maxTilesY = 1000;
         public static uint GameUpdateCount;
         public static int mouseX, mouseY;
