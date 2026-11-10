@@ -19,6 +19,77 @@ namespace Engine;
 
 public sealed class Engine : Mod { }
 
+public sealed class NavigationStartupProbe : ModSystem
+{
+    public override void OnWorldLoad()
+    {
+        if (!Terraria.Program.LaunchParameters.ContainsKey("-navstartupcheck")) return;
+        try
+        {
+            Main.myPlayer = 0;
+            Main.player[0] = new Player { active = true, width = 20, height = 42,
+                position = new Vector2(33566, 3844), maxRunSpeed = 3, runSlowdown = .2f };
+            var player = Main.player[0];
+            player.position += Collision.TileCollision(player.position, new Vector2(0, 16), player.width, player.height);
+            player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+            player.inventory[3].SetDefaults(ItemID.Wood); player.inventory[3].stack = 9999;
+            var policy = (AgentControlPolicy)typeof(AgentTools).GetField("Control", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+            policy.Reset();
+            var support = new JsonArray();
+            for (int ahead = 0; ahead <= 54; ahead += 2)
+                support.Add(new JsonObject { ["ahead"] = ahead,
+                    ["supported"] = VanillaContactRegion.Supported(player.position - new Vector2(ahead, 0), player.width, player.height) });
+            bool localWalk = VanillaContactRegion.TryWalk(player, new Vector2(816 * 16 - 2, player.position.Y), out var localKeys);
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            RecedingNav.Start(816, 259, RecedingNav.Mode.Reach);
+            RecedingNav.Tick();
+            double firstInput = timer.Elapsed.TotalMilliseconds;
+            bool originalInput = player.controlLeft && !player.controlRight;
+            if (localWalk && !originalInput) throw new Exception("safe local walk did not start during field construction");
+            File.WriteAllText(Path.Combine(Main.SavePath, "nav-startup-input.json"), new JsonObject
+                { ["local_walk"] = localWalk, ["local_keys"] = localKeys.ToString(), ["left"] = player.controlLeft,
+                    ["grav_dir"] = player.gravDir, ["grap_count"] = player.grapCount, ["dash_delay"] = player.dashDelay,
+                    ["collision_y"] = Collision.TileCollision(player.position, Vector2.UnitY, player.width, player.height).Y,
+                    ["support"] = support }.ToJsonString());
+            var ready = typeof(RecedingNav).GetProperty("FieldReady", BindingFlags.Static | BindingFlags.NonPublic);
+            while (!(bool)ready.GetValue(null) && timer.Elapsed.TotalSeconds < 10) Thread.Sleep(1);
+            if (!(bool)ready.GetValue(null)) throw new Exception("cold field exceeded ten seconds");
+            var field = MazeWand.PeekFieldOrNull(816, 259);
+            if (field == null || !field.ContainsKey((2098, 242)) || !field.ContainsKey((816, 259)))
+                throw new Exception("bounded field failed to connect original start and goal");
+            double fieldMs = timer.Elapsed.TotalMilliseconds;
+            RecedingNav.Stop();
+            for (int x = 2088; x <= 2102; x++)
+            {
+                for (int y = 238; y < 243; y++) Main.tile[x, y].ClearEverything();
+                Main.tile[x, 243].ResetToType(TileID.Stone);
+            }
+            player.position = new Vector2(33566, 243 * 16 - player.height);
+            player.controlLeft = player.controlRight = false;
+            MazeWand.InvalidateField();
+            var flatTimer = System.Diagnostics.Stopwatch.StartNew();
+            RecedingNav.Start(816, 259, RecedingNav.Mode.Reach);
+            RecedingNav.Tick();
+            double flatInputMs = flatTimer.Elapsed.TotalMilliseconds;
+            if (!player.controlLeft || player.controlRight) throw new Exception("supported flat Reach startup did not set left input");
+            File.WriteAllText(Path.Combine(Main.SavePath, "nav-startup.json"), new JsonObject
+                { ["seed"] = Main.ActiveWorldFileData.SeedText, ["original_local_walk"] = localWalk,
+                    ["original_first_input_ms"] = originalInput ? JsonValue.Create(firstInput) : null,
+                    ["field_ms"] = fieldMs, ["field_cells"] = field.Count, ["flat_fixture_first_input_ms"] = flatInputMs,
+                    ["start_cost"] = field[(2098, 242)],
+                    ["start_connected"] = true, ["goal_connected"] = true }.ToJsonString());
+            RecedingNav.Stop();
+            Console.WriteLine("NAV_STARTUP_COMPLETE native_world=true model_calls=0");
+            Environment.Exit(0);
+        }
+        catch (Exception error)
+        {
+            File.WriteAllText(Path.Combine(Main.SavePath, "nav-startup-error.txt"), error.ToString());
+            Environment.Exit(1);
+        }
+    }
+}
+
 public sealed class CombatEvidenceProbe : ModSystem
 {
     public override void OnWorldLoad()
