@@ -235,11 +235,10 @@ namespace TerraBlind
 
         static Dictionary<(int, int), int> BuildCachedField(int gx, int gy, int sx, int sy)
         {
-            bool narrow = VanillaNavBridge.Enabled || System.Math.Max(System.Math.Abs(gx - sx), System.Math.Abs(gy - sy)) <= 120;
-            var field = BuildField(gx, gy, sx, sy, bigMargin: !narrow,
-                stopAtStart: VanillaNavBridge.RegionsEnabled);
-            if (narrow && !field.ContainsKey((sx, sy)))
-                field = BuildField(gx, gy, sx, sy, bigMargin: true, stopAtStart: VanillaNavBridge.RegionsEnabled);
+            bool directed = VanillaNavBridge.RegionsEnabled || System.Math.Max(System.Math.Abs(gx - sx), System.Math.Abs(gy - sy)) > 120;
+            var field = BuildField(gx, gy, sx, sy, stopAtStart: directed);
+            if (!field.ContainsKey((sx, sy)))
+                field = BuildField(gx, gy, sx, sy, bigMargin: true, stopAtStart: directed);
             return field;
         }
 
