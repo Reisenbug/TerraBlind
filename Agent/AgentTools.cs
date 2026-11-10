@@ -375,7 +375,7 @@ public static partial class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedAttempt = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
+    public static void NewTask() { AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedAttempt = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
         Actions.CancelAll();
@@ -672,7 +672,7 @@ public static partial class AgentTools
         long id = Interlocked.Increment(ref invocationSequence);
         long started = Stopwatch.GetTimestamp();
         bool query = name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
-            or "terrain_map" or "opportunity_assess" or "nearby_drops" or "item_info" or "wiki_search" or "wiki_page" or "recipe" or "script_program";
+            or "terrain_map" or "opportunity_assess" or "nearby_drops" or "item_info" or "wiki_search" or "wiki_page" or "recipe" or "script_program" or "script_report";
         if (query) Interlocked.Increment(ref QueriesInFlight);
         DiagLog.Write($"[agent_tool_begin] id={id} name={name} timestamp={started} node={ActionTasks.NodeContext.Value}");
         try { return await ExecuteObserved(name, args, token); }
@@ -685,6 +685,7 @@ public static partial class AgentTools
 
     static async Task<string> ExecuteObserved(string name, JsonObject args, CancellationToken token)
     {
+        if (name == "script_report") return AgentModelOutput.Read(Text(args, "id")).ToJsonString(ModelJson);
         string taskNode = ActionTasks.NodeContext.Value;
         if (name == "action_control" && Text(args, "command") == "resume")
         {

@@ -448,7 +448,7 @@ public sealed class CodexAgent : IDisposable
                 var result = JsonNode.Parse(output);
                 success = !AgentTools.Rejected(result as JsonObject);
                 if (success && name == "terrain_map") image = AgentImages.Take(result);
-                output = result?.ToJsonString(AgentTools.ModelJson) ?? "null";
+                output = AgentModelOutput.Project(name, result)?.ToJsonString(AgentTools.ModelJson) ?? "null";
             }
             catch (System.Text.Json.JsonException) { }
         }

@@ -31,7 +31,7 @@ public static class AgentScript
                         && name.Value is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
                             or "terrain_map" or "opportunity_assess" or "nearby_drops" or "item_info" or "wiki_search" or "wiki_page"
                             or "recipe" or "script_program" or "find_biome" or "tile_names" or "find_descent" or "descent_route"
-                            or "equipment_list" or "inventory_review" or "npc_find" or "npc_drop_sources" or "script_progress") queries++;
+                            or "equipment_list" or "inventory_review" or "npc_find" or "npc_drop_sources" or "script_progress" or "script_report") queries++;
                     else dynamicOrAction = true;
                 }
                 foreach (var child in node.ChildNodes) Visit(child);
@@ -216,7 +216,7 @@ public static class AgentScript
         + "decision_point的evidence可携带刚测到的关键字段、捕获tick、原handle、已尝试动作及候选方案；后续模型会收到reported_evidence，不要只写‘观察完请再观察’并丢弃变量中的结果。这是脚本报告而非宿主验证，不可代替task_step或新的现场检查。"
         + "decision_point默认暂停当前动作；确需让有时限的防身等动作在模型审阅时继续，可传continue_action为当前active句柄。模型会继续审阅而非等待该动作结束；下一轮须观察并完成输入交接，不能直接启动冲突动作。这不绕过权限、死亡或后续危险事件。"
         + "事件本地消费不占模型唤醒次数，显式decision_point仍受限；源码可跨启动保存，workflow进度只保留本世界。"
-        + "run_script.tool_counts记录本段全部工具请求，action_control按pause/resume/cancel分开；trace仅保留最近12次。get_state.script_workflows各workflow的last_execution保留上一段的tool_counts、tool_calls、elapsed_ms和failure，跨轮续接时先核对；script_progress的last_segment也保留这些证据。请求不代表成功。若只查询或暂停而未推进目标，必须补上依据观察结果执行的分支或说明真实阻塞，不能把脚本正常结束当作已经采取恢复行动。";
+        + "run_script.tool_counts记录本段全部工具请求，action_control按pause/resume/cancel分开；默认报告保留实际返回值和failure，完整trace用script_report({id:report_id})只读查询。get_state.script_workflows各workflow的last_execution保留上一段的tool_counts、tool_calls、elapsed_ms和failure，跨轮续接时先核对；script_progress的last_segment也保留这些证据。请求不代表成功。若只查询或暂停而未推进目标，必须补上依据观察结果执行的分支或说明真实阻塞，不能把脚本正常结束当作已经采取恢复行动。";
 
     public static async Task<JsonObject> Run(string source, int seconds,
         Action<string, JsonObject> validate,

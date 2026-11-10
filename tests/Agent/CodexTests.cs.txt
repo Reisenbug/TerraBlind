@@ -19,6 +19,7 @@ static class CodexTests
 
     public static async Task Run()
     {
+        await ModelResults();
         ContextChanges();
         await GoalProtocol();
         await NativeGoalProtocol();
@@ -240,6 +241,53 @@ static class CodexTests
             Terraria.Main.netMode = Terraria.ID.NetmodeID.SinglePlayer;
         }
         Console.WriteLine("PASS: combat makes no periodic model calls, handles player follow-ups, permits one recovery and respects stop on the same Codex thread");
+    }
+
+    static async Task ModelResults()
+    {
+        var tools = (JsonArray)Tools.DeepClone();
+        tools.Add(JsonNode.Parse("""{"type":"function","function":{"name":"run_script","parameters":{"type":"object","properties":{}}}}"""));
+        var server = new Server { ToolName = "run_script" };
+        using var agent = new CodexAgent((_, _) => server.Connect());
+        var report = JsonNode.Parse("""
+            {"ok":true,"value":{"actual":5,"remaining":1},"tool_counts":{"gather":1},
+             "trace":[{"tool":"gather","result":"large repeated observation"}],"failure":null}
+            """).AsObject();
+        foreach (bool failed in new[] { false, true })
+        {
+            report["ok"] = !failed;
+            report["failure"] = failed ? JsonNode.Parse("""{"tool":"gather","args":{"count":6},"evidence":{"outcome":"inventory_full","actual":5}}""") : null;
+            await agent.RunAsync("read report", "mock", "/tmp", "", "game instructions", tools,
+                (_, _, _) => Task.FromResult(report.ToJsonString()), _ => { }, default);
+            var received = JsonNode.Parse(server.ToolResponses.Last()["contentItems"][0]["text"].ToString());
+            Check(received["trace"] == null && received["report_id"] != null,
+                "model still received repeated trace instead of an addressable full report");
+            Check(JsonNode.DeepEquals(received["value"], report["value"])
+                && JsonNode.DeepEquals(received["failure"], report["failure"])
+                && received["tool_counts"]["gather"].GetValue<int>() == 1
+                && server.ToolResponses.Last()["success"].GetValue<bool>() == !failed,
+                "compact report lost actual progress, failure evidence or rejection status");
+            var full = JsonNode.Parse(await AgentTools.Execute("script_report", new JsonObject { ["id"] = received["report_id"].DeepClone() }, default));
+            Check(JsonNode.DeepEquals(full, report) && report["trace"] != null,
+                "full trace was lost or formatting mutated the host execution report");
+        }
+        var direct = JsonNode.Parse(AgentModelOutput.Format("run_script", report.ToJsonString()));
+        Check(direct["trace"] == null && direct["report_id"] != null,
+            "HTTP conversation formatting retained repeated trace");
+        var internalResult = await AgentScript.Run("return tool('probe').trace;", 0, (_, _) => { },
+            (_, _, _) => Task.FromResult(report.ToJsonString()), _ => Task.CompletedTask, default);
+        Check(JsonNode.DeepEquals(internalResult["value"], report["trace"]),
+            "wire report optimization altered results available inside JavaScript");
+        string firstReport = direct["report_id"].ToString();
+        for (int i = 0; i < 65; i++) AgentModelOutput.Project("run_script", report);
+        Check(AgentModelOutput.Read(firstReport)["error"]?.ToString() == "script_report_unavailable",
+            "model report archive grew past the declared retention bound");
+        direct = AgentModelOutput.Project("run_script", report);
+        AgentTools.NewTask();
+        Check(AgentModelOutput.Read(direct["report_id"].ToString())["error"]?.ToString() == "script_report_unavailable"
+            && AgentScript.PreparationOnly("return tool('script_report',{id:'known'});"),
+            "report archive leaked into another instruction or read-only evidence was treated as an action");
+        Console.WriteLine("PASS: model reports omit duplicate trace, retain measured progress/failure and expose full evidence without replay");
     }
 
     static void ContextChanges()

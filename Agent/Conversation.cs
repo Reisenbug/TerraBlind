@@ -77,7 +77,7 @@ public sealed class AgentConversation
                         foreach (var field in schema["function"]?["parameters"]?["required"]?.AsArray() ?? new JsonArray())
                             if (args[field.GetValue<string>()] == null)
                                 throw new InvalidOperationException($"缺少参数: {field.GetValue<string>()}");
-                        result = await execute(name, args, token).ConfigureAwait(false);
+                        result = AgentModelOutput.Format(name, await execute(name, args, token).ConfigureAwait(false));
                     }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex) { result = new JsonObject { ["error"] = ex.Message }.ToJsonString(); }
@@ -162,4 +162,40 @@ public sealed class AgentConversation
 public sealed class AgentBudgetExceededException : InvalidOperationException
 {
     public AgentBudgetExceededException() : base("本轮已达到 40 次判断上限，目标尚未验证完成。请检查当前进度后继续。") { }
+}
+
+internal static class AgentModelOutput
+{
+    static readonly Dictionary<string, JsonNode> reports = new();
+    static readonly Queue<string> order = new();
+    static readonly object gate = new();
+
+    internal static string Format(string tool, string text)
+    {
+        try { return Project(tool, JsonNode.Parse(text))?.ToJsonString(AgentTools.ModelJson) ?? "null"; }
+        catch (System.Text.Json.JsonException) { return text; }
+    }
+
+    internal static JsonNode Project(string tool, JsonNode result)
+    {
+        if (tool != "run_script" || result is not JsonObject report || report["trace"] is not JsonArray { Count: > 0 }) return result;
+        string id = Guid.NewGuid().ToString("N");
+        lock (gate)
+        {
+            reports[id] = report.DeepClone(); order.Enqueue(id);
+            if (order.Count > 64) reports.Remove(order.Dequeue());
+        }
+        var brief = (JsonObject)report.DeepClone();
+        brief.Remove("trace");
+        brief["report_id"] = id;
+        return brief;
+    }
+
+    internal static JsonNode Read(string id)
+    {
+        lock (gate) return reports.TryGetValue(id, out var result) ? result.DeepClone()
+            : new JsonObject { ["error"] = "script_report_unavailable", ["id"] = id };
+    }
+
+    internal static void Clear() { lock (gate) { reports.Clear(); order.Clear(); } }
 }
