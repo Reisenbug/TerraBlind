@@ -63,6 +63,7 @@ public sealed class BehaviorTrial : ModSystem
     int hornetsSpawned;
     int stingersRequired = 1;
     Task trial;
+    Task operatorRequest = Task.CompletedTask;
     AcceptanceClock acceptance;
     static bool JungleHealthTrial => Environment.GetEnvironmentVariable("TB_JUNGLE_HEALTH_TRIAL") == "1";
     static bool DungeonTrial => Environment.GetEnvironmentVariable("TB_DUNGEON_TRIAL") == "1";
@@ -433,6 +434,22 @@ public sealed class BehaviorTrial : ModSystem
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         if (frames++ == 0) Main.playerInventory = true;
+        if (Environment.GetEnvironmentVariable("TB_OPERATOR_COMMANDS") == "1" && frames % 30 == 0 && operatorRequest.IsCompleted)
+        {
+            string requestPath = Path.Combine(Main.SavePath, "operator-request.json");
+            if (File.Exists(requestPath))
+            {
+                var request = JsonNode.Parse(File.ReadAllText(requestPath)).AsObject();
+                File.Move(requestPath, Path.Combine(Main.SavePath, "operator-running.json"), true);
+                operatorRequest = Task.Run(async () =>
+                {
+                    var result = new JsonObject { ["id"] = request["id"]?.DeepClone() };
+                    try { result["result"] = JsonNode.Parse(await AgentTools.Execute(request["tool"].ToString(), request["args"]?.AsObject() ?? new JsonObject(), default)); }
+                    catch (Exception error) { result["error"] = error.ToString(); }
+                    File.WriteAllText(Path.Combine(Main.SavePath, "operator-result.json"), result.ToJsonString());
+                });
+            }
+        }
         if (!NaturalEncounters)
             for (int i = 0; i < Main.maxNPCs; i++)
                 if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
