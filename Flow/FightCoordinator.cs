@@ -34,10 +34,25 @@ namespace TerraBlind
         }
 
         internal static bool NeedsClearLine(Item item) => item.shoot <= 0
-            || !ContentSamples.ProjectilesByType.TryGetValue(item.shoot, out var shot) || shot.tileCollide;
+            || !ContentSamples.ProjectilesByType.TryGetValue(item.shoot, out var shot) || shot.tileCollide || shot.ownerHitCheck;
 
-        internal static bool CanHitTarget(Player player, Item weapon, Vector2 target)
-            => !NeedsClearLine(weapon) || Collision.CanHitLine(player.Center, 4, 4, target, 4, 4);
+        internal static bool CanHitTarget(Player player, Item weapon, Vector2 target, float targetRadius = 0)
+        {
+            if (weapon.shoot <= 0)
+                return !weapon.noMelee && Vector2.Distance(player.Center, target)
+                    <= Math.Max(32, Math.Max(weapon.width, weapon.height) * weapon.scale + player.width / 2f) + targetRadius
+                    && Collision.CanHitLine(player.Center, 4, 4, target, 4, 4);
+            int shotType = weapon.shoot;
+            if (weapon.useAmmo > 0 && !player.PickAmmo(weapon, out shotType, out _, out _, out _, out _, true)) return false;
+            if (ContentSamples.ProjectilesByType.TryGetValue(shotType, out var shot))
+            {
+                if (shot.aiStyle == ProjAIStyleID.ShortSword && Vector2.Distance(player.Center, target)
+                    > weapon.shootSpeed * 14 + new Vector2(shot.width, shot.height).Length() * weapon.scale / 2 + targetRadius)
+                    return false;
+                if (!shot.tileCollide && !shot.ownerHitCheck) return true;
+            }
+            return Collision.CanHitLine(player.Center, 4, 4, target, 4, 4);
+        }
 
         internal static bool TempleTargetAllowed(Player player, NPC npc)
             => player.ZoneLihzhardTemple || npc.type is not (NPCID.Lihzahrd or NPCID.LihzahrdCrawler or NPCID.FlyingSnake);
@@ -245,8 +260,7 @@ namespace TerraBlind
                 _active = false;
                 return;
             }
-            int weaponSlot = FindWeaponSlot(p);
-            NPC target = weaponSlot >= 0 ? FindNearest(p, p.inventory[weaponSlot], idle) : null;
+            NPC target = FindNearest(p, idle, out int weaponSlot);
 
             if (target == null)
             {
@@ -268,18 +282,23 @@ namespace TerraBlind
 
             p.selectedItem = weaponSlot;
             if (idle) p.delayUseItem = p.mouseInterface = false;
-            p.controlUseItem = CanHitTarget(p, p.HeldItem, target.Center);
+            p.controlUseItem = CanHitTarget(p, p.HeldItem, target.Center, target.width / 2f);
             _usingItem = p.controlUseItem;
             RememberAnimation(p, true);
         }
 
-        private static NPC FindNearest(Player p, Item weapon, bool idle = false)
+        private static NPC FindNearest(Player p, bool idle, out int weaponSlot)
         {
+            weaponSlot = -1;
             float pcx = p.position.X + p.width / 2f;
             float pcy = p.position.Y + p.height / 2f;
             float maxDist = (idle ? 20f : _maxDistTiles) * 16f;
             NPC best = null;
             float bestDist = float.MaxValue;
+            bool bestAttacker = false;
+            var damage = AgentTools.LastDamage;
+            var attacker = damage?["attacker"];
+            long age = (long)Main.GameUpdateCount - (damage?["tick"]?.GetValue<long>() ?? -1000);
             for (int i = 0; i < Main.maxNPCs; i++)
             {
                 NPC npc = Main.npc[i];
@@ -288,22 +307,26 @@ namespace TerraBlind
                 if (npc.townNPC || npc.friendly) continue;
                 if (!TempleTargetAllowed(p, npc)) continue;
                 if (npc.lifeMax <= 5 && npc.damage == 0) continue;
-                if (!CanHitTarget(p, weapon, npc.Center)) continue;
                 float ncx = npc.position.X + npc.width / 2f;
                 float ncy = npc.position.Y + npc.height / 2f;
                 float dx = ncx - pcx;
                 float dy = ncy - pcy;
                 float dist = dx * dx + dy * dy;
-                if (dist < bestDist && System.MathF.Sqrt(dist) <= maxDist)
+                if (dist > maxDist * maxDist) continue;
+                int slot = CombatLoadout.Select(p, npc);
+                if (slot < 0) continue;
+                bool recentAttacker = age >= 0 && age <= 300 && attacker?["npc_index"]?.GetValue<int>() == i
+                    && attacker?["npc_type"]?.GetValue<int>() == npc.type;
+                if (best == null || recentAttacker && !bestAttacker || recentAttacker == bestAttacker && dist < bestDist)
                 {
                     bestDist = dist;
                     best = npc;
+                    bestAttacker = recentAttacker;
+                    weaponSlot = slot;
                 }
             }
             return best;
         }
 
-        private static int FindWeaponSlot(Player p)
-            => CombatLoadout.Select(p);
     }
 }

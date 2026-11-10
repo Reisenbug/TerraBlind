@@ -186,8 +186,8 @@ namespace Terraria
     public class Mount { public bool Active; }
     public class Projectile
     {
-        public bool active, arrow, friendly, hostile, tileCollide = true;
-        public int owner, damage, identity, whoAmI, type, extraUpdates;
+        public bool active, arrow, friendly, hostile, ownerHitCheck, tileCollide = true;
+        public int owner, damage, identity, whoAmI, type, extraUpdates, aiStyle;
         public int width = 8, height = 8;
         public Microsoft.Xna.Framework.Vector2 velocity, Center;
     }
@@ -225,6 +225,7 @@ namespace Terraria
 }
 namespace Terraria.ID
 {
+    public static class ProjAIStyleID { public const int ShortSword = 161; }
     public static class ItemID { public const int FixtureGoal = 191, Umbrella = 946, TragicUmbrella = 4707; }
     public static class NPCID { public const int FixtureEnemy = 222, Lihzahrd = 198, LihzahrdCrawler = 199, FlyingSnake = 226; }
     public static class ProjectileID { }

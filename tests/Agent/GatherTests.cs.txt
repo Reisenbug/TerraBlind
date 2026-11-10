@@ -226,6 +226,7 @@ static class GatherTests
         Evasion();
         FiringLane();
         TempleTargets();
+        WeaponSuitability();
         await PickupCapacity();
     }
 
@@ -239,7 +240,7 @@ static class GatherTests
         {
             Manual.On = false;
             p.inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
-            p.inventory[0] = new Item { stack = 1, damage = 20 }; p.selectedItem = 0;
+            p.inventory[0] = new Item { stack = 1, damage = 20, shoot = 1 }; p.selectedItem = 0;
             Main.npc = Enumerable.Range(0, Main.maxNPCs).Select(_ => new NPC()).ToArray();
             var enemy = Main.npc[0]; enemy.active = true; enemy.position = new(p.position.X + 80, p.position.Y);
             foreach (int type in new[] { Terraria.ID.NPCID.Lihzahrd, Terraria.ID.NPCID.LihzahrdCrawler, Terraria.ID.NPCID.FlyingSnake })
@@ -273,6 +274,80 @@ static class GatherTests
             Manual.On = oldManual;
         }
         Console.WriteLine("PASS: temple targets are skipped outside in explicit/idle combat and released without switching unfinished animations");
+    }
+
+    static void WeaponSuitability()
+    {
+        var p = Main.LocalPlayer;
+        var inventory = p.inventory; var npcs = Main.npc; var damage = AgentTools.LastDamage;
+        var position = p.position; var tick = Main.GameUpdateCount;
+        int preferred = CombatLoadout.PreferredType, selected = p.selectedItem;
+        bool manual = Manual.On, dodge = AgentPermissions.Dodge;
+        bool hadSample = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(77, out var sample);
+        bool hadPassing = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(78, out var passing);
+        try
+        {
+            FightCoordinator.Stop(); Manual.On = false; AgentPermissions.Dodge = false;
+            CombatLoadout.PreferredType = 0; p.position = new(160, 160);
+            p.itemAnimation = p.itemTime = 0;
+            p.inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
+            p.inventory[0] = new Item { type = 50, stack = 1, damage = 100, width = 30, height = 30 };
+            p.inventory[1] = new Item { type = 51, stack = 1, damage = 20, shoot = 77 };
+            p.inventory[2] = new Item { type = 52, stack = 1, damage = 15, shoot = 78 };
+            Terraria.ID.ContentSamples.ProjectilesByType[77] = new Projectile { tileCollide = true };
+            Terraria.ID.ContentSamples.ProjectilesByType[78] = new Projectile { tileCollide = false };
+            var target = new NPC { type = 42, active = true, position = new(360, 160) };
+            Collision.LineTest = (_, _) => true;
+            Check(CombatLoadout.Select(p, target) == 1, "out-of-reach sword displaced a usable ranged weapon");
+            target.position.X = 180;
+            Check(CombatLoadout.Select(p, target) == 0, "nearby target lost an in-range melee weapon");
+            Collision.LineTest = (_, _) => false;
+            Check(CombatLoadout.Select(p, target) == 2, "blocked weapons displaced the wall-passing projectile");
+            var wallPassing = Terraria.ID.ContentSamples.ProjectilesByType[78];
+            wallPassing.ownerHitCheck = true;
+            Check(CombatLoadout.Select(p, target) == -1, "owner-hit-check melee projectile was treated as wall-passing");
+            wallPassing.ownerHitCheck = false;
+            wallPassing.aiStyle = Terraria.ID.ProjAIStyleID.ShortSword;
+            p.inventory[2].shootSpeed = 2.1f; target.position.X = 360;
+            Collision.LineTest = (_, _) => true;
+            p.inventory[2].damage = 200;
+            Check(CombatLoadout.Select(p, target) == 1, "projectile shortsword was treated as a ranged weapon");
+            wallPassing.aiStyle = 0; p.inventory[2].damage = 15;
+            Collision.LineTest = (_, _) => false;
+            CombatLoadout.PreferredType = 51;
+            Check(CombatLoadout.Select(p, target) == -1, "target filtering ignored the agent's explicit weapon choice");
+            CombatLoadout.PreferredType = 0; Collision.LineTest = (_, _) => true;
+            Main.npc = Enumerable.Range(0, Main.maxNPCs).Select(_ => new NPC()).ToArray();
+            Main.npc[0] = new NPC { type = 42, active = true, position = new(240, 160) };
+            Main.npc[1] = new NPC { type = 204, active = true, position = new(360, 160) };
+            Main.GameUpdateCount = 1000;
+            AgentTools.LastDamage = new JsonObject { ["tick"] = 999L,
+                ["attacker"] = new JsonObject { ["npc_index"] = 1, ["npc_type"] = 204, ["via"] = "projectile" } };
+            void AimAt(int index, string reason, int[] types = null)
+            {
+                FightCoordinator.Stop(); p.itemAnimation = p.itemTime = 0;
+                FightCoordinator.Start(40, types); FightCoordinator.Tick(p, true);
+                Check(FightCoordinator.AimTarget == Main.npc[index].Center, reason);
+            }
+            AimAt(1, "recent projectile attacker lost priority to an uninvolved closer NPC");
+            AimAt(0, "retaliation ignored explicit target types", new[] { 42 });
+            Main.GameUpdateCount = 1301;
+            AimAt(0, "stale damage permanently monopolized defense");
+            Main.GameUpdateCount = 1000; Main.npc[1].type = 205;
+            AimAt(0, "reused NPC slot inherited another monster's attack evidence");
+        }
+        finally
+        {
+            FightCoordinator.Stop(); p.inventory = inventory; Main.npc = npcs; AgentTools.LastDamage = damage;
+            p.position = position; p.selectedItem = selected; Main.GameUpdateCount = tick;
+            CombatLoadout.PreferredType = preferred; Manual.On = manual; AgentPermissions.Dodge = dodge;
+            Collision.LineTest = null;
+            if (hadSample) Terraria.ID.ContentSamples.ProjectilesByType[77] = sample;
+            else Terraria.ID.ContentSamples.ProjectilesByType.Remove(77);
+            if (hadPassing) Terraria.ID.ContentSamples.ProjectilesByType[78] = passing;
+            else Terraria.ID.ContentSamples.ProjectilesByType.Remove(78);
+        }
+        Console.WriteLine("PASS: target-aware melee reach, projectile obstruction and recent attacker priority preserve agent filters");
     }
 
     static async Task PickupCapacity()
@@ -606,7 +681,7 @@ static class GatherTests
         try
         {
             FightCoordinator.Stop(); AgentPermissions.Reset(); p.dead = false; Manual.On = false;
-            p.inventory[0] = new Item { stack = 1, damage = 20 };
+            p.inventory[0] = new Item { stack = 1, damage = 20, shoot = 1 };
             Main.npc = new NPC[Main.maxNPCs];
             for (int i = 0; i < Main.npc.Length; i++) Main.npc[i] = new NPC();
             Main.npc[0] = new NPC { type = 42, active = true, damage = 20, position = new(p.position.X + 80, p.position.Y) };
@@ -683,7 +758,7 @@ static class GatherTests
         var oldWeapon = p.inventory[0]; var oldA = Main.npc[0]; var oldB = Main.npc[1];
         try
         {
-            p.inventory[0] = new Item { stack = 1, damage = 20 };
+            p.inventory[0] = new Item { stack = 1, damage = 20, shoot = 1 };
             Main.npc[0] = new NPC { type = 1, active = true, position = new(10, 0) };
             Main.npc[1] = new NPC { type = 2, active = true, position = new(80, 0) };
             FightCoordinator.Start(40, new[] { 2 }); FightCoordinator.Tick(p);

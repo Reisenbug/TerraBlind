@@ -19,6 +19,72 @@ namespace Engine;
 
 public sealed class Engine : Mod { }
 
+public sealed class CombatEvidenceProbe : ModSystem
+{
+    public override void OnWorldLoad()
+    {
+        if (!Terraria.Program.LaunchParameters.ContainsKey("-combatevidencecheck")) return;
+        try
+        {
+            Main.myPlayer = 0;
+            Main.player[0] = new Player { active = true, width = 20, height = 42,
+                position = new Vector2(300 * 16, 200 * 16), statLife = 100 };
+            var player = Main.player[0];
+            int index = NPC.NewNPC(new EntitySource_Misc("combat-evidence"), 310 * 16, 200 * 16, NPCID.SpikedJungleSlime);
+            var npc = Main.npc[index];
+            int shot = Projectile.NewProjectile(npc.GetSource_FromAI(), player.Center, Vector2.Zero, ProjectileID.JungleSpike, 20, 0);
+            int child = Projectile.NewProjectile(Main.projectile[shot].GetSource_FromThis(), player.Center, Vector2.Zero, ProjectileID.JungleSpike, 20, 0);
+            if (!ReferenceEquals(Main.projectile[child].GetGlobalProjectile<AgentProjectileEvidence>().SourceNpc, npc))
+                throw new Exception("child projectile lost its NPC source");
+            player.GetModPlayer<AgentDamageEvidence>().OnHurt(new Player.HurtInfo
+                { Damage = 20, DamageSource = PlayerDeathReason.ByProjectile(255, child) });
+            var damage = (JsonObject)typeof(AgentTools).GetField("LastDamage", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+            if (damage["attacker"]?["npc_index"]?.GetValue<int>() != index
+                || damage["attacker"]?["npc_type"]?.GetValue<int>() != NPCID.SpikedJungleSlime
+                || damage["attacker"]?["via"]?.ToString() != "projectile")
+                throw new Exception("production damage hook lost the actual projectile attacker: " + damage);
+            int unknown = Projectile.NewProjectile(new EntitySource_Misc("unknown-source"), player.Center, Vector2.Zero, ProjectileID.JungleSpike, 20, 0);
+            if (Main.projectile[unknown].GetGlobalProjectile<AgentProjectileEvidence>().SourceNpc != null)
+                throw new Exception("unknown projectile invented an attacker");
+            var canHit = typeof(FightCoordinator).GetMethod("CanHitTarget", BindingFlags.Static | BindingFlags.NonPublic);
+            bool CheckHit(Item weapon, Vector2 target) => (bool)canHit.Invoke(null, new object[] { player, weapon, target, 10f });
+            for (int x = 298; x <= 316; x++)
+            for (int y = 198; y <= 205; y++) Main.tile[x, y].ClearTile();
+            var sword = new Item(ItemID.CopperShortsword);
+            var knife = new Item(ItemID.ThrowingKnife);
+            var star = new Item(ItemID.Starfury);
+            var far = player.Center + new Vector2(160, 0);
+            var profiles = new JsonArray();
+            foreach (var weapon in new[] { sword, knife, star })
+            {
+                ContentSamples.ProjectilesByType.TryGetValue(weapon.shoot, out var projectile);
+                profiles.Add(new JsonObject { ["item"] = weapon.type, ["shoot"] = weapon.shoot,
+                    ["no_melee"] = weapon.noMelee, ["width"] = weapon.width, ["height"] = weapon.height,
+                    ["shoot_speed"] = weapon.shootSpeed, ["ai_style"] = projectile?.aiStyle,
+                    ["time_left"] = projectile?.timeLeft, ["tile_collide"] = projectile?.tileCollide,
+                    ["far"] = CheckHit(weapon, far), ["near"] = CheckHit(weapon, player.Center + new Vector2(20, 0)) });
+            }
+            File.WriteAllText(Path.Combine(Main.SavePath, "combat-profiles.json"), profiles.ToJsonString());
+            if (CheckHit(sword, far) || !CheckHit(knife, far) || !CheckHit(sword, player.Center + new Vector2(20, 0)))
+                throw new Exception("actual melee/projectile defaults failed reach checks");
+            for (int y = 198; y <= 205; y++)
+            { var tile = Main.tile[305, y]; tile.HasTile = true; tile.TileType = TileID.Stone; }
+            if (CheckHit(knife, far) || !CheckHit(star, far))
+                throw new Exception("actual projectile defaults failed obstruction checks");
+            File.WriteAllText(Path.Combine(Main.SavePath, "combat-evidence.json"), new JsonObject
+                { ["damage"] = damage.DeepClone(), ["child_source_preserved"] = true, ["unknown_source_ignored"] = true,
+                    ["melee_reach_checked"] = true, ["projectile_obstruction_checked"] = true }.ToJsonString());
+            Console.WriteLine("COMBAT_EVIDENCE_COMPLETE native_hooks=true model_calls=0");
+            Environment.Exit(0);
+        }
+        catch (Exception error)
+        {
+            File.WriteAllText(Path.Combine(Main.SavePath, "combat-evidence-error.txt"), error.ToString());
+            Environment.Exit(1);
+        }
+    }
+}
+
 public sealed class NavigationFieldProbe : ModSystem
 {
     bool finished;

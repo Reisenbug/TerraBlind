@@ -5,6 +5,18 @@ using Terraria.ModLoader;
 
 namespace TerraBlind;
 
+public sealed class AgentProjectileEvidence : GlobalProjectile
+{
+    public override bool InstancePerEntity => true;
+    public NPC SourceNpc { get; private set; }
+    public override void OnSpawn(Projectile projectile, IEntitySource source)
+    {
+        SourceNpc = source is EntitySource_Parent { Entity: NPC npc } ? npc
+            : source is EntitySource_Parent { Entity: Projectile parent }
+                ? parent.GetGlobalProjectile<AgentProjectileEvidence>().SourceNpc : null;
+    }
+}
+
 public class AgentDamageEvidence : ModPlayer
 {
     public override void OnHurt(Player.HurtInfo info) => Record("hurt", info.Damage, info.DamageSource);
@@ -15,12 +27,19 @@ public class AgentDamageEvidence : ModPlayer
     void Record(string kind, double damage, PlayerDeathReason source)
     {
         if (Player.whoAmI != Main.myPlayer) return;
+        NPC attacker = source.SourceNPCIndex >= 0 && source.SourceNPCIndex < Main.maxNPCs ? Main.npc[source.SourceNPCIndex] : null;
+        if (attacker == null && source.SourceProjectileLocalIndex >= 0 && source.SourceProjectileLocalIndex < Main.maxProjectiles)
+            attacker = Main.projectile[source.SourceProjectileLocalIndex].GetGlobalProjectile<AgentProjectileEvidence>().SourceNpc;
         AgentTools.LastDamage = new JsonObject { ["kind"] = kind, ["tick"] = (long)Main.GameUpdateCount,
             ["damage"] = damage, ["hp_at_hook"] = Player.statLife,
             ["pos_tiles"] = new JsonObject { ["x"] = Player.Center.X / 16, ["y"] = Player.Center.Y / 16 },
             ["projectile_type"] = source.SourceProjectileType,
             ["npc_type"] = source.SourceNPCIndex >= 0 && source.SourceNPCIndex < Main.maxNPCs ? Main.npc[source.SourceNPCIndex].type : -1,
             ["other_source"] = source.SourceOtherIndex };
+        if (attacker != null && attacker.whoAmI >= 0 && attacker.whoAmI < Main.maxNPCs
+            && ReferenceEquals(Main.npc[attacker.whoAmI], attacker))
+            AgentTools.LastDamage["attacker"] = new JsonObject { ["npc_index"] = attacker.whoAmI, ["npc_type"] = attacker.type,
+                ["via"] = source.SourceNPCIndex >= 0 ? "contact" : "projectile" };
         if (kind == "death")
         {
             AgentTools.LastDamage["death_text"] = source.GetDeathText(Player.name).ToString();
