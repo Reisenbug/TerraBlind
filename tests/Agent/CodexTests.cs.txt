@@ -19,8 +19,7 @@ static class CodexTests
 
     public static async Task Run()
     {
-        await ModelResults();
-        ContextChanges();
+        await InputOptimizations();
         await GoalProtocol();
         await NativeGoalProtocol();
         await NativeExecutionSteering();
@@ -243,6 +242,68 @@ static class CodexTests
         Console.WriteLine("PASS: combat makes no periodic model calls, handles player follow-ups, permits one recovery and respects stop on the same Codex thread");
     }
 
+    public static async Task InputOptimizations()
+    {
+        await ModelResults();
+        ContextChanges();
+        ContextPatches();
+        InputReplay();
+    }
+
+    static void InputReplay()
+    {
+        if (Environment.GetEnvironmentVariable("TB_INPUT_REPLAY") is not string recording) return;
+        var source = JsonNode.Parse(File.ReadAllText(recording)).AsObject();
+        var exported = (JsonObject)source.DeepClone();
+        var context = new AgentContext();
+        var state = new JsonObject();
+        int messages = 0, reports = 0;
+        long before = 0, after = 0;
+        foreach (var entry in exported["items"].AsArray())
+        {
+            var item = entry["item"];
+            if (item["type"]?.ToString() == "custom_tool_call_output" && item["output"] is JsonArray parts)
+                foreach (var part in parts.Where(part => part["type"]?.ToString() == "input_text"))
+                {
+                    string text = part["text"].ToString();
+                    JsonNode value;
+                    try { value = JsonNode.Parse(text); } catch (System.Text.Json.JsonException) { continue; }
+                    if (value is not JsonObject obj || obj["trace"] is not JsonArray { Count: > 0 }) continue;
+                    before += text.Length;
+                    part["text"] = AgentModelOutput.Project("run_script", value).ToJsonString(AgentTools.ModelJson);
+                    after += part["text"].ToString().Length; reports++;
+                }
+            if (item["type"]?.ToString() != "message" || item["role"]?.ToString() != "user") continue;
+            foreach (var part in item["content"].AsArray())
+            {
+                string text = part["text"]?.ToString() ?? "";
+                int start = text.LastIndexOf("\n现状：", StringComparison.Ordinal);
+                if (start < 0) continue;
+                start += "\n现状：".Length;
+                var reader = new System.Text.Json.Utf8JsonReader(Encoding.UTF8.GetBytes(text[start..]));
+                using var document = System.Text.Json.JsonDocument.ParseValue(ref reader);
+                string raw = document.RootElement.GetRawText();
+                var old = JsonNode.Parse(raw);
+                if (old["mode"]?.ToString() == "snapshot") state.Clear();
+                foreach (var field in old["state"].AsObject()) state[field.Key] = field.Value?.DeepClone();
+                foreach (var field in old["removed"].AsArray()) state.Remove(field.ToString());
+                var hydrated = (JsonObject)state.DeepClone();
+                foreach (var node in hydrated["task_plan"]?["steps"]?.AsArray() ?? new JsonArray())
+                {
+                    if (node["script_present"]?.GetValue<bool>() == true) node["script"] = "retained script";
+                    if (node["on_failure_present"]?.GetValue<bool>() == true) node["on_failure"] = "retained recovery";
+                }
+                string compact = context.Capture(hydrated).ToJsonString(AgentTools.ModelJson);
+                part["text"] = text[..start] + compact + text[(start + raw.Length)..];
+                before += raw.Length; after += compact.Length; messages++;
+            }
+        }
+        string destination = Environment.GetEnvironmentVariable("TB_INPUT_REPLAY_OUTPUT")
+            ?? Path.Combine(Path.GetTempPath(), "terrablind-input-replayed.json");
+        File.WriteAllText(destination, exported.ToJsonString(AgentTools.ModelJson));
+        Console.WriteLine($"INPUT_REPLAY host_messages={messages} reports={reports} original_chars={before} compact_chars={after} output={destination}");
+    }
+
     static async Task ModelResults()
     {
         var tools = (JsonArray)Tools.DeepClone();
@@ -294,7 +355,7 @@ static class CodexTests
     {
         var context = new AgentContext();
         var state = JsonNode.Parse("""
-            {"player":{"hp":240},"inventory_slots":[{"type":191,"stack":1}],
+            {"player":{"hp":240},"inventory_slots":[{"slot":0,"type":191,"stack":1}],
              "task_plan":{"revision":3,"status":"active","steps":[{"id":"walk","workflow":"walk","status":"active","script":"move()","on_failure":"repair()","conditions":[{"kind":"position","x":10,"y":20}]}]},
              "script_workflows":{"walk":{"revision":5,"running":true,"steps":[{"id":"first","status":"completed","value":{"large":"old result"}}]}},
              "action_tasks":[{"handle":"old","status":"completed","args":{"code":"large old code"}},
@@ -306,9 +367,9 @@ static class CodexTests
             && first["state"]["task_plan"]["steps"][0]["on_failure"] == null
             && first["state"]["task_plan"]["steps"][0]["on_failure_present"]?.GetValue<bool>() == true
             && first["state"]["script_workflows"]["walk"]["steps"][0]["value"] == null
-            && first["state"]["action_tasks"].AsArray().Count == 1 && first["state"]["equipment"] == null,
+            && first["state"]["action_tasks"].AsObject().Count == 1 && first["state"]["equipment"] == null,
             "automatic context repeated completed effects, program source or duplicate inventory");
-        Check(first["state"]["action_tasks"][0]["handle"].ToString() == "live"
+        Check(first["state"]["action_tasks"]["live"]["handle"].ToString() == "live"
             && first["state"]["task_plan"]["steps"][0]["workflow"]?.ToString() == "walk"
             && first["state"]["last_death"]["npc_type"].GetValue<int>() == 222,
             "compact context lost live ownership or actual death evidence");
@@ -340,6 +401,63 @@ static class CodexTests
             }
             Console.WriteLine($"CONTEXT_REPLAY samples={samples} original_chars={before} delta_chars={after}");
         }
+    }
+
+    static void ContextPatches()
+    {
+        var state = JsonNode.Parse("""
+            {"player":{"hp":100,"max_hp":100,"pos":{"x":10,"y":20}},
+             "inventory_slots":[{"slot":0,"type":331,"stack":2,"name":"Spore"},{"slot":3,"type":9,"stack":20}],
+             "combat":{"active":false,"session":0,"outcome":"idle","tick":1,"self":{"x":10}},
+             "terrain":{"tick":1,"legend":"stable legend","rows":[".#"],"trap_tiles":[]},
+             "town_npcs":[{"who":1,"name":"Guide","pos":{"x":10,"y":20}}],
+             "last_damage":null,"script_workflows":{"path/a":{"revision":1}}}
+            """).AsObject();
+        var context = new AgentContext();
+        var first = context.Capture(state);
+        Check(first["state"]["inventory_slots"] is JsonObject && first["state"]["inventory_slots"]["0"]["stack"].GetValue<int>() == 2,
+            "automatic inventory snapshot was not keyed by actual slot");
+        var accumulated = first["state"].AsObject().DeepClone().AsObject();
+        state["inventory_slots"][0]["stack"] = 3;
+        state["inventory_slots"].AsArray().RemoveAt(1);
+        state["player"]["pos"]["x"] = 12;
+        state["combat"]["tick"] = 2; state["combat"]["self"]["x"] = 12;
+        state["terrain"]["tick"] = 2;
+        state["terrain"]["trap_tiles"].AsArray().Add(new JsonObject { ["x"] = 13, ["y"] = 20, ["type"] = 135 });
+        state["town_npcs"][0]["pos"]["x"] = 11;
+        state["last_damage"] = new JsonObject { ["damage"] = 20, ["npc_type"] = 42 };
+        state["script_workflows"].AsObject().Remove("path/a");
+        var patch = context.Capture(state);
+        Check(patch["state"]["inventory_slots"]["0"].AsObject().Count == 1
+            && patch["state"]["inventory_slots"]["0"]["stack"].GetValue<int>() == 3
+            && patch["removed"].AsArray().Any(path => path.ToString() == "/inventory_slots/3")
+            && patch["removed"].AsArray().Any(path => path.ToString() == "/script_workflows/path~1a"),
+            "slot update resent stable inventory metadata or lost removed slots/workflows");
+        Check(patch["state"]["player"]["pos"].AsObject().Count == 1 && patch["state"]["combat"] == null
+            && patch["state"]["terrain"]["legend"] == null && patch["state"]["terrain"]["rows"] == null
+            && patch["state"]["terrain"]["trap_tiles"].AsArray().Count == 1
+            && patch["state"]["town_npcs"]["1"]["name"] == null,
+            "context repeated stable/idle data or discarded a newly observed hazard");
+        void Merge(JsonObject target, JsonObject changes)
+        {
+            foreach (var field in changes)
+                if (field.Value is JsonObject nested && target[field.Key] is JsonObject previous) Merge(previous, nested);
+                else target[field.Key] = field.Value?.DeepClone();
+        }
+        Merge(accumulated, patch["state"].AsObject());
+        foreach (var path in patch["removed"].AsArray())
+        {
+            var keys = path.ToString().Split('/').Skip(1).Select(key => key.Replace("~1", "/").Replace("~0", "~")).ToArray();
+            JsonObject parent = accumulated;
+            foreach (string key in keys.Take(keys.Length - 1)) parent = parent[key].AsObject();
+            parent.Remove(keys[^1]);
+        }
+        context.Reset();
+        var fresh = context.Capture(state);
+        Check(JsonNode.DeepEquals(accumulated, fresh["state"]) && fresh["mode"].ToString() == "snapshot"
+            && fresh["state"]["last_damage"]["npc_type"].GetValue<int>() == 42,
+            "patch application or compaction snapshot lost authoritative current state");
+        Console.WriteLine("PASS: recursive context patches update actual slots/fields and removals while preserving hazards, damage and full reset snapshots");
     }
 
     static async Task NativeExecutionSteering(bool script = false, bool preparedReview = false, bool rejectSteer = false, bool preparationOnly = false)

@@ -2193,14 +2193,42 @@ internal sealed class AgentContext
         return result;
     }
 
+    static JsonObject Index(IEnumerable<JsonNode> items, string key)
+    {
+        var result = new JsonObject();
+        foreach (var item in items) result[item[key].ToString()] = item.DeepClone();
+        return result;
+    }
+
+    static JsonObject Changes(JsonObject current, JsonObject previous, string path, JsonArray removed)
+    {
+        var result = new JsonObject();
+        string Path(string key) => path + "/" + key.Replace("~", "~0").Replace("/", "~1");
+        foreach (var field in current)
+        {
+            if (previous.TryGetPropertyValue(field.Key, out var before) && JsonNode.DeepEquals(before, field.Value)) continue;
+            if (field.Value is JsonObject nested && before is JsonObject old)
+            {
+                var changed = Changes(nested, old, Path(field.Key), removed);
+                if (changed.Count > 0) result[field.Key] = changed;
+            }
+            else result[field.Key] = field.Value?.DeepClone();
+        }
+        foreach (var field in previous.Where(field => !current.ContainsKey(field.Key))) removed.Add(Path(field.Key));
+        return result;
+    }
+
     internal JsonObject Capture(JsonObject state)
     {
         var current = (JsonObject)state.DeepClone();
         foreach (string field in new[] { "equipment", "camera", "tiles", "objects", "detected_tiles", "available_recipes", "codex_goal" })
             current.Remove(field);
         if (state["inventory_slots"] is JsonArray inventory)
-            current["inventory_slots"] = new JsonArray(inventory.Where(item => item["type"]?.GetValue<int>() > 0)
-                .Select(item => item.DeepClone()).ToArray());
+            current["inventory_slots"] = Index(inventory.Where(item => item["type"]?.GetValue<int>() > 0), "slot");
+        foreach (string field in new[] { "town_npcs", "enemies" })
+            if (state[field] is JsonArray entities) current[field] = Index(entities, "who");
+        if (state["combat"]?["active"]?.GetValue<bool>() == false)
+            current["combat"] = Pick(state["combat"], "session", "active", "outcome", "directive", "target", "until_stopped");
         if (state["task_plan"] is JsonObject plan)
         {
             var brief = Pick(plan, "status", "mode", "revision", "progress_revision", "current_step", "ready_steps");
@@ -2229,7 +2257,7 @@ internal sealed class AgentContext
         if (state["action_tasks"] is JsonArray actions)
         {
             var live = actions.Where(action => action["status"]?.ToString() is "running" or "paused" or "queued").ToArray();
-            current["action_tasks"] = new JsonArray((live.Length > 0 ? live : actions.TakeLast(1)).Select(action =>
+            current["action_tasks"] = Index((live.Length > 0 ? live : actions.TakeLast(1)).Select(action =>
             {
                 var item = Pick(action, "handle", "tool", "status", "attempt", "task_node", "after_handle", "result");
                 if (action["args"] is JsonObject args)
@@ -2238,18 +2266,15 @@ internal sealed class AgentContext
                     item["args"].AsObject().Remove("code");
                 }
                 return (JsonNode)item;
-            }).ToArray());
+            }), "handle");
         }
         if (state["watch"] is JsonObject watch)
             current["watch"] = Pick(watch, "pending_count", "events", "passive_events", "radius", "health_below");
-        var changed = new JsonObject();
-        foreach (var field in current)
-            if (previous == null || !previous.ContainsKey(field.Key) || !JsonNode.DeepEquals(previous[field.Key], field.Value))
-                changed[field.Key] = field.Value?.DeepClone();
-        var result = new JsonObject { ["mode"] = previous == null ? "snapshot" : "delta", ["state"] = changed,
-            ["removed"] = new JsonArray(previous == null ? Array.Empty<JsonNode>() : previous.Where(field => !current.ContainsKey(field.Key))
-                .Select(field => (JsonNode)JsonValue.Create(field.Key)).ToArray()),
-            ["detail"] = "state仅更新列出的字段，其余沿用上一份；removed删除字段。完整现场用get_state，动作详情用action_query，脚本进度用script_progress。" };
+        var removed = new JsonArray();
+        var result = new JsonObject { ["mode"] = previous == null ? "snapshot" : "delta", ["format"] = "host_state_v2",
+            ["state"] = previous == null ? current.DeepClone() : Changes(current, previous, "", removed), ["removed"] = removed };
+        if (previous == null)
+            result["detail"] = "自动现场state递归合并对象，数组整体替换，null表示清空值；removed按JSON Pointer删除路径，~1还原/，~0还原~。inventory_slots按slot、town_npcs/enemies按who、action_tasks按handle索引。get_state仍返回原始数组。完整现场用get_state，动作详情用action_query，脚本进度用script_progress。";
         previous = current;
         return result;
     }
