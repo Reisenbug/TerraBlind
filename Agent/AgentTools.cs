@@ -1049,6 +1049,32 @@ public static partial class AgentTools
                         return new JsonObject { ["error"] = "program_revision_conflict", ["revision"] = program["revision"].DeepClone() }.ToJsonString();
                     source = program["code"].GetValue<string>();
                 }
+                string skillSavePath = Main.SavePath, skillWorld = Main.worldName + ":" + Main.worldID;
+                void RecordSkills(JsonObject report)
+                {
+                    var records = (JsonArray)report["skill_calls"].DeepClone();
+                    if (program != null)
+                    {
+                        var record = new JsonObject { ["name"] = program["name"].DeepClone(), ["revision"] = program["revision"].DeepClone(),
+                            ["source_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                                System.Text.Encoding.UTF8.GetBytes(program["code"].ToString()))),
+                            ["status"] = report["ok"]?.GetValue<bool>() == true ? "returned" : "interrupted",
+                            ["elapsed_ms"] = report["elapsed_ms"].DeepClone(), ["tool_calls"] = report["tool_calls"].DeepClone(),
+                            ["result"] = new JsonObject { ["error"] = report["error"]?.DeepClone() } };
+                        foreach (string field in new[] { "status", "reason", "error", "outcome" })
+                            if (report["value"] is JsonObject returned && returned[field] is JsonValue v && v.TryGetValue<string>(out string text))
+                                record["result"][field] = text[..Math.Min(text.Length, 192)];
+                        if (report["failure"] is JsonObject failure)
+                            record["last_failure"] = new JsonObject { ["tool"] = failure["tool"]?.DeepClone(),
+                                ["error"] = failure["evidence"]?["error"]?.DeepClone(), ["reason"] = failure["evidence"]?["reason"]?.DeepClone(),
+                                ["outcome"] = failure["evidence"]?["outcome"]?.DeepClone() };
+                        records.Add(record);
+                    }
+                    if (records.Count == 0) return;
+                    try { new ScriptLibrary(System.IO.Path.Combine(skillSavePath, "TerraBlindAgent", "programs")).RecordCalls(records, skillWorld); }
+                    catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException)
+                    { DiagLog.Write("[agent_skill_evidence] " + error.Message); }
+                }
                 var localRecovery = recoveryContext.Value;
                 var workflow = await NativeAgent.OnMain(() =>
                 {
@@ -1086,7 +1112,7 @@ public static partial class AgentTools
                             return true;
                         }, cleanupToken), token, workflow,
                         localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasRecoveryBlocker ? Watches.Pending(recoveryOnly: true) : null, checkToken),
-                        new ScriptLibrary(System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent", "programs")).Callable());
+                        new ScriptLibrary(System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent", "programs")).Callable(), RecordSkills);
                 }
                 finally
                 {
@@ -1106,30 +1132,6 @@ public static partial class AgentTools
                     }, token);
                 if (program != null)
                     result["program"] = new JsonObject { ["name"] = program["name"].DeepClone(), ["revision"] = program["revision"].DeepClone() };
-                var skillRecords = (JsonArray)result["skill_calls"].DeepClone();
-                if (program != null)
-                {
-                    var record = new JsonObject { ["name"] = program["name"].DeepClone(), ["revision"] = program["revision"].DeepClone(),
-                        ["source_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-                            System.Text.Encoding.UTF8.GetBytes(program["code"].ToString()))),
-                        ["status"] = result["ok"]?.GetValue<bool>() == true ? "returned" : "interrupted",
-                        ["elapsed_ms"] = result["elapsed_ms"].DeepClone(), ["tool_calls"] = result["tool_calls"].DeepClone(), ["result"] = new JsonObject() };
-                    foreach (string field in new[] { "status", "reason", "error", "outcome" })
-                        if (result["value"] is JsonObject returned && returned[field] is JsonValue v && v.TryGetValue<string>(out string text))
-                            record["result"][field] = text[..Math.Min(text.Length, 192)];
-                    if (result["failure"] is JsonObject failure)
-                        record["last_failure"] = new JsonObject { ["tool"] = failure["tool"]?.DeepClone(),
-                            ["error"] = failure["evidence"]?["error"]?.DeepClone(), ["reason"] = failure["evidence"]?["reason"]?.DeepClone(),
-                            ["outcome"] = failure["evidence"]?["outcome"]?.DeepClone() };
-                    skillRecords.Add(record);
-                }
-                if (skillRecords.Count > 0)
-                {
-                    string world = Main.worldName + ":" + Main.worldID;
-                    try { new ScriptLibrary(System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent", "programs")).RecordCalls(skillRecords, world); }
-                    catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException)
-                    { DiagLog.Write("[agent_skill_evidence] " + error.Message); }
-                }
                 if (Text(args, "task_node") != "") result["task_node"] = args["task_node"].DeepClone();
                 if (result["value"] is JsonObject returnedValue && returnedValue["wake"] is JsonObject deliveredWake)
                 {

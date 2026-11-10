@@ -221,7 +221,7 @@ public static class AgentScript
         Action<string, JsonObject> validate,
         Func<string, JsonObject, CancellationToken, Task<string>> execute,
         Func<CancellationToken, Task> stop, CancellationToken token, ScriptProgress progress = null,
-        Func<CancellationToken, Task<JsonObject>> observeEvent = null, JsonArray programs = null)
+        Func<CancellationToken, Task<JsonObject>> observeEvent = null, JsonArray programs = null, Action<JsonObject> onResult = null)
     {
         if (string.IsNullOrWhiteSpace(source) || source.Length > 16000)
             throw new ArgumentException("code必须是1..16000字符的JavaScript函数体，使用return返回结果。");
@@ -248,6 +248,7 @@ public static class AgentScript
                 call["status"] = "interrupted";
                 call["elapsed_ms"] = clock.ElapsedMilliseconds - call["started_ms"].GetValue<long>();
                 call["tool_calls"] = calls - call["tool_calls_before"].GetValue<int>();
+                call["result"] = new JsonObject { ["error"] = error ?? "skill_did_not_return" };
             }
             var result = new JsonObject
             {
@@ -263,6 +264,7 @@ public static class AgentScript
                 { ["characters"] = omittedOutputChars.Value, ["limit"] = 16000, ["body_completed"] = true, ["value_omitted"] = true };
             progress?.End(result);
             if (progress != null) result["workflow"] = progress.Summary();
+            onResult?.Invoke(result);
             return result;
         }
         try
@@ -462,7 +464,7 @@ public static class AgentScript
         }
         catch (Exception) when (token.IsCancellationRequested)
         {
-            progress?.End(new JsonObject { ["error"] = "cancelled", ["detail"] = "执行被取消，未完成步骤需要核对实际状态。" });
+            Report("cancelled", "执行被取消，未完成步骤需要核对实际状态。");
             throw new OperationCanceledException(token);
         }
         catch (Exception error)
@@ -478,7 +480,7 @@ public static class AgentScript
                 try { await stop(token); }
                 catch (Exception) when (token.IsCancellationRequested)
                 {
-                    progress?.End(new JsonObject { ["error"] = "cancelled", ["detail"] = "清理期间被取消，步骤需要核对。" });
+                    Report("cancelled", "清理期间被取消，步骤需要核对。");
                     throw new OperationCanceledException(token);
                 }
                 catch (Exception failure) { cleanup = failure.Message; }

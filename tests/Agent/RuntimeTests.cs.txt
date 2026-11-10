@@ -631,6 +631,26 @@ static class RuntimeTests
                 && evidence["review_returns"].GetValue<int>() == 2
                 && evidence["recent"][0]["result"]["reason"].ToString() == "fixture_observed",
                 "public program and skill invocations did not retain their actual non-completion outcomes: " + observed);
+            await Execute(AgentTools.Execute("script_program", new JsonObject { ["operation"] = "save", ["name"] = "cancelled",
+                ["expected_revision"] = 0, ["code"] = "tool('say',{text:'skill cancellation fixture entered'});tool('script_events',{wait_ms:2000});return {status:'done'};" }, default));
+            foreach (bool asProgram in new[] { true, false })
+            {
+                AgentTools.Watches.Take();
+                int before = AgentChat.Messages.Count;
+                using var cancellation = new CancellationTokenSource();
+                var request = asProgram ? new JsonObject { ["program"] = "cancelled", ["expected_revision"] = 1 }
+                    : new JsonObject { ["code"] = "return skill('cancelled',1);" };
+                var running = AgentTools.Execute("run_script", request, cancellation.Token);
+                await PumpUntil(() => AgentChat.Messages.Count > before);
+                cancellation.Cancel();
+                bool cancelled = false;
+                try { await Execute(running); } catch (OperationCanceledException) { cancelled = true; }
+                Check(cancelled, "cancelled skill unexpectedly completed its blocking script");
+                var interrupted = new ScriptLibrary(Path.Combine(root, "TerraBlindAgent", "programs")).Get("cancelled")["runtime"];
+                Check(interrupted is JsonArray versions && versions[0]["interrupted"].GetValue<int>() == (asProgram ? 1 : 2)
+                    && versions[0]["returned"].GetValue<int>() == 0,
+                    "cancelled skill lost its actual execution evidence, program=" + asProgram);
+            }
             Console.WriteLine("PASS: public skill tools retain per-version evidence for program and nested calls without asserting task completion");
         }
         finally
