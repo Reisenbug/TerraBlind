@@ -1977,6 +1977,15 @@ public static partial class AgentTools
                     lastPlanning = planning;
                     DiagLog.Write($"[agent_navigation_phase] phase={(planning ? "building_field" : "executing")} elapsed_seconds={elapsed:0.###}");
                 }
+                int gx = Int(request, "gx"), gy = Int(request, "gy");
+                if (!planning && !Reach.CanInteract(player, gx, gy))
+                {
+                    var field = MazeWand.PeekFieldOrNull(gx, gy);
+                    if (field?.Count == 1 && field.ContainsKey((gx, gy)))
+                        return new JsonObject { ["error"] = "navigation_goal_isolated", ["outcome"] = "no_route",
+                            ["reason"] = "goal_has_no_traversable_neighbor", ["field_cells"] = field.Count,
+                            ["target"] = new JsonObject { ["x"] = gx, ["y"] = gy }, ["elapsed_seconds"] = elapsed };
+                }
                 var trap = TerrainInspection.NavigationHazard(acceptedTraps);
                 if (trap != null) return trap;
                 if (player.suffocating)

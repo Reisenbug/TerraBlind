@@ -12,6 +12,7 @@ static class ActionTests
 
     public static async Task Run()
     {
+        await IsolatedNavigationGoal();
         await QueuedActions();
         var history = new ActionTasks((_, args, _) => Task.FromResult(args.ToJsonString()),
             _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
@@ -354,6 +355,62 @@ static class ActionTests
         }
         Check(allEnded == 2 && !all.HasActive, "global stop failed to release both action scopes");
         Console.WriteLine("PASS: global stop cancels paused originals and active insertions with scope cleanup");
+    }
+
+    static async Task IsolatedNavigationGoal()
+    {
+        var native = new NativeAgent(); native.Load();
+        var previousField = MazeWand.Field; var previousReach = Reach.InteractTest;
+        var previousHandler = HttpServerSystem.Handler;
+        bool ready = RecedingNav.FieldReady;
+        try
+        {
+            MazeWand.Field = new() { [(900, 100)] = 0 };
+            Reach.InteractTest = (_, _, _) => false;
+            int polls = 0, stops = 0;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/nav_recede_done") polls++;
+                if (path == "/nav_recede_stop") stops++;
+                return (200, "{\"done\":false}");
+            };
+            async Task Pump(Task task)
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(2);
+                while (!task.IsCompleted)
+                {
+                    Check(DateTime.UtcNow < deadline, "isolated goal entered the repeated escape-step loop");
+                    native.PostUpdateEverything(); await Task.Delay(2);
+                }
+                await task;
+            }
+            RecedingNav.FieldReady = false;
+            using var cancel = new CancellationTokenSource();
+            var action = AgentTools.Navigate(new JsonObject { ["x"] = 900, ["y"] = 100 }, cancel.Token);
+            var startedBy = DateTime.UtcNow.AddSeconds(2);
+            while (polls == 0)
+            {
+                Check(DateTime.UtcNow < startedBy, "navigation never started polling");
+                native.PostUpdateEverything(); await Task.Delay(2);
+            }
+            Check(!action.IsCompleted, "unfinished field was classified as a disconnected goal");
+            MazeWand.Field[(899, 100)] = 1;
+            RecedingNav.FieldReady = true;
+            for (int i = 0; i < 30; i++) { native.PostUpdateEverything(); await Task.Delay(2); }
+            Check(!action.IsCompleted && stops == 0, "connected field was incorrectly interrupted");
+            MazeWand.Field.Remove((899, 100));
+            await Pump(action);
+            Check(action.Result["error"]?.ToString() == "navigation_goal_isolated" && stops == 1
+                && action.Result["target"]?["x"]?.GetValue<int>() == 900,
+                "isolated navigation failed without stopping movement and preserving the target evidence");
+        }
+        finally
+        {
+            native.OnWorldUnload(); native.Unload(); MazeWand.Field = previousField;
+            Reach.InteractTest = previousReach; HttpServerSystem.Handler = previousHandler;
+            RecedingNav.FieldReady = ready;
+        }
+        Console.WriteLine("PASS: ready isolated goal stops immediately with target evidence; an unfinished field keeps executing");
     }
 
     static async Task QueuedActions()
