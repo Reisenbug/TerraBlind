@@ -51,7 +51,8 @@ public static class FallSafety
             if (frame.Vy == 0 && LandingDamage(player, position, fallStart) > 0) return false;
             fallStart = ResetDistance(player, position, fallStart, frame.Vy, i + 1);
         }
-        return true;
+        return frames.Count == 0 || LandingDamage(player,
+            new Vector2(frames[^1].Px, frames[^1].Py), fallStart) == 0;
     }
 
     static bool Wet(Player player, Vector2 position)

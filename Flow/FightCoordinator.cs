@@ -238,6 +238,11 @@ namespace TerraBlind
                 }
                 _animationSlot = -1;
             }
+            if (StateSpacePlanner.ReservesItemUse)
+            {
+                _usingItem = _idleDefense = false;
+                return;
+            }
             bool mining = primaryItemUse && (p.HeldItem.pick > 0 || p.HeldItem.axe > 0 || p.HeldItem.hammer > 0);
             bool placing = PlaceAction.IsRunning || PlaceCoordinator.IsActive || PlaceWalls.IsRunning
                 || p.HeldItem.createTile >= 0 && (primaryItemUse || p.itemTime > 0);

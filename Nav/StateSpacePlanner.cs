@@ -2205,7 +2205,8 @@ namespace TerraBlind
         const int StallReport = 20;   // 1/3 秒推不动一帧 = 有问题,比 sentinel 的 30 tick 早发现
         const int PlaceStallMax = 60;
 
-        public static bool IsActive => (_execFrames != null && _execIdx < _execFrames.Count) || _walkActive;
+        public static bool IsActive => _execFrames != null || _walkActive;
+        public static bool ReservesItemUse => _airPlace.HasValue || _execFrames?.Exists(frame => frame.Place) == true;
 
         // 闭环走路:不开环重放计划帧(起点偏了会平移整条边),而是朝目标 X 按键、到位即止,自我纠正。
         // 到位【不】刹车:vx 要带进下一条边(跳跃需要助跑速度,别归零)。
@@ -2233,7 +2234,7 @@ namespace TerraBlind
         // running iff a route is dispatched and not yet ended (steps drive edges; _execFrames is one edge's replay).
         public static bool ExecRunning => StepsActive || IsActive || _greedyActive || _replanPending || _asyncPending;
         internal static bool ReplayAtHandoff => _execFrames != null && _execIdx == _execFrames.Count
-            && _ssSteps?.Count == 1 && _ssDispatched;
+            && !_airPlace.HasValue && _ssSteps?.Count == 1 && _ssDispatched;
 
         // 逐边执行:帧步重放自己模拟出的帧(规划即执行),pillar 步交给 SkillExecutor 的宏。
         // 每一步都要等上一个执行器空闲、人落地站稳(干净静止态)才开始。
@@ -3711,6 +3712,7 @@ namespace TerraBlind
             if (_airPlace.HasValue && !AirPlaceTick(p)) return;
             if (_execIdx >= _execFrames.Count)
             {
+                if (_airPlace.HasValue) return;
                 float cx = p.position.X + p.width / 2f, fy = p.position.Y + p.height;
                 float gx = _execGoalWx * 16f + 8f, gy = (_execGoalWy + 1) * 16f;
                 DiagLog.Write($"[ss-land] goal=({_execGoalWx},{_execGoalWy}) actual_px=({cx:0.#},{fy:0.#}) dx={(cx-gx):0.#} dy={(fy-gy):0.#}");

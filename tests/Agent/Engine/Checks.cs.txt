@@ -19,6 +19,112 @@ namespace Engine;
 
 public sealed class Engine : Mod { }
 
+public sealed class FallExecutionProbe : ModSystem
+{
+    const BindingFlags Hidden = BindingFlags.Static | BindingFlags.NonPublic;
+    public override void OnWorldLoad()
+    {
+        bool plan = Terraria.Program.LaunchParameters.ContainsKey("-fallplancheck");
+        if (!plan && !Terraria.Program.LaunchParameters.ContainsKey("-fallhandoffcheck")) return;
+        try
+        {
+            Main.myPlayer = 0;
+            Main.player[0] = new Player { active = true, width = 20, height = 42, position = new Vector2(13272, 4334),
+                velocity = new Vector2(3, 0), maxRunSpeed = 3, accRunSpeed = 3, runAcceleration = .08f,
+                runSlowdown = .2f, gravity = .4f, maxFallSpeed = 10 };
+            var player = Main.player[0];
+            player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+            player.inventory[3].SetDefaults(ItemID.Wood); player.inventory[3].stack = 9999;
+            player.inventory[4].SetDefaults(ItemID.Starfury);
+            player.inventory[5].SetDefaults(ItemID.WoodPlatform); player.inventory[5].stack = 138;
+            var policy = (AgentControlPolicy)typeof(AgentTools).GetField("Control", Hidden).GetValue(null);
+            policy.Reset();
+            var report = new JsonObject();
+            if (plan)
+            {
+                var result = StateSpacePlanner.StepAlongField(812, 318);
+                var frames = result?.Steps.FirstOrDefault()?.Frames;
+                if (frames == null) throw new Exception("original fall scene produced no replay frames");
+                int fallStart = (int)(player.position.Y / 16);
+                var resets = new JsonArray();
+                for (int i = 0; i < frames.Count; i++)
+                {
+                    var frame = frames[i]; var position = new Vector2(frame.Px, frame.Py);
+                    int damage = frame.Vy == 0 ? FallSafety.LandingDamage(player, position, fallStart) : 0;
+                    int next = FallSafety.ResetDistance(player, position, fallStart, frame.Vy, i + 1);
+                    if (next != fallStart || damage > 0) resets.Add(new JsonObject { ["frame"] = i, ["y"] = frame.Py,
+                        ["vy"] = frame.Vy, ["damage"] = damage, ["before"] = fallStart, ["after"] = next });
+                    fallStart = next;
+                }
+                report = new JsonObject { ["goal"] = new JsonArray(result.GoalWx, result.GoalWy), ["frames"] = frames.Count,
+                    ["place_frame"] = frames.FindIndex(f => f.Place), ["last_vy"] = frames[^1].Vy,
+                    ["safe"] = FallSafety.SafeTrajectory(player, player.position, frames), ["immune"] = FallSafety.Immune(player),
+                    ["terminal_damage"] = FallSafety.LandingDamage(player, new Vector2(frames[^1].Px, frames[^1].Py), fallStart),
+                    ["resets"] = resets };
+                var unfinished = new List<PhysicsSimulator.ControlInput>
+                    { new() { Px = player.position.X, Py = player.position.Y + 43 * 16, Vy = 10 } };
+                if (FallSafety.SafeTrajectory(player, player.position, unfinished)) throw new Exception("lethal unfinished fall was accepted");
+                player.noFallDmg = true;
+                if (!FallSafety.SafeTrajectory(player, player.position, unfinished)) throw new Exception("fall immunity was incorrectly rejected");
+                player.noFallDmg = false; player.slowFall = true;
+                if (!FallSafety.SafeTrajectory(player, player.position, unfinished)) throw new Exception("slow-fall reset was incorrectly rejected");
+                player.slowFall = false;
+                report["lethal_tail_rejected"] = true; report["immune_and_slow_fall_preserved"] = true;
+            }
+            else
+            {
+                player.position = new Vector2(848 * 16, 310 * 16);
+                player.velocity = new Vector2(0, 10); player.itemTime = 5; player.selectedItem = 4;
+                var frames = new List<PhysicsSimulator.ControlInput> { new() { Px = player.position.X, Py = player.position.Y,
+                    Vx = 0, Vy = 10, Place = true, PlaceCx = 848, PlaceCy = 314 } };
+                typeof(StateSpacePlanner).GetField("_execFrames", Hidden).SetValue(null, frames);
+                typeof(StateSpacePlanner).GetField("_execIdx", Hidden).SetValue(null, 0);
+                typeof(StateSpacePlanner).GetField("_ssSteps", Hidden).SetValue(null,
+                    new List<StateSpacePlanner.ExecStep> { new() { Frames = frames } });
+                typeof(StateSpacePlanner).GetField("_ssDispatched", Hidden).SetValue(null, true);
+                Manual.On = false; AgentPermissions.Reset();
+                NPC.NewNPC(new EntitySource_Misc("fall-handoff-defense"), (int)player.Center.X + 80, (int)player.Center.Y, NPCID.BlueSlime);
+                FightCoordinator.Start(40); player.controlUseItem = false;
+                FightCoordinator.Tick(player);
+                if (player.controlUseItem) throw new Exception("defense fired during a reserved placement replay");
+                typeof(FightCoordinator).GetField("_animationSlot", Hidden).SetValue(null, 4);
+                typeof(FightCoordinator).GetField("_animationAttack", Hidden).SetValue(null, true);
+                player.itemAnimation = 3;
+                FightCoordinator.Tick(player);
+                if (player.selectedItem != 4) throw new Exception("placement reservation interrupted an unfinished attack animation");
+                player.itemAnimation = 0;
+                FightCoordinator.Tick(player);
+                if (player.controlUseItem) throw new Exception("defense restarted after animation instead of yielding to placement");
+                FightCoordinator.Stop();
+                StateSpacePlanner.ApplyControls();
+                if (!StateSpacePlanner.IsActive) throw new Exception("last-frame placement lost activity while itemTime=5 and tile was absent");
+                if ((bool)typeof(StateSpacePlanner).GetProperty("ReplayAtHandoff", Hidden).GetValue(null))
+                    throw new Exception("prepared successor could overwrite an unverified placement");
+                player.itemTime = 0; player.controlUseItem = false;
+                StateSpacePlanner.ApplyControls();
+                if (!StateSpacePlanner.IsActive || !player.controlUseItem || player.selectedItem != 5)
+                    throw new Exception("pending placement was cleared before retry after cooldown");
+                FightCoordinator.Start(40); FightCoordinator.Tick(player);
+                if (!player.controlUseItem || player.selectedItem != 5) throw new Exception("defense stole the retried placement input");
+                FightCoordinator.Stop();
+                var tile = Main.tile[848, 314]; tile.ResetToType(TileID.Platforms);
+                StateSpacePlanner.ApplyControls();
+                if (StateSpacePlanner.IsActive) throw new Exception("verified placement did not release the exhausted replay");
+                report = new JsonObject { ["pending_survived"] = true, ["retried_after_cooldown"] = true,
+                    ["verified_before_release"] = true, ["new_attack_withheld"] = true, ["unfinished_attack_preserved"] = true };
+            }
+            File.WriteAllText(Path.Combine(Main.SavePath, plan ? "fall-plan.json" : "fall-handoff.json"), report.ToJsonString());
+            Console.WriteLine(plan ? "FALL_PLAN_COMPLETE native_world=true model_calls=0" : "FALL_HANDOFF_COMPLETE native_world=true model_calls=0");
+            Environment.Exit(0);
+        }
+        catch (Exception error)
+        {
+            File.WriteAllText(Path.Combine(Main.SavePath, "fall-probe-error.txt"), error.ToString());
+            Environment.Exit(1);
+        }
+    }
+}
+
 public sealed class NavigationStartupProbe : ModSystem
 {
     public override void OnWorldLoad()
