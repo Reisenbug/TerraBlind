@@ -26,6 +26,7 @@ static class CodexTests
         await NativeExecutionSteering(script: true);
         await NativeExecutionSteering(preparedReview: true);
         await NativeExecutionSteering(preparedReview: true, rejectSteer: true);
+        await NativeExecutionSteering(preparedReview: true, preparationOnly: true);
         await NativeBackgroundReview();
         var launch = new System.Diagnostics.ProcessStartInfo();
         launch.Environment.Clear();
@@ -293,7 +294,7 @@ static class CodexTests
         }
     }
 
-    static async Task NativeExecutionSteering(bool script = false, bool preparedReview = false, bool rejectSteer = false)
+    static async Task NativeExecutionSteering(bool script = false, bool preparedReview = false, bool rejectSteer = false, bool preparationOnly = false)
     {
         var native = new NativeAgent();
         var server = new Server { HoldFinalReply = true, RejectSteer = rejectSteer };
@@ -323,6 +324,17 @@ static class CodexTests
                       "script":"return step('move',()=>{const r=tool('nav_to',{x:900,y:100});if(!r.done)throw new Error('blocked');return r;});",
                       "conditions":[{"kind":"permanent_health","count":9999}]}]}
                     """).AsObject(), AgentTaskEvidence.Measure);
+                if (preparationOnly)
+                {
+                    var addition = JsonNode.Parse("""
+                        {"expected_revision":0,"reason":"future action is still a template lookup","add_nodes":[
+                         {"id":"collect","description":"execute the prepared collection","depends_on":["travel"],
+                          "script":"return tool('script_program',{operation:'get',name:'use_life_crystals'});",
+                          "conditions":[{"kind":"permanent_health","count":9999}]}]}
+                        """).AsObject();
+                    addition["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone();
+                    AgentTools.Plan.Revise(addition, AgentTaskEvidence.Measure);
+                }
                 ActionTasks.NodeContext.Value = "travel";
                 try { handle = AgentTools.Actions.Start(script ? "run_script" : "nav_to", script
                     ? new JsonObject { ["task_node"] = "travel" } : new JsonObject { ["x"] = 900, ["y"] = 100 }, default)["handle"].ToString(); }
@@ -353,6 +365,18 @@ static class CodexTests
             if (preparedReview)
             {
                 server.FinishReply();
+                if (preparationOnly)
+                {
+                    await Until(() => server.Inputs.Count == 2);
+                    Check(server.Inputs[1].Contains("collect") && AgentTools.Actions.ActiveHandle == handle && starts == 1,
+                        "preparation of a read-only successor waited for arrival or replaced navigation");
+                    server.FinishReply();
+                    quiet = DateTime.UtcNow.AddMilliseconds(700);
+                    while (DateTime.UtcNow < quiet) { native.PostUpdateEverything(); await Task.Delay(5); }
+                    Check(server.Inputs.Count == 2, "unchanged preparation-only source caused an unbounded background review loop");
+                    Console.WriteLine("PASS: preparation-only successors receive a bounded review while the original action runs");
+                    return;
+                }
                 if (rejectSteer)
                 {
                     await Until(() => server.Inputs.Count == 2);

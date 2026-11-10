@@ -11,6 +11,37 @@ namespace TerraBlind;
 
 public static class AgentScript
 {
+    internal static bool PreparationOnly(string source)
+    {
+        try
+        {
+            var ast = new Acornima.Parser().ParseScript("(function(){\n" + source + "\n});");
+            int references = 0, queries = 0;
+            bool dynamicOrAction = false;
+            void Visit(Acornima.Ast.Node node)
+            {
+                if (node is Acornima.Ast.Identifier id)
+                {
+                    if (id.Name == "tool") references++;
+                    if (id.Name == "skill") dynamicOrAction = true;
+                }
+                if (node is Acornima.Ast.CallExpression call && call.Callee is Acornima.Ast.Identifier { Name: "tool" })
+                {
+                    if (call.Arguments.Count > 0 && call.Arguments[0] is Acornima.Ast.StringLiteral name
+                        && name.Value is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
+                            or "terrain_map" or "opportunity_assess" or "nearby_drops" or "item_info" or "wiki_search" or "wiki_page"
+                            or "recipe" or "script_program" or "find_biome" or "tile_names" or "find_descent" or "descent_route"
+                            or "equipment_list" or "inventory_review" or "npc_find" or "npc_drop_sources" or "script_progress") queries++;
+                    else dynamicOrAction = true;
+                }
+                foreach (var child in node.ChildNodes) Visit(child);
+            }
+            Visit(ast);
+            return !dynamicOrAction && references == queries;
+        }
+        catch (Acornima.ParseErrorException) { return false; }
+    }
+
     public static void DescribePrograms(JsonArray tools)
     {
         var findTiles = tools.First(t => t["function"]?["name"]?.ToString() == "find_tiles")["function"];

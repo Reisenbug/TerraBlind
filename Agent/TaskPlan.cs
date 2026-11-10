@@ -18,6 +18,21 @@ public sealed class AgentTaskPlan
     internal int ExecutionRevision(string id) => (_steps.FirstOrDefault(step => step["id"]?.ToString() == id)?["revisions"] as JsonArray)?.Count ?? 0;
     public bool RequiresNodeExecution => _dag && Incomplete;
     public bool Incomplete => _steps.Any(s => s["status"]?.ToString() != "completed");
+    internal JsonArray PreparationNodes(string owner, Func<JsonObject, int> measure)
+    {
+        bool Unmet(JsonNode node)
+        {
+            var condition = node.AsObject();
+            int baseline = condition["kind"]?.ToString() is "npc_kills" or "chests_looted" ? condition["baseline"].GetValue<int>() : 0;
+            return measure(condition) - baseline < condition["count"].GetValue<int>();
+        }
+        var completed = _steps.Where(s => s["status"]?.ToString() == "completed").Select(s => s["id"].ToString()).ToHashSet();
+        return new JsonArray(_steps.Where(s => s["status"]?.ToString() != "completed" && s["preparation_only"]?.GetValue<bool>() == true
+            && s["conditions"].AsArray().Any(Unmet)
+            && (s["id"]?.ToString() == owner || s["depends_on"].AsArray().Any(d => d?.ToString() == owner)
+                && s["depends_on"].AsArray().All(d => d?.ToString() == owner || completed.Contains(d.ToString()))))
+            .Select(s => s["id"].DeepClone()).ToArray());
+    }
 
     public void Reset() { _steps.Clear(); _goal = null; _cursor = _progress = 0; _dag = false; _revision++; }
 
@@ -58,6 +73,7 @@ public sealed class AgentTaskPlan
             if (dag)
             {
                 copy["script"] = step["script"].DeepClone();
+                copy["preparation_only"] = AgentScript.PreparationOnly(step["script"].ToString());
                 if (step["on_failure"] != null) copy["on_failure"] = step["on_failure"].GetValue<string>();
                 copy["workflow"] = "dag-" + Guid.NewGuid().ToString("N");
             }
@@ -194,6 +210,7 @@ public sealed class AgentTaskPlan
             {
                 if (string.IsNullOrWhiteSpace(change["script"].GetValue<string>())) throw new ArgumentException("script不能为空。");
                 step["script"] = change["script"].DeepClone();
+                step["preparation_only"] = AgentScript.PreparationOnly(change["script"].ToString());
             }
             if (change["on_failure"] != null) step["on_failure"] = change["on_failure"].GetValue<string>();
             if (change["depends_on"] != null)

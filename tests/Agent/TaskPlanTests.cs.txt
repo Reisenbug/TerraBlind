@@ -9,9 +9,38 @@ static class TaskPlanTests
     static void Check(bool ok, string message) { if (!ok) throw new Exception(message); }
     static JsonObject Parse(string text) => JsonNode.Parse(text).AsObject();
 
+    static void VerifyPreparation()
+    {
+        foreach (string code in new[] { "return tool('script_program',{operation:'get',name:'use_life_crystals'});",
+            "return {status:'yield'};", "// tool('nav_to',{})\nreturn 'nav_to';", "return tool('get_state');" })
+            Check(AgentScript.PreparationOnly(code), "known preparation-only code was considered actionable: " + code);
+        foreach (string code in new[] { "return tool('nav_to',{x:1,y:2});", "return skill('saved',1);",
+            "const call=tool;return call('nav_to',{x:1,y:2});", "return tool(input.name,input.args);",
+            "return tool('unknown_api');", "return {;" })
+            Check(!AgentScript.PreparationOnly(code), "action or dynamic source was incorrectly declared preparation-only: " + code);
+        var plan = new AgentTaskPlan();
+        var request = Parse("""
+            {"goal":"prepare while moving","mode":"dag","steps":[
+             {"id":"travel","description":"travel","depends_on":[],"script":"return tool('nav_to',{x:1,y:2});","conditions":[{"kind":"permanent_health","count":9999}]},
+             {"id":"collect","description":"collect","depends_on":["travel"],"script":"return tool('script_program',{operation:'get',name:'use_life_crystals'});","conditions":[{"kind":"permanent_health","count":140}]},
+             {"id":"already_met","description":"verify only","depends_on":["travel"],"script":"return {};","conditions":[{"kind":"permanent_health","count":100}]},
+             {"id":"later","description":"later research","depends_on":["collect"],"script":"return {};","conditions":[{"kind":"permanent_health","count":300}]}]}
+            """);
+        plan.Create(request, _ => 100);
+        Check(plan.PreparationNodes("travel", _ => 100).ToJsonString() == "[\"collect\"]",
+            "preparation request included completed conditions or distant dependent work");
+        plan.Revise(new JsonObject { ["expected_revision"] = plan.Snapshot()["revision"].DeepClone(),
+            ["reason"] = "publish an actionable continuation", ["nodes"] = new JsonArray(new JsonObject
+            { ["id"] = "collect", ["script"] = "return skill('saved',1,{target_health:140});" }) }, _ => 100);
+        Check(plan.PreparationNodes("travel", _ => 100).Count == 0,
+            "published action source retained an obsolete preparation marker");
+        Console.WriteLine("PASS: preparation coverage identifies query-only successors, preserves dynamic actions and checks current completion evidence");
+    }
+
     public static void Run()
     {
         VerifyDag();
+        VerifyPreparation();
         VerifyDagInsertion();
         VerifyChestEvidence();
         VerifyPosition();

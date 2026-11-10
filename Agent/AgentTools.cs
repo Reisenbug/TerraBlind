@@ -121,8 +121,10 @@ public static partial class AgentTools
         }
         if (action["args"] is JsonObject args) notice["args"] = Brief(args);
         if (action["result"] is JsonObject result) notice["result"] = Brief(result);
+        var preparationNodes = Plan.PreparationNodes(node, AgentTaskEvidence.Measure);
+        if (kind == "prepare_successor" && preparationNodes.Count > 0) notice["preparation_nodes"] = preparationNodes;
         string instruction = kind == "prepare_successor"
-            ? "宿主执行变化：当前后台动作继续运行。趁本轮准备已查证的后继script及适用的on_failure；准备和只读查询保持当前动作运行。已有充分准备则沿用。"
+            ? "宿主执行变化：当前后台动作继续运行。趁本轮准备已查证的后继script及适用的on_failure；preparation_nodes列出的节点目前只有准备代码，趁行进补齐行动。复用适用技能，结合runtime修订本轮可复用的逻辑。准备和只读查询保持当前动作运行。已有充分准备则沿用。"
             : "宿主执行变化：当前动作已经结束且没有后续动作运行。结合最新句柄与现场优先恢复有效行动；保留已完成进度，修改后续script或准备恢复，随后执行。";
         return Send();
         async Task Send()

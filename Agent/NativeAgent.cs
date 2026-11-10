@@ -320,9 +320,11 @@ public class NativeAgent : ModSystem
                         && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
                     var backgroundReview = System.Diagnostics.Stopwatch.StartNew();
                     string preparingAttempt = AgentTools.Actions.ActiveAttempt;
+                    var preparation = await OnMain(() => (Delay: AgentTools.Plan.RequiresNodeExecution ? 0 : 15,
+                        Nodes: AgentTools.Plan.PreparationNodes(AgentTools.Actions.ActiveNode, AgentTaskEvidence.Measure)), token);
                     bool prepareNext = preparingAttempt != null && preparingAttempt != preparedAttempt
-                        && preparingAttempt != AgentTools.PreparationNotifiedAttempt;
-                    double reviewDelay = await OnMain(() => AgentTools.Plan.RequiresNodeExecution, token) ? 0 : 15;
+                        && (preparingAttempt != AgentTools.PreparationNotifiedAttempt || preparation.Nodes.Count > 0);
+                    double reviewDelay = preparation.Delay;
                     while (!reviewRequested && (!prepareNext || backgroundReview.Elapsed.TotalSeconds < reviewDelay)
                         && await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
                         && !AgentTools.Watches.HasModelInterrupting && !AgentTools.Watches.HasHealthNotice && !AgentTools.Watches.HasAdvisories, token))
@@ -330,7 +332,7 @@ public class NativeAgent : ModSystem
                         await Task.Delay(100, token);
                         preparingAttempt = AgentTools.Actions.ActiveAttempt;
                         prepareNext = preparingAttempt != null && preparingAttempt != preparedAttempt
-                            && preparingAttempt != AgentTools.PreparationNotifiedAttempt;
+                            && (preparingAttempt != AgentTools.PreparationNotifiedAttempt || preparation.Nodes.Count > 0);
                     }
                     if (!reviewRequested && (prepareNext
                         || await OnMain(() => AgentTools.Watches.HasHealthNotice || AgentTools.Watches.HasAdvisories, token))
@@ -340,6 +342,7 @@ public class NativeAgent : ModSystem
                         var healthNotices = await OnMain(AgentTools.Watches.TakeHealthNotices, token);
                         var opportunities = await OnMain(AgentTools.Watches.Advisories, token);
                         input = "继续原目标。后台动作仍在执行，本轮是并行观察，没有暂停输入。"
+                            + "\n待补齐行动的节点：" + preparation.Nodes.ToJsonString()
                             + "低血量仅唤醒观察，不能因此暂停、取消原动作或原地等回血；继续行动并调整后续方案，任务明确规定死亡限制时才按其限制处理。\n健康通知：" + healthNotices.ToJsonString()
                             + "\n新增沿途机会：" + opportunities.ToJsonString(AgentTools.ModelJson)
                             + "本轮先检查当前节点on_failure：按已有权限、工具与已查证故障，将适用的局部恢复写入task_plan_patch nodes，保持当前动作运行；可从技能库复用recover_pressure_plate并填写实际工具配置。随后准备当前动作结束后立即执行的下一段：检查task_plan中的后继节点，把已查证的目标、坐标、来源落实到可执行script。"
