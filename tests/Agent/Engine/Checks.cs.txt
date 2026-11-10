@@ -71,9 +71,31 @@ public sealed class CombatEvidenceProbe : ModSystem
             { var tile = Main.tile[305, y]; tile.HasTile = true; tile.TileType = TileID.Stone; }
             if (CheckHit(knife, far) || !CheckHit(star, far))
                 throw new Exception("actual projectile defaults failed obstruction checks");
+            for (int y = 198; y <= 205; y++) Main.tile[305, y].ClearTile();
+            foreach (var other in Main.npc) if (other != npc) other.active = false;
+            npc.position = player.Center + new Vector2(200, 0);
+            int bystander = NPC.NewNPC(new EntitySource_Misc("combat-bystander"), 302 * 16, 200 * 16, NPCID.BlueSlime);
+            Main.npc[bystander].position = player.Center + new Vector2(80, 0);
+            foreach (var item in player.inventory) item.TurnToAir();
+            player.inventory[0] = sword; sword.damage = 100;
+            player.inventory[1] = knife; player.inventory[2] = star;
+            CombatLoadout.PreferredType = 0;
+            FightCoordinator.Start(40);
+            var select = typeof(FightCoordinator).GetMethod("FindNearest", BindingFlags.Static | BindingFlags.NonPublic);
+            object[] selection = { player, false, -1 };
+            var selected = (NPC)select.Invoke(null, selection);
+            if (selected != npc || (int)selection[2] != 2)
+                throw new Exception($"actual target/weapon selection failed: npc={selected?.whoAmI} slot={selection[2]}");
+            damage["tick"] = -301L;
+            var afterExpiry = (NPC)select.Invoke(null, new object[] { player, false, -1 });
+            if (afterExpiry != Main.npc[bystander]) throw new Exception("expired attacker retained target priority");
+            damage["tick"] = (long)Main.GameUpdateCount;
+            FightCoordinator.Stop();
             File.WriteAllText(Path.Combine(Main.SavePath, "combat-evidence.json"), new JsonObject
                 { ["damage"] = damage.DeepClone(), ["child_source_preserved"] = true, ["unknown_source_ignored"] = true,
-                    ["melee_reach_checked"] = true, ["projectile_obstruction_checked"] = true }.ToJsonString());
+                    ["melee_reach_checked"] = true, ["projectile_obstruction_checked"] = true,
+                    ["selected_attacker"] = selected.whoAmI, ["selected_weapon"] = player.inventory[(int)selection[2]].type,
+                    ["expired_attacker_released"] = true }.ToJsonString());
             Console.WriteLine("COMBAT_EVIDENCE_COMPLETE native_hooks=true model_calls=0");
             Environment.Exit(0);
         }
@@ -122,9 +144,50 @@ public sealed class NavigationFieldProbe : ModSystem
                 var costs = new JsonArray();
                 foreach (var direction in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
                     costs.Add(MazeWand.StepCostPublic(gx, gy, gx + direction.Item1, gy + direction.Item2));
+                var mainQueue = (System.Collections.Concurrent.ConcurrentQueue<Action>)typeof(NativeAgent)
+                    .GetField("MainQueue", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+                var frameQueue = (System.Collections.Concurrent.ConcurrentQueue<Action>)typeof(NativeAgent)
+                    .GetField("FrameQueue", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+                void Pump()
+                {
+                    int frames = frameQueue.Count;
+                    for (int i = 0; i < frames && frameQueue.TryDequeue(out var frame); i++) frame();
+                    while (mainQueue.TryDequeue(out var action)) action();
+                    Thread.Sleep(1);
+                }
+                using var cancel = new CancellationTokenSource();
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                var navigation = (Task<JsonObject>)typeof(AgentTools).GetMethod("Navigate", BindingFlags.Static | BindingFlags.NonPublic)
+                    .Invoke(null, new object[] { new JsonObject { ["x"] = gx, ["y"] = gy }, cancel.Token, 0 });
+                while (!navigation.IsCompleted && timer.Elapsed.TotalSeconds < 10)
+                {
+                    Pump();
+                    if (field.Count > 1 && RecedingNav.Active && MazeWand.PeekFieldOrNull(gx, gy) != null
+                        && timer.ElapsedMilliseconds >= 100)
+                        break;
+                }
+                JsonObject outcome;
+                if (field.Count == 1)
+                {
+                    if (!navigation.IsCompleted) throw new Exception("isolated target did not return within ten seconds");
+                    outcome = navigation.GetAwaiter().GetResult();
+                    if (outcome["error"]?.ToString() != "navigation_goal_isolated" || RecedingNav.Active)
+                        throw new Exception("isolated target failed to stop through the real navigation API: " + outcome);
+                }
+                else
+                {
+                    if (navigation.IsCompleted || !RecedingNav.Active) throw new Exception("connected route was prematurely stopped");
+                    outcome = new JsonObject { ["connected_route_running"] = true };
+                }
+                double elapsed = timer.Elapsed.TotalMilliseconds;
+                cancel.Cancel();
+                while (!navigation.IsCompleted && timer.Elapsed.TotalSeconds < 12) Pump();
+                if (!navigation.IsCompleted) throw new Exception("navigation did not finish cancellation");
+                RecedingNav.Stop();
                 results.Add(new JsonObject { ["start"] = new JsonArray(sx, sy), ["goal"] = new JsonArray(gx, gy),
                     ["pick_power"] = MazeWand.BestPickPower(), ["field_cells"] = field.Count,
-                    ["start_in_field"] = field.ContainsKey((sx, sy)), ["goal_step_costs"] = costs, ["goal_tiles"] = cells });
+                    ["start_in_field"] = field.ContainsKey((sx, sy)), ["goal_step_costs"] = costs, ["goal_tiles"] = cells,
+                    ["navigation_api"] = outcome, ["navigation_api_ms"] = elapsed });
             }
             File.WriteAllText(Path.Combine(Main.SavePath, "nav-field-probe.json"), results.ToJsonString());
             Console.WriteLine("NAV_FIELD_PROBE_COMPLETE native_world=true model_calls=0 scenes=" + results.Count);
