@@ -19,6 +19,59 @@ namespace Engine;
 
 public sealed class Engine : Mod { }
 
+public sealed class NavigationFieldProbe : ModSystem
+{
+    bool finished;
+    public override void OnWorldLoad() => PostUpdateWorld();
+    public override void PostUpdateWorld()
+    {
+        if (finished || !Terraria.Program.LaunchParameters.ContainsKey("-navfieldcheck")) return;
+        finished = true;
+        try
+        {
+            Main.myPlayer = 0;
+            Main.player[0] = new Player { active = true, width = 20, height = 42 };
+            var player = Main.player[0];
+            player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+            player.inventory[3].SetDefaults(ItemID.Wood); player.inventory[3].stack = 9999;
+            var policy = (AgentControlPolicy)typeof(AgentTools).GetField("Control", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+            policy.Reset();
+            var results = new JsonArray();
+            foreach (var scene in new[] { (1100, 252, 1180, 450), (1058, 695, 1480, 870), (1100, 252, 1130, 326) })
+            {
+                var (sx, sy, gx, gy) = scene;
+                player.position = new Vector2(sx * 16, (sy + 1) * 16 - player.height);
+                var field = MazeWand.BuildField(gx, gy, sx, sy, bigMargin: true);
+                var cells = new JsonArray();
+                for (int x = gx - 1; x <= gx + 1; x++)
+                for (int y = gy - 3; y <= gy + 1; y++)
+                {
+                    var tile = Main.tile[x, y];
+                    cells.Add(new JsonObject { ["x"] = x, ["y"] = y, ["has_tile"] = tile.HasTile,
+                        ["type"] = tile.TileType, ["wall"] = tile.WallType, ["liquid"] = tile.LiquidAmount,
+                        ["liquid_type"] = tile.LiquidType, ["solid"] = tile.HasTile && Main.tileSolid[tile.TileType],
+                        ["can_mine"] = DigTable.MineableWith(x, y, 35), ["lava_safe"] = LavaSafety.CanMine(x, y),
+                        ["navigation_forbidden"] = policy.ForbiddenAt(ControlBehavior.Navigation, x, y) });
+                }
+                var costs = new JsonArray();
+                foreach (var direction in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+                    costs.Add(MazeWand.StepCostPublic(gx, gy, gx + direction.Item1, gy + direction.Item2));
+                results.Add(new JsonObject { ["start"] = new JsonArray(sx, sy), ["goal"] = new JsonArray(gx, gy),
+                    ["pick_power"] = MazeWand.BestPickPower(), ["field_cells"] = field.Count,
+                    ["start_in_field"] = field.ContainsKey((sx, sy)), ["goal_step_costs"] = costs, ["goal_tiles"] = cells });
+            }
+            File.WriteAllText(Path.Combine(Main.SavePath, "nav-field-probe.json"), results.ToJsonString());
+            Console.WriteLine("NAV_FIELD_PROBE_COMPLETE native_world=true model_calls=0 scenes=" + results.Count);
+            Environment.Exit(0);
+        }
+        catch (Exception error)
+        {
+            File.WriteAllText(Path.Combine(Main.SavePath, "nav-field-error.txt"), error.ToString());
+            Environment.Exit(1);
+        }
+    }
+}
+
 public sealed class ChatHookProbe : GlobalNPC
 {
     public static int PreCalls, PostCalls;
