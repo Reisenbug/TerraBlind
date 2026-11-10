@@ -263,6 +263,7 @@ public sealed class AgentWatch
                 seen.RemoveWhere(key => key.StartsWith("suffocating:", StringComparison.Ordinal));
         }
         if (state["inventory_full"]?.GetValue<bool>() == true) Emit("inventory_full", "task", state);
+        else if (state["inventory_full"]?.GetValue<bool>() == false) seen.Remove("inventory_full:task");
         if (state["bosses"] is JsonArray bosses)
         {
             string BossKey(JsonNode boss) => boss["who"] + ":" + boss["type"];

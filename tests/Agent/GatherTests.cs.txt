@@ -225,6 +225,152 @@ static class GatherTests
         MiningAttackTurns();
         Evasion();
         FiringLane();
+        TempleTargets();
+        await PickupCapacity();
+    }
+
+    static void TempleTargets()
+    {
+        var p = Main.LocalPlayer;
+        var oldInventory = p.inventory; var oldNpcs = Main.npc;
+        bool oldTemple = p.ZoneLihzhardTemple, oldManual = Manual.On;
+        int oldSlot = p.selectedItem;
+        try
+        {
+            Manual.On = false;
+            p.inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
+            p.inventory[0] = new Item { stack = 1, damage = 20 }; p.selectedItem = 0;
+            Main.npc = Enumerable.Range(0, Main.maxNPCs).Select(_ => new NPC()).ToArray();
+            var enemy = Main.npc[0]; enemy.active = true; enemy.position = new(p.position.X + 80, p.position.Y);
+            foreach (int type in new[] { Terraria.ID.NPCID.Lihzahrd, Terraria.ID.NPCID.LihzahrdCrawler, Terraria.ID.NPCID.FlyingSnake })
+            {
+                enemy.type = type;
+                foreach (bool idle in new[] { false, true })
+                {
+                    FightCoordinator.Stop(); p.ZoneLihzhardTemple = false;
+                    if (!idle) FightCoordinator.Start(40);
+                    FightCoordinator.Tick(p, true);
+                    Check(!p.controlUseItem && !FightCoordinator.AimTarget.HasValue,
+                        "temple enemy targeted while player was outside: " + type);
+                    p.ZoneLihzhardTemple = true;
+                    FightCoordinator.Tick(p, true);
+                    Check(p.controlUseItem, $"temple guard suppressed an enemy inside the temple: type={type} idle={idle}");
+                    p.itemAnimation = 3; p.ZoneLihzhardTemple = false;
+                    FightCoordinator.Tick(p, true);
+                    Check(!p.controlUseItem && !FightCoordinator.AimTarget.HasValue && p.selectedItem == 0,
+                        "leaving temple retained target tracking or switched an unfinished animation");
+                    p.itemAnimation = 0;
+                }
+            }
+            FightCoordinator.Stop(); enemy.type = 42; p.ZoneLihzhardTemple = false;
+            FightCoordinator.Start(40); FightCoordinator.Tick(p, true);
+            Check(p.controlUseItem, "temple filter suppressed an ordinary enemy outside");
+        }
+        finally
+        {
+            FightCoordinator.Stop(); p.inventory = oldInventory; Main.npc = oldNpcs;
+            p.ZoneLihzhardTemple = oldTemple; p.selectedItem = oldSlot; p.itemAnimation = 0;
+            Manual.On = oldManual;
+        }
+        Console.WriteLine("PASS: temple targets are skipped outside in explicit/idle combat and released without switching unfinished animations");
+    }
+
+    static async Task PickupCapacity()
+    {
+        var blocked = new World { Drop = true, PickupBlocked = true };
+        var result = await Gather.Run(Targets, 5, blocked, default);
+        Check(result["outcome"]?.ToString() == "inventory_full" && !result["ok"].GetValue<bool>()
+            && blocked.Actions.SequenceEqual(new[] { "npc" }) && result["blocked_sources"].AsArray().Count == 1,
+            "full inventory repeatedly chased a blocked drop or prevented collecting a fitting target");
+        var race = new World { Drop = true, FullDuringAction = true };
+        result = await Gather.Run(Targets, 5, race, default);
+        Check(result["outcome"]?.ToString() == "inventory_full" && race.Actions.Count == 1,
+            "capacity loss during approach retried the pickup instead of returning inventory evidence");
+        blocked.PickupBlocked = false;
+        result = await Gather.Run(Targets, 5, blocked, default);
+        Check(result["ok"].GetValue<bool>() && blocked.Actions.SequenceEqual(new[] { "npc", "drop" }),
+            "resuming after inventory management lost progress or retained a capacity rejection");
+        var tileBlocked = new World { TypeSpaceBlocked = true };
+        result = await Gather.Run(Targets, 5, tileBlocked, default);
+        Check(result["outcome"]?.ToString() == "inventory_full" && tileBlocked.Actions.SequenceEqual(new[] { "npc" }),
+            "collection mined more material while the native type capacity was blocked");
+        var fittingDrop = new World { Drop = true, TypeSpaceBlocked = true };
+        result = await Gather.Run(Targets, 5, fittingDrop, default);
+        Check(result["ok"].GetValue<bool>() && fittingDrop.Actions.Contains("drop"),
+            "actual drop capacity was overridden by a generic item sample rejection");
+
+        var watch = new AgentWatch(); watch.EnsureDefaults();
+        watch.Observe(new JsonObject { ["inventory_full"] = true });
+        Check(watch.Take().Count == 1, "first full inventory was not reported");
+        watch.Observe(new JsonObject { ["inventory_full"] = true });
+        Check(!watch.HasPending, "unchanged full inventory repeatedly woke the model");
+        watch.Observe(new JsonObject { ["inventory_full"] = false });
+        watch.Observe(new JsonObject { ["inventory_full"] = true });
+        Check(watch.Take().Count == 1, "refilling the inventory after cleanup failed to notify again");
+
+        var p = Main.LocalPlayer; var oldItems = Main.item; var oldNpcs = Main.npc;
+        var oldSpace = p.ItemSpaceHandler; bool oldTemple = p.ZoneLihzhardTemple;
+        var oldHandler = HttpServerSystem.Handler;
+        try
+        {
+            Main.item = Enumerable.Range(0, Main.maxItems).Select(_ => new Item()).ToArray();
+            Main.npc = Enumerable.Range(0, Main.maxNPCs).Select(_ => new NPC()).ToArray();
+            var drop = new Item { active = true, type = 191, stack = 2, position = p.Center };
+            Main.item[0] = drop;
+            var targets = new[] { new GatherTarget(191, 100, Array.Empty<string>(), Array.Empty<int>()) };
+            var world = new GameGather(targets);
+            p.ItemSpaceHandler = _ => false;
+            var agent = new NativeAgent();
+            async Task<JsonObject> Pump(Task<JsonObject> task)
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                while (!task.IsCompleted) { timeout.Token.ThrowIfCancellationRequested(); agent.PostUpdateEverything(); await Task.Delay(1); }
+                return await task;
+            }
+            var scene = await Pump(world.Observe(default));
+            Check(scene["candidates"][0]["can_pickup"]?.GetValue<bool>() == false,
+                "actual drop capacity was absent from gather observation");
+            var action = await Pump(world.Act(scene["candidates"][0].AsObject(), default));
+            Check(action["outcome"]?.ToString() == "inventory_full" && action["item_type"]?.GetValue<int>() == 191,
+                "blocked drop waited for settling/navigation instead of immediately reporting capacity");
+            p.ItemSpaceHandler = item => ReferenceEquals(item, drop);
+            scene = await Pump(world.Observe(default));
+            Check(scene["candidates"][0]["can_pickup"]?.GetValue<bool>() == true,
+                "type-level rejection hid a drop the native capacity check can accept");
+            var drops = NearbyDrops.Read(60);
+            Check(drops[0]["can_pickup"]?.GetValue<bool>() == true, "agent drop query omitted actual pickup capacity");
+            int navStarts = 0, navStops = 0;
+            drop.position = p.Center + new Microsoft.Xna.Framework.Vector2(200, 0);
+            p.ItemSpaceHandler = _ => navStarts == 0;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/nav_recede") navStarts++;
+                if (path == "/nav_recede_stop") navStops++;
+                return (200, path == "/nav_recede_done" ? "{\"done\":false,\"status\":\"running\"}" : "{}");
+            };
+            scene = await Pump(world.Observe(default));
+            action = await Pump(world.Act(scene["candidates"][0].AsObject(), default));
+            Check(action["outcome"]?.ToString() == "inventory_full" && navStarts == 1 && navStops == 1,
+                "capacity loss during navigation did not release the pickup route immediately");
+            Main.npc[0] = new NPC { active = true, type = Terraria.ID.NPCID.Lihzahrd, position = p.Center };
+            var templeWorld = new GameGather(new[] { targets[0] with { Npcs = new[] { Terraria.ID.NPCID.Lihzahrd } } });
+            p.ZoneLihzhardTemple = false;
+            scene = await Pump(templeWorld.Observe(default));
+            Check(!scene["candidates"].AsArray().Any(c => c["kind"]?.ToString() == "npc"),
+                "gather offered a temple enemy outside as a material source");
+            p.ZoneLihzhardTemple = true;
+            scene = await Pump(templeWorld.Observe(default));
+            var npc = scene["candidates"].AsArray().OfType<JsonObject>().Single(c => c["kind"]?.ToString() == "npc");
+            p.ZoneLihzhardTemple = false;
+            action = await Pump(templeWorld.Act(npc, default));
+            Check(action["error"]?.ToString() == "target_changed", "gather attacked a stale temple candidate after leaving");
+        }
+        finally
+        {
+            Main.item = oldItems; Main.npc = oldNpcs; p.ItemSpaceHandler = oldSpace;
+            p.ZoneLihzhardTemple = oldTemple; HttpServerSystem.Handler = oldHandler;
+        }
+        Console.WriteLine("PASS: per-item capacity gates pickup, preserves fitting targets/progress and rearms inventory warnings after cleanup (native capacity stubbed)");
     }
 
     static void MiningAttackTurns()
@@ -621,7 +767,7 @@ static class GatherTests
     sealed class World : IGatherWorld
     {
         public bool Gain = true, Drop, Empty, Dead, WaitForever, Unsafe, Ambiguous, Obstructed, NavigationStalled, CollectionStalled, OutsideMiningRange;
-        public bool LostMiningReach, RecoverOnRetry;
+        public bool LostMiningReach, RecoverOnRetry, PickupBlocked, FullDuringAction, TypeSpaceBlocked;
         public int MiningDamage;
         public CancellationTokenSource Cancel;
         public int Stops;
@@ -631,8 +777,9 @@ static class GatherTests
         {
             token.ThrowIfCancellationRequested();
             JsonObject Candidate(int type, string kind) => new() { ["id"] = type.ToString(), ["item_type"] = type, ["kind"] = kind, ["distance"] = 2f,
-                ["x"] = type, ["y"] = 0 };
+                ["x"] = type, ["y"] = 0, ["can_pickup"] = Drop && type == 10 ? JsonValue.Create(!PickupBlocked) : null };
             return Task.FromResult(new JsonObject { ["counts"] = new JsonObject { ["10"] = counts[10], ["20"] = counts[20] },
+                ["item_space"] = new JsonObject { ["10"] = !TypeSpaceBlocked, ["20"] = true },
                 ["candidates"] = Empty ? new JsonArray() : new JsonArray(Candidate(10, Drop ? "drop" : "tile"), Candidate(20, "npc")),
                 ["error"] = Dead ? "interrupted_by_death" : Ambiguous && Stops == 0 ? "ambiguous_tile_name" : null,
                 ["source_error"] = Ambiguous && Stops == 0 ? new JsonObject { ["error"] = "ambiguous_tile_name",
@@ -641,6 +788,7 @@ static class GatherTests
         public async Task<JsonObject> Act(JsonObject candidate, CancellationToken token)
         {
             Actions.Add(candidate["kind"].ToString());
+            if (FullDuringAction) return new JsonObject { ["outcome"] = "inventory_full", ["item_type"] = candidate["item_type"].DeepClone() };
             Cancel?.Cancel(); token.ThrowIfCancellationRequested();
             if (WaitForever) await Task.Delay(Timeout.Infinite, token);
             if (NavigationStalled) return new JsonObject { ["error"] = "cannot_reach_collect_target",

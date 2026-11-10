@@ -106,7 +106,9 @@ namespace Terraria
         public int fallStart, extraFall;
         public bool delayUseItem, mouseInterface;
         public bool ZoneSkyHeight, ZoneOverworldHeight, ZoneDirtLayerHeight, ZoneRockLayerHeight, ZoneUnderworldHeight;
-        public bool ZoneJungle, ZoneDesert, ZoneSnow, ZoneBeach, ZoneDungeon, ZoneCorrupt, ZoneCrimson, ZoneHallow;
+        public bool ZoneJungle, ZoneDesert, ZoneSnow, ZoneBeach, ZoneDungeon, ZoneCorrupt, ZoneCrimson, ZoneHallow, ZoneLihzhardTemple;
+        public Func<Item, bool> ItemSpaceHandler;
+        public (bool CanTakeItem, bool ItemIsGoingToVoidVault) ItemSpace(Item item) => (ItemSpaceHandler?.Invoke(item) ?? true, false);
         public bool controlUp, controlDown, controlHook, controlMount, controlUseTile, controlThrow, ExtraJump;
         public float wingTime, manaCost = 1;
         public static float jumpSpeed = 5.01f;
@@ -224,7 +226,7 @@ namespace Terraria
 namespace Terraria.ID
 {
     public static class ItemID { public const int FixtureGoal = 191, Umbrella = 946, TragicUmbrella = 4707; }
-    public static class NPCID { public const int FixtureEnemy = 222; }
+    public static class NPCID { public const int FixtureEnemy = 222, Lihzahrd = 198, LihzahrdCrawler = 199, FlyingSnake = 226; }
     public static class ProjectileID { }
     public static class LiquidID { public const int Water = 0, Lava = 1, Honey = 2, Shimmer = 3; }
     public static class TileID

@@ -108,15 +108,21 @@ public static class Gather
                     }
                 }
                 if (stalledActions >= 32) break;
+                bool CanPickup(JsonObject c) => c["can_pickup"]?.GetValue<bool>()
+                    ?? scene["item_space"]?[c["item_type"].ToString()]?.GetValue<bool>() ?? true;
                 var candidate = available
+                    .Where(CanPickup)
                     .Where(c => attempts.GetValueOrDefault(c["id"].ToString()) < 2)
                     .OrderBy(c => c["distance"].GetValue<float>() + (c["kind"].ToString() == "drop" ? -1000 : c["kind"].ToString() == "npc" ? -20 : 0))
                     .FirstOrDefault();
                 if (candidate == null)
                 {
-                    outcome = available.Length == 0 ? "source_unavailable" : "attempt_limit";
+                    outcome = available.Any(c => !CanPickup(c)) || targets.Any(t => Count(t) < t.Count
+                        && scene["item_space"]?[t.ItemType.ToString()]?.GetValue<bool>() == false)
+                        ? "inventory_full" : available.Length == 0 ? "source_unavailable" : "attempt_limit";
                     foreach (var source in available)
                         blockedSources.Add(new JsonObject { ["candidate"] = source.DeepClone(),
+                            ["reason"] = !CanPickup(source) ? "inventory_full" : "attempt_limit",
                             ["attempts"] = attempts.GetValueOrDefault(source["id"].ToString()) });
                     break;
                 }
@@ -126,6 +132,8 @@ public static class Gather
                 previousCount = scene["counts"]?[candidate["item_type"].ToString()]?.GetValue<int>() ?? 0;
                 last = new JsonObject { ["candidate"] = candidate.DeepClone() };
                 last["result"] = await world.Act(candidate, budget.Token);
+                if (last["result"]?["outcome"]?.ToString() == "inventory_full")
+                { outcome = "inventory_full"; break; }
                 if (last["result"]?["navigation"]?["outcome"]?.ToString() == "no_progress"
                     || candidate["kind"].ToString() == "drop" && last["result"]?["outcome"]?.ToString() == "no_progress")
                 { outcome = "navigation_no_progress"; break; }
@@ -163,7 +171,9 @@ public static class Gather
             && targets.Any(t => Count(t) > inventoryBefore[t.ItemType])) outcome = "source_area_exhausted";
         return new JsonObject { ["ok"] = enough, ["outcome"] = enough ? "enough" : outcome,
             ["detail"] = outcome == "source_area_exhausted"
-                ? "本轮已获得部分目标物品，指定source_area内当前已无符合筛选条件的候选。保留实际库存进度，选择下一处来源或调整source_area后继续剩余目标。" : null,
+                ? "本轮已获得部分目标物品，指定source_area内当前已无符合筛选条件的候选。保留实际库存进度，选择下一处来源或调整source_area后继续剩余目标。"
+                : outcome == "inventory_full" ? "目标物品当前无法装入背包。使用inventory_review核对物品，整理出空间后续接剩余目标；实际库存进度已保留。" : null,
+            ["item_space"] = scene["item_space"]?.DeepClone(),
             ["source_rules"] = DescribeSources(targets),
             ["source_area"] = area?.Snapshot(),
             ["actions"] = actions, ["elapsed_ms"] = timer.ElapsedMilliseconds, ["last_result"] = last,

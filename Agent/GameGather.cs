@@ -23,10 +23,12 @@ public sealed class GameGather : IGatherWorld
         var scene = await NativeAgent.OnMain(() =>
         {
             var p = Main.LocalPlayer;
-            var counts = new JsonObject(); var candidates = new JsonArray();
+            var counts = new JsonObject(); var candidates = new JsonArray(); var itemSpace = new JsonObject();
             foreach (var target in _targets)
             {
                 counts[target.ItemType.ToString()] = p.inventory.Where(i => !i.IsAir && i.type == target.ItemType).Sum(i => i.stack);
+                var sample = new Item(); sample.SetDefaults(target.ItemType);
+                itemSpace[target.ItemType.ToString()] = p.ItemSpace(sample).CanTakeItem;
                 for (int i = 0; i < Main.maxItems; i++)
                 {
                     var item = Main.item[i];
@@ -36,6 +38,7 @@ public sealed class GameGather : IGatherWorld
                             observedDrops[i] = identity = (item, ++dropGeneration);
                         var candidate = Candidate(target.ItemType, "drop", i, item.Center.X / 16, item.Center.Y / 16, p);
                         candidate["drop_generation"] = identity.Generation;
+                        candidate["can_pickup"] = p.ItemSpace(item).CanTakeItem;
                         candidate["id"] = $"{target.ItemType}:drop:{i}:{identity.Generation}";
                         candidates.Add(candidate);
                     }
@@ -44,6 +47,7 @@ public sealed class GameGather : IGatherWorld
                 {
                     var npc = Main.npc[i];
                     if (npc.active && !npc.friendly && !npc.townNPC && target.Npcs.Contains(npc.type)
+                        && FightCoordinator.TempleTargetAllowed(p, npc)
                         && Microsoft.Xna.Framework.Vector2.Distance(npc.Center, p.Center) < 1280)
                     {
                         var candidate = Candidate(target.ItemType, "npc", i, npc.Center.X / 16, npc.Center.Y / 16, p);
@@ -59,7 +63,7 @@ public sealed class GameGather : IGatherWorld
                     }
                 }
             }
-            return new JsonObject { ["counts"] = counts, ["candidates"] = candidates,
+            return new JsonObject { ["counts"] = counts, ["candidates"] = candidates, ["item_space"] = itemSpace,
                 ["source_rules"] = Gather.DescribeSources(_targets),
                 ["error"] = p.dead ? "interrupted_by_death" : null };
         }, token);
@@ -119,6 +123,9 @@ public sealed class GameGather : IGatherWorld
                 && identity.Generation == candidate["drop_generation"]?.GetValue<int>()
                 && ReferenceEquals(identity.Entity, Main.item[who]) && Main.item[who].active
                 && Main.item[who].type == candidate["item_type"].GetValue<int>();
+            JsonObject PickupBlocked() => ValidDrop() && !Main.LocalPlayer.ItemSpace(Main.item[who]).CanTakeItem
+                ? new JsonObject { ["ok"] = false, ["outcome"] = "inventory_full", ["item_type"] = Main.item[who].type,
+                    ["who"] = who, ["stack"] = Main.item[who].stack } : null;
             int stable = 0;
             Microsoft.Xna.Framework.Vector2? previousPosition = null;
             for (int i = 0; i < 20; i++)
@@ -126,9 +133,10 @@ public sealed class GameGather : IGatherWorld
                 var sample = await NativeAgent.OnMain(() =>
                 {
                     var item = Main.item[who];
-                    return (Valid: ValidDrop(), Position: item.Center);
+                    return (Valid: ValidDrop(), Position: item.Center, Blocked: PickupBlocked());
                 }, token);
                 if (!sample.Valid) return new JsonObject { ["outcome"] = "target_changed" };
+                if (sample.Blocked != null) return sample.Blocked;
                 stable = previousPosition.HasValue && (sample.Position - previousPosition.Value).LengthSquared() <= .25f ? stable + 1 : 0;
                 previousPosition = sample.Position;
                 if (stable >= 2) break;
@@ -139,6 +147,7 @@ public sealed class GameGather : IGatherWorld
                 var item = Main.item[who];
                 DiagLog.Write($"[gather] drop who={who} pos={item.Center} velocity={item.velocity} player={Main.LocalPlayer.Center}");
                 if (!ValidDrop()) return null;
+                if (PickupBlocked() is JsonObject blocked) return blocked;
                 if (stable < 2 || (item.Center - previousPosition.Value).LengthSquared() > .25f)
                     return new JsonObject { ["moving"] = true };
                 return item.active && item.type == candidate["item_type"].GetValue<int>()
@@ -146,20 +155,23 @@ public sealed class GameGather : IGatherWorld
                         ["near"] = Microsoft.Xna.Framework.Vector2.Distance(item.Center, Main.LocalPlayer.Center) <= 48 } : null;
             }, token);
             if (live == null) return new JsonObject { ["outcome"] = "target_changed" };
+            if (live["outcome"] != null) return live;
             if (live["moving"] != null) return new JsonObject { ["outcome"] = "drop_still_moving" };
             if (live["near"]?.GetValue<bool>() == true)
             {
                 await Task.Delay(400, token);
-                return new JsonObject { ["outcome"] = "waited_for_pickup" };
+                return await NativeAgent.OnMain(PickupBlocked, token) ?? new JsonObject { ["outcome"] = "waited_for_pickup" };
             }
             live.Remove("near");
             var start = await AgentTools.Call("/nav_recede", live, token);
             if (AgentTools.Rejected(start)) return start;
-            var result = await AgentTools.Wait("/nav_recede_done", "nav", "/nav_recede_stop", 12, token);
+            var result = await AgentTools.Wait("/nav_recede_done", "nav", "/nav_recede_stop", 12, token,
+                _ => NativeAgent.OnMain(PickupBlocked, token));
             await Task.Delay(400, token);
-            return result;
+            return await NativeAgent.OnMain(PickupBlocked, token) ?? result;
         }
         bool Valid() => who >= 0 && who < Main.maxNPCs && Main.npc[who].active && !Main.npc[who].friendly
+            && FightCoordinator.TempleTargetAllowed(Main.LocalPlayer, Main.npc[who])
             && !Main.npc[who].townNPC && Main.npc[who].type == candidate["npc_type"].GetValue<int>()
             && observedNpcs.TryGetValue(who, out var identity) && ReferenceEquals(identity.Entity, Main.npc[who])
             && candidate["npc_generation"]?.GetValue<int>() == identity.Generation;

@@ -39,6 +39,9 @@ namespace TerraBlind
         internal static bool CanHitTarget(Player player, Item weapon, Vector2 target)
             => !NeedsClearLine(weapon) || Collision.CanHitLine(player.Center, 4, 4, target, 4, 4);
 
+        internal static bool TempleTargetAllowed(Player player, NPC npc)
+            => player.ZoneLihzhardTemple || npc.type is not (NPCID.Lihzahrd or NPCID.LihzahrdCrawler or NPCID.FlyingSnake);
+
         internal static bool HoldingFallProtection(Player player)
             => player.velocity.Y * player.gravDir > 0
                 && player.HeldItem.type is ItemID.Umbrella or ItemID.TragicUmbrella;
@@ -202,12 +205,13 @@ namespace TerraBlind
             {
                 _animationSeen = true;
                 p.selectedItem = _animationSlot;
-                if (_animationAttack && _animationTarget is { active: true, friendly: false })
+                bool attack = _animationAttack && (_animationTarget == null || TempleTargetAllowed(p, _animationTarget));
+                if (attack && _animationTarget is { active: true, friendly: false })
                     _animationAim = Combat.Aim(p, _animationTarget, p.HeldItem);
                 Cursor.AimPx(_animationAim.X, _animationAim.Y);
                 p.controlUseItem = false;
-                _usingItem = _animationAttack;
-                if (_animationAttack) AimTarget = _animationAim;
+                _usingItem = attack;
+                if (attack) AimTarget = _animationAim;
                 return;
             }
             if (_animationSlot >= 0)
@@ -282,6 +286,7 @@ namespace TerraBlind
                 if (npc == null || !npc.CanBeChasedBy(p)) continue;
                 if (idle ? npc.damage <= 0 : _types != null && !_types.Contains(npc.type)) continue;
                 if (npc.townNPC || npc.friendly) continue;
+                if (!TempleTargetAllowed(p, npc)) continue;
                 if (npc.lifeMax <= 5 && npc.damage == 0) continue;
                 if (!CanHitTarget(p, weapon, npc.Center)) continue;
                 float ncx = npc.position.X + npc.width / 2f;

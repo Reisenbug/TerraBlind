@@ -30,6 +30,7 @@ public static class NearbyDrops
                 ["stack"] = item.stack, ["x"] = x, ["y"] = y, ["distance_tiles"] = distance,
                 ["velocity_x"] = item.velocity.X, ["velocity_y"] = item.velocity.Y,
                 ["inventory_count"] = player.inventory.Where(held => !held.IsAir && held.type == item.type).Sum(held => held.stack),
+                ["can_pickup"] = player.ItemSpace(item).CanTakeItem,
                 ["route_safety_assessed"] = false };
             if (WorldGen.InWorld(x, y))
             {
