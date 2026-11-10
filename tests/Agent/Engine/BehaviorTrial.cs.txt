@@ -432,7 +432,7 @@ public sealed class BehaviorTrial : ModSystem
         Main.soundVolume = Main.musicVolume = Main.ambientVolume = 0; Main.autoPause = false;
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
-        frames++;
+        if (frames++ == 0) Main.playerInventory = true;
         if (!NaturalEncounters)
             for (int i = 0; i < Main.maxNPCs; i++)
                 if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
