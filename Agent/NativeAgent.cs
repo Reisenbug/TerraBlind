@@ -351,7 +351,9 @@ public class NativeAgent : ModSystem
                             + "宿主会在前置验收后直接执行后继script，无需等你再次回复。可以继续查证资源和评估沿途机会；准备后继不暂停当前动作，也不提前启动它抢占当前移动。"
                             + "只有确需改变当前行动时才暂停原句柄，处理后恢复。没有新决定就结束本轮，后台动作继续。\n现状："
                             + await Context();
-                        await OnMain(() => { DiagLog.Write("[agent] background_review active_handle=" + AgentTools.Actions.ActiveHandle); return true; }, token);
+                        await OnMain(() => { DiagLog.Write("[agent] background_review active_handle=" + AgentTools.Actions.ActiveHandle
+                            + " prepare=" + prepareNext + " health=" + healthNotices.Count
+                            + " opportunities=" + string.Join(",", opportunities.Select(e => e["kind"]?.ToString()))); return true; }, token);
                         continue;
                     }
                     if (await OnMain(() => AgentTools.Watches.HasModelInterrupting, token))
