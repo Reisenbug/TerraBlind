@@ -2726,6 +2726,7 @@ public sealed class BehaviorTrial : ModSystem
             int initialInterventions = NavigationSurvival.Interventions;
             int supportedFrames = 0;
             bool webPlaced = false;
+            bool combatObserved = false;
             await OnMain(() =>
             {
                 NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
@@ -2782,6 +2783,29 @@ public sealed class BehaviorTrial : ModSystem
                     landingHealth = p.statLife;
                     Console.WriteLine($"KNOCKBACK_START hp={p.statLife} vx={p.velocity.X} vy={p.velocity.Y}");
                 }
+                if (landingCase is 8 or 9 or 10)
+                {
+                    AgentPermissions.Reset(); Config.I.AgentEnabled = true;
+                    Combat.Enabled = Dodge.Enabled = false;
+                    p.inventory[0].SetDefaults(ItemID.Starfury);
+                    p.position = new Vector2(7237.196f, 9170.01f); p.velocity = new Vector2(0, 10.01f);
+                    p.fallStart = p.fallStart2 = 563;
+                    p.ConsumedLifeCrystals = 4;
+                    p.statLife = p.statLifeMax = p.statLifeMax2 = landingHealth = 180;
+                    if (landingCase == 9) p.armor[3].SetDefaults(ItemID.LuckyHorseshoe);
+                    if (landingCase == 10)
+                    {
+                        p.position.Y = 9620;
+                        p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                    }
+                    target = NPC.NewNPC(new EntitySource_Misc("fall-web-combat"), (int)p.Center.X + 80,
+                        (int)p.Center.Y - 40, NPCID.BlueSlime);
+                    var npc = Main.npc[target];
+                    npc.aiStyle = -1; npc.noGravity = true; npc.noTileCollide = true;
+                    npc.damage = 0; npc.life = npc.lifeMax = 100000;
+                    CombatLoadout.PreferredType = ItemID.Starfury;
+                    FightCoordinator.Start(100);
+                }
                 var decoration = Main.tile[673, 826];
                 if (landingCase == 1 && (!decoration.HasTile || decoration.TileType != TileID.SmallPiles || Main.tile[673, 825].HasTile))
                     throw new Exception("recorded natural landing tiles differ from the death evidence");
@@ -2836,16 +2860,21 @@ public sealed class BehaviorTrial : ModSystem
                     samples.Add(sample);
                     if (sample["dead"].GetValue<bool>()) throw new Exception("recorded landing still caused death");
                     if (sample["hp"].GetValue<int>() != landingHealth) throw new Exception("protected landing lost health");
+                    combatObserved |= sample["held_type"].GetValue<int>() == ItemID.Starfury && sample["item_animation"].GetValue<int>() > 0;
+                    if (landingCase is 9 or 10 && (sample["placement_stock"].GetValue<int>() != 100
+                        || sample["interventions"].GetValue<int>() != initialInterventions))
+                        throw new Exception("safe or immune fall unnecessarily reserved item use");
                     if (landingCase == 5 && sample["platform_stock"].GetValue<int>() != 100)
                         throw new Exception("lethal accumulated fall used a platform instead of resetting fall speed");
                     webPlaced |= sample["placement_stock"].GetValue<int>() < 100 && sample["chosen_has_tile"].GetValue<bool>()
                         && sample["chosen_type"].GetValue<int>() == placementType;
-                    bool protectedLanding = (landingCase == 7 || webPlaced && sample["interventions"].GetValue<int>() > initialInterventions)
+                    bool protectedLanding = (landingCase is 7 or 9 or 10 || webPlaced && sample["interventions"].GetValue<int>() > initialInterventions)
                         && sample["supported"].GetValue<bool>()
                         && sample["vy"].GetValue<float>() == 0;
                     supportedFrames = protectedLanding ? supportedFrames + 1 : 0;
                     if (supportedFrames >= 12)
                     {
+                        if (landingCase is 9 or 10 && !combatObserved) throw new Exception("safe fall prevented ordinary weapon use");
                         File.WriteAllText(Path.Combine(Main.SavePath, "web-landing.json"), samples.ToJsonString());
                         if (landingCase == 3)
                         {

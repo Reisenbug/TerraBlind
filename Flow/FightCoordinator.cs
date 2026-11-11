@@ -59,7 +59,9 @@ namespace TerraBlind
 
         internal static bool HoldingFallProtection(Player player)
             => player.velocity.Y * player.gravDir > 0
-                && player.HeldItem.type is ItemID.Umbrella or ItemID.TragicUmbrella;
+                && (player.HeldItem.type is ItemID.Umbrella or ItemID.TragicUmbrella
+                    || (IsActive || NativeAgent.Processing || RecedingNav.Active) && !player.AnyExtraJumpUsable()
+                        && FallSafety.LandingDamage(player, player.position, player.fallStart) > 0);
 
         internal static (int Direction, bool Jump, bool Apply) Evade(Player p, NPC target = null, bool projectilesOnly = false)
         {

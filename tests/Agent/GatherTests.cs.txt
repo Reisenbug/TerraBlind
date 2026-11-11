@@ -561,6 +561,31 @@ static class GatherTests
                 Check(p.selectedItem == 1 && p.controlUseItem, "defense did not resume after landing");
             }
             finally { p.velocity = oldVelocity; p.controlDown = false; }
+            bool oldNavigation = RecedingNav.Active, oldJump = p.ExtraJump;
+            int oldFallDamage = FallSafety.Damage;
+            try
+            {
+                RecedingNav.Active = true; p.ExtraJump = false;
+                p.velocity = new(0, 10); FallSafety.Damage = 200;
+                p.inventory[2] = new Item { type = 150, stack = 28, createTile = 51 };
+                p.selectedItem = 2; p.itemAnimation = 3; p.itemTime = 23; p.controlUseItem = true;
+                FightCoordinator.Tick(p, true);
+                Check(p.selectedItem == 2 && p.itemAnimation == 3 && p.itemTime == 23 && p.controlUseItem,
+                    "combat replaced pending fall protection or artificially cancelled its remaining animation/cooldown");
+                p.itemAnimation = p.itemTime = 0; FallSafety.Damage = 0;
+                p.selectedItem = 0; p.controlUseItem = false;
+                FightCoordinator.Tick(p, true);
+                Check(p.selectedItem == 1 && p.controlUseItem, "zero fall damage suppressed ordinary combat");
+                FallSafety.Damage = 200; p.ExtraJump = true; p.itemAnimation = p.itemTime = 0;
+                p.selectedItem = 0; p.controlUseItem = false;
+                FightCoordinator.Tick(p, true);
+                Check(p.selectedItem == 1 && p.controlUseItem, "available extra jump unnecessarily reserved item use");
+            }
+            finally
+            {
+                RecedingNav.Active = oldNavigation; p.ExtraJump = oldJump;
+                FallSafety.Damage = oldFallDamage; p.velocity = oldVelocity;
+            }
         }
         finally
         {
