@@ -64,6 +64,7 @@ static class ScriptTests
         await ReactiveTravelExample();
         await ReactiveHostIntegration();
         await TaskPolicyIntegration();
+        await HouseTools();
         var helperProgress = new ScriptProgress();
         var watchProgress = new ScriptProgress();
         var savedWatch = new JsonObject { ["events"] = new JsonArray("nearby_tile", "nearby_chest"),
@@ -1152,6 +1153,62 @@ static class ScriptTests
                 "empty encounter changed the original defense permission: " + policy);
         }
         Console.WriteLine("PASS: unchanged travel policy handles spores, stingers, chests, bag trash/drop, plates, thorns and target-aware weapons");
+    }
+
+    static async Task HouseTools()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var handler = HttpServerSystem.Handler;
+        var samples = Terraria.ID.ContentSamples.ItemsByType;
+        bool hadSample = samples.TryGetValue(Terraria.ID.ItemID.FixtureGoal, out var previous);
+        int polls = 0; bool crafted = false;
+        async Task<JsonObject> Call(string name, JsonObject args)
+        {
+            var call = AgentTools.Execute(name, args, default);
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (!call.IsCompleted)
+            {
+                Check(timer.Elapsed.TotalSeconds < 5, "legacy tool adapter stalled");
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+            return JsonNode.Parse(await call).AsObject();
+        }
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
+            samples[Terraria.ID.ItemID.FixtureGoal] = new Terraria.Item { type = Terraria.ID.ItemID.FixtureGoal, Name = "Fixture Craft" };
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                var args = JsonNode.Parse(payload).AsObject();
+                if (path == "/scan_house")
+                {
+                    Check(args["w"].GetValue<int>() == 21 && args["h"].GetValue<int>() == 10, "house site dimensions differ from builder");
+                    return (200, "{\"found\":true,\"at\":[100,80],\"right\":120}");
+                }
+                if (path == "/build_house")
+                {
+                    Check(args["x"].GetValue<int>() == 120 && args["dir"].GetValue<int>() == -1, "left-facing house used the wrong corner");
+                    return (200, "{\"accepted\":true}");
+                }
+                if (path == "/build_house_status") return (200, ++polls == 1 ? "{\"running\":true}" : "{\"running\":false,\"outcome\":\"done\"}");
+                if (path == "/craft") { crafted = args["item_id"]?.GetValue<int>() == Terraria.ID.ItemID.FixtureGoal; return (200, "{\"ok\":true}"); }
+                return (200, "{}");
+            };
+            var site = await Call("house_site", new JsonObject { ["rooms"] = 4, ["dir"] = -1 });
+            Check(!AgentTools.ControlSession.Active, "read-only house search acquired player input");
+            var house = await Call("build_house", site["build_args"].AsObject());
+            Check(house["outcome"].ToString() == "done" && polls == 2 && !AgentTools.ControlSession.Active,
+                "house construction lost native status or input cleanup");
+            await Call("craft", new JsonObject { ["name"] = "FixtureCraft" });
+            Check(crafted, "craft display-name alias did not reach the native item-id entry");
+            Console.WriteLine("PASS: legacy house adapter preserves dimensions, direction, native completion and input ownership; craft resolves display names");
+        }
+        finally
+        {
+            HttpServerSystem.Handler = handler;
+            if (hadSample) samples[Terraria.ID.ItemID.FixtureGoal] = previous; else samples.Remove(Terraria.ID.ItemID.FixtureGoal);
+            AgentTools.Stop(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.Watches.Reset();
+        }
     }
 
     static async Task ReactiveHostIntegration()

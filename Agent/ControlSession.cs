@@ -22,7 +22,7 @@ public sealed class AgentControlSession
     public string Tool => tool ?? (attackTicket != 0 ? "fight" : null);
     public static bool ActionTool(string name) => name is "nav_to" or "mine" or "mine_vein" or "chop_wood"
         or "use_item" or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap"
-        or "combat_reposition" or "gather" or "collect_treasure" or "equip_item" or "inventory_drop" or "inventory_trash" or "npc_chat" or "fight" or "fight_player";
+        or "combat_reposition" or "gather" or "collect_treasure" or "build_house" or "equip_item" or "inventory_drop" or "inventory_trash" or "npc_chat" or "fight" or "fight_player";
 
     public static void DescribeClaims(JsonArray schemas)
     {
@@ -43,7 +43,7 @@ public sealed class AgentControlSession
         "mine" or "mine_vein" or "chop_wood" => ControlBehavior.Mining,
         "place_at" => ControlBehavior.Placement,
         "fight" or "fight_player" or "combat_start" => ControlBehavior.Attack,
-        "gather" or "collect_treasure" => ControlBehavior.Workflow,
+        "gather" or "collect_treasure" or "build_house" => ControlBehavior.Workflow,
         _ => ControlBehavior.Direct
     };
 
@@ -72,7 +72,7 @@ public sealed class AgentControlSession
             "nav_to" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Placement, ControlBehavior.Direct, ControlBehavior.Attack },
             "mine" or "mine_vein" or "chop_wood" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Direct },
             "place_at" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Placement, ControlBehavior.Direct },
-            "gather" or "collect_treasure" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Placement,
+            "gather" or "collect_treasure" or "build_house" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Placement,
                 ControlBehavior.Direct, ControlBehavior.Workflow, ControlBehavior.Attack, ControlBehavior.Dodge },
             "fight" or "fight_player" => new[] { ControlBehavior.Attack, ControlBehavior.Dodge },
             "act" or "use_item" => new[] { ControlBehavior.Direct, ControlBehavior.Attack, ControlBehavior.Mining, ControlBehavior.Placement },

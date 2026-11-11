@@ -70,6 +70,12 @@ static class ControlTests
             && session.CheckWorkflow("collect_treasure") == null && session.CheckWorkflow("start_run") != null,
             "workflow ownership blocked its own implementation or admitted an unrelated workflow");
         session.End(treasure);
+        Check(AgentControlSession.ActionTool("build_house") && !AgentControlSession.ActionTool("house_site"),
+            "house tools have incorrect input ownership");
+        Check(session.Begin("build_house", null, out long building) == null, "house builder could not acquire free input");
+        Check(session.CheckWorkflow("build_house") == null && session.CheckWorkflow("start_run") != null,
+            "house builder admitted an unrelated legacy workflow");
+        session.End(building);
         claim = policy.Claim(ControlChannels.All, ControlLifetime.Task, null, "manual recovery");
         policy.ConfirmReleased(claim);
         Check(session.Begin("act", null, out _) != null, "unclaimed action acquired reserved input");

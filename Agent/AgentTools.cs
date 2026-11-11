@@ -887,7 +887,7 @@ public static partial class AgentTools
         }
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
             or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition"
-            or "gather" or "collect_treasure" or "equip_item" or "inventory_drop" or "inventory_trash" or "npc_chat";
+            or "gather" or "collect_treasure" or "build_house" or "equip_item" or "inventory_drop" or "inventory_trash" or "npc_chat";
         bool action = external || name is "fight" or "fight_player";
         bool startsPrimary = name == "action_start" && Text(args, "tool") != "fight";
         if ((external || startsPrimary) && string.IsNullOrEmpty(taskNode)
@@ -1117,7 +1117,7 @@ public static partial class AgentTools
         {
             if (name == "fight") return;
             bool changesRoute = name is "nav_to" or "gather" or "mine" or "mine_vein" or "chop_wood" or "use_item"
-                or "place_at" or "act" or "collect_treasure" or "combat_reposition";
+                or "place_at" or "act" or "collect_treasure" or "build_house" or "combat_reposition";
             if (changesRoute && !paused && pause != null) { await pause(ct); paused = true; }
             if (restore != null) return;
             while (await NativeAgent.OnMain(() => Main.LocalPlayer.itemAnimation > 0, ct)) await NativeAgent.NextUpdate(ct);
@@ -1616,6 +1616,7 @@ public static partial class AgentTools
                     _ => throw new ArgumentException("kind 必须是 item、npc 或 tile。")
                 };
                 result = kind == "tile" ? await NativeAgent.OnMain(() => TileCatalog(Text(args, "name")), token)
+                    : kind == "item" ? await NativeAgent.OnMain(() => ItemCatalog(Text(args, "name")), token)
                     : AgentCatalog.Query(constants, Text(args, "name"));
                 result["kind"] = kind;
                 if (kind == "tile" && result["found"]?.GetValue<bool>() == false)
@@ -1911,6 +1912,22 @@ public static partial class AgentTools
             case "place_at":
                 result = await Place(args, token);
                 break;
+            case "house_site":
+                int rooms = Int(args, "rooms", 1), direction = Int(args, "dir", 1);
+                var site = new JsonObject { ["w"] = rooms * 5 + 1, ["h"] = 10, ["range"] = Int(args, "range", 100) };
+                foreach (string field in new[] { "from_x", "from_y" })
+                    if (args[field] != null) site[field] = args[field].DeepClone();
+                result = await Call("/scan_house", site, token);
+                if (Bool(result, "found"))
+                    result["build_args"] = new JsonObject { ["rooms"] = rooms, ["dir"] = direction,
+                        ["x"] = result["at"][0].GetValue<int>() + (direction < 0 ? rooms * 5 : 0),
+                        ["y"] = result["at"][1].GetValue<int>() };
+                break;
+            case "build_house":
+                result = await Call("/build_house", args, token);
+                if (!Rejected(result) && result["accepted"]?.GetValue<bool>() == true)
+                    result = await Wait("/build_house_status", "running", "/build_house_stop", 0, token);
+                break;
             case "interact":
                 result = await Call("/interact", new JsonObject { ["tile_x"] = Int(args, "x"), ["tile_y"] = Int(args, "y") }, token);
                 if (!Rejected(result))
@@ -1924,7 +1941,12 @@ public static partial class AgentTools
                 await Task.Delay(300, token);
                 break;
             case "craft":
-                result = await Call("/craft", new JsonObject { ["item_name"] = Text(args, "name"), ["amount"] = Int(args, "amount", 1) }, token);
+                var craftArgs = new JsonObject { ["item_name"] = Text(args, "name"), ["amount"] = Int(args, "amount", 1) };
+                var matches = await NativeAgent.OnMain(() => ItemCatalog(Text(args, "name")), token);
+                var itemIds = matches["matches"].AsArray().Where(m => m["exact"]?.GetValue<bool>() == true)
+                    .Select(m => m["type"].GetValue<int>()).Distinct().ToArray();
+                if (itemIds.Length == 1) craftArgs["item_id"] = itemIds[0];
+                result = await Call("/craft", craftArgs, token);
                 break;
             case "act":
                 result = await Call("/act", args, token);
@@ -2001,6 +2023,9 @@ public static partial class AgentTools
         string output = await Result(result, before, token);
         return await ToolFinished(name, output, token);
     }
+
+    static JsonObject ItemCatalog(string name) => AgentCatalog.Query(typeof(Terraria.ID.ItemID), name, type =>
+        Terraria.ID.ContentSamples.ItemsByType.TryGetValue(type, out var item) ? new[] { item.Name } : Array.Empty<string>());
 
     static JsonObject TileCatalog(string name) => AgentCatalog.Query(typeof(Terraria.ID.TileID), name, type =>
         type < 0 || type >= Terraria.Map.MapHelper.tileOptionCounts.Length ? Array.Empty<string>() :
