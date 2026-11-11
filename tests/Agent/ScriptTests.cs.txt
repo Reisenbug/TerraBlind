@@ -65,6 +65,7 @@ static class ScriptTests
         await ReactiveHostIntegration();
         await TaskPolicyIntegration();
         await HouseTools();
+        PlacementProgress();
         var helperProgress = new ScriptProgress();
         var watchProgress = new ScriptProgress();
         var savedWatch = new JsonObject { ["events"] = new JsonArray("nearby_tile", "nearby_chest"),
@@ -1153,6 +1154,46 @@ static class ScriptTests
                 "empty encounter changed the original defense permission: " + policy);
         }
         Console.WriteLine("PASS: unchanged travel policy handles spores, stingers, chests, bag trash/drop, plates, thorns and target-aware weapons");
+    }
+
+    static void PlacementProgress()
+    {
+        var p = Terraria.Main.LocalPlayer;
+        var position = p.position;
+        bool active = RecedingNav.Active, ready = RecedingNav.FieldReady;
+        var tile = Terraria.Main.tile[20, 20];
+        try
+        {
+            p.position = new(20 * 16, 20 * 16);
+            RecedingNav.Active = false; RecedingNav.FieldReady = true;
+            var target = new JsonObject { ["world"] = new JsonArray(20, 10), ["expected_tile"] = 30 };
+            var progress = new NavigationProgress();
+            Check(AgentTools.PlacementProgress(progress, 0, target) == null, "placement immediately reported a stall");
+            var stalled = AgentTools.PlacementProgress(progress, 8, target);
+            Check(stalled?["error"]?.ToString() == "placement_no_progress"
+                && stalled["target"]["world"][1].GetValue<int>() == 10,
+                "stationary placement did not retain its target for recovery");
+            progress = new NavigationProgress();
+            AgentTools.PlacementProgress(progress, 0, target);
+            Terraria.Main.tile[20, 20] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 30 };
+            Check(AgentTools.PlacementProgress(progress, 7, target) == null
+                && AgentTools.PlacementProgress(progress, 14, target) == null,
+                "ongoing terrain construction was mistaken for stationary waiting");
+            Check(AgentTools.PlacementProgress(progress, 15, target)?["error"]?.ToString() == "placement_no_progress",
+                "terrain edit concealed a later placement stall");
+            RecedingNav.Active = true; RecedingNav.FieldReady = false;
+            Check(AgentTools.PlacementProgress(progress, 100, target) == null, "placement interrupted active route computation");
+            RecedingNav.FieldReady = true;
+            Check(AgentTools.PlacementProgress(progress, 101, target) == null, "placement inherited pre-planning idle time");
+            p.position.X += 64;
+            Check(AgentTools.PlacementProgress(progress, 108, target) == null, "placement movement counted as idle");
+        }
+        finally
+        {
+            p.position = position; Terraria.Main.tile[20, 20] = tile;
+            RecedingNav.Active = active; RecedingNav.FieldReady = ready;
+        }
+        Console.WriteLine("PASS: placement returns measured stalls, retaining terrain construction, movement and route computation");
     }
 
     static async Task HouseTools()

@@ -2387,7 +2387,11 @@ public static partial class AgentTools
                 payload["world"] = new JsonArray(Int(args, "x") + i * Int(args, "step_x"), Int(args, "y") + i * Int(args, "step_y"));
             var result = await Call("/place_anywhere", payload, token);
             var placement = (JsonObject)result.DeepClone();
-            if (!Rejected(result)) result = await Wait("/place_anywhere_status", "running", "/place_anywhere_stop", 120, token);
+            var progress = new NavigationProgress();
+            if (!Rejected(result)) result = await Wait("/place_anywhere_status", "running", "/place_anywhere_stop", 120, token,
+                elapsed => NativeAgent.OnMain(() => PlacementProgress(progress, elapsed, placement), token));
+            if (Text(result, "error") == "placement_no_progress")
+                await NativeAgent.OnMain(() => { StopInputs(preserveAttack: Actions.HasAttack); return true; }, token);
             if (Text(result, "outcome") == "done")
                 result = await NativeAgent.OnMain(() =>
                 {
@@ -2418,6 +2422,31 @@ public static partial class AgentTools
         }
         return new JsonObject { ["ok"] = placed == count, ["outcome"] = placed == count ? "done" : placed > 0 ? "partial" : "stuck",
             ["placed"] = placed, ["wanted"] = count, ["cells"] = cells };
+    }
+
+    internal static JsonObject PlacementProgress(NavigationProgress progress, double elapsed, JsonObject placement)
+    {
+        var p = Main.LocalPlayer;
+        int px = (int)p.Center.X / 16, py = (int)p.Center.Y / 16;
+        var terrain = new Dictionary<int, long>();
+        for (int x = px - 4; x <= px + 4; x++)
+        for (int y = py - 4; y <= py + 4; y++)
+            if (WorldGen.InWorld(x, y))
+            {
+                var tile = Main.tile[x, y];
+                terrain[x * Main.maxTilesY + y] = ((long)tile.WallType << 24)
+                    + (tile.HasTile ? 1L + ((long)tile.TileType << 8) + ((long)tile.Slope << 4) + (tile.IsHalfBlock ? 2 : 0) : 0);
+            }
+        int gx = placement["world"]?[0]?.GetValue<int>() ?? px, gy = placement["world"]?[1]?.GetValue<int>() ?? py;
+        double distance = Math.Abs(p.Center.X - gx * 16) + Math.Abs(p.Center.Y - gy * 16);
+        var stalled = progress.Observe(elapsed, p.position.X, p.position.Y, distance, terrain,
+            RecedingNav.Active && !RecedingNav.FieldReady);
+        if (stalled != null)
+        {
+            stalled["error"] = "placement_no_progress";
+            stalled["target"] = placement.DeepClone();
+        }
+        return stalled;
     }
 
     static async Task<JsonObject> MineVein(JsonObject args, CancellationToken token)
