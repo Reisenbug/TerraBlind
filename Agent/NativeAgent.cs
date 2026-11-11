@@ -325,20 +325,22 @@ public class NativeAgent : ModSystem
                     bool reviewRequested = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.ReviewRequested
                         && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
                     var backgroundReview = System.Diagnostics.Stopwatch.StartNew();
-                    string preparingAttempt = AgentTools.Actions.ActiveAttempt;
+                    string preparingAttempt = await OnMain(() => AgentTools.PreparationContext(
+                        AgentTools.Actions.ActiveAttempt, AgentTools.Actions.ActiveNode), token);
                     var preparation = await OnMain(() => (Delay: AgentTools.Plan.RequiresNodeExecution ? 0 : 15,
                         Nodes: AgentTools.Plan.PreparationNodes(AgentTools.Actions.ActiveNode, AgentTaskEvidence.Measure)), token);
                     bool prepareNext = preparingAttempt != null && preparingAttempt != preparedAttempt
-                        && (preparingAttempt != AgentTools.PreparationNotifiedAttempt || preparation.Nodes.Count > 0);
+                        && (preparingAttempt != AgentTools.PreparationNotifiedContext || preparation.Nodes.Count > 0);
                     double reviewDelay = preparation.Delay;
                     while (!reviewRequested && (!prepareNext || backgroundReview.Elapsed.TotalSeconds < reviewDelay)
                         && await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
                         && !AgentTools.Watches.HasModelInterrupting && !AgentTools.Watches.HasHealthNotice && !AgentTools.Watches.HasAdvisories, token))
                     {
                         await Task.Delay(100, token);
-                        preparingAttempt = AgentTools.Actions.ActiveAttempt;
+                        preparingAttempt = await OnMain(() => AgentTools.PreparationContext(
+                            AgentTools.Actions.ActiveAttempt, AgentTools.Actions.ActiveNode), token);
                         prepareNext = preparingAttempt != null && preparingAttempt != preparedAttempt
-                            && (preparingAttempt != AgentTools.PreparationNotifiedAttempt || preparation.Nodes.Count > 0);
+                            && (preparingAttempt != AgentTools.PreparationNotifiedContext || preparation.Nodes.Count > 0);
                     }
                     if (!reviewRequested && (prepareNext
                         || await OnMain(() => AgentTools.Watches.HasHealthNotice || AgentTools.Watches.HasAdvisories, token))

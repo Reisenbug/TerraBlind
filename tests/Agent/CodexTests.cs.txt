@@ -20,6 +20,7 @@ static class CodexTests
     public static async Task Run()
     {
         await InputOptimizations();
+        PreparationContexts();
         await GoalProtocol();
         await NativeGoalProtocol();
         await NativeExecutionSteering();
@@ -615,6 +616,33 @@ static class CodexTests
             && fresh["state"]["last_damage"]["npc_type"].GetValue<int>() == 42,
             "patch application or compaction snapshot lost authoritative current state");
         Console.WriteLine("PASS: recursive context patches update actual slots/fields and removals while preserving hazards, damage and full reset snapshots");
+    }
+
+    static void PreparationContexts()
+    {
+        AgentTools.Plan.Reset();
+        try
+        {
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"collect along a route","mode":"dag","steps":[
+                 {"id":"collect","description":"repeat prepared collection","depends_on":[],
+                  "script":"return tool('gather',{targets:[{item_type:29,count:1,tile_names:['Heart']}]});",
+                  "conditions":[{"kind":"permanent_health","count":300}]}]}
+                """).AsObject(), AgentTaskEvidence.Measure);
+            string first = AgentTools.PreparationContext("first:1", "collect");
+            Check(first == AgentTools.PreparationContext("second:1", "collect"),
+                "unchanged node repeated preparation when its collection handle changed");
+            Check(AgentTools.PreparationContext("first:1", null) != AgentTools.PreparationContext("first:2", null),
+                "independent resumed action lost its new preparation context");
+            AgentTools.Plan.Revise(new JsonObject { ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                ["reason"] = "new executable recovery", ["nodes"] = JsonNode.Parse("""
+                    [{"id":"collect","on_failure":"return {status:'yield',reason:'inspect the new route'};"}]
+                    """) }, AgentTaskEvidence.Measure);
+            Check(first != AgentTools.PreparationContext("second:1", "collect"),
+                "changed node recovery did not rearm preparation");
+        }
+        finally { AgentTools.Plan.Reset(); }
+        Console.WriteLine("PASS: preparation follows node source and recovery revisions while standalone attempts remain independent");
     }
 
     static async Task NativeExecutionSteering(bool script = false, bool preparedReview = false, bool rejectSteer = false, bool preparationOnly = false)
