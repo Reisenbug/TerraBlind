@@ -61,6 +61,7 @@ public sealed class BehaviorTrial : ModSystem
     delegate void PrimaryHook(OriginalPrimary original, StateSnapshotPlayer player);
     PrimaryHook primaryHook;
     int hornetsSpawned;
+    JsonObject miningMeasurement;
     int stingersRequired = 1;
     Task trial;
     Task operatorRequest = Task.CompletedTask;
@@ -357,7 +358,11 @@ public sealed class BehaviorTrial : ModSystem
     public override void Load()
     {
         enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentbehaviorcheck");
-        if (enabled) { On_Main.Update += Open; IL_Main.DoUpdate += Focus; }
+        if (enabled)
+        {
+            On_Main.Update += Open; IL_Main.DoUpdate += Focus;
+            if (Environment.GetEnvironmentVariable("TB_MINING_SPEED_TRIAL") == "1") On_Player.PickTile += MeasureMining;
+        }
         if (enabled && Environment.GetEnvironmentVariable("TB_TRACE_PRIMARY") == "1")
         {
             primaryHook = (original, instance) =>
@@ -417,7 +422,33 @@ public sealed class BehaviorTrial : ModSystem
             MonoModHooks.Add(typeof(RecedingNav).GetMethod("Start", new[] { typeof(int), typeof(int), typeof(RecedingNav.Mode) }), materialNavigationHook);
         }
     }
-    public override void Unload() { if (enabled) { On_Main.Update -= Open; IL_Main.DoUpdate -= Focus; } }
+    public override void Unload()
+    {
+        if (enabled)
+        {
+            On_Main.Update -= Open; IL_Main.DoUpdate -= Focus;
+            if (Environment.GetEnvironmentVariable("TB_MINING_SPEED_TRIAL") == "1") On_Player.PickTile -= MeasureMining;
+        }
+    }
+    void MeasureMining(On_Player.orig_PickTile original, Player player, int x, int y, int power)
+    {
+        var sample = miningMeasurement;
+        bool matching = player == Main.LocalPlayer && sample != null && sample["x"].GetValue<int>() == x && sample["y"].GetValue<int>() == y;
+        if (matching)
+        {
+            sample["first_hit_tick"] ??= JsonValue.Create((long)Main.GameUpdateCount);
+            sample["hits"] = (sample["hits"]?.GetValue<int>() ?? 0) + 1;
+            sample["effective_pick_speed"] = player.pickSpeed;
+            sample["pick_power"] = power;
+            sample["use_time"] = player.HeldItem.useTime;
+            sample["use_animation"] = player.HeldItem.useAnimation;
+            sample["effective_use_time"] = CombinedHooks.TotalUseTime(player.HeldItem.useTime * player.pickSpeed, player, player.HeldItem);
+            sample["effective_animation"] = CombinedHooks.TotalAnimationTime(player.HeldItem.useAnimation, player, player.HeldItem);
+        }
+        original(player, x, y, power);
+        if (matching && !Main.tile[x, y].HasTile)
+            sample["mining_frames"] = (long)Main.GameUpdateCount - sample["first_hit_tick"].GetValue<long>() + 1;
+    }
     static void Focus(ILContext il)
     {
         var cursor = new ILCursor(il);
@@ -737,6 +768,7 @@ public sealed class BehaviorTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_MINING_SPEED_TRIAL") == "1") { await MiningSpeedTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_ATOMIC_POLICY_TRIAL") == "1") { await AtomicPolicyTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_OPEN_ITEM_PROBE") == "1")
         {
@@ -3304,6 +3336,62 @@ public sealed class BehaviorTrial : ModSystem
         });
     }
 
+    async Task MiningSpeedTrial()
+    {
+        int cx = Main.spawnTileX + 30, ground = Main.spawnTileY + 5;
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); AgentTools.NewTask(); Manual.On = false; Concessions.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false; AgentPermissions.Attack = AgentPermissions.Dodge = false;
+            for (int x = cx - 6; x <= cx + 8; x++)
+            for (int y = ground - 8; y <= ground + 1; y++)
+            {
+                Main.tile[x, y].ClearEverything();
+                if (y >= ground) Main.tile[x, y].ResetToType(TileID.Dirt);
+            }
+            var player = Main.LocalPlayer;
+            foreach (var item in player.inventory) item.TurnToAir();
+            player.inventory[0].SetDefaults(ItemID.CopperPickaxe); player.selectedItem = 0;
+            player.position = new Vector2(cx * 16, ground * 16 - player.height); player.velocity = Vector2.Zero;
+            player.fallStart = player.fallStart2 = (int)player.position.Y / 16;
+            return true;
+        });
+        var samples = new JsonArray();
+        foreach (bool fast in new[] { false, true })
+        for (int i = 0; i < 5; i++)
+        {
+            int x = cx + 2, y = ground - 2;
+            await OnMain(() =>
+            {
+                Config.I.FastMining = fast;
+                Main.LocalPlayer.itemAnimation = Main.LocalPlayer.itemTime = 0;
+                Main.LocalPlayer.hitTile.ClearThisTile(x, y);
+                Main.tile[x, y].ResetToType(TileID.Stone);
+                miningMeasurement = new JsonObject { ["fast_mining"] = fast, ["sample"] = i,
+                    ["x"] = x, ["y"] = y, ["pick_type"] = Main.LocalPlayer.inventory[0].type, ["tile_type"] = (int)TileID.Stone };
+                return true;
+            });
+            var timer = Stopwatch.StartNew();
+            var result = await Call("use_item", new JsonObject { ["slot"] = 0, ["x"] = x, ["y"] = y, ["strict"] = true });
+            var sample = await OnMain(() => (JsonObject)miningMeasurement.DeepClone());
+            sample["api_elapsed_ms"] = timer.ElapsedMilliseconds;
+            if (result["outcome"]?.ToString() != "removed" || sample["mining_frames"] == null)
+                throw new Exception("native mining speed sample failed: " + result + " " + sample);
+            samples.Add(sample);
+        }
+        await OnMain(() => { miningMeasurement = null; Config.I.FastMining = true; return true; });
+        var averages = new JsonObject();
+        foreach (bool fast in new[] { false, true })
+            averages[fast ? "on" : "off"] = samples.Where(sample => sample["fast_mining"].GetValue<bool>() == fast)
+                .Average(sample => sample["mining_frames"].GetValue<long>());
+        var report = new JsonObject { ["samples"] = samples, ["mean_mining_frames"] = averages, ["model_calls"] = 0,
+            ["fixture_terrain"] = true, ["native_pick_tile"] = true };
+        File.WriteAllText(Path.Combine(Main.SavePath, "mining-speed-native.json"), report.ToJsonString());
+        if (averages["on"].GetValue<double>() >= averages["off"].GetValue<double>())
+            throw new Exception("native mining speed did not improve: " + report);
+        Console.WriteLine("MINING_SPEED_NATIVE_PASS " + averages.ToJsonString());
+    }
+
     async Task AtomicPolicyTrial()
     {
         int cx = Main.spawnTileX + 30, ground = Main.spawnTileY + 5;
@@ -4189,7 +4277,7 @@ public sealed class BehaviorTrial : ModSystem
             ["prompt"] = prompt, ["spawn"] = jungleSpawn.DeepClone(), ["before"] = before,
             ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["model"] = "gpt-6.1-sol", ["effort"] = "low",
             ["natural_encounters"] = NaturalEncounters, ["stage"] = stage, ["terrain_edits"] = 0,
-            ["mining_speed_multiplier"] = BoundaryInputPlayer.MiningSpeedMultiplier,
+            ["mining_speed_multiplier"] = Config.I.FastMining ? ConcessionSpeed.MiningSpeedMultiplier : 1,
             ["resumed_from"] = QueenResumeRoot,
             ["package_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
                 File.ReadAllBytes(Path.Combine(Main.SavePath, "Mods", "TerraBlind.tmod"))))
@@ -4364,7 +4452,7 @@ public sealed class BehaviorTrial : ModSystem
         });
         File.WriteAllText(Path.Combine(Main.SavePath, "queen-start.json"), new JsonObject
         { ["prompt"] = prompt, ["before"] = before.DeepClone(), ["spawn"] = jungleSpawn?.DeepClone(), ["model"] = "gpt-6.1-sol", ["effort"] = "low",
-            ["mining_speed_multiplier"] = BoundaryInputPlayer.MiningSpeedMultiplier,
+            ["mining_speed_multiplier"] = Config.I.FastMining ? ConcessionSpeed.MiningSpeedMultiplier : 1,
             ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["natural_encounters"] = NaturalEncounters,
             ["resumed_from"] = QueenResumeRoot }.ToJsonString());
         using var journal = new StreamWriter(Path.Combine(Main.SavePath, "queen-samples.jsonl")) { AutoFlush = true };
@@ -5990,22 +6078,6 @@ public sealed class BehaviorTrial : ModSystem
 
 public sealed class BoundaryInputPlayer : ModPlayer
 {
-    public const int MiningSpeedMultiplier = 6;
     public static Action<Player> Drive;
-    bool reportedMiningSpeed;
     public override void SetControls() { if (Player.whoAmI == Main.myPlayer) Drive?.Invoke(Player); }
-    public override void PostUpdateEquips()
-    {
-        if (Player.whoAmI == Main.myPlayer && Terraria.Program.LaunchParameters.ContainsKey("-agentbehaviorcheck")
-            && Environment.GetEnvironmentVariable("TB_FULL_CRAFT_TRIAL") == "1")
-        {
-            float before = Player.pickSpeed;
-            Player.pickSpeed /= MiningSpeedMultiplier;
-            if (!reportedMiningSpeed)
-            {
-                reportedMiningSpeed = true;
-                Console.WriteLine($"TRIAL_MINING_SPEED multiplier={MiningSpeedMultiplier} before={before:R} after={Player.pickSpeed:R}");
-            }
-        }
-    }
 }
