@@ -123,7 +123,8 @@ public sealed class ScriptLibrary
               }
               const key=choice?choice.weapon.type+':'+choice.target.who:'none';
               if(key!==combatChoice){
-                const r=tool('set_combat',choice?{auto_attack:true,weapon_type:choice.weapon.type}:{auto_attack:false});
+                const r=tool('set_combat',choice?{auto_attack:true,weapon_type:choice.weapon.type}
+                  :{auto_attack:originalCombat.auto_attack,weapon_type:originalCombat.combat_weapon_type});
                 if(r.error) return {handled:false,reason:r.error};
                 combatChoice=key;
               }

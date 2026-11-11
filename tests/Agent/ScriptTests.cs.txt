@@ -1129,9 +1129,28 @@ static class ScriptTests
         string code = "const input=" + Config().ToJsonString() + ";\n" + ScriptLibrary.Example("reactive_travel")["code"];
         var result = await AgentScript.Run(code, 5, (_, _) => { }, Execute, _ => Task.CompletedTask, default, new ScriptProgress());
         Check(result["ok"].GetValue<bool>() && result["value"]["done"].GetValue<bool>(), "reactive travel example failed: " + result);
-        Check(effects.SequenceEqual(new[] { "remove_plate", "inventory_trash", "collect:331", "collect:209", "chest", "inventory_drop", "weapon:65", "pass_thorn", "no_futile_attack", "weapon:0" })
+        Check(effects.SequenceEqual(new[] { "remove_plate", "inventory_trash", "collect:331", "collect:209", "chest", "inventory_drop", "weapon:65", "pass_thorn", "weapon:0", "weapon:0" })
             && navStarts == 2 && stock[331] == 1 && stock[209] == 1,
             "reactive travel missed a branch, chased an unwanted/lava drop or looted a distant chest: " + string.Join(',', effects));
+        foreach (bool permitted in new[] { true, false })
+        {
+            bool? actualPermission = null;
+            var policy = await AgentScript.Run("(function(){const input=" + Config().ToJsonString() + ";\n"
+                + ScriptLibrary.Example("task_reactions")["code"] + "})();return tool('nav_to');", 5, (_, _) => { },
+                async (name, args, token) =>
+                {
+                    if (name == "get_state") return new JsonObject { ["agent"] = new JsonObject
+                        { ["auto_attack"] = permitted, ["combat_weapon_type"] = 65 } }.ToJsonString();
+                    if (name == "combat_assess") return "{\"tick\":100,\"targets\":[]}";
+                    if (name == "inspect_terrain") return "{\"near_body_tiles\":[]}";
+                    if (name == "set_combat") { actualPermission = args["auto_attack"].GetValue<bool>(); return "{}"; }
+                    if (name == "nav_to")
+                        await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject { ["kind"] = "tick" }, token);
+                    return "{}";
+                }, _ => Task.CompletedTask, default);
+            Check(policy["ok"].GetValue<bool>() && actualPermission == permitted,
+                "empty encounter changed the original defense permission: " + policy);
+        }
         Console.WriteLine("PASS: unchanged travel policy handles spores, stingers, chests, bag trash/drop, plates, thorns and target-aware weapons");
     }
 
