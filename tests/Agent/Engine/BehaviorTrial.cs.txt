@@ -443,6 +443,10 @@ public sealed class BehaviorTrial : ModSystem
                     string destination = Path.Combine(Main.SavePath, "TerraBlindAgent", "programs", Path.GetRelativePath(programs, source));
                     Directory.CreateDirectory(Path.GetDirectoryName(destination)); File.Copy(source, destination, true);
                 }
+            if (ProgressionTrial)
+                foreach (string pattern in new[] { "progression-*-start.json", "progression-*-progress.json" })
+                    foreach (string source in Directory.EnumerateFiles(QueenResumeRoot, pattern))
+                        File.Copy(source, Path.Combine(Main.SavePath, Path.GetFileName(source)), true);
         }
         WorldFile.GetAllMetadata(Path.Combine(Main.SavePath, "Worlds", "Checks.wld"), false).SetAsActive();
         var player = string.IsNullOrEmpty(QueenResumeRoot) ? PlayerFileData.CreateAndSave(new Player { name = "JS behavior trial" })
@@ -4863,7 +4867,20 @@ public sealed class BehaviorTrial : ModSystem
         {
             if (ProgressionTrial)
             {
-                foreach (string stage in new[] { "cobalt", "hellstone", "prime" }) await ShortJungleCollectionTrial(stage);
+                foreach (string stage in new[] { "cobalt", "hellstone", "prime" })
+                {
+                    string checkpoint = Path.Combine(Main.SavePath, "progression-" + stage + "-progress.json");
+                    if (File.Exists(checkpoint))
+                    {
+                        var saved = JsonNode.Parse(File.ReadAllText(checkpoint));
+                        if (saved["ok"]?.GetValue<bool>() == true && saved["after"]?["goal_verification"]?["verified"]?.GetValue<bool>() == true)
+                        {
+                            Console.WriteLine("progression-" + stage + " RESUMED_VERIFIED checkpoint=" + checkpoint);
+                            continue;
+                        }
+                    }
+                    await ShortJungleCollectionTrial(stage);
+                }
                 return;
             }
             if (ShortJungleTrial) { await ShortJungleCollectionTrial(); return; }
