@@ -26,7 +26,7 @@ public static class SurfaceBiomeSearch
         for (int x = 1; x < width - 1; x++)
         {
             int floor = ground[x];
-            if (floor < 3 || Math.Abs(x - originX) >= distance) continue;
+            if (floor < 3 || read(x, floor).Weight <= 0 || Math.Abs(x - originX) >= distance) continue;
             bool clear = true;
             for (int dx = -1; dx <= 1 && clear; dx++)
             for (int dy = 1; dy <= 3 && clear; dy++)

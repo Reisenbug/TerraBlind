@@ -339,23 +339,17 @@ public sealed class BehaviorTrial : ModSystem
     }
     public override void OnWorldLoad()
     {
-        if (!enabled || !ShortJungleTrial && !ProgressionTrial) return;
+        if (!enabled || !ShortJungleTrial && !ProgressionTrial && Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") != "1") return;
         if (ProgressionTrial && !string.IsNullOrEmpty(QueenResumeRoot))
         {
             jungleSpawn = JsonNode.Parse(File.ReadAllText(Path.Combine(QueenResumeRoot, "progression-cobalt-start.json")))["spawn"].DeepClone().AsObject();
             return;
         }
-        var weights = Main.remixWorld ? TileID.Sets.RemixJungleBiome : TileID.Sets.JungleBiome;
-        var spawn = SurfaceBiomeSearch.Find(Main.maxTilesX, Main.maxTilesY, (int)Main.worldSurface, Main.spawnTileX,
-            Main.buffScanAreaWidth, Main.buffScanAreaHeight, SceneMetrics.JungleTileThreshold, (x, y) =>
-            {
-                var tile = Main.tile[x, y];
-                return new BiomeCell(tile.HasUnactuatedTile && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType],
-                    tile.HasTile ? weights[tile.TileType] : 0, tile.LiquidAmount > 0 && tile.LiquidType == LiquidID.Lava);
-            }) ?? throw new Exception("no natural jungle surface spawn found");
-        Main.spawnTileX = spawn.X; Main.spawnTileY = spawn.Y + 1;
+        var spawn = BiomeSearch.Jungle(Main.spawnTileX);
+        if (spawn["found"]?.GetValue<bool>() != true) throw new Exception("no pure natural jungle surface spawn found");
+        Main.spawnTileX = spawn["x"].GetValue<int>(); Main.spawnTileY = spawn["y"].GetValue<int>() + 1;
         jungleSpawn = new JsonObject { ["x"] = Main.spawnTileX, ["y"] = Main.spawnTileY,
-            ["local_jungle_tiles"] = spawn.LocalCount, ["threshold"] = SceneMetrics.JungleTileThreshold,
+            ["local_jungle_tiles"] = spawn["local_biome_tiles"].DeepClone(), ["threshold"] = SceneMetrics.JungleTileThreshold,
             ["terrain_edits"] = 0 };
         Console.WriteLine("JUNGLE_COLLECTION_SPAWN " + jungleSpawn.ToJsonString());
     }
@@ -3335,6 +3329,9 @@ public sealed class BehaviorTrial : ModSystem
         var full = await Call("get_state", new JsonObject());
         var fields = new JsonArray("player", "inventory_slots", "permanent_max_health");
         var focused = await Call("get_state", new JsonObject { ["fields"] = fields });
+        var counts = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("inventory_counts") });
+        if (focused["snapshot_tick"] != null && counts["inventory_counts"]?[ItemID.LifeCrystal.ToString()]?.GetValue<int>() != 2)
+            throw new Exception("native inventory count projection disagrees with the starting bag");
         string code = """
             let reaction=null;
             on('nearby_chest',e=>{
@@ -3369,7 +3366,7 @@ public sealed class BehaviorTrial : ModSystem
         var result = JsonNode.Parse(await execution.WaitAsync(TimeSpan.FromSeconds(20))).AsObject();
         var after = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("player", "inventory_slots", "permanent_max_health") });
         var report = new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["full_state_chars"] = full.ToJsonString().Length,
-            ["focused_state_chars"] = focused.ToJsonString().Length, ["result"] = result,
+            ["focused_state_chars"] = focused.ToJsonString().Length, ["count_state_chars"] = counts.ToJsonString().Length, ["result"] = result,
             ["after"] = after, ["model_calls"] = 0, ["fixture_terrain"] = true, ["event_injected"] = true,
             ["assembly_mvid"] = typeof(AgentTools).Assembly.ManifestModule.ModuleVersionId.ToString() };
         File.WriteAllText(Path.Combine(Main.SavePath, "atomic-policy-native.json"), report.ToJsonString());
@@ -4128,7 +4125,7 @@ public sealed class BehaviorTrial : ModSystem
         {
             var p = Main.LocalPlayer;
             bool resume = stage != null && !string.IsNullOrEmpty(QueenResumeRoot);
-            if (!resume && (stage == null || stage == "cobalt") && (jungleSpawn == null || !p.ZoneJungle || !p.ZoneOverworldHeight
+            if (!resume && (stage == null || stage == "cobalt") && (jungleSpawn == null || !p.ZoneJungle || p.ZoneCrimson || p.ZoneCorrupt || !p.ZoneOverworldHeight
                 || Main.GameMode != 0 || p.statLifeMax != 100 || p.ConsumedLifeCrystals != 0))
                 throw new Exception("short collection requires a fresh 100 HP classic jungle surface spawn");
             if (stage == "cobalt" && (NPC.downedBoss3 || Main.hardMode || p.HasItem(ItemID.CobaltShield)))
@@ -4136,6 +4133,11 @@ public sealed class BehaviorTrial : ModSystem
             if (!resume && (stage == null || stage == "cobalt"))
             {
                 jungleSpawn["actual_biome"] = "jungle";
+                jungleSpawn["zone_jungle"] = p.ZoneJungle; jungleSpawn["zone_crimson"] = p.ZoneCrimson; jungleSpawn["zone_corrupt"] = p.ZoneCorrupt;
+                int groundX = (int)p.Center.X / 16, groundY = (int)(p.Bottom.Y + 1) / 16;
+                jungleSpawn["ground_tile_type"] = (int)Main.tile[groundX, groundY].TileType;
+                if (!Main.tile[groundX, groundY].HasTile || Main.tile[groundX, groundY].TileType != TileID.JungleGrass)
+                    throw new Exception("jungle trial requires standing on native jungle grass");
                 jungleSpawn["actual_position"] = new JsonObject { ["x"] = p.position.X / 16, ["y"] = p.position.Y / 16 };
             }
             string checkpoint = Path.Combine(QueenResumeRoot ?? "", prefix + "-progress.json");
@@ -4154,6 +4156,14 @@ public sealed class BehaviorTrial : ModSystem
             Player.SavePlayer(Main.ActivePlayerFileData); WorldFile.SaveWorld(false);
             return true;
         });
+        if (Environment.GetEnvironmentVariable("TB_JUNGLE_SPAWN_PROBE") == "1")
+        {
+            var report = new JsonObject { ["spawn"] = jungleSpawn.DeepClone(), ["world_seed"] = Main.ActiveWorldFileData.SeedText,
+                ["model_calls"] = 0, ["terrain_edits"] = 0 };
+            File.WriteAllText(Path.Combine(Main.SavePath, "jungle-spawn-native.json"), report.ToJsonString());
+            Console.WriteLine("PURE_JUNGLE_SPAWN_PASS " + report.ToJsonString());
+            return;
+        }
         string prompt = stage switch
         {
             "cobalt" => "/goal 获取钴护盾，放在背包或装备上。自行查询获取方式、前置和召唤条件，按实际难度准备够用的血量、装备、补给及小型战斗场地，击败骷髅王后探索地牢取得护盾。经典难度，结合头与手的实际机制选择攻击目标。",
@@ -4256,6 +4266,17 @@ public sealed class BehaviorTrial : ModSystem
 
     async Task QueenGoalTrial()
     {
+        if (string.IsNullOrEmpty(QueenResumeRoot)) await OnMain(() =>
+        {
+            var player = Main.LocalPlayer;
+            int x = (int)player.Center.X / 16, y = (int)(player.Bottom.Y + 1) / 16;
+            if (!player.ZoneJungle || player.ZoneCrimson || player.ZoneCorrupt || !player.ZoneOverworldHeight
+                || !Main.tile[x, y].HasTile || Main.tile[x, y].TileType != TileID.JungleGrass)
+                throw new Exception("queen trial requires native jungle surface flags and jungle grass underfoot");
+            jungleSpawn["zone_jungle"] = player.ZoneJungle; jungleSpawn["zone_crimson"] = player.ZoneCrimson;
+            jungleSpawn["zone_corrupt"] = player.ZoneCorrupt; jungleSpawn["ground_tile_type"] = (int)Main.tile[x, y].TileType;
+            return true;
+        });
         var before = await Call("get_state", new JsonObject());
         if (await OnMain(() => NPC.downedQueenBee)) throw new Exception("queen trial requires fresh world progression");
         int targetHealth = int.Parse(Environment.GetEnvironmentVariable("TB_QUEEN_TARGET_HEALTH") ?? "240");
@@ -4342,7 +4363,7 @@ public sealed class BehaviorTrial : ModSystem
             return true;
         });
         File.WriteAllText(Path.Combine(Main.SavePath, "queen-start.json"), new JsonObject
-        { ["prompt"] = prompt, ["before"] = before.DeepClone(), ["model"] = "gpt-6.1-sol", ["effort"] = "low",
+        { ["prompt"] = prompt, ["before"] = before.DeepClone(), ["spawn"] = jungleSpawn?.DeepClone(), ["model"] = "gpt-6.1-sol", ["effort"] = "low",
             ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["natural_encounters"] = NaturalEncounters,
             ["resumed_from"] = QueenResumeRoot }.ToJsonString());
         using var journal = new StreamWriter(Path.Combine(Main.SavePath, "queen-samples.jsonl")) { AutoFlush = true };
