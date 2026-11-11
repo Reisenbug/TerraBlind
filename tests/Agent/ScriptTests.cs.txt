@@ -1617,13 +1617,14 @@ static class ScriptTests
             await Call("task_plan", JsonNode.Parse("""
                 {"goal":"shared reactions across nodes","mode":"dag","steps":[
                  {"id":"first","description":"first leg","depends_on":[],"conditions":[{"kind":"position","x":20,"y":10,"radius":3,"count":1}],
-                  "script":"tool('watch',{events:['low_health']});return step('travel',()=>tool('nav_to',{x:20,y:10}));"},
+                  "script":"tool('watch',{events:['low_health']});step('travel',()=>tool('nav_to',{x:20,y:10}));return {status:'yield'};"},
                  {"id":"second","description":"second leg","depends_on":["first"],"conditions":[{"kind":"position","x":40,"y":10,"radius":3,"count":1}],
-                  "script":"on('nearby_chest',e=>{tool('say',{text:'local:'+e.task_node});return {handled:true};});tool('watch',{events:['low_health']});return step('travel',()=>tool('nav_to',{x:40,y:10}));"}]}
+                  "script":"on('nearby_chest',e=>{tool('say',{text:'local:'+e.task_node});return {handled:true};});tool('watch',{events:['low_health']});step('travel',()=>tool('nav_to',{x:40,y:10}));return {status:'yield'};"}]}
                 """).AsObject());
             HttpServerSystem.Handler = (path, payload) =>
             {
-                if (path == "/nav_recede") { RecedingNav.Active = true; goalX = JsonNode.Parse(payload)["gx"].GetValue<int>(); }
+                if (path == "/nav_recede")
+                { RecedingNav.Active = true; goalX = JsonNode.Parse(payload)["gx"].GetValue<int>(); phase = goalX == 20 ? 1 : 2; polls = 0; }
                 if (path == "/nav_recede_done")
                 {
                     polls++;
@@ -1636,7 +1637,6 @@ static class ScriptTests
             };
             foreach (string node in new[] { "first", "second" })
             {
-                phase++; polls = 0;
                 var result = await Call("run_script", new JsonObject { ["task_node"] = node });
                 Check(result["ok"].GetValue<bool>(), "shared policy failed in node " + node + ": " + result);
                 Check(AgentTools.Watches.Subscribed("nearby_drop"), "node watch removed a task policy subscription");
