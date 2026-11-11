@@ -72,6 +72,7 @@ public sealed class BehaviorTrial : ModSystem
     static bool FullQueenRun => Environment.GetEnvironmentVariable("TB_QUEEN_FULL_RUN") == "1";
     Stopwatch shortJungleClock;
     Stopwatch queenClock;
+    bool queenPreviouslyDead;
     double queenSampleMs, queenCoveredMs, queenUncoveredMs, queenRespawnMs, queenComputeMs;
     double queenGapStart = -1;
     bool queenGapWarned;
@@ -349,8 +350,9 @@ public sealed class BehaviorTrial : ModSystem
         if (!enabled || !ShortJungleTrial && !ProgressionTrial && Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") != "1") return;
         if (FullQueenRun)
         {
+            VanillaNavBridge.Enabled = true;
             jungleSpawn = new JsonObject { ["x"] = Main.spawnTileX, ["y"] = Main.spawnTileY,
-                ["world_default"] = true, ["terrain_edits"] = 0 };
+                ["world_default"] = true, ["terrain_edits"] = 0, ["navigation_backend"] = "vanilla_engine" };
             Console.WriteLine("QUEEN_DEFAULT_SPAWN " + jungleSpawn.ToJsonString());
             return;
         }
@@ -497,7 +499,7 @@ public sealed class BehaviorTrial : ModSystem
                 File.Copy(Path.Combine(QueenResumeRoot, relative), destination, true);
             }
             string programs = Path.Combine(QueenResumeRoot, "TerraBlindAgent", "programs");
-            if (ProgressionTrial && Directory.Exists(programs))
+            if ((ProgressionTrial || FullQueenRun) && Directory.Exists(programs))
                 foreach (string source in Directory.EnumerateFiles(programs, "*", SearchOption.AllDirectories))
                 {
                     string destination = Path.Combine(Main.SavePath, "TerraBlindAgent", "programs", Path.GetRelativePath(programs, source));
@@ -522,7 +524,7 @@ public sealed class BehaviorTrial : ModSystem
     }
     public override void PreUpdatePlayers()
     {
-        if (!enabled || Main.gameMenu || Manual.On) return;
+        if (!enabled || Main.gameMenu || Manual.On || FullQueenRun) return;
         if (Environment.GetEnvironmentVariable("TB_IDLE_INPUT_PROBE") == "1")
         {
             Terraria.GameInput.PlayerInput.Triggers.Current.MouseLeft = true;
@@ -591,6 +593,11 @@ public sealed class BehaviorTrial : ModSystem
             for (int i = 0; i < Main.maxNPCs; i++)
                 if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
         var p = Main.LocalPlayer;
+        if (FullQueenRun)
+        {
+            if (queenPreviouslyDead && !p.dead) Main.playerInventory = true;
+            queenPreviouslyDead = p.dead;
+        }
         if (queenClock != null)
         {
             double now = queenClock.Elapsed.TotalMilliseconds, elapsed = now - queenSampleMs;
@@ -709,7 +716,8 @@ public sealed class BehaviorTrial : ModSystem
             string detail = ok ? $"BEHAVIOR_COMPLETE moving_attack_frames={movingAttackFrames}" : trial?.Exception?.GetBaseException().ToString() ?? "behavior frame deadline";
             Console.WriteLine(detail);
             File.WriteAllText(Path.Combine(Main.SavePath, "agent-engine-result.json"), new JsonObject { ["ok"] = ok, ["detail"] = detail }.ToJsonString());
-            Console.Out.Flush(); Environment.Exit(ok ? 0 : 1);
+            Console.Out.Flush();
+            if (ok || !FullQueenRun) Environment.Exit(ok ? 0 : 1);
         }
     }
     static async Task<JsonObject> Call(string tool, JsonObject args)
@@ -4691,6 +4699,13 @@ public sealed class BehaviorTrial : ModSystem
                 Concessions.Enabled = false;
                 if (!string.IsNullOrEmpty(QueenResumeRoot))
                 {
+                    if (FullQueenRun)
+                    {
+                        var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(QueenResumeRoot, "queen-progress.json")))["after"];
+                        p.position = new Vector2(saved["player"]["pos"]["x"].GetValue<float>(), saved["player"]["pos"]["y"].GetValue<float>());
+                        p.velocity = new Vector2(saved["player"]["vel"]["x"].GetValue<float>(), saved["player"]["vel"]["y"].GetValue<float>());
+                        p.fallStart = p.fallStart2 = saved["movement_capabilities"]["fall_start_tile_y"].GetValue<int>();
+                    }
                     originX = (int)p.Center.X / 16; floor = (int)p.Bottom.Y / 16;
                     Console.WriteLine($"FULL_CRAFT_RESUME source={QueenResumeRoot} x={originX} y={floor} max_hp={p.statLifeMax} chakram={p.inventory.Where(item => item.type == ItemID.ThornChakram).Sum(item => item.stack)} concessions=false");
                     return true;
