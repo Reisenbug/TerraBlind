@@ -350,9 +350,9 @@ public sealed class BehaviorTrial : ModSystem
         if (!enabled || !ShortJungleTrial && !ProgressionTrial && Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") != "1") return;
         if (FullQueenRun)
         {
-            VanillaNavBridge.Enabled = true;
+            VanillaNavBridge.Enabled = false;
             jungleSpawn = new JsonObject { ["x"] = Main.spawnTileX, ["y"] = Main.spawnTileY,
-                ["world_default"] = true, ["terrain_edits"] = 0, ["navigation_backend"] = "vanilla_engine" };
+                ["world_default"] = true, ["terrain_edits"] = 0, ["navigation_backend"] = "receding_native_lookahead" };
             Console.WriteLine("QUEEN_DEFAULT_SPAWN " + jungleSpawn.ToJsonString());
             return;
         }
