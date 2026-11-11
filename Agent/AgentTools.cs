@@ -528,7 +528,7 @@ public static partial class AgentTools
             || !AgentPermissions.CanAttack(delegated: true) && !AgentPermissions.CanDodge(delegated: true)) return;
         if (!Main.npc.Any(npc => npc is { active: true, boss: true, life: > 0 }
             && Math.Abs(npc.Center.X - player.Center.X) + Math.Abs(npc.Center.Y - player.Center.Y) <= 200 * 16)) return;
-        if (Combat.Enabled && Dodge.Enabled && !Main.playerInventory) return;
+        if (Combat.Enabled && Dodge.Enabled) return;
         SetBossControl(true);
         DiagLog.Write("[agent_boss_handoff] controller=enabled source=nearby_boss");
     }
@@ -537,7 +537,7 @@ public static partial class AgentTools
     {
         bossBefore ??= (Combat.Enabled, Dodge.Enabled, Dodge.MovementReserveScale);
         Combat.Enabled = Dodge.Enabled = enabled;
-        if (enabled) { TreasureGrab.CloseChest(); Main.playerInventory = false; }
+        if (enabled) { TreasureGrab.CloseChest(); if (!NativeAgent.Processing) Main.playerInventory = false; }
         else Combat.Stop();
     }
     internal static readonly ActionTasks Actions = new(ExecuteWithTaskPolicy, ObserveAction,

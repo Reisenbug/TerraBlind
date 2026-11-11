@@ -119,7 +119,7 @@ namespace TerraBlind
 			if (p == null || !p.active || p.dead) { Release(); return; }
 			if (FightCoordinator.HoldingFallProtection(p)) { Gate("fall protection"); return; }
 			if (Manual.On) { Gate("人工"); Release(); return; }
-			if (Main.gameMenu || Main.playerInventory) { Gate("paused"); _movement.Release(p); return; }
+			if (Main.gameMenu || Main.playerInventory && !NativeAgent.Processing) { Gate("paused"); _movement.Release(p); return; }
 			bool manualInput = p.controlLeft || p.controlRight || p.controlUp || p.controlDown
 				|| p.controlJump || p.controlHook || p.controlMount;
 
@@ -246,7 +246,7 @@ namespace TerraBlind
 		public static bool TryAttackBoss(Player p, out Vector2 target)
 		{
 			target = p.Center;
-			if (Main.gameMenu || Main.playerInventory) return false;
+			if (Main.gameMenu || Main.playerInventory && !NativeAgent.Processing) return false;
 			if (p.statLife < p.statLifeMax2 * 0.5f || p.lavaWet) p.QuickHeal();
 			if (!SelectWeapon(p)) return false;
 			_sensor.Observe(p);
