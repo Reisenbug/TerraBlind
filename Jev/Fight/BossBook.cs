@@ -55,15 +55,12 @@ namespace TerraBlind
 			[Terraria.ID.NPCID.SkeletronHead] = new BossInfo
 			{
 				HowItFights =
-					"Skeletron has a head and two hands. Hit the hands first while both are there. "
-					+ "After one hand is down it starts firing skull shots on curved paths, faster once both hands are gone. "
-					+ "Then watch the shots and dodge them. Every so often its head suddenly spins at high speed and rams. "
-					+ "Stay away from the head when it moves fast; once it speeds up, stay off its path. "
-					+ "Keep distance from both the hands and the head. "
-					+ "The grappling hook can instantly change direction or gain height, avoiding the one sweeping in. "
-					+ "Only running left and right on the ground leaves one dimension to dodge in, and the homing skulls will hit us a lot. "
-					+ "The hook can go up, or down-left and down-right. In this fight, changing height often dodges better than running sideways. "
-					+ "Once both hands are down, vertical movement is more useful.",
+					"Skeletron has a head and two hands. Killing the head wins the fight. "
+					+ "In Classic mode, the head has no hand-dependent defense bonus and fires no homing skulls; attack the head while avoiding both hands. "
+					+ "In Expert and Master modes each surviving hand adds 25 defense to the head, so destroying hands makes the head easier to damage. "
+					+ "Expert and Master skull shots can begin after a hand dies or the head falls below 75% health; with no hands the shots become faster and more frequent. "
+					+ "The head periodically spins and charges. Stay off its charging path and change height to avoid sweeping attacks. "
+					+ "Finish before dawn, when the head becomes extremely fast and lethal.",
 			},
 
 			[Terraria.ID.NPCID.Spazmatism] = new BossInfo
@@ -276,8 +273,10 @@ namespace TerraBlind
 		{
 			if (!UseKnowledge) return "";
 			var o = Override(npcType);
-			if (o == null) return Of(npcType).HowItFights;
-			return o.Enabled ? o.HowItFights : "";
+			string text = o == null ? Of(npcType).HowItFights : o.Enabled ? o.HowItFights : "";
+			if (!string.IsNullOrEmpty(text) && Canon(npcType) == Terraria.ID.NPCID.SkeletronHead)
+				text = "Current difficulty: " + (Terraria.Main.expertMode ? "Expert or Master. " : "Classic. ") + text;
+			return text;
 		}
 
 		// 这个 boss 指定的距离

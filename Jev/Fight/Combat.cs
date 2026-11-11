@@ -128,6 +128,7 @@ namespace TerraBlind
 				if (npc.type == Terraria.ID.NPCID.TheDestroyer) continue;
 				if (twinLock && npc.type != Terraria.ID.NPCID.Spazmatism) continue;
 				if (DodgeOnlyPart(npc.type)) continue;
+				if (npc.type == Terraria.ID.NPCID.SkeletronHand && !Main.expertMode && Alive(Terraria.ID.NPCID.SkeletronHead)) continue;
 				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
 				int d = System.Math.Abs(ncx - pcx) + System.Math.Abs(ncy - pcy);
 				// boss 的部件不限射程
