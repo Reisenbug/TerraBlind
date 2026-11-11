@@ -99,14 +99,16 @@ static class WatchTests
             "deferred opportunity lost evidence or woke the model");
         watch.Observe(state);
         Check(!watch.HasPending, "deferred opportunity was not deduplicated");
-        try { watch.Request("more"); throw new Exception("unbounded active wake accepted"); }
-        catch (InvalidOperationException) { }
+        var requested = watch.Request("route needs review");
+        Check(requested["kind"]?.ToString() == "decision_point" && watch.HasInterrupting
+            && watch.Take()[0]["reason"]?.ToString() == "route needs review",
+            "exhausted opportunity budget rejected a required script decision and aborted its action");
         watch.End();
-        Check(!watch.Armed && !watch.HasPending && watch.Snapshot()["history"].AsArray().Count == 13,
+        Check(!watch.Armed && !watch.HasPending && watch.Snapshot()["history"].AsArray().Count == 14,
             "completion left observations active or erased acceptance evidence");
         watch.Reset(); Check(!watch.Armed && !watch.HasPending && watch.Snapshot()["history"].AsArray().Count == 0,
             "task scope leaked events or state");
-        Console.WriteLine("PASS: task wake budget is shared, bounded and cleared on reset");
+        Console.WriteLine("PASS: opportunity wakes stay bounded while required script decisions remain available");
 
         watch.EnsureDefaults();
         state["hp"] = 100;
