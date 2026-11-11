@@ -334,6 +334,7 @@ namespace TerraBlind
     public static class PlaceCoordinator { public static bool IsActive; }
     public static class PlaceWalls { public static bool IsRunning; }
     public static class StateSpacePlanner { public static bool PreserveTerrain, ReservesItemUse; }
+    public static class VanillaNavBridge { public static bool Enabled; public static string Stage = "Moving"; }
     public sealed class GameWoodHarvest : IWoodHarvestWorld
     {
         public System.Threading.Tasks.Task<System.Text.Json.Nodes.JsonObject> Observe(System.Threading.CancellationToken token) => throw new NotSupportedException("Game adapter requires engine");

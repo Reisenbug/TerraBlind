@@ -15,6 +15,7 @@ namespace TerraBlind
         private const int TimeoutFrames = 360;
         private static HashSet<int> _types;
         private static bool _idleDefense;
+        internal static bool NavigationSnapshotPending;
         private static bool _usingItem;
         private static bool _evading;
         private static int _animationSlot = -1;
@@ -240,7 +241,9 @@ namespace TerraBlind
                 }
                 _animationSlot = -1;
             }
-            if (StateSpacePlanner.ReservesItemUse)
+            if (NavigationSnapshotPending || StateSpacePlanner.ReservesItemUse
+                || RecedingNav.Active && VanillaNavBridge.Enabled
+                    && (!RecedingNav.FieldReady || VanillaNavBridge.Stage is "Approaching" or "Braking" or "Preparing"))
             {
                 _usingItem = _idleDefense = false;
                 return;

@@ -2061,7 +2061,7 @@ public sealed class BehaviorTrial : ModSystem
                     p.selectedItem = 0; p.itemAnimation = p.itemTime = 0;
                     p.position = new Vector2(x * 16, floorY * 16 - p.height); p.velocity = Vector2.Zero;
                     wallX = x + 2;
-                    for (int y = floorY - 3; y < floorY; y++) WorldGen.PlaceTile(wallX, y, TileID.Hive, mute: true, forced: true);
+                    for (int y = floorY - 3; y < floorY; y++) WorldGen.PlaceTile(wallX, y, TileID.Stone, mute: true, forced: true);
                     target = NPC.NewNPC(p.GetSource_Misc("mining-defense-probe"), (int)p.Center.X - 120, (int)p.Center.Y, NPCID.BlueSlime);
                     var enemy = Main.npc[target]; enemy.aiStyle = -1; enemy.velocity = Vector2.Zero;
                     enemy.noGravity = enemy.noTileCollide = true; enemy.damage = 1;
@@ -2105,6 +2105,58 @@ public sealed class BehaviorTrial : ModSystem
                 || stages[1]["approach_attack_frames"].GetValue<int>() == 0 || stages[1]["target_hp"].GetValue<int>() >= 20000)
                 throw new Exception("native mining approach defense failed; inspect mining-defense.json");
             Console.WriteLine("MINING_DEFENSE_PASS native_tiles=true attack_off_and_on=true");
+            var workerReady = typeof(VanillaNavigationDemo).GetProperty("WorkerReady",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            var workerClock = Stopwatch.StartNew();
+            while (!await OnMain(() => (bool)workerReady.GetValue(VanillaNavigationDemo.Instance)))
+            {
+                if (workerClock.Elapsed.TotalSeconds > 60) throw new Exception("native navigation worker did not become ready");
+                await Task.Delay(50);
+            }
+            await OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                target = NPC.NewNPC(p.GetSource_Misc("navigation-weapon-probe"), (int)p.Center.X - 120, (int)p.Center.Y, NPCID.BlueSlime);
+                var enemy = Main.npc[target];
+                enemy.position = p.Center - new Vector2(120, 0); enemy.velocity = Vector2.Zero;
+                enemy.aiStyle = -1; enemy.noGravity = enemy.noTileCollide = true;
+                enemy.damage = 1; enemy.life = enemy.lifeMax = 20000; enemy.knockBackResist = 0;
+                FightCoordinator.Start(20);
+                return true;
+            });
+            var animationClock = Stopwatch.StartNew();
+            while (!await OnMain(() => Main.LocalPlayer.itemAnimation > 0 && Main.LocalPlayer.HeldItem.type == ItemID.ThornChakram))
+            {
+                if (animationClock.Elapsed.TotalSeconds > 3) throw new Exception("native snapshot probe did not start a real attack");
+                await Task.Delay(10);
+            }
+            var beforeNavigation = await OnMain(() =>
+            {
+                VanillaNavBridge.Enabled = true;
+                return new JsonObject { ["animation"] = Main.LocalPlayer.itemAnimation, ["item_time"] = Main.LocalPlayer.itemTime,
+                    ["held"] = Main.LocalPlayer.HeldItem.type, ["x"] = Main.LocalPlayer.position.X, ["y"] = Main.LocalPlayer.position.Y };
+            });
+            var routeClock = Stopwatch.StartNew();
+            var routeSamples = new JsonArray();
+            var navigationTask = Call("nav_to", new JsonObject { ["x"] = Main.spawnTileX + 10, ["y"] = Main.spawnTileY - 1,
+                ["mode"] = "stand" });
+            while (!navigationTask.IsCompleted)
+            {
+                routeSamples.Add(await OnMain(() => new JsonObject { ["tick"] = Main.GameUpdateCount,
+                    ["status"] = VanillaNavigationDemo.Instance.PlannerStatus, ["mismatch"] = VanillaNavigationDemo.Instance.PlannerMismatch,
+                    ["stage"] = VanillaNavBridge.Stage, ["rejection"] = VanillaNavigationDemo.Instance.PlannerRejection,
+                    ["x"] = Main.LocalPlayer.position.X, ["animation"] = Main.LocalPlayer.itemAnimation,
+                    ["item_time"] = Main.LocalPlayer.itemTime, ["held"] = Main.LocalPlayer.HeldItem.type }));
+                await Task.Delay(50);
+            }
+            var navigation = await navigationTask;
+            await OnMain(() => { FightCoordinator.Stop(); VanillaNavBridge.Enabled = false; return true; });
+            File.WriteAllText(Path.Combine(Main.SavePath, "mining-navigation.json"), new JsonObject
+                { ["before"] = beforeNavigation, ["navigation"] = navigation, ["samples"] = routeSamples,
+                    ["elapsed_ms"] = routeClock.ElapsedMilliseconds }.ToJsonString());
+            if (navigation["done"]?.GetValue<bool>() != true)
+                throw new Exception("native navigation did not continue from a real weapon animation: " + navigation);
+            Console.WriteLine("NAVIGATION_WEAPON_HANDOFF_PASS native_animation=true target_reached=true model_calls=0");
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_CRAFT_ADJ_TRIAL") == "1")

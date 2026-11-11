@@ -2363,7 +2363,27 @@ public static partial class AgentTools
         JsonObject result;
         while (true)
         {
-            var start = await Call("/nav_recede", request, token);
+            bool reserve = await NativeAgent.OnMain(() =>
+            {
+                if (!VanillaNavBridge.Enabled) return false;
+                FightCoordinator.NavigationSnapshotPending = true;
+                return true;
+            }, token);
+            JsonObject start;
+            try
+            {
+                while (reserve && !await NativeAgent.OnMain(() =>
+                {
+                    var player = Main.LocalPlayer;
+                    return player.dead || player.itemAnimation == 0 && player.itemTime == 0
+                        || player.HeldItem.pick > 0 || player.HeldItem.createTile >= 0;
+                }, token)) await Task.Delay(16, token);
+                start = await Call("/nav_recede", request, token);
+            }
+            finally
+            {
+                if (reserve) await NativeAgent.OnMain(() => { FightCoordinator.NavigationSnapshotPending = false; return true; }, default);
+            }
             if (Rejected(start))
             {
                 if (clearances.Count > 0) start["verified_clearances"] = clearances;

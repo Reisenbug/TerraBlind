@@ -3682,10 +3682,46 @@ static class RuntimeTests
     {
         var handler = HttpServerSystem.Handler;
         var position = Game.LocalPlayer.position;
+        int heldSlot = Game.LocalPlayer.selectedItem;
+        var heldItem = Game.LocalPlayer.inventory[heldSlot];
+        int animation = Game.LocalPlayer.itemAnimation, itemTime = Game.LocalPlayer.itemTime;
         const string workflow = "navigation-terminal-outcome";
         try
         {
             AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
+            Game.LocalPlayer.position = new(192, 544);
+            Game.LocalPlayer.inventory[Game.LocalPlayer.selectedItem] = new Terraria.Item { stack = 1, damage = 25 };
+            VanillaNavBridge.Enabled = true;
+            int starts = 0;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/nav_recede")
+                {
+                    starts++;
+                    Check(Game.LocalPlayer.itemAnimation == 0 && Game.LocalPlayer.itemTime == 0,
+                        "native navigation captured an unfinished weapon animation");
+                }
+                return (200, path == "/nav_recede_done" ? "{\"done\":true,\"status\":\"done\"}" : "{}");
+            };
+            Game.LocalPlayer.itemAnimation = 3; Game.LocalPlayer.itemTime = 8;
+            var waiting = AgentTools.Navigate(new JsonObject { ["x"] = 12, ["y"] = 34 }, default);
+            await PumpUntil(() => FightCoordinator.NavigationSnapshotPending);
+            Check(starts == 0 && Game.LocalPlayer.itemAnimation == 3 && Game.LocalPlayer.itemTime == 8,
+                "snapshot coordination forced animation completion or started navigation too early");
+            Game.LocalPlayer.itemAnimation = Game.LocalPlayer.itemTime = 0;
+            Check((await Execute(waiting))["done"]?.GetValue<bool>() == true && starts == 1
+                && !FightCoordinator.NavigationSnapshotPending, "snapshot coordination lost the route or retained its reservation");
+            using (var cancellation = new CancellationTokenSource())
+            {
+                Game.LocalPlayer.itemAnimation = 3;
+                var cancelled = AgentTools.Navigate(new JsonObject { ["x"] = 12, ["y"] = 34 }, cancellation.Token);
+                await PumpUntil(() => FightCoordinator.NavigationSnapshotPending);
+                cancellation.Cancel();
+                try { await Execute(cancelled); throw new Exception("cancelled snapshot wait started navigation"); }
+                catch (OperationCanceledException) { }
+                Check(starts == 1 && !FightCoordinator.NavigationSnapshotPending, "cancelled snapshot wait leaked its reservation");
+            }
+            VanillaNavBridge.Enabled = false; Game.LocalPlayer.itemAnimation = Game.LocalPlayer.itemTime = 0;
             foreach (string outcome in new[] { "failed", "stopped_short", "done" })
             {
                 AgentTools.Watches.Reset(); AgentTools.Recovery.Reset(); AgentTools.Workflows.Remove(workflow);
@@ -3724,6 +3760,9 @@ static class RuntimeTests
         {
             AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
             AgentTools.Workflows.Remove(workflow); HttpServerSystem.Handler = handler; Game.LocalPlayer.position = position;
+            VanillaNavBridge.Enabled = false; FightCoordinator.NavigationSnapshotPending = false;
+            Game.LocalPlayer.inventory[heldSlot] = heldItem;
+            Game.LocalPlayer.itemAnimation = animation; Game.LocalPlayer.itemTime = itemTime;
         }
         Console.WriteLine("PASS: navigation completion is checked at the command boundary before checkpointing and subsequent effects");
     }

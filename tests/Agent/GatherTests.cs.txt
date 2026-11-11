@@ -562,6 +562,36 @@ static class GatherTests
                 }
                 finally { AgentTools.ControlSession.End(ticket); }
             }
+            FightCoordinator.Stop(); FightCoordinator.Start(40);
+            FightCoordinator.NavigationSnapshotPending = true;
+            try
+            {
+                p.selectedItem = 0; p.controlUseItem = false; p.itemAnimation = p.itemTime = 0;
+                FightCoordinator.Tick(p, true);
+                Check(p.selectedItem == 0 && !p.controlUseItem,
+                    "defense started a new attack while navigation needed an animation-free snapshot");
+            }
+            finally { FightCoordinator.NavigationSnapshotPending = false; }
+            FightCoordinator.Tick(p, true);
+            Check(p.selectedItem == 1 && p.controlUseItem, "snapshot completion did not restore defense");
+            bool wasNavigating = RecedingNav.Active, wasNative = VanillaNavBridge.Enabled;
+            string previousStage = VanillaNavBridge.Stage;
+            try
+            {
+                RecedingNav.Active = VanillaNavBridge.Enabled = true;
+                foreach (string stage in new[] { "Moving", "Approaching", "Braking", "Preparing", "Excavating" })
+                {
+                    FightCoordinator.Stop(); FightCoordinator.Start(40); VanillaNavBridge.Stage = stage;
+                    p.selectedItem = 0; p.itemAnimation = p.itemTime = 0; p.controlUseItem = false;
+                    FightCoordinator.Tick(p, true);
+                    Check(p.controlUseItem == (stage is "Moving" or "Excavating"),
+                        "native snapshot reservation affected the wrong navigation stage: " + stage);
+                }
+            }
+            finally
+            {
+                RecedingNav.Active = wasNavigating; VanillaNavBridge.Enabled = wasNative; VanillaNavBridge.Stage = previousStage;
+            }
             var oldVelocity = p.velocity;
             try
             {
