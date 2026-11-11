@@ -17,6 +17,55 @@ public class AgentContactEscape : ModSystem
     ItemUseRequest clearing;
     bool clearingStarted;
     int clearingType, clearedTiles;
+    ItemUseRequest lavaItem;
+    Vector2 lavaPosition;
+    int lavaStillFrames;
+    bool lavaItemStarted;
+
+    bool EscapeLava(Player player)
+    {
+        if (lavaItem != null)
+        {
+            frames++;
+            bool protectedNow = player.lavaImmune || player.lavaTime > 0;
+            bool returned = Vector2.DistanceSquared(player.position, lavaPosition) > 256 * 256;
+            if (protectedNow || returned || frames >= 180 || lavaItemStarted && !ItemUseCoordinator.IsActive)
+            {
+                ItemUseCoordinator.Stop(); player.controlUseItem = false;
+                AgentTools.ContactEscapeActive = false;
+                AgentTools.LastContactEscape["status"] = protectedNow ? "lava_protected" : returned ? "recalled" : "item_use_failed";
+                AgentTools.LastContactEscape["frames"] = frames;
+                AgentTools.LastContactEscape["hp_end"] = player.statLife;
+                AgentTools.LastContactEscape["end_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y };
+                DiagLog.Write("[agent_lava_escape] " + AgentTools.LastContactEscape.ToJsonString());
+                lavaItem = null; lavaStillFrames = 0;
+            }
+            else if (!lavaItemStarted && player.itemAnimation == 0 && player.itemTime == 0)
+            { ItemUseCoordinator.Start(lavaItem); lavaItemStarted = true; }
+            return true;
+        }
+        if (AgentTools.ContactEscapeActive || player.lavaImmune || player.lavaTime > 0
+            || !Collision.LavaCollision(player.position, player.width, player.height))
+        { lavaStillFrames = 0; lavaPosition = player.position; return false; }
+        lavaStillFrames = Vector2.DistanceSquared(player.position, lavaPosition) < 4 ? lavaStillFrames + 1 : 0;
+        lavaPosition = player.position;
+        int slot = Array.FindIndex(player.inventory, 0, 50, item => !item.IsAir && item.buffType == BuffID.ObsidianSkin);
+        if (slot < 0 && lavaStillFrames >= 15)
+            foreach (int type in new[] { ItemID.RecallPotion, ItemID.MagicMirror, ItemID.IceMirror })
+            { slot = Array.FindIndex(player.inventory, 0, 50, item => !item.IsAir && item.type == type); if (slot >= 0) break; }
+        if (slot < 0) return false;
+        int itemType = player.inventory[slot].type;
+        AgentTools.StopInputs();
+        lavaItem = new ItemUseRequest { Slot = slot, TargetWx = (int)player.Center.X / 16,
+            TargetWy = (int)player.Center.Y / 16, DurationTicks = 120 };
+        frames = 0; lavaItemStarted = false;
+        AgentTools.ContactEscapeActive = true;
+        AgentTools.LastContactEscape = new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["status"] = "using_emergency_item",
+            ["reason"] = "unprotected_lava", ["item_type"] = itemType, ["hp_start"] = player.statLife,
+            ["start_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y } };
+        DiagLog.Write("[agent_lava_escape] " + AgentTools.LastContactEscape.ToJsonString());
+        return true;
+    }
 
     static bool SafeAfterRemoval(Player player, int x, int y)
     {
@@ -127,14 +176,16 @@ public class AgentContactEscape : ModSystem
             if (AgentTools.ContactEscapeActive)
             {
                 ActExecutor.Stop();
-                if (clearing != null) ItemUseCoordinator.Stop();
-                clearing = null;
+                if (clearing != null || lavaItem != null) ItemUseCoordinator.Stop();
+                clearing = lavaItem = null;
                 AgentTools.LastContactEscape["status"] = "cancelled";
                 AgentTools.LastContactEscape["end_tick"] = (long)Main.GameUpdateCount;
                 DiagLog.Write("[agent_escape] cancelled");
             }
             AgentTools.ContactEscapeActive = false; attemptedDamageTick = -1; return;
         }
+        if (lavaItem != null && !AgentTools.ContactEscapeActive) { ItemUseCoordinator.Stop(); lavaItem = null; }
+        if (EscapeLava(player)) return;
         bool touching = Harmful(player.position, player, includeLava: false);
         if (!AgentTools.ContactEscapeActive)
         {
@@ -213,5 +264,5 @@ public class AgentContactEscape : ModSystem
     }
 
     public override void OnWorldUnload()
-    { AgentTools.ContactEscapeActive = false; AgentTools.LastContactEscape = null; attemptedDamageTick = -1; }
+    { AgentTools.ContactEscapeActive = false; AgentTools.LastContactEscape = null; attemptedDamageTick = -1; lavaItem = null; lavaStillFrames = 0; }
 }

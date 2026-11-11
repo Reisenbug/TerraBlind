@@ -38,7 +38,7 @@ namespace TerraBlind
 			_prevPx = p.position.X; _prevPy = p.position.Y;
 
 			bool touchingLava = TouchesLava(p);
-			bool inLava = p.lavaWet || touchingLava;
+			bool inLava = !p.lavaImmune && p.lavaTime <= 0 && (p.lavaWet || touchingLava);
 			bool lowHp = p.statLife < p.statLifeMax2 * HealFraction;
 			bool emergency = inLava || lowHp;
 
@@ -46,7 +46,7 @@ namespace TerraBlind
 			// 【只在自己拿着 Jump 时按】-- 不然会和寻路派发的跳跃边打架
 			if (inLava && AxisLock.Take(Owner, Ax.Jump, () => TouchesLava(Main.LocalPlayer)))
 				p.controlJump = true;
-			if (!touchingLava) AxisLock.Release(Owner);
+			if (!inLava) AxisLock.Release(Owner);
 
 			// HEAL: quick-heal respects potionDelay internally, so calling it every frame is safe (no-op on cooldown).
 			if (inLava || lowHp)
