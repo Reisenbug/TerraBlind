@@ -610,7 +610,7 @@
                   "items": {
                     "type": "integer"
                   },
-                  "description": "光标格[dx,dy],开始时算一次就钉死不动"
+                  "description": "步骤开始时相对origin_cell的格偏移[dx,dy]，执行期间固定。目标世界格减origin_cell：例如origin_cell=[100,50]、目标世界格=[103,49]，填at:[3,-1]。"
                 },
                 "slot": {
                   "type": "integer",
