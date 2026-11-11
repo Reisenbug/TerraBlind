@@ -112,6 +112,7 @@ public static class Gather
                     ?? scene["item_space"]?[c["item_type"].ToString()]?.GetValue<bool>() ?? true;
                 var candidate = available
                     .Where(CanPickup)
+                    .Where(c => c["blocked_reason"] == null)
                     .Where(c => attempts.GetValueOrDefault(c["id"].ToString()) < 2)
                     .OrderBy(c => c["distance"].GetValue<float>() + (c["kind"].ToString() == "drop" ? -1000 : c["kind"].ToString() == "npc" ? -20 : 0))
                     .FirstOrDefault();
@@ -119,10 +120,14 @@ public static class Gather
                 {
                     outcome = available.Any(c => !CanPickup(c)) || targets.Any(t => Count(t) < t.Count
                         && scene["item_space"]?[t.ItemType.ToString()]?.GetValue<bool>() == false)
-                        ? "inventory_full" : available.Length == 0 ? "source_unavailable" : "attempt_limit";
+                        ? "inventory_full" : available.Length == 0 ? "source_unavailable"
+                        : available.All(c => c["blocked_reason"] != null)
+                            ? available[0]["blocked_reason"]?.ToString() ?? "source_blocked" : "attempt_limit";
                     foreach (var source in available)
                         blockedSources.Add(new JsonObject { ["candidate"] = source.DeepClone(),
-                            ["reason"] = !CanPickup(source) ? "inventory_full" : "attempt_limit",
+                            ["reason"] = !CanPickup(source) ? "inventory_full"
+                                : source["blocked_reason"] != null
+                                    ? source["blocked_reason"]?.ToString() ?? "source_blocked" : "attempt_limit",
                             ["attempts"] = attempts.GetValueOrDefault(source["id"].ToString()) });
                     break;
                 }

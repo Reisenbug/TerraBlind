@@ -58,6 +58,22 @@ static class GatherTests
         result = await Gather.Run(Targets, 5, world, default);
         Check(world.Actions[0] == "drop" && result["ok"].GetValue<bool>(), "existing wanted drop was ignored");
         Console.WriteLine("PASS: multi-resource gathering prioritizes wanted drops and nearby target enemies and stops on actual inventory");
+        world = new World { FarEnemy = true };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(world.Actions.SequenceEqual(new[] { "tile" }) && result["outcome"]?.ToString() == "combat_out_of_range"
+            && result["targets"][0]["actual"]?.GetValue<int>() == 1
+            && result["blocked_sources"][0]["candidate"]["kind"]?.ToString() == "npc"
+            && result["blocked_sources"][0]["attempts"]?.GetValue<int>() == 0,
+            "out-of-range enemy stopped executable collection or lost its observed blocker");
+        world.FarEnemy = false;
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(result["ok"].GetValue<bool>() && world.Actions.SequenceEqual(new[] { "tile", "npc" }),
+            "a newly reachable enemy stayed excluded or completed collection was replayed");
+        world = new World { FarEnemy = true, EnemyApproaches = true };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(result["ok"].GetValue<bool>() && world.Actions.SequenceEqual(new[] { "tile", "npc" }),
+            "candidate reachability was not refreshed while other collection continued");
+        Console.WriteLine("PASS: unreachable sources retain evidence while executable targets continue and reachability is reobserved");
         var largeCollection = new ProbeWorld { GainEvery = 1 };
         var largeResult = await Gather.Run(new[] { new GatherTarget(10, 65, new[] { "test tile" }, Array.Empty<int>()) },
             5, largeCollection, default);
@@ -861,6 +877,7 @@ static class GatherTests
     {
         public bool Gain = true, Drop, Empty, Dead, WaitForever, Unsafe, Ambiguous, Obstructed, NavigationStalled, CollectionStalled, OutsideMiningRange;
         public bool LostMiningReach, RecoverOnRetry, PickupBlocked, FullDuringAction, TypeSpaceBlocked;
+        public bool FarEnemy, EnemyApproaches;
         public int MiningDamage;
         public CancellationTokenSource Cancel;
         public int Stops;
@@ -870,7 +887,9 @@ static class GatherTests
         {
             token.ThrowIfCancellationRequested();
             JsonObject Candidate(int type, string kind) => new() { ["id"] = type.ToString(), ["item_type"] = type, ["kind"] = kind, ["distance"] = 2f,
-                ["x"] = type, ["y"] = 0, ["can_pickup"] = Drop && type == 10 ? JsonValue.Create(!PickupBlocked) : null };
+                ["x"] = type, ["y"] = 0, ["can_pickup"] = Drop && type == 10 ? JsonValue.Create(!PickupBlocked) : null,
+                ["blocked_reason"] = kind == "npc" && FarEnemy && !(EnemyApproaches && Actions.Contains("tile"))
+                    ? "combat_out_of_range" : null };
             return Task.FromResult(new JsonObject { ["counts"] = new JsonObject { ["10"] = counts[10], ["20"] = counts[20] },
                 ["item_space"] = new JsonObject { ["10"] = !TypeSpaceBlocked, ["20"] = true },
                 ["candidates"] = Empty ? new JsonArray() : new JsonArray(Candidate(10, Drop ? "drop" : "tile"), Candidate(20, "npc")),

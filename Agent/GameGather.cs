@@ -60,6 +60,11 @@ public sealed class GameGather : IGatherWorld
                         candidate["source_verified"] = false;
                         candidate["hp"] = npc.life;
                         candidate["clear_line"] = Collision.CanHitLine(p.Center, 4, 4, npc.Center, 4, 4);
+                        if (candidate["distance"].GetValue<float>() > 40)
+                        {
+                            candidate["blocked_reason"] = "combat_out_of_range";
+                            candidate["combat_range_tiles"] = 40;
+                        }
                         candidates.Add(candidate);
                     }
                 }

@@ -1177,8 +1177,10 @@ static class RuntimeTests
             var rangeResult = await Execute(Gather.Run(new[] { new GatherTarget(209, 9, Array.Empty<string>(), new[] { 42 }) },
                 5, gather, default));
             Check(rangeResult["ok"]?.GetValue<bool>() == false && rangeResult["outcome"]?.ToString() == "combat_out_of_range"
-                && rangeResult["actions"].GetValue<int>() == 1
-                && rangeResult["last_result"]["result"]["combat_range_tiles"].GetValue<int>() == 40,
+                && rangeResult["actions"].GetValue<int>() == 0
+                && rangeResult["blocked_sources"][0]["candidate"]["combat_range_tiles"].GetValue<int>() == 40
+                && rangeResult["blocked_sources"][0]["candidate"]["distance"].GetValue<float>() > 40
+                && rangeResult["blocked_sources"][0]["reason"]?.ToString() == "combat_out_of_range",
                 "out-of-range gathering retried blindly or lost reposition evidence");
             Game.npc[0].position = nearbyPosition;
             bool clear = Terraria.Collision.Clear;
