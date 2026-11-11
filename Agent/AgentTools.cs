@@ -878,12 +878,14 @@ public static partial class AgentTools
     static long invocationSequence;
     internal static int QueriesInFlight;
     static readonly AsyncLocal<long> scriptInvocation = new();
+    static bool ObservationTool(string name) => name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
+        or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "item_info" or "wiki_search" or "wiki_page"
+        or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status";
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
     {
         long id = Interlocked.Increment(ref invocationSequence);
         long started = Stopwatch.GetTimestamp();
-        bool query = name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
-            or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "item_info" or "wiki_search" or "wiki_page" or "recipe" or "script_program" or "script_report";
+        bool query = ObservationTool(name);
         if (query) Interlocked.Increment(ref QueriesInFlight);
         DiagLog.Write($"[agent_tool_begin] id={id} name={name} timestamp={started} node={ActionTasks.NodeContext.Value}");
         try { return await ExecuteObserved(name, args, token); }
@@ -1209,7 +1211,7 @@ public static partial class AgentTools
         var before = await NativeAgent.OnMain(() =>
         {
             DiagLog.Write($"[agent] tool {name} {args}");
-            if (name is not ("say" or "ask" or "get_state"))
+            if (!ObservationTool(name) && name is not ("say" or "ask"))
                 NativeAgent.Progress("开始执行：" + name, "执行 " + name,
                     !PvpDuel.Active && !name.StartsWith("combat_"));
             return name is "get_state" or "say" or "ask" or "wiki_search" or "wiki_page" ? null : Inventory();
@@ -2202,8 +2204,9 @@ public static partial class AgentTools
         return await NativeAgent.OnMain(() =>
         {
             DiagLog.Write($"[agent] result {name} {output}");
-            NativeAgent.Progress("执行结束：" + name + "，等待下一步决策。", "等待模型决策",
-                !PvpDuel.Active && !name.StartsWith("combat_"));
+            if (!ObservationTool(name))
+                NativeAgent.Progress("执行结束：" + name + "，等待下一步决策。", "等待模型决策",
+                    !PvpDuel.Active && !name.StartsWith("combat_"));
             return output;
         }, token);
     }

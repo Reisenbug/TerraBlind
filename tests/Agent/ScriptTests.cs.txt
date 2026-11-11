@@ -60,6 +60,7 @@ static class ScriptTests
 
     public static async Task Run()
     {
+        await QuietObservation();
         await MixedBiomeObservation();
         await ReactiveHandlers();
         await ReactiveTravelExample();
@@ -1280,6 +1281,38 @@ static class ScriptTests
             if (hadSample) samples[Terraria.ID.ItemID.FixtureGoal] = previous; else samples.Remove(Terraria.ID.ItemID.FixtureGoal);
             AgentTools.Stop(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.Watches.Reset();
         }
+    }
+
+    static async Task QuietObservation()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var originalHttp = HttpServerSystem.Handler;
+        try
+        {
+            HttpServerSystem.Handler = (_, _) => (200, "{}");
+            async Task<JsonObject> Call(string name, JsonObject args)
+            {
+                var pending = AgentTools.Execute(name, args, default);
+                while (!pending.IsCompleted) { agent.PostUpdateEverything(); await Task.Delay(1); }
+                return JsonNode.Parse(await pending).AsObject();
+            }
+            NativeAgent.Progress("quiet observation fixture", "执行 nav_to", false);
+            int messages = AgentChat.Messages.Count;
+            for (int i = 0; i < 8; i++)
+            {
+                var terrain = await Call("inspect_terrain", new JsonObject());
+                Check(terrain["near_body_tiles"] is JsonArray, "quiet observation discarded actual terrain");
+                await Call("item_info", new JsonObject { ["name"] = "Wood" });
+            }
+            Check(AgentChat.Messages.Count == messages && NativeAgent.Status == "执行 nav_to",
+                "read-only checks flooded chat or overwrote the active action status");
+            var said = AgentTools.Execute("say", new JsonObject { ["text"] = "visible phase fixture" }, default);
+            while (!said.IsCompleted) { agent.PostUpdateEverything(); await Task.Delay(1); }
+            await said;
+            Check(AgentChat.Messages.Last() == "visible phase fixture", "quiet queries suppressed the agent's actual speech");
+        }
+        finally { HttpServerSystem.Handler = originalHttp; agent.Unload(); }
+        Console.WriteLine("PASS: repeated terrain and item queries retain results without chat or action-status spam");
     }
 
     static async Task MixedBiomeObservation()
