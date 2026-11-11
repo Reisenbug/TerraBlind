@@ -375,6 +375,7 @@ public sealed class BehaviorTrial : ModSystem
         {
             On_Main.Update += Open; IL_Main.DoUpdate += Focus;
             if (Environment.GetEnvironmentVariable("TB_MINING_SPEED_TRIAL") == "1") On_Player.PickTile += MeasureMining;
+            if (Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") == "1") On_WorldGen.KillTile += TraceLarva;
         }
         if (enabled && Environment.GetEnvironmentVariable("TB_TRACE_PRIMARY") == "1")
         {
@@ -441,7 +442,19 @@ public sealed class BehaviorTrial : ModSystem
         {
             On_Main.Update -= Open; IL_Main.DoUpdate -= Focus;
             if (Environment.GetEnvironmentVariable("TB_MINING_SPEED_TRIAL") == "1") On_Player.PickTile -= MeasureMining;
+            if (Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") == "1") On_WorldGen.KillTile -= TraceLarva;
         }
+    }
+    static void TraceLarva(On_WorldGen.orig_KillTile original, int x, int y, bool fail, bool effectOnly, bool noItem)
+    {
+        bool larva = Main.tile[x, y].HasTile && Main.tile[x, y].TileType == TileID.Larva;
+        original(x, y, fail, effectOnly, noItem);
+        if (!larva || Main.tile[x, y].HasTile) return;
+        var player = Main.LocalPlayer;
+        Console.WriteLine("QUEEN_LARVA_BREAK " + new JsonObject { ["tick"] = Main.GameUpdateCount,
+            ["x"] = x, ["y"] = y, ["held_type"] = player.HeldItem.type, ["animation"] = player.itemAnimation,
+            ["player_x"] = player.Center.X / 16, ["player_y"] = player.Center.Y / 16,
+            ["source_stack"] = Environment.StackTrace }.ToJsonString());
     }
     void MeasureMining(On_Player.orig_PickTile original, Player player, int x, int y, int power)
     {
@@ -689,7 +702,7 @@ public sealed class BehaviorTrial : ModSystem
                 + $" attack={p.controlUseItem} target_active={npc?.active} target_hp={npc?.life} target_pos={npc?.position}"
                 + $" clear_line={(npc != null && Collision.CanHitLine(p.Center, 4, 4, npc.Center, 4, 4))}");
         }
-        if (trial?.IsCompleted == true || !JungleHealthTrial && !ShortJungleTrial && !ProgressionTrial && frames > FrameLimit)
+        if (trial?.IsCompleted == true || !FullQueenRun && !JungleHealthTrial && !ShortJungleTrial && !ProgressionTrial && frames > FrameLimit)
         {
             finished = true;
             bool ok = trial?.IsCompletedSuccessfully == true;
