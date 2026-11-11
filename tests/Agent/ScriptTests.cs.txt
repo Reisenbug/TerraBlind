@@ -1019,16 +1019,26 @@ static class ScriptTests
             "prepared pressure plate repair failed to retry in the same script");
 
         int observations = 0;
+        string reactionState = new JsonObject { ["payload"] = new string('x', 20000) }.ToJsonString();
         var sustained = await AgentScript.Run("on('tick',()=>{let n=0;for(let i=0;i<20;i++)n+=i;tool('get_state');return {handled:true,n};});return tool('nav_to');",
             5, (_, _) => { }, async (name, args, token) =>
             {
-                if (name == "get_state") { observations++; return "{}"; }
+                if (name == "get_state") { observations++; return reactionState; }
                 for (int i = 0; i < 1100; i++)
                     await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject { ["kind"] = "tick" }, token);
                 return "{\"done\":true}";
             }, _ => Task.CompletedTask, default);
         Check(sustained["ok"].GetValue<bool>() && observations == 1100 && sustained["reaction_count"].GetValue<int>() == 1100,
             "routine event handling exhausted the main program budget: " + sustained);
+        var oversizedReaction = await AgentScript.Run("on('tick',()=>{let text='x';for(let i=0;i<26;i++)text+=text;return {handled:true};});return tool('nav_to');",
+            5, (_, _) => { }, async (_, _, token) =>
+            {
+                await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject { ["kind"] = "tick" }, token);
+                return "{\"done\":true}";
+            }, _ => Task.CompletedTask, default);
+        Check(!oversizedReaction["ok"].GetValue<bool>()
+            && oversizedReaction["detail"].ToString().Contains("MemoryLimitExceededException"),
+            "individual reaction no longer enforced its allocation limit: " + oversizedReaction);
 
         var watch = new AgentWatch();
         watch.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") });

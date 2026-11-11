@@ -378,7 +378,12 @@ public static class AgentScript
                         or "inventory_full" or "target_acquired" or "low_health" or "honey_slowdown" or "tick" or "action_failed"))
                         throw new ArgumentException("on不支持此事件：" + kind);
                     if (reactions.Handling) throw new InvalidOperationException("事件处理期间不能注册处理函数。");
-                    reactions.Register(kind, notice => JsonNode.Parse(engine.Invoke(handler, notice.ToJsonString()).AsString())?.AsObject());
+                    reactions.Register(kind, notice =>
+                    {
+                        engine.Constraints.Reset();
+                        try { return JsonNode.Parse(engine.Invoke(handler, notice.ToJsonString()).AsString())?.AsObject(); }
+                        finally { engine.Constraints.Reset(); }
+                    });
                     registerReaction?.Invoke(kind);
                 }));
                 engine.SetValue("__gameHandling", new Action<bool, string>((value, facts) =>
