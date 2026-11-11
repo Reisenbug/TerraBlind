@@ -544,7 +544,7 @@ public sealed class BehaviorTrial : ModSystem
             string detail = ok ? $"BEHAVIOR_COMPLETE moving_attack_frames={movingAttackFrames}" : trial?.Exception?.GetBaseException().ToString() ?? "behavior frame deadline";
             Console.WriteLine(detail);
             File.WriteAllText(Path.Combine(Main.SavePath, "agent-engine-result.json"), new JsonObject { ["ok"] = ok, ["detail"] = detail }.ToJsonString());
-            if (FullCraftTrial) { Console.Out.Flush(); Environment.Exit(ok ? 0 : 1); }
+            Console.Out.Flush(); Environment.Exit(ok ? 0 : 1);
         }
     }
     static async Task<JsonObject> Call(string tool, JsonObject args)
