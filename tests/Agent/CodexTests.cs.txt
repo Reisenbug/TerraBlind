@@ -621,27 +621,38 @@ static class CodexTests
 
     static async Task InTurnCompaction()
     {
-        foreach (bool executing in new[] { false, true })
+        foreach (var (executing, holdReply, ends) in new[] { (false, false, false), (true, true, false), (true, false, false), (true, true, true) })
         {
+            var actions = new ActionTasks(async (_, _, ct) => { await Task.Delay(Timeout.Infinite, ct); return "{}"; },
+                _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
+            var action = executing ? actions.Start("nav_to", new JsonObject(), default) : null;
             var server = new Server { InputTokens = CodexAgent.ContextTokenLimit + 1000,
-                HoldFinalReply = executing, HoldCompaction = executing };
+                HoldFinalReply = holdReply, HoldCompaction = executing };
             using var agent = new CodexAgent((_, _) => server.Connect());
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var goal = new JsonObject { ["objective"] = "continue the current action", ["request"] = "compact-active-action" };
             var run = agent.RunAsync("continue", "", "", "fixture", "system", Tools,
                 (_, _, _) => Task.FromResult("{\"running\":true}"), _ => { }, timeout.Token, goal,
-                canCompact: () => Task.FromResult(executing));
+                canCompact: () => Task.FromResult(actions.HasPrimaryControl));
             if (executing)
             {
                 while (server.Compactions == 0) await Task.Delay(5, timeout.Token);
                 Check(!run.IsCompleted && server.Interrupts == 1 && agent.GoalState["native"]["status"].ToString() == "active",
                     "background compaction completed the goal or waited for a final model message");
-                server.FinishCompaction();
+                Check(actions.ActiveHandle == action["handle"].ToString() && actions.HasPrimaryControl,
+                    "compaction released a registered action before it acquired frame controls");
+                if (ends) actions.Reset();
+                else server.FinishCompaction();
             }
             await run;
             Check(server.Compactions == (executing ? 1 : 0) && server.Threads == 1
-                && server.Interrupts == (executing ? 1 : 0) && !agent.HasActiveTurn,
+                && server.Interrupts == (ends ? 2 : executing ? 1 : 0) && !agent.HasActiveTurn,
                 "in-turn compaction ignored action coverage, replaced the thread or retained active reasoning");
+            Check(agent.Compactions == (executing && !ends ? 1 : 0) && !server.Stopped
+                && agent.GoalState["native"]["status"].ToString() == "active"
+                && (!ends || agent.LastCompactionError == "background_action_ended"),
+                "ended action waited for held compaction or lost its unfinished goal/history connection");
+            actions.Reset();
         }
         Console.WriteLine("PASS: large active reasoning hands off history only under background execution, preserving its thread and active goal");
     }
@@ -870,8 +881,10 @@ static class CodexTests
             {
                 Check(server.Compactions == 1 && server.Threads == 1 && server.Inputs[1].Contains("\"mode\":\"snapshot\"")
                     && server.Inputs[1].Contains("\"hp\":77") && server.Inputs[1].Contains(handle)
-                    && AgentTools.Watches.Pending()["events"].AsArray().Any(e => e["key"]?.ToString() == "during-compaction"),
-                    "post-compaction input reused a partial/stale snapshot or discarded events raised while navigation continued");
+                    && (server.Inputs[1].Contains("\"key\":\"during-compaction\"")
+                        || AgentTools.Watches.Pending()["events"].AsArray().Any(e => e["key"]?.ToString() == "during-compaction")),
+                    "post-compaction state mismatch: compactions=" + server.Compactions + " threads=" + server.Threads
+                    + " pending=" + AgentTools.Watches.Pending() + " input=" + server.Inputs[1][..Math.Min(1800, server.Inputs[1].Length)]);
                 Check(handedOff, "compaction handoff scenario was skipped");
                 Console.WriteLine("PASS: prepared navigation starts during held compaction; refreshed input retains new handle, health and pending events");
                 return;

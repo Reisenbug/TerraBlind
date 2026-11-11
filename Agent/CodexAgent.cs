@@ -170,14 +170,14 @@ public sealed class CodexAgent : IDisposable
     }
 
     internal async Task PrepareContext(string executable, string cwd, string model, string system, JsonArray tools,
-        bool managedGoal, CancellationToken token, bool compact = true)
+        bool managedGoal, CancellationToken token, bool compact = true, Func<Task<bool>> keepExecuting = null)
     {
         if (HasActiveTurn) return;
         await Ensure(executable, cwd, model, system, tools, token, managedGoal);
-        if (compact) await CompactContext(token);
+        if (compact) await CompactContext(token, keepExecuting: keepExecuting);
     }
 
-    internal async Task<bool> CompactContext(CancellationToken token, bool force = false)
+    internal async Task<bool> CompactContext(CancellationToken token, bool force = false, Func<Task<bool>> keepExecuting = null)
     {
         int input = _usage?["last"]?["inputTokens"]?.GetValue<int>() ?? 0;
         if (_rpc == null || HasActiveTurn || !force && input < compactAtInput) return false;
@@ -191,7 +191,21 @@ public sealed class CodexAgent : IDisposable
             await _rpc.Request("thread/compact/start", new JsonObject { ["threadId"] = _thread }, token);
             while (true)
             {
-                var message = await _rpc.Next(token);
+                JsonObject message;
+                using (var polling = CancellationTokenSource.CreateLinkedTokenSource(token))
+                {
+                    if (keepExecuting != null && turn != null && !observed) polling.CancelAfter(100);
+                    try { message = await _rpc.Next(polling.Token); }
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                    {
+                        if (await keepExecuting()) continue;
+                        await Interrupt(turn);
+                        compactAtInput = input + ContextTokenLimit / 2;
+                        LastCompactionError = "background_action_ended";
+                        DiagLog.Write($"[agent_context_compaction] status=deferred reason=background_action_ended elapsed_ms={elapsed.ElapsedMilliseconds}");
+                        return false;
+                    }
+                }
                 var args = message["params"] as JsonObject;
                 string method = message["method"]?.ToString();
                 if (message["id"] != null)
@@ -213,7 +227,7 @@ public sealed class CodexAgent : IDisposable
                         throw new GoalBudgetExceededException();
                     }
                 }
-                if (method != "turn/completed" || turn != null && args["turn"]?["id"]?.ToString() != turn) continue;
+                if (method != "turn/completed" || turn == null || args["turn"]?["id"]?.ToString() != turn) continue;
                 if (!observed || args["turn"]?["status"]?.ToString() != "completed")
                     throw new IOException("Codex历史整理未完成：" + args["turn"]?.ToJsonString());
                 ContextRevision++; Compactions++; measureAfterCompaction = true;
@@ -480,7 +494,7 @@ public sealed class CodexAgent : IDisposable
                         await Interrupt(turn);
                         if (_rpc == null) throw new IOException("Codex历史交接连接已关闭。");
                         _activeTurn = null;
-                        await CompactContext(token);
+                        await CompactContext(token, keepExecuting: canCompact);
                         return;
                     }
                 }

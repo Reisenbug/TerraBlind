@@ -289,12 +289,15 @@ public class NativeAgent : ModSystem
                 await _goalStopping.WaitAsync(token);
                 var modelContext = new AgentContext();
                 int contextRevision = 0;
+                Task<bool> Covered() => OnMain(() => (AgentTools.ControlSession.PrimaryActive || AgentTools.Actions.HasPrimaryControl)
+                    && !Main.LocalPlayer.dead && !AgentTools.Watches.HasModelInterrupting, token);
                 async Task<string> Context()
                 {
                     if (useCodex)
                     {
-                        bool executing = await OnMain(() => AgentTools.ControlSession.PrimaryActive, token);
-                        await codex.PrepareContext(codexPath, cwd, codexModel, system, entrySchemas, goalOptions != null, token, compact: executing);
+                        bool executing = await Covered();
+                        await codex.PrepareContext(codexPath, cwd, codexModel, system, entrySchemas, goalOptions != null, token,
+                            compact: executing, keepExecuting: Covered);
                     }
                     if (useCodex && contextRevision != codex.ContextRevision)
                     { modelContext.Reset(); contextRevision = codex.ContextRevision; }
@@ -318,8 +321,7 @@ public class NativeAgent : ModSystem
                     var workflowBefore = await OnMain(() => AgentTools.Workflows.ToDictionary(w => w.Key, w => w.Value.Segment), token);
                     if (useCodex)
                         await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token, goalOptions, Context,
-                            () => OnMain(() => AgentTools.ControlSession.PrimaryActive && !Main.LocalPlayer.dead
-                                && !AgentTools.Watches.HasModelInterrupting, token));
+                            Covered);
                     else
                         await _conversation.RunAsync(input, url, key, model, system, entrySchemas, AgentTools.Execute, Say, token);
                     bool scriptYielded = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.Yielded
