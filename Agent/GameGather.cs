@@ -163,11 +163,8 @@ public sealed class GameGather : IGatherWorld
                 await Task.Delay(400, token);
                 return await NativeAgent.OnMain(PickupBlocked, token) ?? new JsonObject { ["outcome"] = "waited_for_pickup" };
             }
-            live.Remove("near");
-            var start = await AgentTools.Call("/nav_recede", live, token);
-            if (AgentTools.Rejected(start)) return start;
-            var result = await AgentTools.Wait("/nav_recede_done", "nav", "/nav_recede_stop", 12, token,
-                _ => NativeAgent.OnMain(PickupBlocked, token));
+            var result = await AgentTools.Navigate(new JsonObject { ["x"] = live["gx"].DeepClone(),
+                ["y"] = live["gy"].DeepClone(), ["mode"] = "travel" }, token, 12, PickupBlocked);
             await Task.Delay(400, token);
             return await NativeAgent.OnMain(PickupBlocked, token) ?? result;
         }

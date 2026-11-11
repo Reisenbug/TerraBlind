@@ -29,9 +29,9 @@ public sealed class ScriptLibrary
                 ||!Number.isFinite(config.max_detour_tiles)||!Number.isFinite(config.health_reserve))
               throw new Error('Fill destination, resources, weapon_order, max_detour_tiles and health_reserve');
             const handled=()=>({handled:true});
-            const state=()=>tool('get_state');
-            const originalCombat=state().agent;
-            const count=type=>state().inventory_slots.filter(i=>i.type===type).reduce((n,i)=>n+i.stack,0);
+            const state=fields=>tool('get_state',{fields});
+            const originalCombat=state(['agent']).agent;
+            const count=type=>state(['inventory_slots']).inventory_slots.filter(i=>i.type===type).reduce((n,i)=>n+i.stack,0);
             const same=(a,b)=>a.x===b.x&&a.y===b.y&&a.type===b.type&&a.frame_x===b.frame_x&&a.frame_y===b.frame_y;
             const protectedTypes=new Set([...config.resources.map(r=>r.item_type),...config.weapon_order,...(config.protected_types??[])]);
             const makeSpace=()=>{
@@ -156,7 +156,7 @@ public sealed class ScriptLibrary
               throw new Error('input needs gather_args.targets and up to eight observed waypoints');
             const targets=config.gather_args.targets;
             const counts=()=>{
-              const inventory=tool('get_state').inventory_slots;
+              const inventory=tool('get_state',{fields:['inventory_slots']}).inventory_slots;
               return targets.map(t=>({type:t.item_type,wanted:t.count,
                 actual:inventory.filter(i=>i.type===t.item_type).reduce((n,i)=>n+i.stack,0)}));
             };
@@ -191,7 +191,7 @@ public sealed class ScriptLibrary
             const nav=result?.last_result?.result?.navigation??result?.navigation??result;
             if(nav?.error!=='navigation_near_trap'||!nav.trap_tiles?.length||nav.trap_tiles.some(t=>t.kind!=='pressure_plate'))
               return {status:'needs_review',reason:'uncovered_failure',handle:failure.handle};
-            const inventory=tool('get_state',{}).inventory_slots;
+            const inventory=tool('get_state',{fields:['inventory_slots']}).inventory_slots;
             if(!inventory.some(i=>i.slot===config.pick_slot&&i.type===config.pick_type&&i.stack>0))
               return {status:'needs_review',reason:'configured_pick_changed'};
             const same=(a,b)=>a.x===b.x&&a.y===b.y&&a.type===b.type&&a.frame_x===b.frame_x&&a.frame_y===b.frame_y;
@@ -281,14 +281,15 @@ public sealed class ScriptLibrary
             const config = typeof input==='undefined'?null:input;
             if(!config||!Number.isInteger(config.target_health)||config.target_health<100||config.target_health>400)
               throw new Error('Pass input.target_health between 100 and 400');
-            let state=tool('get_state',{});
+            const observe=()=>tool('get_state',{fields:['player','inventory_slots','permanent_max_health']});
+            let state=observe();
             while(state.permanent_max_health<config.target_health){
               let crystal=state.inventory_slots.find(i=>i.type===29&&i.stack>0);
               if(!crystal){
                 if(!config.gather_args) return {status:'missing_crystals',permanent_health:state.permanent_max_health,target:config.target_health};
                 const collection=tool('gather',config.gather_args);
                 if(collection.outcome!=='enough') return {status:'needs_review',collection,permanent_health:state.permanent_max_health};
-                state=tool('get_state',{});
+                state=observe();
                 crystal=state.inventory_slots.find(i=>i.type===29&&i.stack>0);
                 if(!crystal) return {status:'needs_review',reason:'collection_inventory_changed',collection};
               }
@@ -298,7 +299,7 @@ public sealed class ScriptLibrary
                 if(r.error||r.verified!==true) throw new Error(JSON.stringify(r));
                 return {outcome:r.outcome,verified:r.verified};
               });
-              state=tool('get_state',{});
+              state=observe();
               if(state.permanent_max_health<=before) return {status:'needs_review',reason:'permanent_health_did_not_increase',before,actual:state.permanent_max_health};
             }
             return {status:'target_met',permanent_health:state.permanent_max_health,next:'Verify permanent_health DAG condition'};
@@ -311,7 +312,7 @@ public sealed class ScriptLibrary
                 if(!config) throw new Error('Read current action and fill config before execution');
                 const {handle,item_type,count,tile_name,source_area,max_samples}=config;
                 if(!Number.isInteger(max_samples)||max_samples<1||max_samples>12) throw new Error('max_samples must be 1..12');
-                const inventory=()=>tool('get_state',{}).inventory_slots.filter(i=>i.type===item_type).reduce((n,i)=>n+i.stack,0);
+                const inventory=()=>tool('get_state',{fields:['inventory_slots']}).inventory_slots.filter(i=>i.type===item_type).reduce((n,i)=>n+i.stack,0);
                 const readEvents=()=>{
                   const notice=tool('script_events',{wait_ms:0,max_events:16});
                   if(notice.remaining_events) tool('decision_point',{reason:'Review remaining opportunities before sampling',evidence:{handle,notice}});

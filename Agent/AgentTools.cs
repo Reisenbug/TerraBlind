@@ -590,8 +590,12 @@ public static partial class AgentTools
         return result;
     }, token);
 
-    public static Task<string> State(CancellationToken token, bool includeTiles = false, bool includeWatchHistory = false) => NativeAgent.OnMain(() =>
+    public static Task<string> State(CancellationToken token, bool includeTiles = false, bool includeWatchHistory = false,
+        JsonArray fields = null) => NativeAgent.OnMain(() =>
     {
+        string[] selected = fields?.Select(field => field.GetValue<string>()).Distinct().ToArray();
+        if (selected is { Length: 0 } || selected?.Any(string.IsNullOrWhiteSpace) == true)
+            throw new ArgumentException("fields需要至少一个顶层状态字段名。");
         Plan.Observe(AgentTaskEvidence.Measure);
         var state = JsonNode.Parse(StateSerializer.ToJson(HttpServerSystem.LatestSnapshot)) as JsonObject ?? new();
         if (!includeTiles && state["tiles"] is JsonObject tiles)
@@ -704,6 +708,13 @@ public static partial class AgentTools
         state["goal_verification"] = verification;
         state["boss_control"] = BossStatus();
         state["equipment_slots"] = Equipment.Snapshot();
+        if (selected != null)
+        {
+            string[] unknown = selected.Where(field => !state.ContainsKey(field)).ToArray();
+            if (unknown.Length > 0) throw new ArgumentException("未知状态字段：" + string.Join(",", unknown));
+            state = new JsonObject(selected.Select(field => new KeyValuePair<string, JsonNode>(field, state[field]?.DeepClone())));
+            state["snapshot_tick"] = Main.GameUpdateCount;
+        }
         return state.ToJsonString(ModelJson);
     }, token);
 
@@ -782,7 +793,8 @@ public static partial class AgentTools
     }, token);
 
     internal static async Task<JsonObject> Wait(string path, string active, string stop, int seconds, CancellationToken token,
-        Func<double, Task<JsonObject>> navigationProgress = null)
+        Func<double, Task<JsonObject>> navigationProgress = null, JsonObject reactionContext = null,
+        Func<JsonObject, Task> onCompleted = null)
     {
         var stopArgs = stop == "/fight" ? new JsonObject { ["active"] = false } : null;
         async Task StopAction()
@@ -804,7 +816,20 @@ public static partial class AgentTools
                 var status = await Call(path, null, token);
                 if (Rejected(status)) throw new InvalidOperationException($"{path} 状态查询被拒绝：{status}");
                 if (active == "nav" ? Bool(status, "done") || Text(status, "status") == "failed" : !Bool(status, active))
+                {
+                    if (onCompleted != null) await onCompleted(status);
                     return status;
+                }
+                if (reactionContext != null)
+                {
+                    JsonObject completed = null;
+                    await ReactAtBoundary(token, pause: async ct =>
+                    {
+                        int remaining = seconds <= 0 ? 0 : Math.Max(1, (int)Math.Ceiling(seconds - timer.Elapsed.TotalSeconds));
+                        completed = await Wait(path, active, stop, remaining, ct, navigationProgress, onCompleted: onCompleted);
+                    }, context: reactionContext);
+                    if (completed != null) return completed;
+                }
                 if (navigationProgress != null)
                 {
                     var stalled = await navigationProgress(timer.Elapsed.TotalSeconds);
@@ -819,6 +844,7 @@ public static partial class AgentTools
             await StopAction();
             var final = await Call(path, null, token);
             final["outcome"] = "timeout";
+            if (onCompleted != null) await onCompleted(final);
             return final;
         }
         catch (OperationCanceledException) { throw; }
@@ -1170,7 +1196,7 @@ public static partial class AgentTools
                     !PvpDuel.Active && !name.StartsWith("combat_"));
             return name is "get_state" or "say" or "ask" or "wiki_search" or "wiki_page" ? null : Inventory();
         }, token);
-        if (name == "get_state") return await State(token, Bool(args, "include_tiles"), Bool(args, "include_watch_history"));
+        if (name == "get_state") return await State(token, Bool(args, "include_tiles"), Bool(args, "include_watch_history"), args["fields"] as JsonArray);
         if (name == "say")
         {
             await NativeAgent.OnMain(() => { AgentChat.Say(AgentConversation.VisibleText(Text(args, "text"))); return true; }, token);
@@ -1865,7 +1891,8 @@ public static partial class AgentTools
                 if (result != null) break;
                 result = await Call("/mine", new JsonObject { ["dir"] = Text(args, "dir"),
                     ["target_wx"] = Int(args, "target_x"), ["target_wy"] = Int(args, "target_y") }, token);
-                if (!Rejected(result)) result = await Wait("/mine_status", "running", "/mine_stop", 120, token);
+                if (!Rejected(result)) result = await Wait("/mine_status", "running", "/mine_stop", 120, token,
+                    reactionContext: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
                 if (!Rejected(result) && Text(result, "outcome") != "done")
                 {
                     result["ok"] = false;
@@ -1893,24 +1920,28 @@ public static partial class AgentTools
                     ["target_wx"] = Int(args, "x"), ["target_wy"] = Int(args, "y"), ["slot"] = Int(args, "slot", -1),
                     ["duration_ticks"] = Int(args, "duration_ticks", 30), ["strict"] = Bool(args, "strict")
                 }, token);
-                if (!Rejected(result)) result = await Wait("/item_use_status", "active", "/item_use_stop", 60, token);
-                if (Text(result, "outcome") == "n/a" && usedItem?["consumable"]?.GetValue<bool>() == true)
-                    result = await NativeAgent.OnMain(() =>
+                if (!Rejected(result)) result = await Wait("/item_use_status", "active", "/item_use_stop", 60, token,
+                    reactionContext: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() },
+                    onCompleted: async receipt =>
                     {
-                        var player = Main.LocalPlayer;
-                        int remaining = player.inventory.Where(i => i.type == usedItem["type"].GetValue<int>()).Sum(i => i.stack);
-                        int consumed = usedItem["count"].GetValue<int>() - remaining;
-                        result["consumed"] = Math.Max(0, consumed); result["verified"] = consumed > 0;
-                        if (consumed > 0) result["outcome"] = "consumed";
-                        else
+                        if (Text(receipt, "outcome") != "n/a" || usedItem?["consumable"]?.GetValue<bool>() != true) return;
+                        await NativeAgent.OnMain(() =>
                         {
-                            result["error"] = "item_use_not_observed"; result["outcome"] = "no_progress";
-                            result["reason"] = usedItem["heal_life"].GetValue<int>() > 0 && player.potionDelay > 0
-                                ? "potion_sickness" : "consumable_count_unchanged";
-                        }
-                        result["potion_delay_ticks"] = player.potionDelay;
-                        return result;
-                    }, token);
+                            var player = Main.LocalPlayer;
+                            int remaining = player.inventory.Where(i => i.type == usedItem["type"].GetValue<int>()).Sum(i => i.stack);
+                            int consumed = usedItem["count"].GetValue<int>() - remaining;
+                            receipt["consumed"] = Math.Max(0, consumed); receipt["verified"] = consumed > 0;
+                            if (consumed > 0) receipt["outcome"] = "consumed";
+                            else
+                            {
+                                receipt["error"] = "item_use_not_observed"; receipt["outcome"] = "no_progress";
+                                receipt["reason"] = usedItem["heal_life"].GetValue<int>() > 0 && player.potionDelay > 0
+                                    ? "potion_sickness" : "consumable_count_unchanged";
+                            }
+                            receipt["potion_delay_ticks"] = player.potionDelay;
+                            return true;
+                        }, token);
+                    });
                 break;
             case "place_at":
                 result = await Place(args, token);
@@ -1960,7 +1991,8 @@ public static partial class AgentTools
                 break;
             case "act":
                 result = await Call("/act", args, token);
-                if (!Rejected(result)) result = await Wait("/act_status", "active", "/act_stop", 120, token);
+                if (!Rejected(result)) result = await Wait("/act_status", "active", "/act_stop", 120, token,
+                    reactionContext: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
                 break;
             case "fight":
                 if (!await NativeAgent.OnMain(() => AgentPermissions.Attack, token))
@@ -2216,7 +2248,9 @@ public static partial class AgentTools
         }
         var result = await Call("/item_use", new JsonObject { ["target_wx"] = x, ["target_wy"] = y,
             ["slot"] = target["slot"].DeepClone(), ["strict"] = true }, token);
-        if (!Rejected(result)) result = await Wait("/item_use_status", "active", "/item_use_stop", 15, token);
+        if (!Rejected(result)) result = await Wait("/item_use_status", "active", "/item_use_stop", 15, token,
+            reactionContext: new JsonObject { ["tool"] = "use_item", ["args"] = new JsonObject {
+                ["slot"] = target["slot"].DeepClone(), ["x"] = x, ["y"] = y, ["strict"] = true } });
         if (Text(result, "outcome") == "removed") await Task.Delay(400, token);
         result["mode_adjustment"] = "target_use_collect_tool";
         return result;
@@ -2252,7 +2286,8 @@ public static partial class AgentTools
         return route;
     }
 
-    internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 0)
+    internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 0,
+        Func<JsonObject> interruption = null)
     {
         var region = await NativeAgent.OnMain(() => Control.CheckAt(ControlBehavior.Navigation, Int(args, "x"), Int(args, "y")), token);
         if (region != null) return region;
@@ -2302,6 +2337,8 @@ public static partial class AgentTools
                         }, new JsonObject { ["tool"] = "nav_to", ["args"] = args.DeepClone() });
                 return await NativeAgent.OnMain(() =>
             {
+                var interrupted = interruption?.Invoke();
+                if (interrupted != null) return interrupted;
                 var player = Main.LocalPlayer;
                 bool planning = !RecedingNav.FieldReady;
                 if (lastPlanning != planning)
@@ -2399,7 +2436,8 @@ public static partial class AgentTools
             var placement = (JsonObject)result.DeepClone();
             var progress = new NavigationProgress();
             if (!Rejected(result)) result = await Wait("/place_anywhere_status", "running", "/place_anywhere_stop", 120, token,
-                elapsed => NativeAgent.OnMain(() => PlacementProgress(progress, elapsed, placement), token));
+                elapsed => NativeAgent.OnMain(() => PlacementProgress(progress, elapsed, placement), token),
+                new JsonObject { ["tool"] = "place_at", ["args"] = args.DeepClone() });
             if (Text(result, "error") == "placement_no_progress")
                 await NativeAgent.OnMain(() => { StopInputs(preserveAttack: Actions.HasAttack); return true; }, token);
             if (Text(result, "outcome") == "done")

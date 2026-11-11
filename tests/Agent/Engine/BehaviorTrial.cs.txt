@@ -743,6 +743,7 @@ public sealed class BehaviorTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_ATOMIC_POLICY_TRIAL") == "1") { await AtomicPolicyTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_OPEN_ITEM_PROBE") == "1")
         {
             await Call("set_combat", new JsonObject { ["auto_dodge"] = false, ["auto_attack"] = false });
@@ -3307,6 +3308,76 @@ public sealed class BehaviorTrial : ModSystem
                 throw new Exception("edited program replayed the original task or did not use revision 2");
             return true;
         });
+    }
+
+    async Task AtomicPolicyTrial()
+    {
+        int cx = Main.spawnTileX + 30, ground = Main.spawnTileY + 5;
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); AgentTools.NewTask();
+            Manual.On = false; Concessions.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false; AgentPermissions.Attack = AgentPermissions.Dodge = false;
+            for (int x = cx - 8; x <= cx + 80; x++)
+            for (int y = ground - 8; y <= ground + 1; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                if (y >= ground) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+            }
+            var p = Main.LocalPlayer;
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[2].SetDefaults(ItemID.LifeCrystal); p.inventory[2].stack = 2;
+            p.statLife = p.statLifeMax = 100; p.ConsumedLifeCrystals = 0;
+            p.position = new Vector2(cx * 16, ground * 16 - p.height); p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+            return true;
+        });
+        var full = await Call("get_state", new JsonObject());
+        var fields = new JsonArray("player", "inventory_slots", "permanent_max_health");
+        var focused = await Call("get_state", new JsonObject { ["fields"] = fields });
+        string code = """
+            let reaction=null;
+            on('nearby_chest',e=>{
+              const s=tool('get_state',{fields:['player','inventory_slots','permanent_max_health']});
+              const observedTick=s.player.tick;
+              const crystal=s.inventory_slots.find(i=>i.type===29&&i.stack>0);
+              const receipt=tool('use_item',{slot:crystal.slot,x:Math.floor(s.player.pos.x/16),y:Math.floor(s.player.pos.y/16),duration_ticks:30});
+              reaction={delay_ticks:observedTick-e.evidence.tick,observed_tick:observedTick,receipt};
+              return {handled:true};
+            });
+            tool('watch',{events:['nearby_chest']});
+            const movement=tool('act',{steps:[{keys:['right'],until:{frames:180}}]});
+            const next=tool('act',{steps:[{keys:['left'],until:{frames:1}}]});
+            return {movement,next,reaction,after:tool('get_state',{fields:['player','inventory_slots','permanent_max_health']})};
+            """;
+        var clock = Stopwatch.StartNew();
+        var execution = AgentTools.Execute("run_script", new JsonObject { ["code"] = code }, default);
+        while (!await OnMain(() => ((AgentControlSession)SessionField.GetValue(null)).Tool == "act"))
+        {
+            if (execution.IsCompleted || clock.Elapsed.TotalSeconds > 5) throw new Exception("native policy movement did not start");
+            await Task.Delay(10);
+        }
+        int emitFrame = await OnMain(() => frames + 15);
+        while (await OnMain(() => frames < emitFrame)) await Task.Delay(10);
+        await OnMain(() =>
+        {
+            var watches = (AgentWatch)typeof(AgentTools).GetField("Watches", HiddenStatic).GetValue(null);
+            watches.Emit("nearby_chest", "native-atomic-policy", new JsonObject { ["tick"] = Main.GameUpdateCount,
+                ["x"] = cx + 5, ["y"] = ground - 2 });
+            return true;
+        });
+        var result = JsonNode.Parse(await execution.WaitAsync(TimeSpan.FromSeconds(20))).AsObject();
+        var after = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("player", "inventory_slots", "permanent_max_health") });
+        var report = new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["full_state_chars"] = full.ToJsonString().Length,
+            ["focused_state_chars"] = focused.ToJsonString().Length, ["result"] = result,
+            ["after"] = after, ["model_calls"] = 0, ["fixture_terrain"] = true, ["event_injected"] = true,
+            ["assembly_mvid"] = typeof(AgentTools).Assembly.ManifestModule.ModuleVersionId.ToString() };
+        File.WriteAllText(Path.Combine(Main.SavePath, "atomic-policy-native.json"), report.ToJsonString());
+        if (result["ok"]?.GetValue<bool>() != true || result["value"]?["reaction"] == null
+            || after["permanent_max_health"]?.GetValue<int>() != 120
+            || after["inventory_slots"].AsArray().Where(i => i["type"]?.GetValue<int>() == ItemID.LifeCrystal).Sum(i => i["stack"].GetValue<int>()) != 1)
+            throw new Exception("native atomic policy failed: " + report);
+        Console.WriteLine("ATOMIC_POLICY_NATIVE_PASS " + report.ToJsonString());
     }
 
     async Task FallPlacementTrial()
