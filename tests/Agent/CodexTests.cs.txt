@@ -244,6 +244,22 @@ static class CodexTests
 
     public static async Task InputOptimizations()
     {
+        string packageRoot = Path.Combine(Path.GetTempPath(), "codex-native-resolution-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string launcher = Path.Combine(packageRoot, "bin", "codex.js");
+            string native = Path.Combine(packageRoot, "node_modules", "@openai", "fixture-platform", "vendor", "fixture", "bin", "codex");
+            Directory.CreateDirectory(Path.GetDirectoryName(launcher)); Directory.CreateDirectory(Path.GetDirectoryName(native));
+            File.WriteAllText(launcher, "fixture launcher"); File.WriteAllText(native, "fixture native");
+            Check(CodexAgent.NpmNativeExecutable(launcher) == native
+                && CodexAgent.NpmNativeExecutable(native) == native,
+                "default npm launch unnecessarily depended on the child Node architecture");
+            Directory.Delete(Path.Combine(packageRoot, "node_modules"), true);
+            Check(CodexAgent.NpmNativeExecutable(launcher) == launcher,
+                "native resolution discarded a launcher without an installed native package");
+            Check(CodexAgent.ResolveExecutable(launcher) == launcher, "explicit Codex launcher preference was overridden");
+        }
+        finally { if (Directory.Exists(packageRoot)) Directory.Delete(packageRoot, true); }
         await PromptContinuity();
         await ModelResults();
         ContextChanges();

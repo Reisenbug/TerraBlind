@@ -259,13 +259,24 @@ public sealed class CodexAgent : IDisposable
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         string[] known = { Environment.GetEnvironmentVariable("CODEX_HUD_CODEX_BIN"),
             Path.Combine(home, ".npm-global", "bin", "codex"), "/opt/homebrew/bin/codex", "/usr/local/bin/codex" };
-        foreach (string path in known) if (!string.IsNullOrEmpty(path) && File.Exists(path)) return path;
+        foreach (string path in known) if (!string.IsNullOrEmpty(path) && File.Exists(path)) return NpmNativeExecutable(path);
         foreach (string directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
         {
             string path = Path.Combine(directory, OperatingSystem.IsWindows() ? "codex.exe" : "codex");
-            if (File.Exists(path)) return path;
+            if (File.Exists(path)) return NpmNativeExecutable(path);
         }
         throw new InvalidOperationException("未找到 Codex。请先安装并执行 codex login，或填写 Codex 可执行文件路径。");
+    }
+
+    internal static string NpmNativeExecutable(string launcher)
+    {
+        string target = File.ResolveLinkTarget(launcher, true)?.FullName ?? launcher;
+        if (Path.GetFileName(target) != "codex.js") return launcher;
+        string packages = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(target)), "node_modules", "@openai");
+        if (!Directory.Exists(packages)) return launcher;
+        string[] natives = Directory.GetFiles(packages, "codex", SearchOption.AllDirectories)
+            .Where(path => Path.GetFileName(Path.GetDirectoryName(path)) == "bin").ToArray();
+        return natives.Length == 1 ? natives[0] : launcher;
     }
 
     static CodexConnection Launch(string executable, string cwd)
@@ -289,7 +300,15 @@ public sealed class CodexAgent : IDisposable
         if (!OperatingSystem.IsWindows()) start.Environment["PATH"] = (start.Environment["PATH"] ?? "") + ":/usr/local/bin:/opt/homebrew/bin";
         ApplySystemProxy(start, HttpClient.DefaultProxy);
         var process = Process.Start(start) ?? throw new IOException("无法启动 Codex。");
-        _ = process.StandardError.ReadToEndAsync();
+        _ = process.StandardError.ReadToEndAsync().ContinueWith(errors =>
+        {
+            if (!errors.IsCompletedSuccessfully) return;
+            string message = errors.Result.Trim(), code = "unavailable";
+            try { if (process.HasExited) code = process.ExitCode.ToString(); } catch (InvalidOperationException) { }
+            string key = Config.I.AgentApiKey;
+            if (!string.IsNullOrEmpty(key)) message = message.Replace(key, "[redacted]");
+            DiagLog.Write($"[agent_codex_exit] code={code} stderr={message[..Math.Min(4000, message.Length)]}");
+        }, TaskContinuationOptions.ExecuteSynchronously);
         return new CodexConnection(process.StandardOutput, process.StandardInput, () =>
         {
             try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
