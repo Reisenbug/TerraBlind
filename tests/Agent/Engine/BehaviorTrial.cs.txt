@@ -3423,6 +3423,17 @@ public sealed class BehaviorTrial : ModSystem
         if (averages["on"].GetValue<double>() >= averages["off"].GetValue<double>())
             throw new Exception("native mining speed did not improve: " + report);
         Console.WriteLine("MINING_SPEED_NATIVE_PASS " + averages.ToJsonString());
+        int drop = await OnMain(() => Item.NewItem(new EntitySource_Misc("pickup-range-trial"), (cx + 6) * 16,
+            (ground - 2) * 16, 16, 16, ItemID.Stinger));
+        var pickupClock = Stopwatch.StartNew();
+        var pickup = await Call("gather", new JsonObject { ["targets"] = new JsonArray(new JsonObject { ["item_type"] = (int)ItemID.Stinger, ["count"] = 1 }) });
+        var pickupReport = await OnMain(() => new JsonObject { ["elapsed_ms"] = pickupClock.ElapsedMilliseconds,
+            ["result"] = pickup.DeepClone(), ["actual"] = Main.LocalPlayer.inventory.Where(item => item.type == ItemID.Stinger).Sum(item => item.stack),
+            ["drop_active"] = Main.item[drop].active, ["drop_type"] = Main.item[drop].type, ["model_calls"] = 0 });
+        File.WriteAllText(Path.Combine(Main.SavePath, "drop-pickup-native.json"), pickupReport.ToJsonString());
+        if (pickup["outcome"]?.ToString() != "enough" || pickupReport["actual"].GetValue<int>() != 1)
+            throw new Exception("native pickup failed to close the remaining distance: " + pickupReport);
+        Console.WriteLine("DROP_PICKUP_NATIVE_PASS " + pickupReport.ToJsonString());
     }
 
     async Task AtomicPolicyTrial()
