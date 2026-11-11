@@ -4525,16 +4525,18 @@ public sealed class BehaviorTrial : ModSystem
                 journal.WriteLine(new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["boss"] = boss.DeepClone(), ["state"] = state.DeepClone() }.ToJsonString());
                 bool completed = healthMs != null && chakram && boss["defeated"].GetValue<bool>()
                     && state["task_plan"]?["status"]?.ToString() == "completed";
+                long elapsed = clock.ElapsedMilliseconds;
                 File.WriteAllText(Path.Combine(Main.SavePath, "queen-progress.json"), new JsonObject
-                { ["ok"] = completed, ["elapsed_ms"] = clock.ElapsedMilliseconds, ["target_health"] = targetHealth, ["health_target_ms"] = healthMs,
+                { ["ok"] = completed && elapsed <= 25 * 60 * 1000, ["elapsed_ms"] = elapsed, ["target_health"] = targetHealth, ["health_target_ms"] = healthMs,
                     ["chakram_ms"] = chakramMs, ["queen_spawn_ms"] = queenSpawnMs, ["deaths"] = deaths.DeepClone(),
                     ["boss"] = boss.DeepClone(), ["coverage"] = await OnMain(QueenCoverage), ["after"] = state.DeepClone() }.ToJsonString());
                 if (completed)
                 {
-                    if (clock.Elapsed.TotalMinutes > 25) throw new Exception("queen goal completed after the 25 minute limit");
+                    if (elapsed > 25 * 60 * 1000) throw new Exception("queen goal completed after the 25 minute limit");
                     Console.WriteLine($"QUEEN_GOAL_PASS elapsed_ms={clock.ElapsedMilliseconds} target_health={targetHealth} health_target_ms={healthMs} chakram_ms={chakramMs} queen_spawn_ms={queenSpawnMs} deaths={deaths.Count}"); return;
                 }
                 if (clock.Elapsed.TotalMinutes >= 25) throw new Exception("queen goal exceeded the 25 minute limit; checkpoint retained");
+                if (NativeAgent.Status == "waiting for answer") throw new Exception("autonomous queen goal requires operator input; checkpoint retained");
                 if (NativeAgent.Status is "failed" or "idle") throw new Exception("queen goal stopped before verification: " + NativeAgent.Status);
             }
         }
