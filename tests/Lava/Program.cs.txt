@@ -36,6 +36,14 @@ foreach (int liquid in new[] { 0, 2 })
 Reset();
 Main.tile[4, 4].TileType = TileID.Hellstone;
 Check(!LavaSafety.CanMine(4, 4), "hellstone_releases_lava");
+Main.LocalPlayer.lavaImmune = true;
+Check(LavaSafety.CanMine(4, 4), "immune_hellstone");
+Main.tile[4, 3].LiquidType = LiquidID.Lava;
+Main.tile[4, 3].LiquidAmount = 255;
+Check(LavaSafety.CanMine(4, 4), "immune_hellstone_next_to_lava");
+Check(!LavaSafety.CanMine(0, 4), "immunity_preserves_world_bounds");
+Main.LocalPlayer.lavaImmune = false;
+Check(!LavaSafety.CanMine(4, 4), "expired_immunity_rechecks_lava");
 Reset();
 Check(LavaSafety.CanMine(4, 4), "before_liquid_change");
 Main.tile[4, 3].LiquidType = LiquidID.Lava;
@@ -63,7 +71,9 @@ namespace Terraria
     {
         public const int maxTilesX = 10, maxTilesY = 10;
         public static readonly Tile[,] tile = new Tile[maxTilesX, maxTilesY];
+        public static readonly Player LocalPlayer = new();
     }
+    public class Player { public bool lavaImmune; }
     public class Tile
     {
         public bool HasTile;
