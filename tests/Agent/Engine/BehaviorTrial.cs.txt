@@ -74,6 +74,15 @@ public sealed class BehaviorTrial : ModSystem
     int mechanicalSkulls;
     long lastProgressionDamage = -1;
     JsonObject primeSummon;
+    readonly HashSet<int> progressionItems = new();
+    bool protectedLavaContact;
+    JsonObject ProgressionPrerequisites() => new()
+    {
+        ["evil_pickaxe"] = progressionItems.Contains(ItemID.NightmarePickaxe) || progressionItems.Contains(ItemID.DeathbringerPickaxe),
+        ["waterleaf"] = progressionItems.Contains(ItemID.Waterleaf), ["fireblossom"] = progressionItems.Contains(ItemID.Fireblossom),
+        ["obsidian"] = progressionItems.Contains(ItemID.Obsidian), ["hellforge"] = progressionItems.Contains(ItemID.Hellforge),
+        ["obsidian_skin_potion"] = progressionItems.Contains(ItemID.ObsidianSkinPotion), ["protected_lava_contact"] = protectedLavaContact
+    };
     static bool DungeonTrial => Environment.GetEnvironmentVariable("TB_DUNGEON_TRIAL") == "1";
     static string QueenResumeRoot => Environment.GetEnvironmentVariable("TB_QUEEN_RESUME");
     sealed class AcceptanceClock
@@ -487,6 +496,11 @@ public sealed class BehaviorTrial : ModSystem
         }
         if (ProgressionTrial && shortJungleClock != null)
         {
+            foreach (var item in Main.LocalPlayer.inventory)
+                if (!item.IsAir && item.type is ItemID.NightmarePickaxe or ItemID.DeathbringerPickaxe or ItemID.Waterleaf
+                    or ItemID.Fireblossom or ItemID.Obsidian or ItemID.Hellforge or ItemID.ObsidianSkinPotion) progressionItems.Add(item.type);
+            protectedLavaContact |= Main.LocalPlayer.lavaImmune && Main.LocalPlayer.HasBuff(BuffID.ObsidianSkin)
+                && Collision.LavaCollision(Main.LocalPlayer.position, Main.LocalPlayer.width, Main.LocalPlayer.height);
             var damage = (JsonObject)DamageField.GetValue(null);
             if (damage != null && damage["tick"].GetValue<long>() != lastProgressionDamage)
             {
@@ -729,6 +743,67 @@ public sealed class BehaviorTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_LAVA_ESCAPE_CASE") is string lavaCase)
+        {
+            var death = JsonNode.Parse(File.ReadAllText(Path.Combine(QueenResumeRoot, "progression-hellstone-progress.json")))["deaths"].AsArray().Last()["evidence"];
+            var origin = new Vector2(death["pos_tiles"]["x"].GetValue<float>() * 16, death["pos_tiles"]["y"].GetValue<float>() * 16);
+            int item = lavaCase == "skin" ? ItemID.ObsidianSkinPotion : ItemID.RecallPotion;
+            await Call("set_combat", new JsonObject { ["auto_dodge"] = true, ["auto_attack"] = false });
+            await Call("watch", new JsonObject { ["events"] = new JsonArray("nearby_tile"), ["tile_types"] = new JsonArray(12), ["radius"] = 10 });
+            int before = await OnMain(() =>
+            {
+                var p = Main.LocalPlayer; Config.I.AgentEnabled = true;
+                origin -= new Vector2(p.width / 2f, p.height / 2f);
+                p.ClearBuff(BuffID.ObsidianSkin); p.lavaTime = 0;
+                if (lavaCase == "skin")
+                {
+                    int slot = Array.FindIndex(p.inventory, 0, 50, i => i.IsAir);
+                    if (slot < 0) slot = 0;
+                    p.inventory[slot].SetDefaults(item); p.inventory[slot].stack = 1;
+                }
+                p.Teleport(origin); p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)origin.Y / 16;
+                p.statLife = p.statLifeMax2; p.immune = false; p.immuneTime = 0;
+                bool lava = Collision.LavaCollision(p.position, p.width, p.height), solid = Collision.SolidCollision(p.position, p.width, p.height);
+                var cells = new JsonArray();
+                for (int x = (int)origin.X / 16 - 1; x <= (int)(origin.X + p.width) / 16 + 1; x++)
+                for (int y = (int)origin.Y / 16 - 1; y <= (int)(origin.Y + p.height) / 16 + 1; y++)
+                { var t = Main.tile[x, y]; cells.Add(new JsonObject { ["x"] = x, ["y"] = y, ["tile"] = t.HasTile ? t.TileType : -1,
+                    ["liquid"] = t.LiquidAmount, ["liquid_type"] = t.LiquidType, ["slope"] = (int)t.Slope, ["half"] = t.IsHalfBlock }); }
+                File.WriteAllText(Path.Combine(Main.SavePath, "lava-escape-geometry.json"), new JsonObject
+                { ["lava_collision"] = lava, ["solid_collision"] = solid, ["x"] = p.position.X, ["y"] = p.position.Y, ["tiles"] = cells }.ToJsonString());
+                if (!lava || solid)
+                    throw new Exception("recorded native death position is not an open lava contact in this world");
+                return p.inventory.Where(i => i.type == item).Sum(i => i.stack);
+            });
+            JsonObject report = null;
+            var timer = Stopwatch.StartNew();
+            while (timer.Elapsed.TotalSeconds < 5)
+            {
+                await Task.Delay(50);
+                report = await OnMain(() =>
+                {
+                    var p = Main.LocalPlayer;
+                    return new JsonObject { ["case"] = lavaCase, ["elapsed_ms"] = timer.ElapsedMilliseconds,
+                        ["hp"] = p.statLife, ["dead"] = p.dead, ["lava_immune"] = p.lavaImmune,
+                        ["lava_contact"] = Collision.LavaCollision(p.position, p.width, p.height),
+                        ["distance_from_danger"] = Vector2.Distance(p.position, origin), ["control_jump"] = p.controlJump,
+                        ["item_before"] = before, ["item_after"] = p.inventory.Where(i => i.type == item).Sum(i => i.stack),
+                        ["model_calls"] = 0, ["fixture_item_grant"] = lavaCase == "skin" };
+                });
+                if (report["dead"].GetValue<bool>()) break;
+                if (lavaCase == "skin" ? report["lava_immune"].GetValue<bool>() : report["distance_from_danger"].GetValue<float>() > 256) break;
+            }
+            await Task.Delay(150);
+            var final = await Call("get_state", new JsonObject());
+            report["contact_escape"] = final["contact_escape"]?.DeepClone();
+            report["jump_after_settle"] = await OnMain(() => Main.LocalPlayer.controlJump);
+            File.WriteAllText(Path.Combine(Main.SavePath, "lava-escape-native-" + lavaCase + ".json"), report.ToJsonString());
+            if (report["dead"].GetValue<bool>() || report["item_before"].GetValue<int>() - report["item_after"].GetValue<int>() != 1
+                || (lavaCase == "skin" ? !report["lava_immune"].GetValue<bool>() || report["jump_after_settle"].GetValue<bool>()
+                    : report["distance_from_danger"].GetValue<float>() <= 256)) throw new Exception("native lava rescue failed: " + report);
+            Console.WriteLine("LAVA_ESCAPE_PASS case=" + lavaCase + " native_item_consumed=1 model_calls=0 elapsed_ms=" + timer.ElapsedMilliseconds);
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_LAVA_IMMUNITY_PROBE") == "1")
         {
             var target = await OnMain(() =>
@@ -3956,7 +4031,10 @@ public sealed class BehaviorTrial : ModSystem
             string checkpoint = Path.Combine(QueenResumeRoot ?? "", prefix + "-progress.json");
             if (resume && File.Exists(checkpoint))
             {
-                var saved = JsonNode.Parse(File.ReadAllText(checkpoint))["after"]["player"];
+                var prior = JsonNode.Parse(File.ReadAllText(checkpoint));
+                foreach (var type in prior["observed_item_types"]?.AsArray() ?? new JsonArray()) progressionItems.Add(type.GetValue<int>());
+                protectedLavaContact |= prior["live"]?["prerequisites"]?["protected_lava_contact"]?.GetValue<bool>() == true;
+                var saved = prior["after"]["player"];
                 var position = new Vector2(saved["pos"]["x"].GetValue<float>(), saved["pos"]["y"].GetValue<float>());
                 if (!saved["on_ground"].GetValue<bool>() || saved["dead"].GetValue<bool>())
                     throw new Exception("progression checkpoint requires a living grounded position");
@@ -3969,7 +4047,7 @@ public sealed class BehaviorTrial : ModSystem
         string prompt = stage switch
         {
             "cobalt" => "/goal 获取钴护盾，放在背包或装备上。自行查询获取方式、前置和召唤条件，按实际难度准备够用的血量、装备、补给及小型战斗场地，击败骷髅王后探索地牢取得护盾。经典难度，结合头与手的实际机制选择攻击目标。",
-            "hellstone" => "/goal 高效率采集60个狱岩，最终随身背包至少保留60个。自行查证开采条件、工具、材料和药水，完成相应前置；按现场准备生存能力。记录去地狱、找矿、开采及恢复分别耗时。",
+            "hellstone" => "/goal 高效率采集60个狱岩，最终随身背包至少保留60个。自行查证并完成本世界邪恶Boss、邪恶镐、waterleaf和火焰花、黑曜石、黑曜石皮药水的制作使用、受其保护时实际接触岩浆、取得地狱熔炉这些环节，按现场安排次序与生存能力。记录去地狱、找矿、开采及恢复分别耗时。",
             "prime" => "/goal 制作机械骷髅王召唤物，并实际使用它召唤机械骷髅王。自行查证进度、材料、制作站和使用条件，完成肉山及所需的采矿、收集、装备和场地准备，召唤成功后验收。可复用已有肉山流程中的建房、准备及炸肉山行为，也可保存新技能。",
             _ => "/goal 从当前丛林地表出生点进入丛林地下，收集并使用3颗生命水晶，使永久生命上限达到160，最后仍在丛林地下。途中顺手采集近便的丛林孢子、搜刮箱子、拾取有用掉落物。"
         };
@@ -4009,6 +4087,7 @@ public sealed class BehaviorTrial : ModSystem
                     ["skeletron_defeated"] = NPC.downedBoss3, ["evil_boss_defeated"] = NPC.downedBoss2, ["hardmode"] = Main.hardMode,
                     ["cobalt_shields"] = Main.LocalPlayer.inventory.Concat(Main.LocalPlayer.armor.Take(10)).Where(i => i.type == ItemID.CobaltShield).Sum(i => i.stack),
                     ["hellstone"] = Main.LocalPlayer.inventory.Where(i => i.type == ItemID.Hellstone).Sum(i => i.stack),
+                    ["prerequisites"] = ProgressionPrerequisites(),
                     ["prime_summon"] = primeSummon?.DeepClone() });
                 long now = shortJungleClock.ElapsedMilliseconds;
                 bool dead = state["player"]["dead"].GetValue<bool>();
@@ -4032,7 +4111,8 @@ public sealed class BehaviorTrial : ModSystem
                 bool actual = stage switch
                 {
                     "cobalt" => live["skeletron_defeated"].GetValue<bool>() && live["cobalt_shields"].GetValue<int>() > 0,
-                    "hellstone" => live["hellstone"].GetValue<int>() >= 60,
+                    "hellstone" => live["hellstone"].GetValue<int>() >= 60 && live["evil_boss_defeated"].GetValue<bool>()
+                        && live["prerequisites"].AsObject().All(pair => pair.Value.GetValue<bool>()),
                     "prime" => live["hardmode"].GetValue<bool>() && primeSummon != null,
                     _ => state["permanent_max_health"].GetValue<int>() >= 160
                         && live["used_crystals"].GetValue<int>() >= 3 && live["underground_jungle"].GetValue<bool>()
@@ -4043,6 +4123,7 @@ public sealed class BehaviorTrial : ModSystem
                 File.WriteAllText(Path.Combine(Main.SavePath, prefix + "-progress.json"), new JsonObject
                 {
                     ["ok"] = completed, ["elapsed_ms"] = now, ["live"] = live, ["after"] = state,
+                    ["observed_item_types"] = new JsonArray(progressionItems.OrderBy(type => type).Select(type => JsonValue.Create(type)).ToArray()),
                     ["deaths"] = deaths.DeepClone(), ["first_action"] = firstJungleAction?.DeepClone(),
                     ["stationary_ms"] = now - stillSince, ["spawn"] = jungleSpawn.DeepClone()
                 }.ToJsonString());
