@@ -67,8 +67,13 @@ public sealed class BehaviorTrial : ModSystem
     AcceptanceClock acceptance;
     static bool JungleHealthTrial => Environment.GetEnvironmentVariable("TB_JUNGLE_HEALTH_TRIAL") == "1";
     static bool ShortJungleTrial => Environment.GetEnvironmentVariable("TB_SHORT_JUNGLE_TRIAL") == "1";
+    static bool ProgressionTrial => Environment.GetEnvironmentVariable("TB_PROGRESSION_TRIAL") == "1";
     Stopwatch shortJungleClock;
     JsonObject jungleSpawn, firstJungleAction;
+    string progressionStage;
+    int mechanicalSkulls;
+    long lastProgressionDamage = -1;
+    JsonObject primeSummon;
     static bool DungeonTrial => Environment.GetEnvironmentVariable("TB_DUNGEON_TRIAL") == "1";
     static string QueenResumeRoot => Environment.GetEnvironmentVariable("TB_QUEEN_RESUME");
     sealed class AcceptanceClock
@@ -325,7 +330,7 @@ public sealed class BehaviorTrial : ModSystem
     }
     public override void OnWorldLoad()
     {
-        if (!enabled || !ShortJungleTrial) return;
+        if (!enabled || !ShortJungleTrial && !ProgressionTrial) return;
         var weights = Main.remixWorld ? TileID.Sets.RemixJungleBiome : TileID.Sets.JungleBiome;
         var spawn = SurfaceBiomeSearch.Find(Main.maxTilesX, Main.maxTilesY, (int)Main.worldSurface, Main.spawnTileX,
             Main.buffScanAreaWidth, Main.buffScanAreaHeight, SceneMetrics.JungleTileThreshold, (x, y) =>
@@ -455,12 +460,33 @@ public sealed class BehaviorTrial : ModSystem
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         if (frames++ == 0) Main.playerInventory = true;
-        if (ShortJungleTrial && shortJungleClock != null && firstJungleAction == null
+        if ((ShortJungleTrial || ProgressionTrial) && shortJungleClock != null && firstJungleAction == null
             && ((AgentControlSession)SessionField.GetValue(null)).PrimaryActive)
         {
             var policy = (JsonObject)typeof(AgentTools).GetMethod("TaskPolicyStatus", HiddenStatic).Invoke(null, new object[] { false });
             firstJungleAction = new JsonObject { ["elapsed_ms"] = shortJungleClock.ElapsedMilliseconds,
                 ["tool"] = ((AgentControlSession)SessionField.GetValue(null)).Tool, ["task_policy"] = policy };
+        }
+        if (ProgressionTrial && shortJungleClock != null)
+        {
+            var damage = (JsonObject)DamageField.GetValue(null);
+            if (damage != null && damage["tick"].GetValue<long>() != lastProgressionDamage)
+            {
+                lastProgressionDamage = damage["tick"].GetValue<long>();
+                File.AppendAllText(Path.Combine(Main.SavePath, "progression-" + progressionStage + "-damage.jsonl"),
+                    new JsonObject { ["elapsed_ms"] = shortJungleClock.ElapsedMilliseconds,
+                        ["evidence"] = damage.DeepClone() }.ToJsonString() + Environment.NewLine);
+            }
+            if (progressionStage == "prime")
+            {
+                int current = Main.LocalPlayer.inventory.Where(i => i.type == ItemID.MechanicalSkull).Sum(i => i.stack);
+                if (primeSummon == null && current < mechanicalSkulls && Main.LocalPlayer.itemAnimation > 0
+                    && NPC.AnyNPCs(NPCID.SkeletronPrime))
+                    primeSummon = new JsonObject { ["elapsed_ms"] = shortJungleClock.ElapsedMilliseconds,
+                        ["tick"] = Main.GameUpdateCount, ["skulls_before"] = mechanicalSkulls, ["skulls_after"] = current,
+                        ["boss_active"] = true, ["item_animation"] = Main.LocalPlayer.itemAnimation };
+                mechanicalSkulls = current;
+            }
         }
         if (Environment.GetEnvironmentVariable("TB_OPERATOR_COMMANDS") == "1" && frames % 30 == 0 && operatorRequest.IsCompleted)
         {
@@ -565,7 +591,7 @@ public sealed class BehaviorTrial : ModSystem
                 + $" attack={p.controlUseItem} target_active={npc?.active} target_hp={npc?.life} target_pos={npc?.position}"
                 + $" clear_line={(npc != null && Collision.CanHitLine(p.Center, 4, 4, npc.Center, 4, 4))}");
         }
-        if (trial?.IsCompleted == true || !JungleHealthTrial && !ShortJungleTrial && frames > FrameLimit)
+        if (trial?.IsCompleted == true || !JungleHealthTrial && !ShortJungleTrial && !ProgressionTrial && frames > FrameLimit)
         {
             finished = true;
             bool ok = trial?.IsCompletedSuccessfully == true;
@@ -3861,20 +3887,34 @@ public sealed class BehaviorTrial : ModSystem
         Console.WriteLine("OPPORTUNITY_COMPLETE native_engine=true model_calls=0 teleports_after_start=0");
     }
 
-    async Task ShortJungleCollectionTrial()
+    async Task ShortJungleCollectionTrial(string stage = null)
     {
+        string prefix = stage == null ? "jungle-collection" : "progression-" + stage;
         await OnMain(() =>
         {
             var p = Main.LocalPlayer;
-            if (jungleSpawn == null || !p.ZoneJungle || !p.ZoneOverworldHeight || Main.GameMode != 0
-                || p.statLifeMax != 100 || p.ConsumedLifeCrystals != 0)
+            if ((stage == null || stage == "cobalt") && (jungleSpawn == null || !p.ZoneJungle || !p.ZoneOverworldHeight
+                || Main.GameMode != 0 || p.statLifeMax != 100 || p.ConsumedLifeCrystals != 0))
                 throw new Exception("short collection requires a fresh 100 HP classic jungle surface spawn");
-            jungleSpawn["actual_biome"] = "jungle";
-            jungleSpawn["actual_position"] = new JsonObject { ["x"] = p.position.X / 16, ["y"] = p.position.Y / 16 };
+            if (stage == "cobalt" && (NPC.downedBoss3 || Main.hardMode || p.HasItem(ItemID.CobaltShield)))
+                throw new Exception("progression requires undefeated Skeletron and no Cobalt Shield");
+            if (stage == null || stage == "cobalt")
+            {
+                jungleSpawn["actual_biome"] = "jungle";
+                jungleSpawn["actual_position"] = new JsonObject { ["x"] = p.position.X / 16, ["y"] = p.position.Y / 16 };
+            }
+            progressionStage = stage; firstJungleAction = null; shortJungleClock = null;
             Player.SavePlayer(Main.ActivePlayerFileData); WorldFile.SaveWorld(false);
             return true;
         });
-        const string prompt = "/goal 从当前丛林地表出生点进入丛林地下，收集并使用3颗生命水晶，使永久生命上限达到160，最后仍在丛林地下。途中顺手采集近便的丛林孢子、搜刮箱子、拾取有用掉落物。首段行动前用task_policy挂整趟途中反应，行进期间继续补充知识和后继计划；可读取task_reactions模板并按实际装备与地形修改。处理机会后续接原目标，背包整理与局部恢复由已准备的脚本处理。提供基础工具、星怒、足量木头、持续鱼鳃和光芒效果；天然地形和怪物照常运行。低血量只唤醒观察，当前行动继续。用真实血上限、实际水晶使用和宿主DAG验收结果完成任务。";
+        string prompt = stage switch
+        {
+            "cobalt" => "/goal 获取钴护盾，放在背包或装备上。自行查询获取方式、前置和召唤条件，按实际难度准备够用的血量、装备、补给及小型战斗场地，击败骷髅王后探索地牢取得护盾。经典难度，结合头与手的实际机制选择攻击目标。",
+            "hellstone" => "/goal 高效率采集60个狱岩，最终随身背包至少保留60个。自行查证开采条件、工具、材料和药水，完成相应前置；按现场准备生存能力。记录去地狱、找矿、开采及恢复分别耗时。",
+            "prime" => "/goal 制作机械骷髅王召唤物，并实际使用它召唤机械骷髅王。自行查证进度、材料、制作站和使用条件，完成肉山及所需的采矿、收集、装备和场地准备，召唤成功后验收。可复用已有肉山流程中的建房、准备及炸肉山行为，也可保存新技能。",
+            _ => "/goal 从当前丛林地表出生点进入丛林地下，收集并使用3颗生命水晶，使永久生命上限达到160，最后仍在丛林地下。途中顺手采集近便的丛林孢子、搜刮箱子、拾取有用掉落物。"
+        };
+        prompt += "首段行动前用task_policy挂整趟途中反应，行进期间继续补充知识和后继计划；可读取task_reactions模板并按实际装备与地形修改。处理机会后续接原目标，背包整理与局部恢复由已准备的脚本处理。初始提供基础工具、星怒、足量木头、持续鱼鳃和光芒效果，当前装备和世界进度以get_state为准；天然地形和怪物照常运行。低血量只唤醒观察，当前行动继续。使用DAG和可复用JS技能持续推进，以真实物品、进度和宿主验收完成任务。";
         var before = await Call("get_state", new JsonObject());
         var deaths = new JsonArray(); bool previouslyDead = false;
         Vector2? anchor = null;
@@ -3887,14 +3927,16 @@ public sealed class BehaviorTrial : ModSystem
             shortJungleClock = Stopwatch.StartNew();
             NativeAgent.Submit(prompt); return true;
         });
-        File.WriteAllText(Path.Combine(Main.SavePath, "jungle-collection-start.json"), new JsonObject
+        File.WriteAllText(Path.Combine(Main.SavePath, prefix + "-start.json"), new JsonObject
         {
             ["prompt"] = prompt, ["spawn"] = jungleSpawn.DeepClone(), ["before"] = before,
             ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["model"] = "gpt-6.1-sol", ["effort"] = "low",
-            ["natural_encounters"] = NaturalEncounters, ["target_health"] = 160, ["terrain_edits"] = 0
+            ["natural_encounters"] = NaturalEncounters, ["stage"] = stage, ["terrain_edits"] = 0,
+            ["package_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                File.ReadAllBytes(Path.Combine(Main.SavePath, "Mods", "TerraBlind.tmod"))))
         }.ToJsonString());
-        using var journal = new StreamWriter(Path.Combine(Main.SavePath, "jungle-collection-samples.jsonl")) { AutoFlush = true };
-        using var pauses = new StreamWriter(Path.Combine(Main.SavePath, "jungle-collection-pauses.jsonl")) { AutoFlush = true };
+        using var journal = new StreamWriter(Path.Combine(Main.SavePath, prefix + "-samples.jsonl")) { AutoFlush = true };
+        using var pauses = new StreamWriter(Path.Combine(Main.SavePath, prefix + "-pauses.jsonl")) { AutoFlush = true };
         try
         {
             while (true)
@@ -3902,7 +3944,11 @@ public sealed class BehaviorTrial : ModSystem
                 await Task.Delay(1000);
                 var state = await Call("get_state", new JsonObject { ["include_watch_history"] = sample++ % 10 == 0 });
                 var live = await OnMain(() => new JsonObject { ["used_crystals"] = Main.LocalPlayer.ConsumedLifeCrystals,
-                    ["underground_jungle"] = Main.LocalPlayer.ZoneJungle && Main.LocalPlayer.Center.Y / 16 > Main.worldSurface });
+                    ["underground_jungle"] = Main.LocalPlayer.ZoneJungle && Main.LocalPlayer.Center.Y / 16 > Main.worldSurface,
+                    ["skeletron_defeated"] = NPC.downedBoss3, ["evil_boss_defeated"] = NPC.downedBoss2, ["hardmode"] = Main.hardMode,
+                    ["cobalt_shields"] = Main.LocalPlayer.inventory.Concat(Main.LocalPlayer.armor.Take(10)).Where(i => i.type == ItemID.CobaltShield).Sum(i => i.stack),
+                    ["hellstone"] = Main.LocalPlayer.inventory.Where(i => i.type == ItemID.Hellstone).Sum(i => i.stack),
+                    ["prime_summon"] = primeSummon?.DeepClone() });
                 long now = shortJungleClock.ElapsedMilliseconds;
                 bool dead = state["player"]["dead"].GetValue<bool>();
                 if (dead && !previouslyDead) deaths.Add(new JsonObject { ["elapsed_ms"] = now, ["evidence"] = state["last_death"]?.DeepClone() });
@@ -3920,22 +3966,29 @@ public sealed class BehaviorTrial : ModSystem
                     var warning = new JsonObject { ["kind"] = "stationary_over_10s", ["elapsed_ms"] = now,
                         ["stationary_ms"] = now - stillSince, ["position_pixels"] = state["player"]["pos"]?.DeepClone(),
                         ["continuity"] = state["execution_continuity"]?.DeepClone(), ["agent"] = state["agent"]?.DeepClone() };
-                    pauses.WriteLine(warning.ToJsonString()); Console.WriteLine("JUNGLE_COLLECTION_WARNING " + warning);
+                    pauses.WriteLine(warning.ToJsonString()); Console.WriteLine(prefix + " WARNING " + warning);
                 }
-                bool completed = !dead && state["permanent_max_health"].GetValue<int>() >= 160
-                    && live["used_crystals"].GetValue<int>() >= 3 && live["underground_jungle"].GetValue<bool>()
-                    && state["task_plan"]?["status"]?.ToString() == "completed" && state["goal_verification"]?["verified"]?.GetValue<bool>() == true;
+                bool actual = stage switch
+                {
+                    "cobalt" => live["skeletron_defeated"].GetValue<bool>() && live["cobalt_shields"].GetValue<int>() > 0,
+                    "hellstone" => live["hellstone"].GetValue<int>() >= 60,
+                    "prime" => live["hardmode"].GetValue<bool>() && primeSummon != null,
+                    _ => state["permanent_max_health"].GetValue<int>() >= 160
+                        && live["used_crystals"].GetValue<int>() >= 3 && live["underground_jungle"].GetValue<bool>()
+                };
+                bool completed = !dead && actual && state["task_plan"]?["status"]?.ToString() == "completed"
+                    && state["goal_verification"]?["verified"]?.GetValue<bool>() == true;
                 journal.WriteLine(new JsonObject { ["elapsed_ms"] = now, ["live"] = live.DeepClone(), ["state"] = state.DeepClone() }.ToJsonString());
-                File.WriteAllText(Path.Combine(Main.SavePath, "jungle-collection-progress.json"), new JsonObject
+                File.WriteAllText(Path.Combine(Main.SavePath, prefix + "-progress.json"), new JsonObject
                 {
                     ["ok"] = completed, ["elapsed_ms"] = now, ["live"] = live, ["after"] = state,
                     ["deaths"] = deaths.DeepClone(), ["first_action"] = firstJungleAction?.DeepClone(),
                     ["stationary_ms"] = now - stillSince, ["spawn"] = jungleSpawn.DeepClone()
                 }.ToJsonString());
                 if (completed)
-                { Console.WriteLine("JUNGLE_COLLECTION_PASS health=160 crystals_used=3 elapsed_ms=" + now + " deaths=" + deaths.Count); return; }
+                { Console.WriteLine(prefix + " PASS elapsed_ms=" + now + " deaths=" + deaths.Count + " actual=" + live); return; }
                 if (NativeAgent.Status is "failed" or "idle" or "needs_repair" or "paused")
-                    throw new Exception("short jungle collection stopped before host verification: " + NativeAgent.Status);
+                    throw new Exception(prefix + " stopped before host verification: " + NativeAgent.Status);
             }
         }
         finally
@@ -3943,7 +3996,8 @@ public sealed class BehaviorTrial : ModSystem
             await OnMain(() =>
             {
                 NativeAgent.Stop(); Player.SavePlayer(Main.ActivePlayerFileData); WorldFile.SaveWorld(false);
-                Console.WriteLine("JUNGLE_COLLECTION_CHECKPOINT_SAVED root=" + Main.SavePath); return true;
+                shortJungleClock = null;
+                Console.WriteLine(prefix + " CHECKPOINT_SAVED root=" + Main.SavePath); return true;
             });
         }
     }
@@ -4750,6 +4804,11 @@ public sealed class BehaviorTrial : ModSystem
         }
         if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1")
         {
+            if (ProgressionTrial)
+            {
+                foreach (string stage in new[] { "cobalt", "hellstone", "prime" }) await ShortJungleCollectionTrial(stage);
+                return;
+            }
             if (ShortJungleTrial) { await ShortJungleCollectionTrial(); return; }
             if (Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") == "1")
             { await QueenGoalTrial(); return; }
