@@ -1363,7 +1363,7 @@ static class ScriptTests
                             Terraria.Main.tile[30, 30].HasUnactuatedTile = scenario is "unverified" or "predicted_unverified";
                             Terraria.Main.tile[30, 30].TileType = 69;
                             AgentTools.LastContactEscape = new JsonObject { ["status"] = "controls_released", ["contact_clear"] = true,
-                                ["cleared_tiles"] = 1, ["hazard_tiles"] = new JsonArray(new JsonObject { ["x"] = 30, ["y"] = 30, ["type"] = 69 }) };
+                                ["cleared_tiles"] = 1, ["hazard_tiles"] = new JsonArray(new JsonObject { ["x"] = 30, ["y"] = 30, ["type"] = (ushort)69 }) };
                             if (scenario.StartsWith("predicted_", StringComparison.Ordinal))
                             {
                                 AgentTools.LastContactEscape["predicted_tile"] = AgentTools.LastContactEscape["hazard_tiles"][0].DeepClone();

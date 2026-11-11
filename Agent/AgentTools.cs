@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -583,7 +584,11 @@ public static partial class AgentTools
         player.releaseUseItem = true;
     }
 
-    static int Int(JsonObject args, string key, int fallback = 0) => args[key]?.GetValue<int>() ?? fallback;
+    static int Int(JsonObject args, string key, int fallback = 0)
+    {
+        var node = args[key];
+        return node is JsonValue value && value.TryGetValue<int>(out int number) ? number : node?.Deserialize<int>() ?? fallback;
+    }
     static string Text(JsonObject args, string key) => args[key]?.GetValue<string>() ?? "";
     static bool Bool(JsonObject args, string key) => args[key]?.GetValue<bool>() ?? false;
     internal static bool Rejected(JsonObject result) => result != null && (result["error"] != null ||
