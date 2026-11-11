@@ -69,6 +69,7 @@ public sealed class BehaviorTrial : ModSystem
     static bool JungleHealthTrial => Environment.GetEnvironmentVariable("TB_JUNGLE_HEALTH_TRIAL") == "1";
     static bool ShortJungleTrial => Environment.GetEnvironmentVariable("TB_SHORT_JUNGLE_TRIAL") == "1";
     static bool ProgressionTrial => Environment.GetEnvironmentVariable("TB_PROGRESSION_TRIAL") == "1";
+    static bool FullQueenRun => Environment.GetEnvironmentVariable("TB_QUEEN_FULL_RUN") == "1";
     Stopwatch shortJungleClock;
     Stopwatch queenClock;
     double queenSampleMs, queenCoveredMs, queenUncoveredMs, queenRespawnMs, queenComputeMs;
@@ -346,6 +347,13 @@ public sealed class BehaviorTrial : ModSystem
     public override void OnWorldLoad()
     {
         if (!enabled || !ShortJungleTrial && !ProgressionTrial && Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") != "1") return;
+        if (FullQueenRun)
+        {
+            jungleSpawn = new JsonObject { ["x"] = Main.spawnTileX, ["y"] = Main.spawnTileY,
+                ["world_default"] = true, ["terrain_edits"] = 0 };
+            Console.WriteLine("QUEEN_DEFAULT_SPAWN " + jungleSpawn.ToJsonString());
+            return;
+        }
         if (ProgressionTrial && !string.IsNullOrEmpty(QueenResumeRoot))
         {
             jungleSpawn = JsonNode.Parse(File.ReadAllText(Path.Combine(QueenResumeRoot, "progression-cobalt-start.json")))["spawn"].DeepClone().AsObject();
@@ -4504,7 +4512,7 @@ public sealed class BehaviorTrial : ModSystem
 
     async Task QueenGoalTrial()
     {
-        if (string.IsNullOrEmpty(QueenResumeRoot)) await OnMain(() =>
+        if (!FullQueenRun && string.IsNullOrEmpty(QueenResumeRoot)) await OnMain(() =>
         {
             var player = Main.LocalPlayer;
             int x = (int)player.Center.X / 16, y = (int)(player.Bottom.Y + 1) / 16;
@@ -4520,7 +4528,9 @@ public sealed class BehaviorTrial : ModSystem
         int targetHealth = int.Parse(Environment.GetEnvironmentVariable("TB_QUEEN_TARGET_HEALTH") ?? "240");
         string prompt = "/goal 前往丛林地下，获得至少240点永久生命上限，制作荆棘旋刃，召唤并击败蜂王。生命水晶、毒刺、丛林孢子、箱子并行规划：240血前以水晶为主要目标，其他资源和箱子在去水晶的路上近便时获取；达到240血后推进荆棘旋刃与蜂王，路上仍择机收集近便水晶和箱子。生命水晶及时使用。先利用find_descent与descent_route的丛林主道出发，赶路时完成材料知识查询和后续路线准备。结合当前地形地图安排采集及蜂巢场地。背包有星怒和足量木头，本轮持续鱼鳃与光芒效果。低血量唤醒观察，当前动作继续执行。持续推进直到真实结果通过宿主验收。";
         prompt = prompt.Replace("240", targetHealth.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        prompt += "本轮要求25分钟内达到300点永久生命并击败蜂王。以持续执行和实际进度安排路线，材料与场地准备期间提前完成后继判断。";
+        prompt += FullQueenRun
+            ? "本轮从世界默认出生点出发，先确定丛林方向并赶路。持续执行完整任务，记录实际进度，材料与场地准备期间提前完成后继判断。"
+            : "本轮要求25分钟内达到300点永久生命并击败蜂王。以持续执行和实际进度安排路线，材料与场地准备期间提前完成后继判断。";
         prompt += "本轮验证途中反应：首段行动前用task_policy挂整趟反应，途中继续完善，让近便资源拾取、背包整理和压力板局部恢复直接在脚本内执行；可读取task_reactions模板并按现场修改。200血以上零死亡，关注动作交接和超过10秒的停顿。";
         if (!string.IsNullOrEmpty(QueenResumeRoot))
         {
@@ -4628,15 +4638,15 @@ public sealed class BehaviorTrial : ModSystem
                     && state["task_plan"]?["status"]?.ToString() == "completed";
                 long elapsed = clock.ElapsedMilliseconds;
                 File.WriteAllText(Path.Combine(Main.SavePath, "queen-progress.json"), new JsonObject
-                { ["ok"] = completed && elapsed <= 25 * 60 * 1000, ["elapsed_ms"] = elapsed, ["target_health"] = targetHealth, ["health_target_ms"] = healthMs,
+                { ["ok"] = completed && (FullQueenRun || elapsed <= 25 * 60 * 1000), ["elapsed_ms"] = elapsed, ["target_health"] = targetHealth, ["health_target_ms"] = healthMs,
                     ["chakram_ms"] = chakramMs, ["queen_spawn_ms"] = queenSpawnMs, ["deaths"] = deaths.DeepClone(),
                     ["boss"] = boss.DeepClone(), ["coverage"] = await OnMain(QueenCoverage), ["after"] = state.DeepClone() }.ToJsonString());
                 if (completed)
                 {
-                    if (elapsed > 25 * 60 * 1000) throw new Exception("queen goal completed after the 25 minute limit");
+                    if (!FullQueenRun && elapsed > 25 * 60 * 1000) throw new Exception("queen goal completed after the 25 minute limit");
                     Console.WriteLine($"QUEEN_GOAL_PASS elapsed_ms={clock.ElapsedMilliseconds} target_health={targetHealth} health_target_ms={healthMs} chakram_ms={chakramMs} queen_spawn_ms={queenSpawnMs} deaths={deaths.Count}"); return;
                 }
-                if (clock.Elapsed.TotalMinutes >= 25) throw new Exception("queen goal exceeded the 25 minute limit; checkpoint retained");
+                if (!FullQueenRun && clock.Elapsed.TotalMinutes >= 25) throw new Exception("queen goal exceeded the 25 minute limit; checkpoint retained");
                 if (NativeAgent.Status == "waiting for answer") throw new Exception("autonomous queen goal requires operator input; checkpoint retained");
                 if (NativeAgent.Status is "failed" or "idle") throw new Exception("queen goal stopped before verification: " + NativeAgent.Status);
             }
