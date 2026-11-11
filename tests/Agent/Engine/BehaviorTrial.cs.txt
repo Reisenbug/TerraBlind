@@ -743,6 +743,39 @@ public sealed class BehaviorTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_OPEN_ITEM_PROBE") == "1")
+        {
+            await Call("set_combat", new JsonObject { ["auto_dodge"] = false, ["auto_attack"] = false });
+            async Task<JsonObject> OpenItem(int slot)
+            {
+                var inventory = (await Call("get_state", new JsonObject()))["inventory_slots"].AsArray();
+                var item = inventory.First(i => i["slot"].GetValue<int>() == slot);
+                return await Call("open_item", new JsonObject { ["slot"] = slot, ["expected"] = new JsonObject
+                    { ["type"] = item["type"].DeepClone(), ["prefix"] = item["prefix"].DeepClone(), ["stack"] = item["stack"].DeepClone() } });
+            }
+            int herb = await OnMain(() => Array.FindIndex(Main.LocalPlayer.inventory, 0, 50, item => item.type == ItemID.HerbBag));
+            if (herb < 0) throw new Exception("native opening probe requires the naturally collected herb bag");
+            var opened = await OpenItem(herb);
+            await OnMain(() =>
+            {
+                if (Main.LocalPlayer.HasItem(ItemID.GoldenKey)) throw new Exception("locked-container fixture requires no preexisting golden key");
+                Main.LocalPlayer.inventory[0].SetDefaults(ItemID.LockBox); Main.LocalPlayer.inventory[0].stack = 1;
+                return true;
+            });
+            var locked = await OpenItem(0);
+            await OnMain(() => { Main.LocalPlayer.inventory[1].SetDefaults(ItemID.GoldenKey); Main.LocalPlayer.inventory[1].stack = 1; return true; });
+            var unlocked = await OpenItem(0);
+            var report = await OnMain(() => new JsonObject { ["herb_bag"] = opened, ["without_key"] = locked, ["with_key"] = unlocked,
+                ["golden_keys_after"] = Main.LocalPlayer.inventory.Where(i => i.type == ItemID.GoldenKey).Sum(i => i.stack),
+                ["lockboxes_after"] = Main.LocalPlayer.inventory.Where(i => i.type == ItemID.LockBox).Sum(i => i.stack),
+                ["fixture_lockbox_and_key"] = true, ["model_calls"] = 0 });
+            File.WriteAllText(Path.Combine(Main.SavePath, "open-item-native.json"), report.ToJsonString());
+            if (opened["consumed"]?.GetValue<int>() != 1 || locked["consumed"]?.GetValue<int>() != 0
+                || unlocked["consumed"]?.GetValue<int>() != 1 || report["golden_keys_after"].GetValue<int>() != 0
+                || report["lockboxes_after"].GetValue<int>() != 0) throw new Exception("native container/key check failed: " + report);
+            Console.WriteLine("OPEN_ITEM_PASS native_herb_bag=true locked_without_key=true key_consumed=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_LAVA_ESCAPE_CASE") is string lavaCase)
         {
             var death = JsonNode.Parse(File.ReadAllText(Path.Combine(QueenResumeRoot, "progression-hellstone-progress.json")))["deaths"].AsArray().Last()["evidence"];
@@ -771,11 +804,12 @@ public sealed class BehaviorTrial : ModSystem
                     ["liquid"] = t.LiquidAmount, ["liquid_type"] = t.LiquidType, ["slope"] = (int)t.Slope, ["half"] = t.IsHalfBlock }); }
                 File.WriteAllText(Path.Combine(Main.SavePath, "lava-escape-geometry.json"), new JsonObject
                 { ["lava_collision"] = lava, ["solid_collision"] = solid, ["x"] = p.position.X, ["y"] = p.position.Y, ["tiles"] = cells }.ToJsonString());
-                if (!lava || solid)
-                    throw new Exception("recorded native death position is not an open lava contact in this world");
+                if (lavaCase == "suffocation" ? !solid : !lava || solid)
+                    throw new Exception("recorded native death position does not contain the expected hazard");
                 return p.inventory.Where(i => i.type == item).Sum(i => i.stack);
             });
             JsonObject report = null;
+            bool suffocationSeen = false;
             var timer = Stopwatch.StartNew();
             while (timer.Elapsed.TotalSeconds < 5)
             {
@@ -783,22 +817,27 @@ public sealed class BehaviorTrial : ModSystem
                 report = await OnMain(() =>
                 {
                     var p = Main.LocalPlayer;
+                    suffocationSeen |= p.suffocating;
                     return new JsonObject { ["case"] = lavaCase, ["elapsed_ms"] = timer.ElapsedMilliseconds,
                         ["hp"] = p.statLife, ["dead"] = p.dead, ["lava_immune"] = p.lavaImmune,
                         ["lava_contact"] = Collision.LavaCollision(p.position, p.width, p.height),
                         ["distance_from_danger"] = Vector2.Distance(p.position, origin), ["control_jump"] = p.controlJump,
+                        ["suffocation_seen"] = suffocationSeen,
                         ["item_before"] = before, ["item_after"] = p.inventory.Where(i => i.type == item).Sum(i => i.stack),
                         ["model_calls"] = 0, ["fixture_item_grant"] = lavaCase == "skin" };
                 });
                 if (report["dead"].GetValue<bool>()) break;
                 if (lavaCase == "skin" ? report["lava_immune"].GetValue<bool>() : report["distance_from_danger"].GetValue<float>() > 256) break;
             }
-            await Task.Delay(150);
+            await Task.Delay(lavaCase == "suffocation" ? 1000 : 150);
             var final = await Call("get_state", new JsonObject());
             report["contact_escape"] = final["contact_escape"]?.DeepClone();
+            report["item_after_settle"] = await OnMain(() => Main.LocalPlayer.inventory.Where(i => i.type == item).Sum(i => i.stack));
             report["jump_after_settle"] = await OnMain(() => Main.LocalPlayer.controlJump);
             File.WriteAllText(Path.Combine(Main.SavePath, "lava-escape-native-" + lavaCase + ".json"), report.ToJsonString());
             if (report["dead"].GetValue<bool>() || report["item_before"].GetValue<int>() - report["item_after"].GetValue<int>() != 1
+                || report["item_before"].GetValue<int>() - report["item_after_settle"].GetValue<int>() != 1
+                || lavaCase == "suffocation" && !suffocationSeen
                 || (lavaCase == "skin" ? !report["lava_immune"].GetValue<bool>() || report["jump_after_settle"].GetValue<bool>()
                     : report["distance_from_danger"].GetValue<float>() <= 256)) throw new Exception("native lava rescue failed: " + report);
             Console.WriteLine("LAVA_ESCAPE_PASS case=" + lavaCase + " native_item_consumed=1 model_calls=0 elapsed_ms=" + timer.ElapsedMilliseconds);
