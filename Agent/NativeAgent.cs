@@ -317,7 +317,9 @@ public class NativeAgent : ModSystem
                     int discoveriesBefore = await OnMain(() => AgentTools.DiscoveryRevision, token);
                     var workflowBefore = await OnMain(() => AgentTools.Workflows.ToDictionary(w => w.Key, w => w.Value.Segment), token);
                     if (useCodex)
-                        await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token, goalOptions, Context);
+                        await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token, goalOptions, Context,
+                            () => OnMain(() => AgentTools.ControlSession.PrimaryActive && !Main.LocalPlayer.dead
+                                && !AgentTools.Watches.HasModelInterrupting, token));
                     else
                         await _conversation.RunAsync(input, url, key, model, system, entrySchemas, AgentTools.Execute, Say, token);
                     bool scriptYielded = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.Yielded
@@ -325,11 +327,12 @@ public class NativeAgent : ModSystem
                     bool reviewRequested = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.ReviewRequested
                         && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
                     var backgroundReview = System.Diagnostics.Stopwatch.StartNew();
+                    bool historyChanged = useCodex && contextRevision != codex.ContextRevision;
                     string preparingAttempt = await OnMain(() => AgentTools.PreparationContext(
                         AgentTools.Actions.ActiveAttempt, AgentTools.Actions.ActiveNode), token);
                     var preparation = await OnMain(() => (Delay: AgentTools.Plan.RequiresNodeExecution ? 0 : 15,
                         Nodes: AgentTools.Plan.PreparationNodes(AgentTools.Actions.ActiveNode, AgentTaskEvidence.Measure)), token);
-                    bool prepareNext = preparingAttempt != null && preparingAttempt != preparedAttempt
+                    bool prepareNext = historyChanged || preparingAttempt != null && preparingAttempt != preparedAttempt
                         && (preparingAttempt != AgentTools.PreparationNotifiedContext || preparation.Nodes.Count > 0);
                     double reviewDelay = preparation.Delay;
                     while (!reviewRequested && (!prepareNext || backgroundReview.Elapsed.TotalSeconds < reviewDelay)
@@ -339,7 +342,7 @@ public class NativeAgent : ModSystem
                         await Task.Delay(100, token);
                         preparingAttempt = await OnMain(() => AgentTools.PreparationContext(
                             AgentTools.Actions.ActiveAttempt, AgentTools.Actions.ActiveNode), token);
-                        prepareNext = preparingAttempt != null && preparingAttempt != preparedAttempt
+                        prepareNext = historyChanged || preparingAttempt != null && preparingAttempt != preparedAttempt
                             && (preparingAttempt != AgentTools.PreparationNotifiedContext || preparation.Nodes.Count > 0);
                     }
                     if (!reviewRequested && (prepareNext

@@ -20,6 +20,7 @@ static class CodexTests
     public static async Task Run()
     {
         await InputOptimizations();
+        await InTurnCompaction();
         PreparationContexts();
         await GoalProtocol();
         await NativeGoalProtocol();
@@ -616,6 +617,33 @@ static class CodexTests
             && fresh["state"]["last_damage"]["npc_type"].GetValue<int>() == 42,
             "patch application or compaction snapshot lost authoritative current state");
         Console.WriteLine("PASS: recursive context patches update actual slots/fields and removals while preserving hazards, damage and full reset snapshots");
+    }
+
+    static async Task InTurnCompaction()
+    {
+        foreach (bool executing in new[] { false, true })
+        {
+            var server = new Server { InputTokens = CodexAgent.ContextTokenLimit + 1000,
+                HoldFinalReply = executing, HoldCompaction = executing };
+            using var agent = new CodexAgent((_, _) => server.Connect());
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var goal = new JsonObject { ["objective"] = "continue the current action", ["request"] = "compact-active-action" };
+            var run = agent.RunAsync("continue", "", "", "fixture", "system", Tools,
+                (_, _, _) => Task.FromResult("{\"running\":true}"), _ => { }, timeout.Token, goal,
+                canCompact: () => Task.FromResult(executing));
+            if (executing)
+            {
+                while (server.Compactions == 0) await Task.Delay(5, timeout.Token);
+                Check(!run.IsCompleted && server.Interrupts == 1 && agent.GoalState["native"]["status"].ToString() == "active",
+                    "background compaction completed the goal or waited for a final model message");
+                server.FinishCompaction();
+            }
+            await run;
+            Check(server.Compactions == (executing ? 1 : 0) && server.Threads == 1
+                && server.Interrupts == (executing ? 1 : 0) && !agent.HasActiveTurn,
+                "in-turn compaction ignored action coverage, replaced the thread or retained active reasoning");
+        }
+        Console.WriteLine("PASS: large active reasoning hands off history only under background execution, preserving its thread and active goal");
     }
 
     static void PreparationContexts()

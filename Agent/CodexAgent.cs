@@ -393,7 +393,7 @@ public sealed class CodexAgent : IDisposable
 
     public async Task RunAsync(string input, string executable, string cwd, string model, string system, JsonArray tools,
         Func<string, JsonObject, CancellationToken, Task<string>> execute, Action<string> say, CancellationToken token,
-        JsonObject goalOptions = null, Func<Task<string>> refreshContext = null)
+        JsonObject goalOptions = null, Func<Task<string>> refreshContext = null, Func<Task<bool>> canCompact = null)
     {
         string turn = null;
         var elapsed = Stopwatch.StartNew();
@@ -472,6 +472,16 @@ public sealed class CodexAgent : IDisposable
                         await Interrupt(turn);
                         await SuspendGoal("budgetLimited", token);
                         throw new GoalBudgetExceededException();
+                    }
+                    if (goalOptions != null && canCompact != null
+                        && usage["last"]?["inputTokens"]?.GetValue<int>() >= compactAtInput && await canCompact())
+                    {
+                        DiagLog.Write("[agent_context_compaction] status=handoff background_action=true");
+                        await Interrupt(turn);
+                        if (_rpc == null) throw new IOException("Codex历史交接连接已关闭。");
+                        _activeTurn = null;
+                        await CompactContext(token);
+                        return;
                     }
                 }
                 if (method == "error" && args["willRetry"]?.GetValue<bool>() == true)
