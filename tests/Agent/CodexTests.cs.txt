@@ -627,7 +627,7 @@ static class CodexTests
                 _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
             var action = executing ? actions.Start("nav_to", new JsonObject(), default) : null;
             var server = new Server { InputTokens = CodexAgent.ContextTokenLimit + 1000,
-                HoldFinalReply = holdReply, HoldCompaction = executing };
+                HoldFinalReply = holdReply, HoldCompaction = executing, RejectIdleInterrupt = executing && !holdReply };
             using var agent = new CodexAgent((_, _) => server.Connect());
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var goal = new JsonObject { ["objective"] = "continue the current action", ["request"] = "compact-active-action" };
@@ -1351,7 +1351,7 @@ static class CodexTests
         string compactTurn;
         public Action AfterCompaction;
         int _turn;
-        public bool Stopped, LoggedIn = true, FailTurn, EmitCompaction, HoldFinalReply, RejectSteer;
+        public bool Stopped, LoggedIn = true, FailTurn, EmitCompaction, HoldFinalReply, RejectSteer, RejectIdleInterrupt;
         public string ToolName = "get_state";
         public Action<int> AfterTool;
         public JsonObject ThreadArgs;
@@ -1433,7 +1433,14 @@ static class CodexTests
             }
             else if (method == "turn/interrupt")
             {
-                Interrupts++; Reply(message["id"], new JsonObject());
+                Interrupts++;
+                if (RejectIdleInterrupt && compactTurn == null)
+                {
+                    Send(new JsonObject { ["id"] = message["id"].DeepClone(),
+                        ["error"] = new JsonObject { ["message"] = "no active turn to interrupt" } });
+                    return;
+                }
+                Reply(message["id"], new JsonObject());
                 if (compactTurn == null) Completed("interrupted");
                 else
                 {

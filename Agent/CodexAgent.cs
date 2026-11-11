@@ -619,6 +619,8 @@ public sealed class CodexAgent : IDisposable
                     ["error"] = new JsonObject { ["code"] = -32800, ["message"] = "任务已取消。" } }, timeout.Token);
             }
         }
+        catch (InvalidOperationException error) when (error.Message == "Codex: no active turn to interrupt")
+        { DiagLog.Write("[agent_interrupt] already_completed turn=" + turn); }
         catch { Dispose(); }
     }
 
