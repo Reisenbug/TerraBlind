@@ -8,6 +8,7 @@ static class InventoryTests
 {
     public static void Run()
     {
+        OpenContainers();
         var self = Game.LocalPlayer;
         var old0 = self.inventory[0]; var old12 = self.inventory[12];
         int net = Game.netMode;
@@ -77,5 +78,57 @@ static class InventoryTests
             self.trashItem = oldTrash;
         }
         Console.WriteLine("PASS: inventory swap validates busy/stale states, preserves both items and emits two slot syncs");
+    }
+
+    static void OpenContainers()
+    {
+        var p = Game.LocalPlayer;
+        var item = p.inventory[12]; var mouseItem = Game.mouseItem;
+        var mouse = (Game.mouseRight, Game.mouseRightRelease);
+        var canOpen = Terraria.ModLoader.ItemLoader.RightClickTest;
+        var native = Terraria.UI.ItemSlot.RightClickHandler;
+        int calls = 0;
+        try
+        {
+            Game.mouseItem = new(); Game.mouseRight = false; Game.mouseRightRelease = true;
+            p.itemAnimation = p.itemTime = 0;
+            p.inventory[12] = new Terraria.Item { type = 3093, stack = 2 };
+            Terraria.ModLoader.ItemLoader.RightClickTest = i => i.type == 3093;
+            Terraria.UI.ItemSlot.RightClickHandler = (items, context, slot) =>
+            {
+                if (!ReferenceEquals(items, p.inventory) || context != 0 || slot != 12 || !Game.mouseRight || !Game.mouseRightRelease)
+                    throw new Exception("open tool did not dispatch the native inventory right click");
+                calls++; items[slot].stack--; Game.mouseRightRelease = false;
+            };
+            var args = new JsonObject { ["slot"] = 12, ["expected"] = new JsonObject { ["type"] = 3093, ["prefix"] = 0, ["stack"] = 2 } };
+            if (!PvpInventory.Review()["inventory"].AsArray().Any(i => i["slot"].GetValue<int>() == 12 && i["can_open"].GetValue<bool>()))
+                throw new Exception("review omitted the native right-click capability");
+            p.itemAnimation = 1;
+            if (PvpInventory.Open(args)["error"]?.ToString() != "inventory_busy" || calls != 0)
+                throw new Exception("opening interrupted an unfinished item animation");
+            p.itemAnimation = 0;
+            var result = PvpInventory.Open(args);
+            if (result["consumed"]?.GetValue<int>() != 1 || result["outcome"]?.ToString() != "opened"
+                || calls != 1 || p.inventory[12].stack != 1 || Game.mouseRight || !Game.mouseRightRelease)
+                throw new Exception("native container dispatch lost consumption evidence or mouse restoration");
+            if (PvpInventory.Open(args)["error"]?.ToString() != "stale_inventory" || calls != 1)
+                throw new Exception("stale opening consumed another item");
+            args["expected"]["stack"] = 1;
+            Terraria.ModLoader.ItemLoader.RightClickTest = _ => false;
+            if (PvpInventory.Open(args)["error"]?.ToString() != "item_not_openable" || calls != 1)
+                throw new Exception("ordinary inventory item reached the right-click dispatcher");
+            Terraria.ModLoader.ItemLoader.RightClickTest = _ => true;
+            Terraria.UI.ItemSlot.RightClickHandler = (_, _, _) => { throw new InvalidOperationException("native_hook_failed"); };
+            try { PvpInventory.Open(args); throw new Exception("native hook exception was lost"); }
+            catch (InvalidOperationException error) when (error.Message == "native_hook_failed") { }
+            if (Game.mouseRight || !Game.mouseRightRelease) throw new Exception("hook failure retained synthetic mouse input");
+        }
+        finally
+        {
+            p.inventory[12] = item; Game.mouseItem = mouseItem; (Game.mouseRight, Game.mouseRightRelease) = mouse;
+            p.itemAnimation = p.itemTime = 0;
+            Terraria.ModLoader.ItemLoader.RightClickTest = canOpen; Terraria.UI.ItemSlot.RightClickHandler = native;
+        }
+        Console.WriteLine("PASS: container opening uses native right click, validates slot state and restores input after hook failure");
     }
 }

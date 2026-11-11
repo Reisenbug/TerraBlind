@@ -52,6 +52,11 @@ namespace Terraria.GameContent.ItemDropRules
 
 namespace Terraria.UI
 {
+    public static class ItemSlot
+    {
+        public static Action<Terraria.Item[], int, int> RightClickHandler;
+        public static void RightClick(Terraria.Item[] items, int context = 0, int slot = 0) => RightClickHandler?.Invoke(items, context, slot);
+    }
     public static class ChestUI
     {
         public static Action LootHandler;
@@ -78,6 +83,7 @@ namespace Terraria
         public static Projectile[] projectile = Enumerable.Range(0, 20).Select(i => new Projectile { whoAmI = i }).ToArray();
         public static int maxNPCs = 20, maxItems = 20;
         public static Item mouseItem = new();
+        public static bool mouseRight, mouseRightRelease;
         public static NPC[] npc = Enumerable.Range(0, 20).Select(_ => new NPC()).ToArray();
         public static Item[] item = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
         public static Tile[,] tile = new Tile[1000, 1000];
@@ -254,7 +260,12 @@ namespace Terraria.ID
 }
 namespace Terraria.ModLoader
 {
-    public static class ItemLoader { public static int ItemCount = 6000; }
+    public static class ItemLoader
+    {
+        public static int ItemCount = 6000;
+        public static Func<Terraria.Item, bool> RightClickTest;
+        public static bool CanRightClick(Terraria.Item item) => RightClickTest?.Invoke(item) == true;
+    }
     public static class NPCLoader { public static int NPCCount = 700; }
     public class GlobalNPC { public virtual void OnKill(Terraria.NPC npc) { } }
     public class Mod

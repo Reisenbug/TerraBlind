@@ -22,7 +22,7 @@ public sealed class AgentControlSession
     public string Tool => tool ?? (attackTicket != 0 ? "fight" : null);
     public static bool ActionTool(string name) => name is "nav_to" or "mine" or "mine_vein" or "chop_wood"
         or "use_item" or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap"
-        or "combat_reposition" or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "inventory_drop" or "inventory_trash" or "npc_chat" or "fight" or "fight_player";
+        or "combat_reposition" or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat" or "fight" or "fight_player";
 
     public static void DescribeClaims(JsonArray schemas)
     {

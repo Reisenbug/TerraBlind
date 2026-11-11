@@ -32,6 +32,7 @@ public static class PvpInventory
             fact["armor_slot"] = item.headSlot >= 0 ? 0 : item.bodySlot >= 0 ? 1 : item.legSlot >= 0 ? 2 : null;
             fact["damage"] = item.damage; fact["pick"] = item.pick; fact["axe"] = item.axe; fact["hammer"] = item.hammer;
             fact["material"] = item.material; fact["consumable"] = item.consumable;
+            fact["can_open"] = Terraria.ModLoader.ItemLoader.CanRightClick(item);
             fact["heal_life"] = item.healLife; fact["use_ammo"] = item.useAmmo;
             return fact;
         }
@@ -56,6 +57,33 @@ public static class PvpInventory
     public static JsonObject Drop(JsonObject args) => Discard(args, false);
 
     public static JsonObject Trash(JsonObject args) => Discard(args, true);
+
+    public static JsonObject Open(JsonObject args)
+    {
+        var player = Main.LocalPlayer;
+        int slot = args["slot"]?.GetValue<int>() ?? -1;
+        if (slot is < 0 or >= 50) return new JsonObject { ["error"] = "invalid_inventory_slot" };
+        if (Main.gameMenu || !player.active || player.dead || player.itemAnimation != 0 || player.itemTime != 0
+            || !Main.mouseItem.IsAir || ItemUseCoordinator.IsActive || PlaceAnywhere.IsRunning)
+            return new JsonObject { ["error"] = "inventory_busy" };
+        var item = player.inventory[slot]; var expected = args["expected"];
+        if (expected is not JsonObject || expected["type"]?.GetValue<int>() != item.type
+            || expected["prefix"]?.GetValue<int>() != item.prefix || expected["stack"]?.GetValue<int>() != item.stack)
+            return new JsonObject { ["error"] = "stale_inventory", ["actual"] = ItemState(item) };
+        if (!Terraria.ModLoader.ItemLoader.CanRightClick(item)) return new JsonObject { ["error"] = "item_not_openable" };
+        var before = ItemState(item);
+        var mouse = (Main.mouseRight, Main.mouseRightRelease);
+        try
+        {
+            Main.mouseRight = Main.mouseRightRelease = true;
+            Terraria.UI.ItemSlot.RightClick(player.inventory, 0, slot);
+        }
+        finally { (Main.mouseRight, Main.mouseRightRelease) = mouse; }
+        var after = player.inventory[slot];
+        int consumed = before["stack"].GetValue<int>() - (after.type == before["type"].GetValue<int>() ? after.stack : 0);
+        return new JsonObject { ["ok"] = consumed > 0, ["outcome"] = consumed > 0 ? "opened" : "not_consumed",
+            ["consumed"] = consumed, ["item_before"] = before, ["item_after"] = ItemState(after) };
+    }
 
     static JsonObject Discard(JsonObject args, bool trash)
     {
