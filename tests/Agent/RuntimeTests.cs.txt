@@ -1892,6 +1892,23 @@ static class RuntimeTests
                 NativeAgent.Stop();
                 Check(Combat.Enabled && !Dodge.Enabled && !AgentTools.HasBossControlOverride && Dodge.MovementReserveScale == previousReserve,
                     "Agent stop did not restore existing user controller settings");
+                Combat.Enabled = Dodge.Enabled = false; Game.playerInventory = true;
+                AgentTools.ObserveBossControl(false);
+                Check(!Combat.Enabled && !Dodge.Enabled && Game.playerInventory,
+                    "idle host activated Boss controls without an executing task");
+                Game.LocalPlayer.dead = true;
+                AgentTools.ObserveBossControl(true);
+                Check(!Combat.Enabled && !Dodge.Enabled, "dead player activated automatic Boss controls");
+                Game.LocalPlayer.dead = false;
+                AgentTools.ObserveBossControl(true);
+                Check(Combat.Enabled && Dodge.Enabled && !Game.playerInventory && !AgentPermissions.Attack,
+                    "Boss appearance waited for model or bypassed independent attack permission");
+                await Execute(AgentTools.Execute("set_combat", new JsonObject { ["boss_control"] = false }, default));
+                AgentTools.ObserveBossControl(true);
+                Check(!Combat.Enabled && !Dodge.Enabled, "automatic Boss handoff overrode the model's explicit refusal");
+                AgentTools.Stop();
+                Check(!Combat.Enabled && !Dodge.Enabled && !AgentTools.HasBossControlOverride,
+                    "automatic Boss handoff did not restore its original controller state");
             }
             finally { Game.npc[0] = previousNpc; Combat.Enabled = previousAttackController; Dodge.Enabled = previousMovementController; Dodge.MovementReserveScale = previousReserve; Dodge.Snapshot = previousMovementSnapshot; Game.playerInventory = previousInventory;
                 (Game.LocalPlayer.ExtraJump, Game.LocalPlayer.wingTime, Game.LocalPlayer.velocity) = previousMobility; }

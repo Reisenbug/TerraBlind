@@ -518,7 +518,28 @@ public static partial class AgentTools
         return age is >= 0 and <= 2 ? damage : null;
     }
     static (bool Attack, bool Dodge, float Reserve)? bossBefore;
+    static bool? requestedBossControl;
     internal static bool HasBossControlOverride => bossBefore != null;
+    internal static void ObserveBossControl(bool processing)
+    {
+        var player = Main.LocalPlayer;
+        if (!processing || Main.gameMenu || Manual.On || player == null || !player.active || player.dead
+            || requestedBossControl == false || PvpDuel.Active || PlayerCombat.Active
+            || !AgentPermissions.CanAttack(delegated: true) && !AgentPermissions.CanDodge(delegated: true)) return;
+        if (!Main.npc.Any(npc => npc is { active: true, boss: true, life: > 0 }
+            && Math.Abs(npc.Center.X - player.Center.X) + Math.Abs(npc.Center.Y - player.Center.Y) <= 200 * 16)) return;
+        if (Combat.Enabled && Dodge.Enabled && !Main.playerInventory) return;
+        SetBossControl(true);
+        DiagLog.Write("[agent_boss_handoff] controller=enabled source=nearby_boss");
+    }
+
+    static void SetBossControl(bool enabled)
+    {
+        bossBefore ??= (Combat.Enabled, Dodge.Enabled, Dodge.MovementReserveScale);
+        Combat.Enabled = Dodge.Enabled = enabled;
+        if (enabled) { TreasureGrab.CloseChest(); Main.playerInventory = false; }
+        else Combat.Stop();
+    }
     internal static readonly ActionTasks Actions = new(ExecuteWithTaskPolicy, ObserveAction,
         owns => NativeAgent.OnMain(() => { if (owns() && !ContactEscapeActive) StopInputs(); return true; }, default),
         (handle, owns) => NativeAgent.OnMain(() => { if (owns()) Control.EndAction(handle); return true; }, default),
@@ -561,6 +582,7 @@ public static partial class AgentTools
         {
             Combat.Enabled = previous.Attack; Dodge.Enabled = previous.Dodge; Dodge.MovementReserveScale = previous.Reserve; bossBefore = null;
         }
+        requestedBossControl = null;
         StopInputs();
     }
 
@@ -1855,10 +1877,8 @@ public static partial class AgentTools
                     }
                     if (args["boss_control"] != null)
                     {
-                        bossBefore ??= (Combat.Enabled, Dodge.Enabled, Dodge.MovementReserveScale);
-                        Combat.Enabled = Dodge.Enabled = Bool(args, "boss_control");
-                        if (Combat.Enabled) { TreasureGrab.CloseChest(); Main.playerInventory = false; }
-                        else Combat.Stop();
+                        requestedBossControl = Bool(args, "boss_control");
+                        SetBossControl(requestedBossControl.Value);
                     }
                     if (reserve is double requestedReserve)
                     {

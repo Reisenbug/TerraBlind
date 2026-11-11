@@ -190,6 +190,7 @@ public class NativeAgent : ModSystem
         while (MainQueue.TryDequeue(out var action)) action();
         if (!Main.gameMenu && _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false)
         {
+            AgentTools.ObserveBossControl(Processing);
             AgentTools.ContinuePreparedNode(_cancel.Token);
             AgentTools.ObserveContinuity();
             AgentTools.LootPassingChest();
