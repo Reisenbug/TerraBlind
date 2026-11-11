@@ -3741,7 +3741,7 @@ static class RuntimeTests
             {
                 AgentTools.Watches.Reset(); AgentTools.Recovery.Reset(); AgentTools.Workflows.Remove(workflow);
                 AgentTools.Workflows.Remove(workflow + "-background");
-                HttpServerSystem.Handler = (path, _) => (200, path == "/mine_status"
+                HttpServerSystem.Handler = (path, _) => (200, path == "/nav_recede" ? "{\"error\":\"fixture_route_unavailable\"}" : path == "/mine_status"
                     ? new JsonObject { ["outcome"] = outcome, ["running"] = false, ["mined"] = 2,
                         ["reason"] = "measured terminal state" }.ToJsonString() : "{\"ok\":true}");
                 var result = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
@@ -3764,6 +3764,37 @@ static class RuntimeTests
                         "background mining hid its failure or partial work: " + action);
                 }
             }
+            var recoveryTile = Game.tile[12, 34];
+            int mineCalls = 0, navigationCalls = 0;
+            try
+            {
+                AgentTools.Recovery.Reset(); AgentTools.Watches.Reset();
+                Game.tile[12, 34] = default;
+                HttpServerSystem.Handler = (path, payload) =>
+                {
+                    if (path == "/mine") mineCalls++;
+                    if (path == "/mine_status") return (200, "{\"running\":false,\"outcome\":\"out_of_box\",\"mined\":2}");
+                    if (path == "/nav_recede")
+                    {
+                        navigationCalls++;
+                        var request = JsonNode.Parse(payload);
+                        Check(request["gx"]?.GetValue<int>() == 12 && request["gy"]?.GetValue<int>() == 34,
+                            "mining drift recovery changed the original destination");
+                    }
+                    if (path == "/nav_recede_done")
+                    {
+                        return (200, "{\"done\":true,\"status\":\"done\"}");
+                    }
+                    return (200, "{\"ok\":true}");
+                };
+                var resumed = JsonNode.Parse(await Execute(AgentTools.Execute("mine", new JsonObject
+                    { ["dir"] = "right", ["target_x"] = 12, ["target_y"] = 34 }, default)));
+                Check(resumed["outcome"]?.ToString() == "done" && mineCalls == 1 && navigationCalls == 1
+                    && resumed["mining_attempt"]?["outcome"]?.ToString() == "out_of_box"
+                    && resumed["mined"]?.GetValue<int>() == 2 && resumed["navigation"]?["done"]?.GetValue<bool>() == true,
+                    "mining drift repeated the obsolete axis command or lost verified recovery evidence");
+            }
+            finally { Game.tile[12, 34] = recoveryTile; }
         }
         finally
         {
