@@ -76,6 +76,11 @@ static class ControlTests
         Check(session.CheckWorkflow("build_house") == null && session.CheckWorkflow("start_run") != null,
             "house builder admitted an unrelated legacy workflow");
         session.End(building);
+        Check(session.Begin("hell_run", null, out long hell) == null, "legacy hell workflow could not acquire input");
+        Check(session.CheckWorkflow("build_house") == null && session.CheckWorkflow("wof_prep") == null
+            && session.CheckWorkflow("start_run") != null && session.CheckWorkflow("collect_treasure") != null,
+            "hell workflow blocked its own phases or admitted an unrelated workflow");
+        session.End(hell);
         claim = policy.Claim(ControlChannels.All, ControlLifetime.Task, null, "manual recovery");
         policy.ConfirmReleased(claim);
         Check(session.Begin("act", null, out _) != null, "unclaimed action acquired reserved input");

@@ -887,7 +887,7 @@ public static partial class AgentTools
         }
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
             or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition"
-            or "gather" or "collect_treasure" or "build_house" or "equip_item" or "inventory_drop" or "inventory_trash" or "npc_chat";
+            or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "inventory_drop" or "inventory_trash" or "npc_chat";
         bool action = external || name is "fight" or "fight_player";
         bool startsPrimary = name == "action_start" && Text(args, "tool") != "fight";
         if ((external || startsPrimary) && string.IsNullOrEmpty(taskNode)
@@ -1117,7 +1117,7 @@ public static partial class AgentTools
         {
             if (name == "fight") return;
             bool changesRoute = name is "nav_to" or "gather" or "mine" or "mine_vein" or "chop_wood" or "use_item"
-                or "place_at" or "act" or "collect_treasure" or "build_house" or "combat_reposition";
+                or "place_at" or "act" or "collect_treasure" or "build_house" or "hell_run" or "combat_reposition";
             if (changesRoute && !paused && pause != null) { await pause(ct); paused = true; }
             if (restore != null) return;
             while (await NativeAgent.OnMain(() => Main.LocalPlayer.itemAnimation > 0, ct)) await NativeAgent.NextUpdate(ct);
@@ -1927,6 +1927,13 @@ public static partial class AgentTools
                 result = await Call("/build_house", args, token);
                 if (!Rejected(result) && result["accepted"]?.GetValue<bool>() == true)
                     result = await Wait("/build_house_status", "running", "/build_house_stop", 0, token);
+                break;
+            case "hell_run":
+                result = await NativeAgent.OnMain(() => new JsonObject
+                {
+                    ["accepted"] = StateSnapshotPlayer.StartHellRun(out string reason), ["reason"] = reason
+                }, token);
+                if (!Rejected(result)) result = await Wait("/hell_run_status", "running", "/hell_run_stop", 0, token);
                 break;
             case "interact":
                 result = await Call("/interact", new JsonObject { ["tile_x"] = Int(args, "x"), ["tile_y"] = Int(args, "y") }, token);

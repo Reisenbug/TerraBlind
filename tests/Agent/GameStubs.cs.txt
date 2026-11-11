@@ -340,7 +340,12 @@ namespace TerraBlind
         public static int Stops;
         public static string All() { Stops++; RecedingNav.Active = false; return "stopped"; }
     }
-    public static class StateSnapshotPlayer { public static void StopRemoteTask() { } }
+    public static class StateSnapshotPlayer
+    {
+        public static Func<bool> HellStart;
+        public static bool StartHellRun(out string why) { why = "fixture_start"; return HellStart?.Invoke() == true; }
+        public static void StopRemoteTask() { }
+    }
     public static class ReplaySystem { public static void Stop() { } }
     public static class KeyPress { public static void Clear() { } }
     public static class Combat
