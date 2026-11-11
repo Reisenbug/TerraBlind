@@ -590,8 +590,11 @@ public static partial class AgentTools
         return result;
     }, token);
 
-    public static Task<string> State(CancellationToken token, bool includeTiles = false, bool includeWatchHistory = false,
-        JsonArray fields = null) => NativeAgent.OnMain(() =>
+    public static Task<string> State(CancellationToken token, bool includeTiles = false, bool includeWatchHistory = false) =>
+        State(token, includeTiles, includeWatchHistory, null);
+
+    public static Task<string> State(CancellationToken token, bool includeTiles, bool includeWatchHistory,
+        JsonArray fields) => NativeAgent.OnMain(() =>
     {
         string[] selected = fields?.Select(field => field.GetValue<string>()).Distinct().ToArray();
         if (selected is { Length: 0 } || selected?.Any(string.IsNullOrWhiteSpace) == true)
@@ -641,6 +644,16 @@ public static partial class AgentTools
             observedPlayer["suffocating"] = Main.LocalPlayer.suffocating;
             observedPlayer["honey_slowed"] = healthPlayer.honeyWet && !healthPlayer.ignoreWater;
             observedPlayer["potion_delay_ticks"] = Main.LocalPlayer.potionDelay;
+            observedPlayer["biome_flags"] = new JsonObject { ["jungle"] = healthPlayer.ZoneJungle,
+                ["crimson"] = healthPlayer.ZoneCrimson, ["corruption"] = healthPlayer.ZoneCorrupt,
+                ["hallow"] = healthPlayer.ZoneHallow, ["dungeon"] = healthPlayer.ZoneDungeon,
+                ["desert"] = healthPlayer.ZoneDesert, ["snow"] = healthPlayer.ZoneSnow, ["ocean"] = healthPlayer.ZoneBeach };
+            var ground = new JsonArray();
+            int groundY = (int)(healthPlayer.position.Y + healthPlayer.height + 1) / 16;
+            for (int x = (int)healthPlayer.position.X / 16; x <= (int)(healthPlayer.position.X + healthPlayer.width - 1) / 16; x++)
+                if (WorldGen.InWorld(x, groundY)) ground.Add(new JsonObject { ["x"] = x, ["y"] = groundY,
+                    ["type"] = Main.tile[x, groundY].HasTile ? (int)Main.tile[x, groundY].TileType : -1 });
+            observedPlayer["ground_tiles"] = ground;
         }
         state["depth"] = new JsonObject
         {
@@ -678,6 +691,9 @@ public static partial class AgentTools
         state["other_players"] = players;
         state["combat"] = PvpDuel.Report();
         state["inventory_slots"] = PvpInventory.Snapshot();
+        if (selected?.Contains("inventory_counts") == true)
+            state["inventory_counts"] = new JsonObject(healthPlayer.inventory.Take(50).Where(item => !item.IsAir && item.stack > 0)
+                .GroupBy(item => item.type).Select(group => new KeyValuePair<string, JsonNode>(group.Key.ToString(), JsonValue.Create(group.Sum(item => item.stack)))));
         state["healing_items"] = new JsonArray(Main.LocalPlayer.inventory.Take(50)
             .Select((item, slot) => (item, slot)).Where(entry => !entry.item.IsAir && entry.item.healLife > 0)
             .Select(entry => (JsonNode)new JsonObject { ["slot"] = entry.slot, ["type"] = entry.item.type,
@@ -818,6 +834,7 @@ public static partial class AgentTools
                 if (active == "nav" ? Bool(status, "done") || Text(status, "status") == "failed" : !Bool(status, active))
                 {
                     if (onCompleted != null) await onCompleted(status);
+                    if (reactionContext != null) await ReactAtBoundary(token, context: reactionContext);
                     return status;
                 }
                 if (reactionContext != null)
@@ -825,6 +842,7 @@ public static partial class AgentTools
                     JsonObject completed = null;
                     await ReactAtBoundary(token, pause: async ct =>
                     {
+                        if (completed != null) return;
                         int remaining = seconds <= 0 ? 0 : Math.Max(1, (int)Math.Ceiling(seconds - timer.Elapsed.TotalSeconds));
                         completed = await Wait(path, active, stop, remaining, ct, navigationProgress, onCompleted: onCompleted);
                     }, context: reactionContext);
@@ -2316,11 +2334,22 @@ public static partial class AgentTools
             return new JsonObject { ["gx"] = x, ["gy"] = y, ["exact"] = exact && !reach, ["reach"] = reach,
                 ["stand"] = stand };
         }, token);
-        var start = await Call("/nav_recede", request, token);
-        if (Rejected(start)) return start;
-        var progress = new NavigationProgress();
-        bool? lastPlanning = null;
-        var result = await Wait("/nav_recede_done", "nav", "/nav_recede_stop", seconds, token,
+        var clearances = new JsonArray();
+        var clearedSites = new HashSet<string>();
+        var clock = Stopwatch.StartNew();
+        JsonObject result;
+        while (true)
+        {
+            var start = await Call("/nav_recede", request, token);
+            if (Rejected(start))
+            {
+                if (clearances.Count > 0) start["verified_clearances"] = clearances;
+                return start;
+            }
+            var progress = new NavigationProgress();
+            bool? lastPlanning = null;
+            int remaining = seconds <= 0 ? 0 : Math.Max(1, (int)Math.Ceiling(seconds - clock.Elapsed.TotalSeconds));
+            result = await Wait("/nav_recede_done", "nav", "/nav_recede_stop", remaining, token,
             async elapsed =>
             {
                 await ReactAtBoundary(token,
@@ -2376,9 +2405,37 @@ public static partial class AgentTools
                 return progress.Observe(elapsed, player.position.X, player.position.Y, distance, terrain, planning);
                 }, token);
             });
+            bool escaped = await NativeAgent.OnMain(() => Text(result, "status") == "failed" && Text(result, "reason") == "stopped" && LastContactEscape != null
+                && !ReferenceEquals(escapeBefore, LastContactEscape), token);
+            if (!escaped) break;
+            while (await NativeAgent.OnMain(() => ContactEscapeActive && !Main.LocalPlayer.dead, token))
+                await NativeAgent.NextUpdate(token);
+            var clearance = await NativeAgent.OnMain(() =>
+            {
+                var escape = LastContactEscape;
+                if (Main.LocalPlayer.dead || Main.LocalPlayer.suffocating || Text(escape, "status") != "controls_released"
+                    || !Bool(escape, "contact_clear") || Int(escape, "cleared_tiles") <= 0
+                    || TerrainInspection.NavigationHazard(acceptedTraps) != null) return null;
+                var hazards = escape["hazard_tiles"] as JsonArray;
+                if (hazards == null || !hazards.OfType<JsonObject>().Any(tile =>
+                {
+                    int x = Int(tile, "x"), y = Int(tile, "y");
+                    return WorldGen.InWorld(x, y) && (!Main.tile[x, y].HasTile || Main.tile[x, y].TileType != Int(tile, "type"));
+                })) return null;
+                string site = string.Join(";", hazards.Select(tile => tile["x"] + "," + tile["y"] + ":" + tile["type"]));
+                if (!clearedSites.Add(site)) return null;
+                escapeBefore = escape;
+                return (JsonObject)escape.DeepClone();
+            }, token);
+            if (clearance == null || seconds > 0 && clock.Elapsed.TotalSeconds >= seconds) break;
+            clearances.Add(clearance);
+            DiagLog.Write("[agent_navigation_resume] " + new JsonObject { ["target"] = args.DeepClone(),
+                ["clearance"] = clearance.DeepClone(), ["elapsed_ms"] = clock.ElapsedMilliseconds });
+        }
         return await NativeAgent.OnMain(() =>
         {
             var p = Main.LocalPlayer;
+            if (clearances.Count > 0) result["verified_clearances"] = clearances;
             if (!Bool(result, "done") && LastContactEscape != null && !ReferenceEquals(escapeBefore, LastContactEscape))
             {
                 result["outcome"] = "unsafe"; result["error"] = "navigation_contact_escape";

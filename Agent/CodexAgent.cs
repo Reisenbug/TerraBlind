@@ -552,6 +552,7 @@ public sealed class CodexAgent : IDisposable
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { success = false; output = new JsonObject { ["error"] = ex.Message }.ToJsonString(AgentTools.ModelJson); }
+        DiagLog.Write($"[agent-model-output] tool={request["params"]?["tool"]} chars={output.Length} success={success}");
         var content = new JsonArray(new JsonObject { ["type"] = "inputText", ["text"] = output });
         if (image != null) content.Add(new JsonObject { ["type"] = "inputImage", ["imageUrl"] = image });
         await _rpc.Send(new JsonObject { ["id"] = request["id"].DeepClone(), ["result"] = new JsonObject

@@ -60,11 +60,13 @@ static class ScriptTests
 
     public static async Task Run()
     {
+        await MixedBiomeObservation();
         await ReactiveHandlers();
         await ReactiveTravelExample();
         await ReactiveHostIntegration();
         await TaskPolicyIntegration();
         await AtomicActionPolicy();
+        await ResolvedNavigationClearance();
         await HouseTools();
         PlacementProgress();
         var helperProgress = new ScriptProgress();
@@ -337,7 +339,7 @@ static class ScriptTests
                 recipeCalls++;
                 return Task.FromResult(name switch
                 {
-                    "get_state" => "{\"inventory_slots\":[{\"type\":77,\"stack\":" + recipeItems + "}]}",
+                    "get_state" => "{\"inventory_counts\":{\"77\":" + recipeItems + "}}",
                     "find_tiles" => "{\"variants\":[{\"nearest\":{\"x\":11,\"y\":10,\"frame_x\":18,\"frame_y\":0}},{\"nearest\":{\"x\":12,\"y\":10,\"frame_x\":36,\"frame_y\":0}},{\"nearest\":{\"x\":13,\"y\":10,\"frame_x\":54,\"frame_y\":0}}]}",
                     "script_events" => "{\"remaining_events\":0,\"events\":[{\"kind\":\"action_finished\",\"evidence\":{\"handle\":\"original\"}}]}",
                     "opportunity_assess" => args["x"].GetValue<int>() == 11
@@ -518,7 +520,7 @@ static class ScriptTests
             int collectedCount = 0, gatherCalls = 0, recoveryMoves = 0;
             Task<string> RouteGather(string name, JsonObject args, CancellationToken token)
             {
-                if (name == "get_state") return Task.FromResult("{\"inventory_slots\":[{\"type\":42,\"stack\":" + collectedCount + "}]}");
+                if (name == "get_state") return Task.FromResult("{\"inventory_counts\":{\"42\":" + collectedCount + "}}");
                 if (name == "nav_to") { recoveryMoves++; return Task.FromResult("{\"done\":true}"); }
                 Check(name == "gather", "source recovery dispatched an unrelated action");
                 gatherCalls++;
@@ -1099,6 +1101,7 @@ static class ScriptTests
         {
             if (name == "get_state") return new JsonObject { ["player"] = JsonNode.Parse("{\"hp\":260,\"pos\":{\"x\":160,\"y\":160}}"),
                 ["agent"] = JsonNode.Parse("{\"auto_attack\":true,\"combat_weapon_type\":0}"),
+                ["inventory_counts"] = new JsonObject(stock.Select(pair => new KeyValuePair<string, JsonNode>(pair.Key.ToString(), JsonValue.Create(pair.Value)))),
                 ["inventory_slots"] = new JsonArray(stock.Select(pair => (JsonNode)new JsonObject { ["type"] = pair.Key, ["stack"] = pair.Value }).ToArray()) }.ToJsonString();
             if (name == "inventory_review") return new JsonObject
             {
@@ -1279,6 +1282,88 @@ static class ScriptTests
         }
     }
 
+    static async Task MixedBiomeObservation()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var snapshot = HttpServerSystem.LatestSnapshot;
+        var player = Terraria.Main.LocalPlayer;
+        bool jungle = player.ZoneJungle, crimson = player.ZoneCrimson;
+        try
+        {
+            HttpServerSystem.LatestSnapshot = new JsonObject { ["player"] = new JsonObject { ["biome"] = "jungle" } };
+            player.ZoneJungle = player.ZoneCrimson = true;
+            var pending = AgentTools.State(default, false, false, new JsonArray("player"));
+            while (!pending.IsCompleted) { agent.PostUpdateEverything(); await Task.Delay(1); }
+            var state = JsonNode.Parse(await pending);
+            Check(state["player"]["biome_flags"]["jungle"].GetValue<bool>() && state["player"]["biome_flags"]["crimson"].GetValue<bool>()
+                && state["player"]["ground_tiles"] is JsonArray,
+                "legacy biome label concealed simultaneous native jungle and crimson flags or actual ground evidence");
+            Console.WriteLine("PASS: biome observations retain simultaneous native jungle/crimson flags and actual foot tiles");
+        }
+        finally { player.ZoneJungle = jungle; player.ZoneCrimson = crimson; HttpServerSystem.LatestSnapshot = snapshot; agent.Unload(); }
+    }
+
+    static async Task ResolvedNavigationClearance()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var originalHttp = HttpServerSystem.Handler;
+        var player = Terraria.Main.LocalPlayer;
+        var position = player.position;
+        var savedTile = Terraria.Main.tile[30, 30];
+        bool dead = player.dead, suffocating = player.suffocating;
+        try
+        {
+            foreach (string scenario in new[] { "cleared", "unverified", "repeated", "different_failure" })
+            {
+                AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
+                AgentTools.LastContactEscape = null; AgentTools.ContactEscapeActive = false;
+                player.dead = player.suffocating = false; player.position = new System.Numerics.Vector2(160, 160);
+                Terraria.Main.tile[30, 30].HasUnactuatedTile = false;
+                int starts = 0;
+                HttpServerSystem.Handler = (path, payload) =>
+                {
+                    if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
+                    if (path == "/nav_recede_done")
+                    {
+                        if (starts == 1 || scenario == "repeated")
+                        {
+                            Terraria.Main.tile[30, 30].HasUnactuatedTile = scenario == "unverified";
+                            Terraria.Main.tile[30, 30].TileType = 69;
+                            AgentTools.LastContactEscape = new JsonObject { ["status"] = "controls_released", ["contact_clear"] = true,
+                                ["cleared_tiles"] = 1, ["hazard_tiles"] = new JsonArray(new JsonObject { ["x"] = 30, ["y"] = 30, ["type"] = 69 }) };
+                            RecedingNav.Active = false;
+                            return (200, new JsonObject { ["done"] = false, ["status"] = "failed",
+                                ["reason"] = scenario == "different_failure" ? "engine_route_failed" : "stopped" }.ToJsonString());
+                        }
+                        player.position = new System.Numerics.Vector2(320, 160); RecedingNav.Active = false;
+                        return (200, "{\"done\":true,\"status\":\"done\"}");
+                    }
+                    return (200, "{}");
+                };
+                var pending = AgentTools.Navigate(new JsonObject { ["x"] = 20, ["y"] = 10 }, default);
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                while (!pending.IsCompleted)
+                {
+                    Check(timer.Elapsed.TotalSeconds < 5, "clearance continuation looped: " + scenario);
+                    agent.PostUpdateEverything(); await Task.Delay(1);
+                }
+                var result = await pending;
+                Check(starts == (scenario is "cleared" or "repeated" ? 2 : 1)
+                    && (result["done"]?.GetValue<bool>() == true) == (scenario == "cleared")
+                    && (result["verified_clearances"]?.AsArray().Count ?? 0) == (scenario is "cleared" or "repeated" ? 1 : 0),
+                    "clearance continuation hid failure, replayed an unchanged site or discarded verified progress: " + scenario + " " + result);
+            }
+            Console.WriteLine("PASS: native controller clearance resumes the same navigation intent after verified world change; unresolved, repeated and unrelated failures retain evidence");
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.Watches.Reset();
+            AgentTools.LastContactEscape = null; AgentTools.ContactEscapeActive = false;
+            Terraria.Main.tile[30, 30] = savedTile; player.position = position; player.dead = dead; player.suffocating = suffocating;
+            HttpServerSystem.Handler = originalHttp; agent.Unload();
+        }
+    }
+
     static async Task AtomicActionPolicy()
     {
         var agent = new NativeAgent(); agent.Load();
@@ -1306,33 +1391,42 @@ static class ScriptTests
             var invalid = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("made_up_state") });
             Check(invalid["error"] != null && invalid["detail"].ToString().Contains("made_up_state"), "unknown state field silently returned missing evidence");
             Console.WriteLine($"STATE_PROJECTION full_chars={fullState.ToJsonString().Length} focused_chars={focused.ToJsonString().Length}");
+            var counts = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("inventory_counts") });
+            var expectedCounts = fullState["inventory_slots"].AsArray().Where(i => i["type"].GetValue<int>() > 0 && i["stack"].GetValue<int>() > 0)
+                .GroupBy(i => i["type"].GetValue<int>()).ToDictionary(group => group.Key.ToString(), group => group.Sum(i => i["stack"].GetValue<int>()));
+            Check(counts.Count == 2 && counts["inventory_counts"].AsObject().Count == expectedCounts.Count
+                && expectedCounts.All(pair => counts["inventory_counts"][pair.Key]?.GetValue<int>() == pair.Value),
+                "inventory count projection disagrees with native bag slots");
+            foreach (bool terminalNotice in new[] { false, true })
             foreach (string tool in new[] { "mine", "use_item", "act" })
             {
                 AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
-                int polls = 0, readAt = -1, effectAt = -1, starts = 0, stops = 0;
+                int polls = 0, readAt = -1, effectAt = -1, starts = 0, stops = 0, effects = 0;
                 bool secondary = false;
                 if (tool == "use_item") player.inventory[49] = new Terraria.Item { type = 29, stack = 2, consumable = true };
                 string startPath = tool == "use_item" ? "/item_use" : "/" + tool;
                 string statusPath = startPath + "_status";
                 string active = tool == "mine" ? "running" : "active";
-                int messages = AgentChat.Messages.Count;
                 HttpServerSystem.Handler = (path, payload) =>
                 {
+                    if (path == "/item_info") { readAt = polls; return (200, "{}"); }
                     if (path == startPath && starts == 0) { starts++; return (200, "{\"ok\":true}"); }
                     if (path == statusPath && !secondary)
                     {
                         polls++;
-                        if (polls == 2) AgentTools.Watches.Emit("nearby_chest", "atomic:" + tool,
-                            new JsonObject { ["x"] = 10, ["y"] = 10 });
-                        if (AgentChat.Messages.Skip(messages).Contains("observed") && readAt < 0) readAt = polls - 1;
+                        if (polls == (terminalNotice ? 8 : 2))
+                        {
+                            AgentTools.Watches.Emit("nearby_chest", "atomic:" + tool, new JsonObject { ["x"] = 10, ["y"] = 10 });
+                            AgentTools.Watches.Emit("nearby_drop", "atomic-drop:" + tool, new JsonObject { ["who"] = 1 });
+                        }
                         if (polls == 8 && tool == "use_item") player.inventory[49].stack--;
                         return (200, new JsonObject { [active] = polls < 8, ["outcome"] = polls < 8 ? "running" : tool == "use_item" ? "n/a" : "done",
                             ["marker"] = "original" }.ToJsonString());
                     }
                     if (path == "/act")
                     {
-                        secondary = true; effectAt = polls;
-                        if (tool == "use_item") player.inventory[49].stack--;
+                        secondary = true; effectAt = polls; effects++;
+                        if (tool == "use_item" && effects == 1) player.inventory[49].stack--;
                         return (200, "{\"ok\":true}");
                     }
                     if (path == "/act_status") return (200, "{\"active\":false,\"outcome\":\"handler_done\"}");
@@ -1342,7 +1436,9 @@ static class ScriptTests
                 var args = tool == "mine" ? new JsonObject { ["dir"] = "right", ["target_x"] = 100, ["target_y"] = 100 }
                     : tool == "use_item" ? new JsonObject { ["slot"] = 49, ["x"] = 100, ["y"] = 100 }
                     : JsonNode.Parse("{\"steps\":[{\"keys\":[\"right\"],\"until\":{\"frames\":8}}]}").AsObject();
-                string code = "on('nearby_chest',e=>{tool('say',{text:'observed'});"
+                await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
+                    ["code"] = "tool('watch',{events:['nearby_drop']});on('nearby_drop',()=>{tool('act',{steps:[{keys:['left'],until:{frames:1}}]});return {handled:true};});" });
+                string code = "on('nearby_chest',e=>{tool('item_info',{name:'Wood'});"
                     + "tool('act',{steps:[{keys:['left'],until:{frames:1}}]});return {handled:true};});"
                     + "tool('watch',{events:['nearby_chest']});return tool('" + tool + "'," + args.ToJsonString() + ");";
                 var task = AgentTools.Execute("run_script", new JsonObject { ["code"] = code }, default);
@@ -1354,7 +1450,7 @@ static class ScriptTests
                 }
                 var report = JsonNode.Parse(await task);
                 Check(report["ok"].GetValue<bool>() && report["value"]["marker"]?.ToString() == "original"
-                    && readAt == 2 && effectAt == 8 && starts == 1 && stops == 0,
+                    && readAt == (terminalNotice ? 8 : 2) && effectAt == 8 && effects == 2 && starts == 1 && stops == 0,
                     "atomic policy lost in-flight observation, animation boundary or original receipt: " + tool + " " + report
                     + $" readAt={readAt} effectAt={effectAt} starts={starts} stops={stops}");
                 if (tool == "use_item") Check(report["value"]["consumed"]?.GetValue<int>() == 1 && player.inventory[49].stack == 0,

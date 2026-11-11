@@ -31,7 +31,7 @@ public sealed class ScriptLibrary
             const handled=()=>({handled:true});
             const state=fields=>tool('get_state',{fields});
             const originalCombat=state(['agent']).agent;
-            const count=type=>state(['inventory_slots']).inventory_slots.filter(i=>i.type===type).reduce((n,i)=>n+i.stack,0);
+            const count=type=>state(['inventory_counts']).inventory_counts[type]??0;
             const same=(a,b)=>a.x===b.x&&a.y===b.y&&a.type===b.type&&a.frame_x===b.frame_x&&a.frame_y===b.frame_y;
             const protectedTypes=new Set([...config.resources.map(r=>r.item_type),...config.weapon_order,...(config.protected_types??[])]);
             const makeSpace=()=>{
@@ -59,9 +59,10 @@ public sealed class ScriptLibrary
               return !a.hazards.some(h=>h.on_direct_corridor&&['lava','falling_block','trap_tile'].includes(h.kind));
             };
             const collect=(resource,point,drop,event)=>{
-              if(count(resource.item_type)>=resource.count||!worthwhile(point,event)) return handled();
+              const actual=count(resource.item_type);
+              if(actual>=resource.count||!worthwhile(point,event)) return handled();
               if(!makeSpace()) return {handled:false,reason:'inventory_policy_needs_review'};
-              const target={item_type:resource.item_type,count:Math.min(resource.count,count(resource.item_type)+1)};
+              const target={item_type:resource.item_type,count:Math.min(resource.count,actual+1)};
               if(!drop){
                 target.tile_names=[resource.tile_name];
                 if(resource.frame_x!=null) target.tile_frame_x=resource.frame_x;
@@ -156,9 +157,9 @@ public sealed class ScriptLibrary
               throw new Error('input needs gather_args.targets and up to eight observed waypoints');
             const targets=config.gather_args.targets;
             const counts=()=>{
-              const inventory=tool('get_state',{fields:['inventory_slots']}).inventory_slots;
+              const inventory=tool('get_state',{fields:['inventory_counts']}).inventory_counts;
               return targets.map(t=>({type:t.item_type,wanted:t.count,
-                actual:inventory.filter(i=>i.type===t.item_type).reduce((n,i)=>n+i.stack,0)}));
+                actual:inventory[t.item_type]??0}));
             };
             let args=config.gather_args;
             const visited=[];
@@ -312,7 +313,7 @@ public sealed class ScriptLibrary
                 if(!config) throw new Error('Read current action and fill config before execution');
                 const {handle,item_type,count,tile_name,source_area,max_samples}=config;
                 if(!Number.isInteger(max_samples)||max_samples<1||max_samples>12) throw new Error('max_samples must be 1..12');
-                const inventory=()=>tool('get_state',{fields:['inventory_slots']}).inventory_slots.filter(i=>i.type===item_type).reduce((n,i)=>n+i.stack,0);
+                const inventory=()=>tool('get_state',{fields:['inventory_counts']}).inventory_counts[item_type]??0;
                 const readEvents=()=>{
                   const notice=tool('script_events',{wait_ms:0,max_events:16});
                   if(notice.remaining_events) tool('decision_point',{reason:'Review remaining opportunities before sampling',evidence:{handle,notice}});
