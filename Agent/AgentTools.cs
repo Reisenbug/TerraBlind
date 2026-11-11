@@ -2419,8 +2419,11 @@ public static partial class AgentTools
                 if (Main.LocalPlayer.dead || Main.LocalPlayer.suffocating || Text(escape, "status") != "controls_released"
                     || !Bool(escape, "contact_clear") || Int(escape, "cleared_tiles") <= 0
                     || TerrainInspection.NavigationHazard(acceptedTraps) != null) return null;
-                var hazards = escape["hazard_tiles"] as JsonArray;
-                if (hazards == null || !hazards.OfType<JsonObject>().Any(tile =>
+                var hazards = (escape["hazard_tiles"] as JsonArray)?.OfType<JsonObject>().ToList() ?? new List<JsonObject>();
+                if (escape["predicted_tile"] is JsonObject predicted && !hazards.Any(tile =>
+                    Int(tile, "x") == Int(predicted, "x") && Int(tile, "y") == Int(predicted, "y") && Int(tile, "type") == Int(predicted, "type")))
+                    hazards.Add(predicted);
+                if (!hazards.Any(tile =>
                 {
                     int x = Int(tile, "x"), y = Int(tile, "y");
                     return WorldGen.InWorld(x, y) && (!Main.tile[x, y].HasTile || Main.tile[x, y].TileType != Int(tile, "type"));
