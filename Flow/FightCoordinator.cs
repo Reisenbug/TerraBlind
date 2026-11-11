@@ -242,8 +242,8 @@ namespace TerraBlind
                 _animationSlot = -1;
             }
             if (NavigationSnapshotPending || StateSpacePlanner.ReservesItemUse
-                || RecedingNav.Active && VanillaNavBridge.Enabled
-                    && (!RecedingNav.FieldReady || VanillaNavBridge.Stage is "Approaching" or "Braking" or "Preparing"))
+                || RecedingNav.Active && (VanillaNavBridge.Enabled && !RecedingNav.FieldReady
+                    || VanillaNavBridge.Stage is "Approaching" or "Braking" or "Preparing"))
             {
                 _usingItem = _idleDefense = false;
                 return;

@@ -3738,7 +3738,15 @@ static class RuntimeTests
                 catch (OperationCanceledException) { }
                 Check(starts == 1 && !FightCoordinator.NavigationSnapshotPending, "cancelled snapshot wait leaked its reservation");
             }
-            VanillaNavBridge.Enabled = false; Game.LocalPlayer.itemAnimation = Game.LocalPlayer.itemTime = 0;
+            VanillaNavBridge.Enabled = false;
+            Game.LocalPlayer.itemAnimation = 3; Game.LocalPlayer.itemTime = 8;
+            var stand = AgentTools.Navigate(new JsonObject { ["x"] = 12, ["y"] = 34, ["mode"] = "stand" }, default);
+            await PumpUntil(() => FightCoordinator.NavigationSnapshotPending);
+            Check(starts == 1 && Game.LocalPlayer.itemAnimation == 3 && Game.LocalPlayer.itemTime == 8,
+                "legacy stand approach captured an unfinished weapon animation");
+            Game.LocalPlayer.itemAnimation = Game.LocalPlayer.itemTime = 0;
+            Check((await Execute(stand))["done"]?.GetValue<bool>() == true && starts == 2
+                && !FightCoordinator.NavigationSnapshotPending, "stand snapshot reservation was not released");
             foreach (string outcome in new[] { "failed", "stopped_short", "done" })
             {
                 AgentTools.Watches.Reset(); AgentTools.Recovery.Reset(); AgentTools.Workflows.Remove(workflow);
