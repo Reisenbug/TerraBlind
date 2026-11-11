@@ -780,7 +780,8 @@ public static partial class AgentTools
             ["attack_enabled"] = Combat.Enabled, ["movement_enabled"] = Dodge.Enabled,
             ["attack_permitted"] = AgentPermissions.Attack, ["movement_permitted"] = AgentPermissions.Dodge,
             ["manual_control"] = Manual.On, ["pvp_active"] = PvpDuel.Active,
-            ["input_gate"] = Manual.On ? "manual" : Main.gameMenu ? "game_menu" : Main.playerInventory ? "inventory_open" : null,
+            ["inventory_open"] = Main.playerInventory,
+            ["input_gate"] = Manual.On ? "manual" : Main.gameMenu ? "game_menu" : Main.playerInventory && !NativeAgent.Processing ? "inventory_open" : null,
             ["movement_reserve_scale"] = Dodge.MovementReserveScale,
             ["honey_slowed"] = Main.LocalPlayer.honeyWet && !Main.LocalPlayer.ignoreWater,
             ["movement_snapshot"] = movement != null ? new JsonObject
