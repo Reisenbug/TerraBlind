@@ -66,6 +66,9 @@ public sealed class BehaviorTrial : ModSystem
     Task operatorRequest = Task.CompletedTask;
     AcceptanceClock acceptance;
     static bool JungleHealthTrial => Environment.GetEnvironmentVariable("TB_JUNGLE_HEALTH_TRIAL") == "1";
+    static bool ShortJungleTrial => Environment.GetEnvironmentVariable("TB_SHORT_JUNGLE_TRIAL") == "1";
+    Stopwatch shortJungleClock;
+    JsonObject jungleSpawn, firstJungleAction;
     static bool DungeonTrial => Environment.GetEnvironmentVariable("TB_DUNGEON_TRIAL") == "1";
     static string QueenResumeRoot => Environment.GetEnvironmentVariable("TB_QUEEN_RESUME");
     sealed class AcceptanceClock
@@ -320,6 +323,24 @@ public sealed class BehaviorTrial : ModSystem
         }
         return await Call("script_program", new JsonObject { ["operation"] = "get", ["name"] = materials ? "material_recovery" : "combat_loot_return" });
     }
+    public override void OnWorldLoad()
+    {
+        if (!enabled || !ShortJungleTrial) return;
+        var weights = Main.remixWorld ? TileID.Sets.RemixJungleBiome : TileID.Sets.JungleBiome;
+        var spawn = SurfaceBiomeSearch.Find(Main.maxTilesX, Main.maxTilesY, (int)Main.worldSurface, Main.spawnTileX,
+            Main.buffScanAreaWidth, Main.buffScanAreaHeight, SceneMetrics.JungleTileThreshold, (x, y) =>
+            {
+                var tile = Main.tile[x, y];
+                return new BiomeCell(tile.HasUnactuatedTile && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType],
+                    tile.HasTile ? weights[tile.TileType] : 0, tile.LiquidAmount > 0 && tile.LiquidType == LiquidID.Lava);
+            }) ?? throw new Exception("no natural jungle surface spawn found");
+        Main.spawnTileX = spawn.X; Main.spawnTileY = spawn.Y + 1;
+        jungleSpawn = new JsonObject { ["x"] = Main.spawnTileX, ["y"] = Main.spawnTileY,
+            ["local_jungle_tiles"] = spawn.LocalCount, ["threshold"] = SceneMetrics.JungleTileThreshold,
+            ["terrain_edits"] = 0 };
+        Console.WriteLine("JUNGLE_COLLECTION_SPAWN " + jungleSpawn.ToJsonString());
+    }
+
     public override void Load()
     {
         enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentbehaviorcheck");
@@ -434,6 +455,13 @@ public sealed class BehaviorTrial : ModSystem
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         if (frames++ == 0) Main.playerInventory = true;
+        if (ShortJungleTrial && shortJungleClock != null && firstJungleAction == null
+            && ((AgentControlSession)SessionField.GetValue(null)).PrimaryActive)
+        {
+            var policy = (JsonObject)typeof(AgentTools).GetMethod("TaskPolicyStatus", HiddenStatic).Invoke(null, new object[] { false });
+            firstJungleAction = new JsonObject { ["elapsed_ms"] = shortJungleClock.ElapsedMilliseconds,
+                ["tool"] = ((AgentControlSession)SessionField.GetValue(null)).Tool, ["task_policy"] = policy };
+        }
         if (Environment.GetEnvironmentVariable("TB_OPERATOR_COMMANDS") == "1" && frames % 30 == 0 && operatorRequest.IsCompleted)
         {
             string requestPath = Path.Combine(Main.SavePath, "operator-request.json");
@@ -537,7 +565,7 @@ public sealed class BehaviorTrial : ModSystem
                 + $" attack={p.controlUseItem} target_active={npc?.active} target_hp={npc?.life} target_pos={npc?.position}"
                 + $" clear_line={(npc != null && Collision.CanHitLine(p.Center, 4, 4, npc.Center, 4, 4))}");
         }
-        if (trial?.IsCompleted == true || !JungleHealthTrial && frames > FrameLimit)
+        if (trial?.IsCompleted == true || !JungleHealthTrial && !ShortJungleTrial && frames > FrameLimit)
         {
             finished = true;
             bool ok = trial?.IsCompletedSuccessfully == true;
@@ -3833,6 +3861,93 @@ public sealed class BehaviorTrial : ModSystem
         Console.WriteLine("OPPORTUNITY_COMPLETE native_engine=true model_calls=0 teleports_after_start=0");
     }
 
+    async Task ShortJungleCollectionTrial()
+    {
+        await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            if (jungleSpawn == null || !p.ZoneJungle || !p.ZoneOverworldHeight || Main.GameMode != 0
+                || p.statLifeMax != 100 || p.ConsumedLifeCrystals != 0)
+                throw new Exception("short collection requires a fresh 100 HP classic jungle surface spawn");
+            jungleSpawn["actual_biome"] = "jungle";
+            jungleSpawn["actual_position"] = new JsonObject { ["x"] = p.position.X / 16, ["y"] = p.position.Y / 16 };
+            Player.SavePlayer(Main.ActivePlayerFileData); WorldFile.SaveWorld(false);
+            return true;
+        });
+        const string prompt = "/goal 从当前丛林地表出生点进入丛林地下，收集并使用3颗生命水晶，使永久生命上限达到160，最后仍在丛林地下。途中顺手采集近便的丛林孢子、搜刮箱子、拾取有用掉落物。首段行动前用task_policy挂整趟途中反应，行进期间继续补充知识和后继计划；可读取task_reactions模板并按实际装备与地形修改。处理机会后续接原目标，背包整理与局部恢复由已准备的脚本处理。提供基础工具、星怒、足量木头、持续鱼鳃和光芒效果；天然地形和怪物照常运行。低血量只唤醒观察，当前行动继续。用真实血上限、实际水晶使用和宿主DAG验收结果完成任务。";
+        var before = await Call("get_state", new JsonObject());
+        var deaths = new JsonArray(); bool previouslyDead = false;
+        Vector2? anchor = null;
+        long stillSince = 0;
+        bool warned = false;
+        int sample = 0;
+        await OnMain(() =>
+        {
+            Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = "gpt-6.1-sol";
+            shortJungleClock = Stopwatch.StartNew();
+            NativeAgent.Submit(prompt); return true;
+        });
+        File.WriteAllText(Path.Combine(Main.SavePath, "jungle-collection-start.json"), new JsonObject
+        {
+            ["prompt"] = prompt, ["spawn"] = jungleSpawn.DeepClone(), ["before"] = before,
+            ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["model"] = "gpt-6.1-sol", ["effort"] = "low",
+            ["natural_encounters"] = NaturalEncounters, ["target_health"] = 160, ["terrain_edits"] = 0
+        }.ToJsonString());
+        using var journal = new StreamWriter(Path.Combine(Main.SavePath, "jungle-collection-samples.jsonl")) { AutoFlush = true };
+        using var pauses = new StreamWriter(Path.Combine(Main.SavePath, "jungle-collection-pauses.jsonl")) { AutoFlush = true };
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(1000);
+                var state = await Call("get_state", new JsonObject { ["include_watch_history"] = sample++ % 10 == 0 });
+                var live = await OnMain(() => new JsonObject { ["used_crystals"] = Main.LocalPlayer.ConsumedLifeCrystals,
+                    ["underground_jungle"] = Main.LocalPlayer.ZoneJungle && Main.LocalPlayer.Center.Y / 16 > Main.worldSurface });
+                long now = shortJungleClock.ElapsedMilliseconds;
+                bool dead = state["player"]["dead"].GetValue<bool>();
+                if (dead && !previouslyDead) deaths.Add(new JsonObject { ["elapsed_ms"] = now, ["evidence"] = state["last_death"]?.DeepClone() });
+                previouslyDead = dead;
+                var position = new Vector2(state["player"]["pos"]["x"].GetValue<float>(), state["player"]["pos"]["y"].GetValue<float>());
+                if (!anchor.HasValue || Vector2.DistanceSquared(position, anchor.Value) > 16 || dead)
+                {
+                    if (warned) pauses.WriteLine(new JsonObject { ["started_ms"] = stillSince, ["ended_ms"] = now,
+                        ["duration_ms"] = now - stillSince, ["position_pixels"] = state["player"]["pos"]?.DeepClone() }.ToJsonString());
+                    anchor = position; stillSince = now; warned = false;
+                }
+                if (!dead && !warned && now - stillSince >= 10000)
+                {
+                    warned = true;
+                    var warning = new JsonObject { ["kind"] = "stationary_over_10s", ["elapsed_ms"] = now,
+                        ["stationary_ms"] = now - stillSince, ["position_pixels"] = state["player"]["pos"]?.DeepClone(),
+                        ["continuity"] = state["execution_continuity"]?.DeepClone(), ["agent"] = state["agent"]?.DeepClone() };
+                    pauses.WriteLine(warning.ToJsonString()); Console.WriteLine("JUNGLE_COLLECTION_WARNING " + warning);
+                }
+                bool completed = !dead && state["permanent_max_health"].GetValue<int>() >= 160
+                    && live["used_crystals"].GetValue<int>() >= 3 && live["underground_jungle"].GetValue<bool>()
+                    && state["task_plan"]?["status"]?.ToString() == "completed" && state["goal_verification"]?["verified"]?.GetValue<bool>() == true;
+                journal.WriteLine(new JsonObject { ["elapsed_ms"] = now, ["live"] = live.DeepClone(), ["state"] = state.DeepClone() }.ToJsonString());
+                File.WriteAllText(Path.Combine(Main.SavePath, "jungle-collection-progress.json"), new JsonObject
+                {
+                    ["ok"] = completed, ["elapsed_ms"] = now, ["live"] = live, ["after"] = state,
+                    ["deaths"] = deaths.DeepClone(), ["first_action"] = firstJungleAction?.DeepClone(),
+                    ["stationary_ms"] = now - stillSince, ["spawn"] = jungleSpawn.DeepClone()
+                }.ToJsonString());
+                if (completed)
+                { Console.WriteLine("JUNGLE_COLLECTION_PASS health=160 crystals_used=3 elapsed_ms=" + now + " deaths=" + deaths.Count); return; }
+                if (NativeAgent.Status is "failed" or "idle" or "needs_repair" or "paused")
+                    throw new Exception("short jungle collection stopped before host verification: " + NativeAgent.Status);
+            }
+        }
+        finally
+        {
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Player.SavePlayer(Main.ActivePlayerFileData); WorldFile.SaveWorld(false);
+                Console.WriteLine("JUNGLE_COLLECTION_CHECKPOINT_SAVED root=" + Main.SavePath); return true;
+            });
+        }
+    }
+
     async Task QueenGoalTrial()
     {
         var before = await Call("get_state", new JsonObject());
@@ -4635,6 +4750,7 @@ public sealed class BehaviorTrial : ModSystem
         }
         if (Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1")
         {
+            if (ShortJungleTrial) { await ShortJungleCollectionTrial(); return; }
             if (Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") == "1")
             { await QueenGoalTrial(); return; }
             string trialModel = Environment.GetEnvironmentVariable("TB_OPPORTUNITY_MODEL") ?? "gpt-6-luna";
