@@ -725,6 +725,37 @@ public sealed class BehaviorTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_LAVA_IMMUNITY_PROBE") == "1")
+        {
+            var target = await OnMain(() =>
+            {
+                for (int y = Main.maxTilesY - 250; y < Main.maxTilesY - 10; y++)
+                for (int x = 10; x < Main.maxTilesX - 10; x++)
+                    if (Main.tile[x, y].HasTile && Main.tile[x, y].TileType == TileID.Hellstone) return new Point(x, y);
+                throw new Exception("no natural hellstone found for immunity check");
+            });
+            if (await OnMain(() => Main.LocalPlayer.lavaImmune || LavaSafety.CanMine(target.X, target.Y)))
+                throw new Exception("unprotected native player was allowed to mine hellstone");
+            await OnMain(() => { Main.LocalPlayer.AddBuff(BuffID.ObsidianSkin, 120); return true; });
+            await Task.Delay(100);
+            var active = await OnMain(() => new JsonObject { ["buff_active"] = Main.LocalPlayer.HasBuff(BuffID.ObsidianSkin),
+                ["lava_immune"] = Main.LocalPlayer.lavaImmune, ["can_mine"] = LavaSafety.CanMine(target.X, target.Y) });
+            if (!active["buff_active"].GetValue<bool>() || !active["lava_immune"].GetValue<bool>() || !active["can_mine"].GetValue<bool>())
+                throw new Exception("native obsidian skin did not permit protected mining: " + active);
+            await OnMain(() => { Main.LocalPlayer.ClearBuff(BuffID.ObsidianSkin); return true; });
+            await Task.Delay(100);
+            var expired = await OnMain(() => new JsonObject { ["lava_immune"] = Main.LocalPlayer.lavaImmune,
+                ["can_mine"] = LavaSafety.CanMine(target.X, target.Y) });
+            if (expired["lava_immune"].GetValue<bool>() || expired["can_mine"].GetValue<bool>())
+                throw new Exception("expired native immunity retained mining permission: " + expired);
+            File.WriteAllText(Path.Combine(Main.SavePath, "lava-immunity-native.json"), new JsonObject
+            {
+                ["target"] = new JsonObject { ["x"] = target.X, ["y"] = target.Y }, ["active"] = active, ["expired"] = expired,
+                ["performed_mining"] = false, ["model_calls"] = 0, ["terrain_edits"] = 0
+            }.ToJsonString());
+            Console.WriteLine("LAVA_IMMUNITY_PASS native_buff=true expiration_rechecked=true model_calls=0");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_TASK_POLICY_PROBE") == "1") { await TaskPolicyTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_FALL_PLACEMENT_PROBE") == "1") { await FallPlacementTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_CONSUMABLE_HANDOFF_PROBE") == "1") { await ConsumableHandoffTrial(); return; }
