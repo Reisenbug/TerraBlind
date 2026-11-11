@@ -381,7 +381,7 @@ static class CodexTests
                     string text = part["text"].ToString();
                     JsonNode value;
                     try { value = JsonNode.Parse(text); } catch (System.Text.Json.JsonException) { continue; }
-                    if (value is not JsonObject obj || obj["trace"] is not JsonArray { Count: > 0 }) continue;
+                    if (value is not JsonObject obj || obj["trace"] is not JsonArray && obj["task_plan"] is not JsonObject) continue;
                     before += text.Length;
                     part["text"] = AgentModelOutput.Project("run_script", value).ToJsonString(AgentTools.ModelJson);
                     after += part["text"].ToString().Length; reports++;
@@ -452,6 +452,34 @@ static class CodexTests
             (_, _, _) => Task.FromResult(report.ToJsonString()), _ => Task.CompletedTask, default);
         Check(JsonNode.DeepEquals(internalResult["value"], report["trace"]),
             "wire report optimization altered results available inside JavaScript");
+        var plan = JsonNode.Parse("""
+            {"goal":"collect","mode":"dag","revision":2,"status":"active","steps":[
+             {"id":"walk","status":"active","depends_on":[],"script":"move()","on_failure":"repair()",
+              "conditions":[{"kind":"item","type":29,"count":1}]}]}
+            """);
+        plan["steps"][0]["script"] = new string('x', 8000);
+        var write = new JsonObject { ["ok"] = true, ["value"] = new JsonObject { ["plan"] = plan.DeepClone(), ["actual"] = 0 },
+            ["task_plan"] = plan.DeepClone(), ["tool_counts"] = new JsonObject { ["task_plan_patch"] = 1 },
+            ["trace"] = report["trace"].DeepClone() };
+        var folded = AgentModelOutput.Project("run_script", write);
+        Check(folded["value"]["plan"]["steps"][0]["script"] == null
+            && folded["value"]["plan"]["steps"][0]["script_present"]?.GetValue<bool>() == true
+            && folded["value"]["plan"]["steps"][0]["on_failure_present"]?.GetValue<bool>() == true
+            && folded["value"]["plan"]["revision"]?.GetValue<int>() == 2
+            && JsonNode.DeepEquals(folded["value"]["plan"]["steps"][0]["conditions"], plan["steps"][0]["conditions"])
+            && folded["value"]["actual"]?.GetValue<int>() == 0,
+            "plan write acknowledgment repeated source or lost executable state and completion evidence");
+        Check(JsonNode.DeepEquals(AgentModelOutput.Read(folded["report_id"].ToString()), write)
+            && plan["steps"][0]["script"].ToString().Length == 8000,
+            "folding discarded original source or altered the script-owned plan");
+        write["tool_counts"]["get_state"] = 1;
+        Check(JsonNode.DeepEquals(AgentModelOutput.Project("run_script", write)["value"], write["value"])
+            && AgentModelOutput.Project("run_script", write)["task_plan"]["steps"][0]["script"] == null
+            && JsonNode.DeepEquals(AgentModelOutput.Project("get_state", plan), plan),
+            "folding hid explicitly queried plan source");
+        write.Remove("trace");
+        Check(AgentModelOutput.Project("run_script", write)["task_plan"]["steps"][0]["script"] == null,
+            "automatic plan source was repeated in a report without execution trace");
         string firstReport = direct["report_id"].ToString();
         for (int i = 0; i < 65; i++) AgentModelOutput.Project("run_script", report);
         Check(AgentModelOutput.Read(firstReport)["error"]?.ToString() == "script_report_unavailable",

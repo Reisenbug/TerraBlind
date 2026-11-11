@@ -178,7 +178,8 @@ internal static class AgentModelOutput
 
     internal static JsonNode Project(string tool, JsonNode result)
     {
-        if (tool != "run_script" || result is not JsonObject report || report["trace"] is not JsonArray { Count: > 0 }) return result;
+        if (tool != "run_script" || result is not JsonObject report
+            || report["trace"] is not JsonArray && report["task_plan"] is not JsonObject) return result;
         string id = Guid.NewGuid().ToString("N");
         lock (gate)
         {
@@ -187,8 +188,31 @@ internal static class AgentModelOutput
         }
         var brief = (JsonObject)report.DeepClone();
         brief.Remove("trace");
+        FoldPlanSources(brief["task_plan"]);
+        if (report["tool_counts"] is JsonObject counts && counts["get_state"] == null
+            && (counts["task_plan"] != null || counts["task_plan_patch"] != null))
+            FoldPlanSources(brief["value"]);
         brief["report_id"] = id;
         return brief;
+    }
+
+    static void FoldPlanSources(JsonNode value)
+    {
+        if (value is JsonObject obj)
+        {
+            if (obj["mode"]?.ToString() is "dag" or "sequential" && obj["revision"] != null
+                && obj["steps"] is JsonArray steps)
+                foreach (var step in steps.OfType<JsonObject>())
+                    foreach (string field in new[] { "script", "on_failure" })
+                        if (step[field] != null)
+                        {
+                            step[field + "_present"] = !string.IsNullOrWhiteSpace(step[field].ToString());
+                            step.Remove(field);
+                        }
+            foreach (var field in obj) FoldPlanSources(field.Value);
+        }
+        else if (value is JsonArray array)
+            foreach (var child in array) FoldPlanSources(child);
     }
 
     internal static JsonNode Read(string id)
