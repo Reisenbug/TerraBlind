@@ -467,7 +467,8 @@ public class NativeAgent : ModSystem
                         else Progress("本轮已结束，但长任务尚未验证完成；进度已保留，可发指令继续。", "paused");
                     }
                     else Status = AgentTools.Actions.HasActive ? "后台动作执行中" : "idle";
-                    if (!AgentTools.Actions.HasActive && !AgentTools.Plan.Incomplete) AgentTools.Watches.End();
+                    if (!AgentTools.Actions.HasActive && !AgentTools.Plan.Incomplete)
+                    { AgentTools.ClearTaskPolicy(); AgentTools.Watches.End(); }
                     return true;
                 }, token);
             }
@@ -545,6 +546,7 @@ public class NativeAgent : ModSystem
     public override void OnWorldUnload()
     {
         Cancel();
+        AgentTools.ClearTaskPolicy(true);
         AgentTools.Plan.Reset();
         AgentTools.Workflows.Clear();
         AgentTools.Actions.Reset();

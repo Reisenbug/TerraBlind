@@ -12,16 +12,40 @@ namespace TerraBlind;
 public static class AgentScript
 {
     internal static readonly AsyncLocal<Reactions> CurrentReactions = new();
+    internal static readonly AsyncLocal<CancellationToken> ReactionCancellation = new();
 
     internal sealed class Reactions
     {
-        sealed record Request(JsonObject Event, TaskCompletionSource<JsonObject> Completion, ExecutionContext Context);
+        sealed record Request(JsonObject Event, TaskCompletionSource<JsonObject> Completion, ExecutionContext Context, CancellationToken Token);
         readonly object gate = new();
         readonly Dictionary<string, Func<JsonObject, JsonObject>> handlers = new();
         readonly Queue<Request> requests = new();
         TaskCompletionSource<bool> signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool servicing;
+        Action retired;
+        public bool Active { get; private set; } = true;
         public bool Handling { get; set; }
         public Func<string, CancellationToken, Task> BeforeAction;
+        public bool TryEnter()
+        {
+            lock (gate)
+            {
+                if (!Active || servicing) return false;
+                servicing = true; return true;
+            }
+        }
+        public void Exit()
+        {
+            Action finish;
+            lock (gate) { servicing = false; finish = retired; retired = null; }
+            finish?.Invoke();
+        }
+        public void Retire(Action finish)
+        {
+            bool wait;
+            lock (gate) { Active = false; wait = servicing; if (wait) retired = finish; }
+            if (!wait) finish();
+        }
         long lastTick;
         public bool TickDue()
         {
@@ -38,9 +62,11 @@ public static class AgentScript
         public async Task<JsonObject> Dispatch(JsonObject notice, CancellationToken token)
         {
             var completion = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var cancellation = token.Register(() => completion.TrySetCanceled(token));
-            lock (gate) { requests.Enqueue(new Request(notice, completion, ExecutionContext.Capture())); signal.TrySetResult(true); }
-            return await completion.Task;
+            token.ThrowIfCancellationRequested();
+            lock (gate) { requests.Enqueue(new Request(notice, completion, ExecutionContext.Capture(), token)); signal.TrySetResult(true); }
+            var result = await completion.Task;
+            token.ThrowIfCancellationRequested();
+            return result;
         }
 
         public string Await(Task<string> task)
@@ -58,11 +84,16 @@ public static class AgentScript
                 if (request != null)
                 {
                     if (request.Completion.Task.IsCompleted) continue;
+                    if (request.Token.IsCancellationRequested) { request.Completion.TrySetCanceled(request.Token); continue; }
                     Handling = true;
                     try
                     {
-                        ExecutionContext.Run(request.Context, _ => request.Completion.TrySetResult(
-                            handlers[request.Event["kind"].ToString()](request.Event)), null);
+                        ExecutionContext.Run(request.Context, _ =>
+                        {
+                            CurrentReactions.Value = this;
+                            ReactionCancellation.Value = request.Token;
+                            request.Completion.TrySetResult(handlers[request.Event["kind"].ToString()](request.Event));
+                        }, null);
                     }
                     catch (Exception error) { request.Completion.TrySetException(error); }
                     finally { Handling = false; }
@@ -107,6 +138,17 @@ public static class AgentScript
 
     public static void DescribePrograms(JsonArray tools)
     {
+        tools.Add(new JsonObject { ["type"] = "function", ["function"] = new JsonObject
+        {
+            ["name"] = "task_policy",
+            ["description"] = "整项任务共用的JS反应策略。先get读取版本，set提交初始化源码：用on注册处理函数、watch配置观察，可调用已保存技能；动作放在处理函数中。所有DAG节点及后台动作自动使用此策略，局部on优先覆盖同名事件。策略闭包状态跨节点保留。更新先初始化新策略，成功后切换，当前动作和已进入的旧处理继续；失败保持旧策略。clear关闭未来反应，已发生的游戏效果保留。新指令任务及离开世界清除策略。",
+            ["parameters"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject
+            {
+                ["operation"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("get", "set", "clear") },
+                ["code"] = new JsonObject { ["type"] = "string", ["minLength"] = 1, ["maxLength"] = 15000 },
+                ["expected_revision"] = new JsonObject { ["type"] = "integer", ["minimum"] = 0 }
+            }, ["required"] = new JsonArray("operation") }
+        } });
         tools.Add(new JsonObject { ["type"] = "function", ["function"] = new JsonObject
         {
             ["name"] = "combat_assess",
@@ -235,6 +277,7 @@ public static class AgentScript
         + "每step结果限8000字符，return限16000字符；print每条限1000字符，log_truncations记录截断。只返回决策字段，完整执行轨迹按report_id用script_report查询。tool_counts表示请求次数，效果用真实状态核验。"
         + "\nDAG执行：第一步目的地与验收明确后建立最小计划，从ready节点后台启动；最终要求从初始conditions保留，末端包含仍需持有物品。调查、后继script和on_failure在行进期间补齐，前置通过宿主验收后自动派发。依赖表示已验收，输入互斥由执行器管理。"
         + "\n途中反应：先用on(kind,event=>{...;return {handled:true};})注册本次脚本的处理函数，再执行主任务。watch订阅nearby_tile/nearby_chest/nearby_drop/nearby_npc_killed/inventory_full等现场事件；tick每250ms提供一次本地检查机会，适合检查受伤、威胁和武器，combat_assess提供事实。导航及gather内部导航会执行处理函数，原脚本和主动作句柄保持；只读和背包操作保持路线运行，需要移动/挖掘/放置时交接控制，结束后按当前位置重启原目的地。处理函数可调用tool/skill/step，步骤与主任务隔离。返回handled:false交回Agent；未注册事件沿用原交付。注册仅本次脚本有效，重新执行源码会使用新处理函数。"
+        + "整趟任务的资源、背包、压力板和战斗反应先挂到task_policy，随后开始首段行动；节点script只推进主任务，局部on用于该节点的特别处理。task_policy覆盖当前节点、后继节点、恢复脚本和独立后台动作；不依赖后继节点开始才生效。event.execution给出本次实际工具及args，event.task_node为所属节点，可据此决定顺路采集与返回。赶路时更新同一策略，注册与新策略初始化保持当前动作运行。task_reactions模板可用于整趟任务，reactive_travel用于单段。"
         + "on('action_failed',event=>...)接收tool/args/result；查证并完成修复后返回{retry:true}，宿主仅立即重试原调用一次，原失败保留记录；压力板、背包满等可在本地处理。处理失败返回证据给主脚本或显式decision_point。技能reactive_travel提供机会、背包、压力板、荆棘和战斗策略的可编辑示例。"
         + "task_plan_patch带expected_revision和reason，nodes更新现节点，add_nodes插入机会或恢复节点；保留原意图、workflow、handle和step id。当前片段正常yield后续跑已保存新版本；already_running保留原执行，派发中的handle可为空。"
         + "父脚本运行时由它续接；脚本已退出且主动作独立运行时，action_queue在当前handle后排同节点run_script，args填task_node。"
@@ -277,7 +320,9 @@ public static class AgentScript
         var skills = (programs ?? new JsonArray()).ToDictionary(p => p["name"].ToString(), p => p.AsObject());
         int calls = 0;
         int mainCalls = 0, handlerCalls = 0, reactionCount = 0;
+        int mainSkillCalls = 0, handlerSkillCalls = 0;
         ScriptProgress handlerProgress = null;
+        Reactions session = null;
         var reactionReports = new Queue<JsonNode>();
         bool inTool = false;
         bool inputEffects = false;
@@ -316,7 +361,7 @@ public static class AgentScript
         {
             return await Task.Run(() =>
             {
-                var reactions = new Reactions();
+                var reactions = session = new Reactions();
                 CurrentReactions.Value = reactions;
                 using var engine = new Engine(options =>
                 {
@@ -341,7 +386,7 @@ public static class AgentScript
                     reactions.Handling = value;
                     if (value)
                     {
-                        handlerCalls = 0; reactionCount++;
+                        handlerCalls = handlerSkillCalls = 0; reactionCount++;
                         handlerProgress = new ScriptProgress(); handlerProgress.Begin();
                     }
                     else if (handlerProgress != null)
@@ -424,7 +469,11 @@ public static class AgentScript
                 engine.SetValue("__gamePrint", new Action<string>(text =>
                 {
                     budget.Token.ThrowIfCancellationRequested();
-                    if (logs.Count >= 20) throw new InvalidOperationException("脚本最多print 20次。");
+                    if (logs.Count >= 20)
+                    {
+                        if (reactions.Handling) logs.RemoveAt(0);
+                        else throw new InvalidOperationException("脚本最多print 20次。");
+                    }
                     if (text?.Length > 1000) logTruncations.Add(new JsonObject
                         { ["index"] = logs.Count, ["original_chars"] = text.Length, ["retained_chars"] = 1000 });
                     logs.Add(Clip(text ?? "null", 1000));
@@ -436,8 +485,9 @@ public static class AgentScript
                 engine.SetValue("__skillEnter", new Func<string, string, string, int>((name, input, key) =>
                 {
                     budget.Token.ThrowIfCancellationRequested();
-                    if (skillCalls.Count >= 64 || input.Length > 8000)
+                    if ((reactions.Handling ? handlerSkillCalls++ : mainSkillCalls++) >= 64 || input.Length > 8000)
                         throw hostFailure = new InvalidOperationException("技能调用最多64次，单次input最多8000字符。");
+                    if (skillCalls.Count >= 64 && skillCalls.All(call => call["status"]?.ToString() != "running")) skillCalls.Clear();
                     var saved = skills[name];
                     skillCalls.Add(new JsonObject { ["name"] = name, ["revision"] = saved["revision"].DeepClone(),
                         ["source_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
@@ -584,5 +634,6 @@ public static class AgentScript
             if (cleanup != null) result["cleanup_error"] = cleanup;
             return result;
         }
+        finally { if (session != null) session.Retire(() => { }); }
     }
 }

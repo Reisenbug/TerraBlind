@@ -63,6 +63,7 @@ static class ScriptTests
         await ReactiveHandlers();
         await ReactiveTravelExample();
         await ReactiveHostIntegration();
+        await TaskPolicyIntegration();
         var helperProgress = new ScriptProgress();
         var watchProgress = new ScriptProgress();
         var savedWatch = new JsonObject { ["events"] = new JsonArray("nearby_tile", "nearby_chest"),
@@ -1184,6 +1185,178 @@ static class ScriptTests
             AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Watches.Reset(); AgentTools.Plan.Reset();
             player.position = position; player.dead = dead; player.suffocating = suffocating;
             HttpServerSystem.Handler = http; agent.Unload();
+        }
+    }
+
+    static async Task TaskPolicyIntegration()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var originalHttp = HttpServerSystem.Handler;
+        var player = Terraria.Main.LocalPlayer;
+        var position = player.position;
+        bool dead = player.dead, suffocating = player.suffocating;
+        async Task Pump(Func<bool> done)
+        {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (!done())
+            {
+                Check(timer.Elapsed.TotalSeconds < 15, "task policy integration stalled");
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+        }
+        async Task<JsonObject> Call(string name, JsonObject args)
+        {
+            var task = AgentTools.Execute(name, args, default);
+            await Pump(() => task.IsCompleted);
+            return JsonNode.Parse(await task).AsObject();
+        }
+        Task<JsonObject> Set(int revision, string code) => Call("task_policy", new JsonObject
+            { ["operation"] = "set", ["expected_revision"] = revision, ["code"] = code });
+        int phase = 0, polls = 0, goalX = 20;
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
+            player.position = new System.Numerics.Vector2(160, 160); player.dead = player.suffocating = false;
+            int messages = AgentChat.Messages.Count;
+            var installed = await Set(0, """
+                let count=0;
+                tool('watch',{events:['nearby_chest','nearby_drop']});
+                on('nearby_chest',e=>{tool('say',{text:'global:'+e.task_node+':'+(++count)});return {handled:true};});
+                on('nearby_drop',e=>{tool('say',{text:'global-drop:'+e.task_node+':'+(++count)});return {handled:true};});
+                """);
+            Check(installed["active"].GetValue<bool>(), "task policy failed to initialize: " + installed);
+            await Call("task_plan", JsonNode.Parse("""
+                {"goal":"shared reactions across nodes","mode":"dag","steps":[
+                 {"id":"first","description":"first leg","depends_on":[],"conditions":[{"kind":"position","x":20,"y":10,"radius":3,"count":1}],
+                  "script":"tool('watch',{events:['low_health']});return step('travel',()=>tool('nav_to',{x:20,y:10}));"},
+                 {"id":"second","description":"second leg","depends_on":["first"],"conditions":[{"kind":"position","x":40,"y":10,"radius":3,"count":1}],
+                  "script":"on('nearby_chest',e=>{tool('say',{text:'local:'+e.task_node});return {handled:true};});tool('watch',{events:['low_health']});return step('travel',()=>tool('nav_to',{x:40,y:10}));"}]}
+                """).AsObject());
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/nav_recede") { RecedingNav.Active = true; goalX = JsonNode.Parse(payload)["gx"].GetValue<int>(); }
+                if (path == "/nav_recede_done")
+                {
+                    polls++;
+                    if (polls == 1) AgentTools.Watches.Emit("nearby_chest", "leg:" + phase, new JsonObject { ["x"] = goalX, ["y"] = 10 });
+                    if (phase == 2 && polls == 2) AgentTools.Watches.Emit("nearby_drop", "drop:2", new JsonObject { ["x"] = goalX, ["y"] = 10 });
+                    if (polls >= 4) { player.position = new System.Numerics.Vector2(goalX * 16, 160); return (200, "{\"done\":true}"); }
+                    return (200, "{\"done\":false}");
+                }
+                return (200, "{}");
+            };
+            foreach (string node in new[] { "first", "second" })
+            {
+                phase++; polls = 0;
+                var result = await Call("run_script", new JsonObject { ["task_node"] = node });
+                Check(result["ok"].GetValue<bool>(), "shared policy failed in node " + node + ": " + result);
+                Check(AgentTools.Watches.Subscribed("nearby_drop"), "node watch removed a task policy subscription");
+                var verified = await Call("task_step", new JsonObject { ["id"] = node, ["action"] = "verify" });
+                Check(verified["verified"].GetValue<bool>(), "node completion was not host verified");
+                if (node == "first")
+                {
+                    var saved = await Call("task_policy", new JsonObject { ["operation"] = "get" });
+                    var same = await Set(1, saved["code"].ToString());
+                    Check(same["unchanged"]?.GetValue<bool>() == true && same["revision"].GetValue<int>() == 1,
+                        "identical policy code discarded live closure state");
+                }
+            }
+            Check(AgentChat.Messages.Skip(messages).Where(m => m.StartsWith("global") || m.StartsWith("local:"))
+                    .SequenceEqual(new[] { "global:first:1", "local:second", "global-drop:second:2" }),
+                "task policy lost closure state, node ownership or local precedence: " + string.Join(',', AgentChat.Messages.Skip(messages)));
+            Check(!AgentTools.TaskPolicyStatus()["active"].GetValue<bool>(), "completed DAG retained its task policy");
+
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
+            bool release = false, started = false, emitted = false, replaced = false, newEmitted = false;
+            int navStarts = 0;
+            await Set(0, """
+                tool('watch',{events:['nearby_chest']});
+                on('nearby_chest',e=>{
+                  tool('say',{text:'old-start'});
+                  tool('act',{steps:[{keys:['right'],until:{frames:1}}]});
+                  tool('say',{text:'old-finished'});return {handled:true};
+                });
+                """);
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/nav_recede") { navStarts++; RecedingNav.Active = true; }
+                if (path == "/nav_recede_stop") RecedingNav.Active = false;
+                if (path == "/act") started = true;
+                if (path == "/act_status") return (200, release ? "{\"active\":false}" : "{\"active\":true}");
+                if (path == "/nav_recede_done")
+                {
+                    if (!emitted) { emitted = true; AgentTools.Watches.Emit("nearby_chest", "hot:old", new JsonObject { ["x"] = 50, ["y"] = 10 }); }
+                    if (release && replaced && !newEmitted)
+                    { newEmitted = true; AgentTools.Watches.Emit("nearby_chest", "hot:new", new JsonObject { ["x"] = 51, ["y"] = 10 }); }
+                    if (AgentChat.Messages.Contains("new-policy"))
+                    { player.position = new System.Numerics.Vector2(960, 160); return (200, "{\"done\":true}"); }
+                    return (200, "{\"done\":false}");
+                }
+                return (200, "{}");
+            };
+            var action = await Call("run_script", new JsonObject { ["code"] = "return tool('action_start',{tool:'nav_to',args:{x:60,y:10}});" });
+            string handle = action["value"]["handle"].ToString();
+            await Pump(() => started);
+            var updated = await Set(1, "tool('watch',{events:['nearby_chest']});on('nearby_chest',e=>{tool('say',{text:'new-policy'});return {handled:true};});");
+            replaced = true;
+            Check(updated["revision"].GetValue<int>() == 2 && navStarts == 1,
+                "updating policy restarted the route or failed to publish a revision");
+            var bad = await Set(2, "tool('watch',{events:['nearby_tile'],tile_types:[12]});throw new Error('broken candidate');");
+            Check(bad["error"] != null && AgentTools.TaskPolicyStatus()["revision"].GetValue<int>() == 2
+                && AgentTools.Watches.Subscribed("nearby_chest") && !AgentTools.Watches.WatchesTile(12),
+                "failed policy installation changed the active policy or its subscriptions");
+            release = true;
+            await Pump(() => AgentTools.Actions.Summary().Any(a => a["handle"]?.ToString() == handle && a["status"]?.ToString() == "completed"));
+            var completed = AgentTools.Actions.Summary().First(a => a["handle"]?.ToString() == handle);
+            Check(completed["attempt"].GetValue<int>() == 1 && navStarts == 2
+                && AgentChat.Messages.Contains("old-finished") && AgentChat.Messages.Contains("new-policy"),
+                "hot update cancelled an entered handler or lost the original independent action");
+            await Set(2, """
+                let calls=0;
+                tool('watch',{events:['nearby_chest']});
+                on('nearby_chest',e=>{
+                  calls++;
+                  if(calls===1)tool('act',{steps:[{keys:['right'],until:{frames:1}}]});
+                  tool('say',{text:'after-cancel:'+calls});return {handled:true};
+                });
+                """);
+            bool inAction = false, sent = false, resumed = false;
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/nav_recede") RecedingNav.Active = true;
+                if (path == "/nav_recede_stop") RecedingNav.Active = false;
+                if (path == "/act") inAction = true;
+                if (path == "/act_status") return (200, "{\"active\":true}");
+                if (path == "/nav_recede_done")
+                {
+                    if (!sent) { sent = true; AgentTools.Watches.Emit("nearby_chest", "cancel:" + resumed, new JsonObject { ["x"] = 75, ["y"] = 10 }); }
+                    if (AgentChat.Messages.Contains("after-cancel:2"))
+                    { player.position = new System.Numerics.Vector2(1280, 160); return (200, "{\"done\":true}"); }
+                    return (200, "{\"done\":false}");
+                }
+                return (200, "{}");
+            };
+            var cancellable = await Call("run_script", new JsonObject { ["code"] = "return tool('action_start',{tool:'nav_to',args:{x:80,y:10}});" });
+            string cancelHandle = cancellable["value"]["handle"].ToString();
+            await Pump(() => inAction);
+            var paused = await Call("action_control", new JsonObject { ["handle"] = cancelHandle, ["command"] = "pause" });
+            Check(paused["status"].ToString() == "paused" && !AgentTools.ControlSession.Active,
+                "pause returned before the task policy released its active action");
+            resumed = true; sent = false;
+            await Call("action_control", new JsonObject { ["handle"] = cancelHandle, ["command"] = "resume" });
+            await Pump(() => AgentTools.Actions.Summary().Any(a => a["handle"]?.ToString() == cancelHandle && a["status"]?.ToString() == "completed"));
+            Check(AgentTools.TaskPolicyStatus()["active"].GetValue<bool>() && AgentChat.Messages.Contains("after-cancel:2"),
+                "pausing one actor cancelled the shared policy or lost its state");
+            AgentTools.NewTask();
+            Check(!AgentTools.TaskPolicyStatus()["active"].GetValue<bool>() && AgentTools.TaskPolicyStatus()["revision"].GetValue<int>() == 0,
+                "new task inherited a stale policy");
+            Console.WriteLine("PASS: task policy spans DAG nodes, preserves closure/ownership, supports local overrides and updates without restarting active work");
+        }
+        finally
+        {
+            AgentTools.ClearTaskPolicy(true); AgentTools.Stop(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.Watches.Reset();
+            player.position = position; player.dead = dead; player.suffocating = suffocating;
+            HttpServerSystem.Handler = originalHttp; agent.Unload();
         }
     }
 }

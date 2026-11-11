@@ -576,8 +576,88 @@ public sealed class BehaviorTrial : ModSystem
             }
         return false;
     }
+    async Task TaskPolicyTrial()
+    {
+        int cx = Main.spawnTileX + 30, floor = Main.spawnTileY + 5;
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); AgentTools.NewTask();
+            Manual.On = false; Concessions.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false; AgentPermissions.Attack = AgentPermissions.Dodge = false;
+            for (int x = cx - 5; x <= cx + 28; x++)
+            for (int y = floor - 8; y <= floor + 1; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                if (y >= floor) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+            }
+            foreach (int x in new[] { cx + 3, cx + 16 })
+            {
+                WorldGen.PlaceTile(x, floor - 1, TileID.PressurePlates, true, true);
+                if (!Main.tile[x, floor - 1].HasTile || Main.tile[x, floor - 1].TileType != TileID.PressurePlates)
+                    throw new Exception("native task policy plate placement failed");
+            }
+            var p = Main.LocalPlayer;
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            p.inventory[1].SetDefaults(ItemID.Wood); p.inventory[1].stack = 9999;
+            p.position = new Vector2(cx * 16, floor * 16 - p.height); p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+            return true;
+        });
+        var policy = await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
+            ["code"] = """
+                let removed=0;
+                on('action_failed',event=>{
+                  const n=event.result;
+                  if(n.error!=='navigation_near_trap'||!n.trap_tiles?.every(t=>t.kind==='pressure_plate'))return {retry:false};
+                  for(const t of n.trap_tiles){
+                    const r=tool('use_item',{slot:0,x:t.x,y:t.y});
+                    if(r.outcome!=='removed'||tool('inspect_terrain').trap_tiles.some(p=>p.x===t.x&&p.y===t.y))return {retry:false};
+                    removed++;
+                  }
+                  tool('say',{text:'task policy removed '+removed});
+                  return {retry:true};
+                });
+                """ });
+        if (policy["active"]?.GetValue<bool>() != true) throw new Exception("native task policy installation failed: " + policy);
+        var steps = new JsonArray();
+        for (int i = 0; i < 2; i++)
+        {
+            int plateX = cx + (i == 0 ? 3 : 16), goalX = cx + (i == 0 ? 6 : 20);
+            steps.Add(new JsonObject { ["id"] = "leg" + i, ["description"] = "native pressure plate leg " + i,
+                ["depends_on"] = i == 0 ? new JsonArray() : new JsonArray("leg0"),
+                ["script"] = "return step('travel',()=>tool('nav_to',{x:" + goalX + ",y:" + (floor - 1) + "}));",
+                ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "tiles", ["type"] = -1, ["count"] = 1,
+                    ["x"] = plateX, ["y"] = floor - 1, ["width"] = 1, ["height"] = 1 }) });
+        }
+        await Call("task_plan", new JsonObject { ["goal"] = "native task policy across nodes", ["mode"] = "dag", ["steps"] = steps });
+        var timer = Stopwatch.StartNew();
+        var results = new JsonArray();
+        for (int i = 0; i < 2; i++)
+        {
+            var result = await Call("run_script", new JsonObject { ["task_node"] = "leg" + i });
+            if (result["ok"]?.GetValue<bool>() != true) throw new Exception("native shared policy leg failed: " + result);
+            var verified = await Call("task_step", new JsonObject { ["id"] = "leg" + i, ["action"] = "verify" });
+            if (verified["verified"]?.GetValue<bool>() != true) throw new Exception("native plate removal was not verified: " + verified);
+            results.Add(new JsonObject { ["node"] = "leg" + i, ["elapsed_ms"] = timer.ElapsedMilliseconds, ["result"] = result });
+        }
+        var policyAfter = await Call("task_policy", new JsonObject { ["operation"] = "get" });
+        var report = await OnMain(() => new JsonObject { ["elapsed_ms"] = timer.ElapsedMilliseconds,
+            ["plate1_remaining"] = Main.tile[cx + 3, floor - 1].HasTile,
+            ["plate2_remaining"] = Main.tile[cx + 16, floor - 1].HasTile,
+            ["plates_picked"] = Main.LocalPlayer.inventory.Where(i => i.createTile == TileID.PressurePlates).Sum(i => i.stack),
+            ["hp"] = Main.LocalPlayer.statLife, ["policy"] = policyAfter.DeepClone(), ["nodes"] = results,
+            ["model_calls"] = 0, ["fixture_terrain"] = true });
+        File.WriteAllText(Path.Combine(Main.SavePath, "task-policy-native.json"), report.ToJsonString());
+        if (report["plate1_remaining"].GetValue<bool>() || report["plate2_remaining"].GetValue<bool>()
+            || report["plates_picked"].GetValue<int>() != 2 || report["policy"]["active"].GetValue<bool>())
+            throw new Exception("native task policy acceptance failed: " + report);
+        Console.WriteLine("TASK_POLICY_NATIVE_PASS nodes=2 plates_removed=2 model_calls=0 elapsed_ms=" + timer.ElapsedMilliseconds);
+    }
+
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_TASK_POLICY_PROBE") == "1") { await TaskPolicyTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_FALL_PLACEMENT_PROBE") == "1") { await FallPlacementTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_CONSUMABLE_HANDOFF_PROBE") == "1") { await ConsumableHandoffTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_DESERT_CONTACT_PROBE") == "1") { await DesertContactTrial(); return; }
@@ -3760,7 +3840,7 @@ public sealed class BehaviorTrial : ModSystem
         int targetHealth = int.Parse(Environment.GetEnvironmentVariable("TB_QUEEN_TARGET_HEALTH") ?? "240");
         string prompt = "/goal 前往丛林地下，获得至少240点永久生命上限，制作荆棘旋刃，召唤并击败蜂王。生命水晶、毒刺、丛林孢子、箱子并行规划：240血前以水晶为主要目标，其他资源和箱子在去水晶的路上近便时获取；达到240血后推进荆棘旋刃与蜂王，路上仍择机收集近便水晶和箱子。生命水晶及时使用。先利用find_descent与descent_route的丛林主道出发，赶路时完成材料知识查询和后续路线准备。结合当前地形地图安排采集及蜂巢场地。背包有星怒和足量木头，本轮持续鱼鳃与光芒效果。低血量唤醒观察，当前动作继续执行。持续推进直到真实结果通过宿主验收。";
         prompt = prompt.Replace("240", targetHealth.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        prompt += "本轮验证途中反应：准备on事件处理函数，让近便资源拾取、背包整理和压力板局部恢复直接在脚本内执行；可读取reactive_travel模板并按现场修改。200血以上零死亡，关注动作交接和超过10秒的停顿。";
+        prompt += "本轮验证途中反应：首段行动前用task_policy挂整趟反应，途中继续完善，让近便资源拾取、背包整理和压力板局部恢复直接在脚本内执行；可读取task_reactions模板并按现场修改。200血以上零死亡，关注动作交接和超过10秒的停顿。";
         if (!string.IsNullOrEmpty(QueenResumeRoot))
         {
             prompt += "这是同一人物和地图的存档续接。先按当前永久生命与背包验收已有进度，推进剩余步骤；地图保留此前采集与放置的改变。";

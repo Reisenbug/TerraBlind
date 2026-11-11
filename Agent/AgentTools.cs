@@ -15,6 +15,170 @@ public static partial class AgentTools
     internal static readonly System.Text.Json.JsonSerializerOptions ModelJson = new(System.Text.Json.JsonSerializerOptions.Default)
     { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     internal const int ApiRevision = 2;
+    sealed class TaskPolicyInstance
+    {
+        public readonly Guid Id = Guid.NewGuid();
+        public readonly CancellationTokenSource Lifetime = new();
+        public readonly TaskCompletionSource<bool> Ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public string Code;
+        public AgentScript.Reactions Reactions;
+        public JsonObject Watch, Report, LastReaction;
+        public Task Worker;
+        int retired;
+        public void Retire()
+        {
+            if (Interlocked.Exchange(ref retired, 1) != 0) return;
+            void Finish()
+            {
+                Lifetime.Cancel();
+                _ = Worker.ContinueWith(_ => Lifetime.Dispose(), TaskScheduler.Default);
+            }
+            if (Reactions == null) Finish(); else Reactions.Retire(Finish);
+        }
+    }
+    static volatile TaskPolicyInstance taskPolicy;
+    static int taskPolicyRevision, taskPolicyEpoch;
+
+    internal static JsonObject TaskPolicyStatus(bool includeCode = false)
+    {
+        var policy = taskPolicy;
+        var result = new JsonObject { ["revision"] = taskPolicyRevision, ["active"] = policy?.Reactions?.Active == true,
+            ["events"] = new JsonArray((policy?.Reactions?.Kinds ?? Array.Empty<string>()).Select(k => (JsonNode)JsonValue.Create(k)).ToArray()),
+            ["watch"] = policy?.Watch?.DeepClone(), ["last_reaction"] = policy?.LastReaction?.DeepClone() };
+        if (includeCode) result["code"] = policy?.Code;
+        return result;
+    }
+
+    static void RestoreTaskPolicyWatch()
+    {
+        var policy = taskPolicy;
+        Watches.SetPolicyWatch(policy?.Watch);
+        if (policy?.Reactions == null) return;
+        foreach (string kind in policy.Reactions.Kinds) Watches.RegisterHandler(policy.Id, kind);
+    }
+
+    internal static void ClearTaskPolicy(bool resetRevision = false)
+    {
+        var previous = taskPolicy; taskPolicy = null;
+        taskPolicyEpoch++;
+        taskPolicyRevision = resetRevision ? 0 : taskPolicyRevision + 1;
+        if (previous != null) Watches.EndHandlers(previous.Id);
+        Watches.SetPolicyWatch(null);
+        previous?.Retire();
+    }
+
+    static async Task RunTaskPolicy(TaskPolicyInstance policy)
+    {
+        string savePath = Main.SavePath, world = Main.worldName + ":" + Main.worldID;
+        try
+        {
+            policy.Report = await AgentScript.Run("(function(){\n" + policy.Code + "\n})();return tool('__task_policy_wait');", 120,
+                (name, args) => { if (name != "__task_policy_wait") NativeAgent.ValidateTool(name, args); },
+                async (name, args, token) =>
+                {
+                    using var dispatch = CancellationTokenSource.CreateLinkedTokenSource(token, AgentScript.ReactionCancellation.Value);
+                    token = dispatch.Token;
+                    var scope = AgentScript.CurrentReactions.Value;
+                    if (name == "__task_policy_wait")
+                    {
+                        if (scope.Kinds.Length == 0) throw new InvalidOperationException("任务策略需要通过on注册事件处理。");
+                        policy.Reactions = scope; policy.Ready.TrySetResult(true);
+                        await Task.Delay(Timeout.Infinite, token);
+                        return "{}";
+                    }
+                    if (name == "watch")
+                    {
+                        var validation = new AgentWatch(); validation.Configure(args);
+                        policy.Watch = (JsonObject)args.DeepClone();
+                        if (ReferenceEquals(taskPolicy, policy))
+                            await NativeAgent.OnMain(() => { RestoreTaskPolicyWatch(); return true; }, token);
+                        return validation.Snapshot().ToJsonString();
+                    }
+                    if (!scope.Handling)
+                    {
+                        if (!AgentScript.PreparationOnly("tool(" + JsonValue.Create(name).ToJsonString() + ",{});"))
+                            throw new InvalidOperationException("策略初始化阶段只注册on、设置watch和读取资料；动作写在事件处理函数中。");
+                        return await Execute(name, args, token);
+                    }
+                    return await ExecuteScriptTool(name, args, token, token);
+                }, _ => Task.CompletedTask, policy.Lifetime.Token, programs:
+                    new ScriptLibrary(System.IO.Path.Combine(savePath, "TerraBlindAgent", "programs")).Callable(),
+                onResult: report =>
+                {
+                    policy.Report = report;
+                    if (report["skill_calls"] is JsonArray { Count: > 0 } calls)
+                        new ScriptLibrary(System.IO.Path.Combine(savePath, "TerraBlindAgent", "programs")).RecordCalls(calls, world);
+                });
+        }
+        catch (OperationCanceledException) when (policy.Lifetime.IsCancellationRequested) { }
+        catch (Exception error)
+        {
+            policy.Report = new JsonObject { ["error"] = "task_policy_failed", ["detail"] = error.Message };
+            if (!ReferenceEquals(taskPolicy, policy)) return;
+            await NativeAgent.OnMain(() =>
+            {
+                if (ReferenceEquals(taskPolicy, policy))
+                {
+                    Watches.EndHandlers(policy.Id); Watches.SetPolicyWatch(null);
+                    Watches.Request("task_policy_failed", policy.Report);
+                }
+                return true;
+            }, policy.Lifetime.Token);
+        }
+    }
+
+    static async Task<JsonObject> ManageTaskPolicy(JsonObject args, CancellationToken token)
+    {
+        string operation = Text(args, "operation");
+        if (operation == "get") return await NativeAgent.OnMain(() => TaskPolicyStatus(true), token);
+        int expected = Int(args, "expected_revision", -1);
+        int epoch = await NativeAgent.OnMain(() =>
+        {
+            if (expected != taskPolicyRevision) throw new InvalidOperationException("任务策略版本已改变，请先读取task_policy get。");
+            return taskPolicyEpoch;
+        }, token);
+        if (operation == "clear") return await NativeAgent.OnMain(() =>
+        {
+            if (expected != taskPolicyRevision || epoch != taskPolicyEpoch)
+                throw new InvalidOperationException("任务或策略版本已改变，请重新读取。");
+            ClearTaskPolicy(); return TaskPolicyStatus();
+        }, token);
+        if (operation != "set") throw new ArgumentException("operation需要get/set/clear。");
+        string code = Text(args, "code");
+        if (string.IsNullOrWhiteSpace(code) || code.Length > 15000) throw new ArgumentException("策略code需要1..15000字符。");
+        var unchanged = await NativeAgent.OnMain(() =>
+        {
+            if (expected != taskPolicyRevision || epoch != taskPolicyEpoch)
+                throw new InvalidOperationException("任务或策略版本已改变，请重新读取。");
+            var current = taskPolicy;
+            if (current?.Code != code || current.Reactions?.Active != true) return null;
+            var status = TaskPolicyStatus(); status["unchanged"] = true; return status;
+        }, token);
+        if (unchanged != null) return unchanged;
+        var candidate = new TaskPolicyInstance { Code = code };
+        candidate.Worker = RunTaskPolicy(candidate);
+        try
+        {
+            await Task.WhenAny(candidate.Ready.Task, candidate.Worker).WaitAsync(token);
+            if (!candidate.Ready.Task.IsCompletedSuccessfully)
+            {
+                await candidate.Worker;
+                throw new InvalidOperationException("任务策略初始化失败：" + candidate.Report?.ToJsonString());
+            }
+            return await NativeAgent.OnMain(() =>
+            {
+                if (expected != taskPolicyRevision || epoch != taskPolicyEpoch)
+                    throw new InvalidOperationException("任务或策略版本已改变，候选策略未启用。");
+                var previous = taskPolicy;
+                if (previous != null) Watches.EndHandlers(previous.Id);
+                taskPolicy = candidate; taskPolicyRevision++;
+                RestoreTaskPolicyWatch();
+                previous?.Retire();
+                return TaskPolicyStatus();
+            }, token);
+        }
+        catch { candidate.Retire(); throw; }
+    }
     internal static readonly AgentTaskPlan Plan = new();
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
     static readonly HashSet<string> continuedActions = new();
@@ -122,9 +286,10 @@ public static partial class AgentTools
         if (action["args"] is JsonObject args) notice["args"] = Brief(args);
         if (action["result"] is JsonObject result) notice["result"] = Brief(result);
         var preparationNodes = Plan.PreparationNodes(node, AgentTaskEvidence.Measure);
+        notice["task_policy"] = TaskPolicyStatus();
         if (kind == "prepare_successor" && preparationNodes.Count > 0) notice["preparation_nodes"] = preparationNodes;
         string instruction = kind == "prepare_successor"
-            ? "宿主执行变化：当前后台动作继续运行。趁本轮准备已查证的后继script及适用的on_failure；preparation_nodes列出的节点目前只有准备代码，趁行进补齐行动。复用适用技能，结合runtime修订本轮可复用的逻辑。准备和只读查询保持当前动作运行。已有充分准备则沿用。"
+            ? "宿主执行变化：当前后台动作继续运行。task_policy未启用时先准备整趟反应并设置，使当前节点和后继节点同时受益。趁本轮准备已查证的后继script及适用的on_failure；preparation_nodes列出的节点目前只有准备代码，趁行进补齐行动。复用适用技能，结合runtime修订本轮可复用的逻辑。准备和只读查询保持当前动作运行。已有充分准备则沿用。"
             : "宿主执行变化：当前动作已经结束且没有后续动作运行。结合最新句柄与现场优先恢复有效行动；保留已完成进度，修改后续script或准备恢复，随后执行。";
         return Send();
         async Task Send()
@@ -343,7 +508,7 @@ public static partial class AgentTools
     }
     static (bool Attack, bool Dodge, float Reserve)? bossBefore;
     internal static bool HasBossControlOverride => bossBefore != null;
-    internal static readonly ActionTasks Actions = new(Execute, ObserveAction,
+    internal static readonly ActionTasks Actions = new(ExecuteWithTaskPolicy, ObserveAction,
         owns => NativeAgent.OnMain(() => { if (owns() && !ContactEscapeActive) StopInputs(); return true; }, default),
         (handle, owns) => NativeAgent.OnMain(() => { if (owns()) Control.EndAction(handle); return true; }, default),
         (tool, owns) => NativeAgent.OnMain(() =>
@@ -375,11 +540,12 @@ public static partial class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedAttempt = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
+    public static void NewTask() { ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedAttempt = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
         Actions.CancelAll();
         Watches.Reset();
+        RestoreTaskPolicyWatch();
         if (bossBefore is { } previous)
         {
             Combat.Enabled = previous.Attack; Dodge.Enabled = previous.Dodge; Dodge.MovementReserveScale = previous.Reserve; bossBefore = null;
@@ -530,6 +696,7 @@ public static partial class AgentTools
         state["control_execution"] = ControlSession.Snapshot();
         state["idle_defense_active"] = FightCoordinator.IsIdleDefending;
         state["watch"] = includeWatchHistory ? Watches.Snapshot() : Watches.Summary();
+        state["task_policy"] = TaskPolicyStatus();
         state["recovery"] = Recovery.Snapshot();
         state["codex_goal"] = NativeAgent.GoalState;
         var verification = Plan.VerifyFinal(AgentTaskEvidence.Measure);
@@ -846,21 +1013,19 @@ public static partial class AgentTools
     static async Task<string> ExecuteScriptTool(string name, JsonObject args, CancellationToken root, CancellationToken token, bool scriptEvents = false)
     {
         var reactions = AgentScript.CurrentReactions.Value;
-        if (reactions?.Handling == true && name is "action_control" or "action_start" or "action_queue" or "control")
+        if (reactions?.Handling == true && name is "action_control" or "action_start" or "action_queue" or "control" or "task_policy")
             return new JsonObject { ["error"] = "reaction_action_lifecycle",
                 ["detail"] = "事件中直接调用nav_to/gather/use_item等，宿主交接并恢复原动作。任务句柄控制交回Agent执行。" }.ToJsonString();
         if (reactions?.Handling == true && AgentControlSession.ActionTool(name) && reactions.BeforeAction != null)
             await reactions.BeforeAction(name, token);
-        else if (reactions?.Handling == false)
-            await ReactAtBoundary(token);
         if (reactions?.Handling == true) return await Execute(name, args, token);
         if (!ActionTasks.Supports(name))
-            return await Execute(name, args, name is "action_start" or "action_queue" || name == "action_control" && Text(args, "command") == "resume" ? root : token);
+            return await ExecuteWithTaskPolicy(name, args, name is "action_start" or "action_queue" || name == "action_control" && Text(args, "command") == "resume" ? root : token);
         if (name != "fight" && string.IsNullOrEmpty(ActionTasks.NodeContext.Value)
             && await NativeAgent.OnMain(() => Plan.RequiresNodeExecution, token))
             return await Execute(name, args, token);
         if (name == "fight" && !AgentPermissions.Attack) return await Execute(name, args, token);
-        if (Actions.RunningScript) return await Execute(name, args, token);
+        if (Actions.RunningScript) return await ExecuteWithTaskPolicy(name, args, token);
         await NativeAgent.OnMain(() => { Watches.EnsureDefaults(); return true; }, token);
         string handle = Actions.Start(name, args, root, inline: true)["handle"].ToString();
         while (true)
@@ -894,14 +1059,57 @@ public static partial class AgentTools
         }
     }
 
-    internal static async Task ReactAtBoundary(CancellationToken token,
-        Func<CancellationToken, Task> pause = null, Func<CancellationToken, Task> resume = null)
+    static async Task<string> ExecuteWithTaskPolicy(string name, JsonObject args, CancellationToken token)
     {
-        var reactions = AgentScript.CurrentReactions.Value;
-        if (reactions == null || reactions.Handling || reactions.Kinds.Length == 0) return;
-        var notices = await NativeAgent.OnMain(() => Watches.TakeForScript(reactions.Kinds), token);
-        if (notices.Count == 0 && reactions.Has("tick") && reactions.TickDue()) notices.Add(new JsonObject { ["kind"] = "tick" });
-        if (notices.Count == 0) return;
+        if (AgentControlSession.ActionTool(name) && AgentScript.CurrentReactions.Value?.Handling != true)
+            await ReactAtBoundary(token, context: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
+        string output = await Execute(name, args, token);
+        var local = AgentScript.CurrentReactions.Value;
+        var policy = taskPolicy?.Reactions;
+        if (!AgentControlSession.ActionTool(name) || local?.Handling == true || policy?.Has("action_failed") != true
+            || local?.Active == true && local.Has("action_failed")) return output;
+        if (JsonNode.Parse(output) is not JsonObject failed || !ScriptProgress.Failed(failed)
+            || failed["task_policy_recovery"] != null) return output;
+        var decision = await ServiceReaction(policy, () => Task.FromResult(new JsonObject { ["kind"] = "action_failed",
+            ["tool"] = name, ["args"] = args.DeepClone(), ["result"] = failed.DeepClone(), ["task_node"] = ActionTasks.NodeContext.Value }), token);
+        if (decision?["retry"]?.GetValue<bool>() == true)
+        {
+            output = await Execute(name, args, token);
+            if (JsonNode.Parse(output) is JsonObject retried)
+            { retried["task_policy_recovery"] = true; output = retried.ToJsonString(); }
+        }
+        return output;
+    }
+
+    internal static async Task ReactAtBoundary(CancellationToken token,
+        Func<CancellationToken, Task> pause = null, Func<CancellationToken, Task> resume = null, JsonObject context = null)
+    {
+        var local = AgentScript.CurrentReactions.Value;
+        if (local?.Handling == true) return;
+        if (local?.Active != true) local = null;
+        var global = taskPolicy?.Reactions;
+        foreach (var reactions in new[] { local, global }.Where(r => r != null).Distinct())
+        {
+            string[] kinds = reactions.Kinds.Except(ReferenceEquals(reactions, global) ? local?.Kinds ?? Array.Empty<string>() : Array.Empty<string>()).ToArray();
+            await ServiceReaction(reactions, async () =>
+            {
+                var notices = await NativeAgent.OnMain(() => Watches.TakeForScript(kinds), token);
+                JsonObject notice = notices.FirstOrDefault()?.AsObject();
+                if (notice == null && kinds.Contains("tick") && reactions.TickDue()) notice = new JsonObject { ["kind"] = "tick" };
+                if (notice != null)
+                {
+                    notice["execution"] = context?.DeepClone();
+                    notice["task_node"] = ActionTasks.NodeContext.Value;
+                }
+                return notice;
+            }, token, pause, resume);
+        }
+    }
+
+    static async Task<JsonObject> ServiceReaction(AgentScript.Reactions reactions, Func<Task<JsonObject>> read,
+        CancellationToken token, Func<CancellationToken, Task> pause = null, Func<CancellationToken, Task> resume = null)
+    {
+        if (!reactions.TryEnter()) return null;
         bool paused = false;
         Action restore = null;
         var previous = reactions.BeforeAction;
@@ -917,31 +1125,38 @@ public static partial class AgentTools
         };
         try
         {
-            foreach (var notice in notices.OfType<JsonObject>())
+            var notice = await read();
+            if (notice == null) return null;
+            long started = Stopwatch.GetTimestamp();
+            var decision = await reactions.Dispatch(notice, token);
+            if (notice["kind"]?.ToString() != "action_failed" && decision?["handled"]?.GetValue<bool>() != true)
             {
-                long started = Stopwatch.GetTimestamp();
-                var decision = await reactions.Dispatch(notice, token);
-                if (decision?["handled"]?.GetValue<bool>() != true)
+                reactions.Remove(notice["kind"].ToString());
+                await NativeAgent.OnMain(() =>
                 {
-                    reactions.Remove(notice["kind"].ToString());
-                    await NativeAgent.OnMain(() =>
-                    {
-                        if (notice["kind"]?.ToString() == "tick") Watches.Request("script_tick_requires_review", decision);
-                        else Watches.ReturnToAgent(notice);
-                        return true;
-                    }, token);
-                }
-                DiagLog.Write("[script-reaction] " + new JsonObject { ["kind"] = notice["kind"]?.DeepClone(),
-                    ["elapsed_ms"] = Stopwatch.GetElapsedTime(started).TotalMilliseconds, ["took_control"] = paused,
-                    ["handled"] = decision?["handled"]?.DeepClone() });
+                    if (notice["kind"]?.ToString() == "tick") Watches.Request("script_tick_requires_review", decision);
+                    else Watches.ReturnToAgent(notice);
+                    return true;
+                }, token);
             }
+            var record = new JsonObject { ["kind"] = notice["kind"]?.DeepClone(),
+                ["elapsed_ms"] = Stopwatch.GetElapsedTime(started).TotalMilliseconds, ["took_control"] = paused,
+                ["handled"] = decision?["handled"]?.DeepClone(), ["retry"] = decision?["retry"]?.DeepClone(),
+                ["task_node"] = notice["task_node"]?.DeepClone() };
+            if (ReferenceEquals(taskPolicy?.Reactions, reactions)) taskPolicy.LastReaction = record;
+            DiagLog.Write("[script-reaction] " + record);
+            return decision;
         }
         finally
         {
             reactions.BeforeAction = previous;
-            if (restore != null) await NativeAgent.OnMain(() => { restore(); return true; }, default);
-            if (paused && resume != null && !token.IsCancellationRequested
-                && !await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token)) await resume(token);
+            try
+            {
+                if (restore != null) await NativeAgent.OnMain(() => { restore(); return true; }, default);
+                if (paused && resume != null && !token.IsCancellationRequested
+                    && !await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token)) await resume(token);
+            }
+            finally { reactions.Exit(); }
         }
     }
 
@@ -968,6 +1183,8 @@ public static partial class AgentTools
         {
             case "game_api":
                 return NativeAgent.DescribeApi(args).ToJsonString(ModelJson);
+            case "task_policy":
+                return (await ManageTaskPolicy(args, token)).ToJsonString();
             case "nearby_drops":
                 return new JsonObject { ["drops"] = await NativeAgent.OnMain(() => NearbyDrops.Read(Int(args, "radius", 25)), token) }.ToJsonString();
             case "combat_assess":
@@ -1439,6 +1656,7 @@ public static partial class AgentTools
                     {
                         foreach (var actionState in Actions.Summary().OfType<JsonObject>())
                             if (actionState["task_node"]?.ToString() == Text(args, "id")) Watches.AcknowledgeCompletion(actionState);
+                        if (result["status"]?.ToString() == "completed") ClearTaskPolicy();
                         return true;
                     }, token);
                 break;
@@ -2046,7 +2264,7 @@ public static partial class AgentTools
                             var restarted = await Call("/nav_recede", request, ct);
                             if (Rejected(restarted)) throw new InvalidOperationException(restarted.ToJsonString());
                             progress = new NavigationProgress();
-                        });
+                        }, new JsonObject { ["tool"] = "nav_to", ["args"] = args.DeepClone() });
                 return await NativeAgent.OnMain(() =>
             {
                 var player = Main.LocalPlayer;

@@ -20,6 +20,19 @@ public sealed class AgentWatch
     readonly HashSet<string> visibleDrops = new();
     readonly HashSet<string> visibleBosses = new();
     readonly HashSet<int> tileTypes = new();
+    readonly HashSet<string> policyEvents = new();
+    readonly HashSet<int> policyTiles = new();
+    int radius = 25, policyRadius;
+    bool lootChests, policyLootChests;
+    internal void SetPolicyWatch(JsonObject args)
+    {
+        var validated = new AgentWatch();
+        if (args != null) validated.Configure(args);
+        policyEvents.Clear(); policyEvents.UnionWith(validated.events);
+        policyTiles.Clear(); policyTiles.UnionWith(validated.tileTypes);
+        policyRadius = args == null ? 0 : validated.Radius;
+        policyLootChests = args != null && validated.LootChestsInReach;
+    }
     readonly HashSet<string> passive = new();
     readonly HashSet<string> background = new();
     readonly HashSet<int> advised = new();
@@ -79,8 +92,8 @@ public sealed class AgentWatch
     string currentChestTarget;
     JsonObject lastObservation;
     JsonObject itemCounts;
-    public int Radius { get; private set; } = 25;
-    public bool LootChestsInReach { get; private set; }
+    public int Radius { get => Math.Max(radius, policyRadius); private set => radius = value; }
+    public bool LootChestsInReach { get => lootChests || policyLootChests; private set => lootChests = value; }
     int? healthOverride;
     int maxHealth = 100;
     public int HealthBelow => healthOverride ?? (int)Math.Ceiling(maxHealth * 0.3);
@@ -112,9 +125,9 @@ public sealed class AgentWatch
         && e["kind"]?.ToString() is not ("action_finished" or "target_acquired")
         && !(e["kind"]?.ToString() == "nearby_chest" && e["key"]?.ToString() == currentChestTarget)
         && !passive.Contains(e["kind"]?.ToString());
-    public bool Armed => events.Count > 0;
-    public bool Subscribed(string kind) => events.Contains(kind);
-    public bool WatchesTile(int type) => tileTypes.Contains(type);
+    public bool Armed => events.Count > 0 || policyEvents.Count > 0;
+    public bool Subscribed(string kind) => events.Contains(kind) || policyEvents.Contains(kind);
+    public bool WatchesTile(int type) => tileTypes.Contains(type) || policyTiles.Contains(type);
     public int Samples => samples;
     public JsonObject LastObservation => lastObservation?.DeepClone() as JsonObject;
     public void IgnorePriorActions(JsonArray actions)
@@ -224,7 +237,7 @@ public sealed class AgentWatch
         passive.Clear(); passive.UnionWith(passiveEvents); passive.UnionWith(backgroundEvents);
         background.Clear(); background.UnionWith(backgroundEvents);
         LootChestsInReach = requested.Contains("nearby_chest")
-            && (args["loot_chests_in_reach"]?.GetValue<bool>() ?? LootChestsInReach);
+            && (args["loot_chests_in_reach"]?.GetValue<bool>() ?? lootChests);
         currentChestTarget = null;
         tileTypes.Clear(); tileTypes.UnionWith(types);
         events.Clear(); events.UnionWith(requested); Radius = radius; healthOverride = health;
@@ -297,7 +310,7 @@ public sealed class AgentWatch
         foreach (var chest in state["chests"]?.AsArray() ?? new JsonArray())
             Emit("nearby_chest", chest["x"] + "," + chest["y"], chest);
         foreach (var tile in state["tiles"]?.AsArray() ?? new JsonArray())
-            if (tile["tile_type"] is JsonValue type && tileTypes.Contains(type.GetValue<int>()))
+            if (tile["tile_type"] is JsonValue type && WatchesTile(type.GetValue<int>()))
                 Emit("nearby_tile", tile["tile_type"] + ":" + tile["x"] + "," + tile["y"], tile);
         if (state["drops"] is JsonArray drops)
         {
@@ -322,7 +335,7 @@ public sealed class AgentWatch
 
     public void Emit(string kind, string key, JsonNode evidence)
     {
-        if (!events.Contains(kind) || !seen.Add(kind + ":" + key)) return;
+        if (!Subscribed(kind) || !seen.Add(kind + ":" + key)) return;
         bool attackFinished = kind == "action_finished" && evidence?["tool"]?.ToString() == "fight";
         bool verified = kind == "action_finished" && verifiedCompletions.Contains(key);
         bool continued = kind == "action_finished" && continuedAttempts.Contains(key);
@@ -433,7 +446,7 @@ public sealed class AgentWatch
         if (kind is not ("nearby_tile" or "nearby_chest" or "nearby_drop") || string.IsNullOrWhiteSpace(key)
             || string.IsNullOrWhiteSpace(reason) || reason.Length > 500)
             throw new ArgumentException("需要机会事件kind/key及1..500字符的重新考虑原因。");
-        if (!events.Contains(kind)) throw new ArgumentException("该事件尚未订阅。");
+        if (!Subscribed(kind)) throw new ArgumentException("该事件尚未订阅。");
         if (pending.Any(e => e["kind"]?.ToString() == kind && e["key"]?.ToString() == key))
             return new JsonObject { ["status"] = "already_pending", ["kind"] = kind, ["key"] = key };
         if (!seen.Remove(kind + ":" + key)) throw new ArgumentException("没有已处理的对应机会事件。");
@@ -468,8 +481,8 @@ public sealed class AgentWatch
         ["loot_chests_in_reach"] = LootChestsInReach,
         ["passive_events"] = new JsonArray(passive.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["background_events"] = new JsonArray(background.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
-        ["tile_types"] = new JsonArray(tileTypes.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
-        ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
+        ["tile_types"] = new JsonArray(tileTypes.Union(policyTiles).Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
+        ["events"] = new JsonArray(events.Union(policyEvents).Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = wakeCount, ["wake_limit"] = 6, ["event_count"] = issued,
         ["pending"] = new JsonArray(pending.Take(12).Select(value => value.DeepClone()).ToArray()),
         ["pending_count"] = pending.Count, ["pending_truncated"] = pending.Count > 12,
@@ -487,8 +500,8 @@ public sealed class AgentWatch
         ["loot_chests_in_reach"] = LootChestsInReach,
         ["passive_events"] = new JsonArray(passive.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["background_events"] = new JsonArray(background.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
-        ["tile_types"] = new JsonArray(tileTypes.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
-        ["events"] = new JsonArray(events.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
+        ["tile_types"] = new JsonArray(tileTypes.Union(policyTiles).Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
+        ["events"] = new JsonArray(events.Union(policyEvents).Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = wakeCount, ["wake_limit"] = 6, ["event_count"] = issued,
         ["pending"] = new JsonArray(pending.Select(x => x.DeepClone()).ToArray()),
         ["history"] = new JsonArray(history.Select(x => x.DeepClone()).ToArray()), ["scope"] = "current_instruction",
@@ -496,6 +509,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); background.Clear(); advised.Clear(); verifiedCompletions.Clear(); continuedAttempts.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); scriptHandlers.Clear(); issued = wakeCount = samples = 0; nextOpportunityReview = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; honeySince = null; }
-    public void End() { events.Clear(); pending.Clear(); scriptHandlers.Clear(); LootChestsInReach = false; }
+    { SetPolicyWatch(null); events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); background.Clear(); advised.Clear(); verifiedCompletions.Clear(); continuedAttempts.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); scriptHandlers.Clear(); issued = wakeCount = samples = 0; nextOpportunityReview = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; honeySince = null; }
+    public void End() { events.Clear(); pending.Clear(); scriptHandlers.Clear(); SetPolicyWatch(null); LootChestsInReach = false; }
 }
