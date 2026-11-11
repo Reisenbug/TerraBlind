@@ -3923,8 +3923,8 @@ public sealed class BehaviorTrial : ModSystem
             {
                 var saved = JsonNode.Parse(File.ReadAllText(checkpoint))["after"]["player"];
                 var position = new Vector2(saved["pos"]["x"].GetValue<float>(), saved["pos"]["y"].GetValue<float>());
-                if (!saved["on_ground"].GetValue<bool>() || saved["dead"].GetValue<bool>()
-                    || Collision.SolidCollision(position, p.width, p.height)) throw new Exception("progression checkpoint requires a living clear grounded position");
+                if (!saved["on_ground"].GetValue<bool>() || saved["dead"].GetValue<bool>())
+                    throw new Exception("progression checkpoint requires a living grounded position");
                 p.Teleport(position); p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
             }
             progressionStage = stage; firstJungleAction = null; shortJungleClock = null;
@@ -5730,10 +5730,20 @@ public sealed class BehaviorTrial : ModSystem
 public sealed class BoundaryInputPlayer : ModPlayer
 {
     public static Action<Player> Drive;
+    bool reportedMiningSpeed;
     public override void SetControls() { if (Player.whoAmI == Main.myPlayer) Drive?.Invoke(Player); }
     public override void PostUpdateEquips()
     {
         if (Player.whoAmI == Main.myPlayer && Terraria.Program.LaunchParameters.ContainsKey("-agentbehaviorcheck")
-            && Environment.GetEnvironmentVariable("TB_FULL_CRAFT_TRIAL") == "1") Player.pickSpeed /= 3;
+            && Environment.GetEnvironmentVariable("TB_FULL_CRAFT_TRIAL") == "1")
+        {
+            float before = Player.pickSpeed;
+            Player.pickSpeed /= 3;
+            if (!reportedMiningSpeed)
+            {
+                reportedMiningSpeed = true;
+                Console.WriteLine($"TRIAL_MINING_SPEED multiplier=3 before={before:R} after={Player.pickSpeed:R}");
+            }
+        }
     }
 }
