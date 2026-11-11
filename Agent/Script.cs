@@ -510,8 +510,17 @@ public static class AgentScript
                     call["result"] = JsonNode.Parse(outcome);
                 }));
                 string skillSource = string.Join(",", skills.Select(pair =>
-                    System.Text.Json.JsonSerializer.Serialize(pair.Key) + ":{revision:" + pair.Value["revision"]
-                    + ",run:function(input){\n" + pair.Value["code"].ToString() + "\n}}"));
+                {
+                    string code = pair.Value["code"].ToString();
+                    try { Engine.PrepareScript(ScriptLibrary.FunctionSource(code)); }
+                    catch (ScriptPreparationException error)
+                    {
+                        code = "throw new Error(" + System.Text.Json.JsonSerializer.Serialize(
+                            $"program_invalid_syntax: {pair.Key} revision={pair.Value["revision"]}: {error.Message}") + ");";
+                    }
+                    return System.Text.Json.JsonSerializer.Serialize(pair.Key) + ":{revision:" + pair.Value["revision"]
+                        + ",run:function(input){\n" + code + "\n}}";
+                }));
                 string wrapper = """
                     (function(call, log, enter, complete, enterSkill, exitSkill, register, setHandling) {
                         delete globalThis.__gameTool;

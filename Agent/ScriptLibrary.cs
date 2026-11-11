@@ -10,6 +10,7 @@ public sealed class ScriptLibrary
     static readonly object gate = new();
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
+    internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
     static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions" };
 
     static JsonObject Template(string name, string detail, string code) => new()
@@ -476,7 +477,7 @@ public sealed class ScriptLibrary
             }
             try
             {
-                string wrapped = "(function() {\n" + code + "\n});";
+                string wrapped = FunctionSource(code);
                 Jint.Engine.PrepareScript(wrapped);
                 var script = new Acornima.Parser().ParseScript(wrapped);
                 var function = (Acornima.Ast.FunctionExpression)((Acornima.Ast.ExpressionStatement)script.Body[0]).Expression;

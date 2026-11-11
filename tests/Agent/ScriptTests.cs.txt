@@ -411,6 +411,8 @@ static class ScriptTests
             Check(patched["value"]?.ToString() == "patched" && effects == 2, "patched continuation replayed completed effects");
             Check(library.Save("collect", "const state = await tool('get_state');", 3)["error"]?.ToString() == "program_invalid_syntax",
                 "saved top-level await that the synchronous runner cannot execute");
+            Check(library.Save("collect", "const input={}; return input;", 3)["error"]?.ToString() == "program_invalid_syntax",
+                "save accepted a declaration that conflicts with the runtime input parameter");
             Check(library.Patch("collect", "return 'patched';", "return {;", 3)["error"]?.ToString() == "program_invalid_syntax",
                 "patch accepted syntactically invalid continuation");
             Check(library.Get("collect")["revision"].GetValue<int>() == 3
@@ -428,6 +430,19 @@ static class ScriptTests
             Check(entryCalls == 1 && entryResult["value"]["hp"].GetValue<int>() == 60,
                 "explicit function invocation was rejected or executed during save");
             library.Save("parameterized", "return step('effect',()=>tool('effect',input));", 0);
+            File.WriteAllText(Path.Combine(programDirectory, "broken_legacy.json"), new JsonObject
+            {
+                ["name"] = "broken_legacy", ["found"] = true, ["revision"] = 1, ["code"] = "const input={}; return input;"
+            }.ToJsonString());
+            var independent = await AgentScript.Run("return tool('effect',{});", 5, (_, _) => { }, Effect,
+                _ => Task.CompletedTask, default, programs: library.Callable());
+            Check(independent["ok"]?.GetValue<bool>() == true && independent["tool_calls"]?.GetValue<int>() == 1,
+                "an unused legacy skill prevented ordinary repair tools from executing");
+            var broken = await AgentScript.Run("return skill('broken_legacy',1,{});", 5, (_, _) => { }, Effect,
+                _ => Task.CompletedTask, default, programs: library.Callable());
+            Check(broken["ok"]?.GetValue<bool>() == false && broken["tool_calls"]?.GetValue<int>() == 0
+                && broken["detail"]?.ToString().Contains("program_invalid_syntax: broken_legacy revision=1") == true,
+                "invalid legacy invocation omitted its specific name and revision or executed effects");
             var skillProgress = new ScriptProgress();
             var skillTargets = new List<int>();
             Task<string> SkillEffect(string name, JsonObject args, CancellationToken token)
