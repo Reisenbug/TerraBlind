@@ -63,7 +63,7 @@ public sealed class AgentWatch
             notice["wake_deferred"] = false;
             nextOpportunityReview = clock();
         }
-        pending.Enqueue(notice);
+        pending.Enqueue((JsonObject)notice.DeepClone());
     }
     public Guid BeginScriptDelivery()
     {

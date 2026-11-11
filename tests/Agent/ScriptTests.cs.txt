@@ -1040,6 +1040,16 @@ static class ScriptTests
         watch.ReturnToAgent(notice);
         Check(watch.HasAdvisories && !watch.HasModelInterrupting,
             "unhandled opportunity was lost or stopped movement instead of requesting parallel Agent review");
+        var returned = watch.Take()[0].AsObject();
+        Check(returned["id"].ToString() == notice["id"].ToString()
+            && JsonNode.DeepEquals(returned["evidence"], notice["evidence"]),
+            "returned opportunity lost its identity or evidence");
+        returned["evidence"]["x"] = 2;
+        Check(notice["evidence"]["x"].GetValue<int>() == 1,
+            "returned opportunity retained the script result parent or mutable evidence");
+        watch.ReturnToAgent(returned);
+        Check(watch.TakeForScript(new[] { "nearby_chest" })[0]["evidence"]["x"].GetValue<int>() == 2,
+            "repeated event handoff could not be read by a later script");
         watch.EndHandlers(reader);
         Console.WriteLine("PASS: live JS event handlers preserve action ownership, isolate steps, repair locally and retain unhandled evidence");
     }
