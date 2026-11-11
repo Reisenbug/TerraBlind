@@ -502,6 +502,24 @@ static class GatherTests
             FightCoordinator.Tick(p, true, true);
             Check(p.selectedItem == 0 && !FightCoordinator.AimTarget.HasValue,
                 "completed attack animation did not restore mining");
+            FightCoordinator.Stop(); FightCoordinator.Start(40);
+            Main.npc[0].position = new(p.position.X + 24, p.position.Y);
+            p.selectedItem = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Check(p.selectedItem == 1 && p.controlUseItem, "immediate threat waited for another mining swing");
+            p.itemAnimation = 3; p.selectedItem = 0;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Check(p.selectedItem == 1, "immediate defense interrupted an unfinished attack");
+            p.itemAnimation = p.itemTime = 0; p.selectedItem = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Check(p.selectedItem == 1 && p.controlUseItem, "immediate threat yielded back to mining before clearance");
+            p.itemAnimation = 3;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Main.npc[0].active = false;
+            p.itemAnimation = p.itemTime = 0; p.selectedItem = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Check(p.selectedItem == 0 && p.controlUseItem, "cleared immediate threat did not restore mining");
+            Main.npc[0].active = true; Main.npc[0].position.X = p.position.X + 100;
             p.inventory[2] = new Item { stack = 1, createTile = 19 };
             p.selectedItem = 2; p.itemAnimation = 0; p.itemTime = 3; p.controlUseItem = false;
             FightCoordinator.Tick(p, true);

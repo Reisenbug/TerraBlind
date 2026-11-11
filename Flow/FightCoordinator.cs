@@ -246,7 +246,9 @@ namespace TerraBlind
             bool mining = primaryItemUse && (p.HeldItem.pick > 0 || p.HeldItem.axe > 0 || p.HeldItem.hammer > 0);
             bool placing = PlaceAction.IsRunning || PlaceCoordinator.IsActive || PlaceWalls.IsRunning
                 || p.HeldItem.createTile >= 0 && (primaryItemUse || p.itemTime > 0);
-            bool itemBusy = placing || mining && !_attackNext || !mining && (primaryItemUse || ItemUseCoordinator.IsActive
+            int closeWeapon = -1;
+            NPC closeThreat = mining && !placing ? FindNearest(p, !IsActive, out closeWeapon, closeOnly: true) : null;
+            bool itemBusy = placing || mining && !_attackNext && closeThreat == null || !mining && (primaryItemUse || ItemUseCoordinator.IsActive
                 || AgentTools.ControlSession.Active && AgentTools.ControlSession.Tool is not ("nav_to" or "fight" or "gather" or "collect_treasure"));
             if (itemBusy)
             {
@@ -265,7 +267,8 @@ namespace TerraBlind
                 _active = false;
                 return;
             }
-            NPC target = FindNearest(p, idle, out int weaponSlot);
+            int weaponSlot = closeWeapon;
+            NPC target = closeThreat ?? FindNearest(p, idle, out weaponSlot);
 
             if (target == null)
             {
@@ -292,7 +295,7 @@ namespace TerraBlind
             RememberAnimation(p, true);
         }
 
-        private static NPC FindNearest(Player p, bool idle, out int weaponSlot)
+        private static NPC FindNearest(Player p, bool idle, out int weaponSlot, bool closeOnly = false)
         {
             weaponSlot = -1;
             float pcx = p.position.X + p.width / 2f;
@@ -318,6 +321,12 @@ namespace TerraBlind
                 float dy = ncy - pcy;
                 float dist = dx * dx + dy * dy;
                 if (dist > maxDist * maxDist) continue;
+                if (closeOnly)
+                {
+                    float gapX = Math.Max(0, Math.Abs(dx) - (p.width + npc.width) / 2f);
+                    float gapY = Math.Max(0, Math.Abs(dy) - (p.height + npc.height) / 2f);
+                    if (npc.damage <= 0 || gapX * gapX + gapY * gapY > 48 * 48) continue;
+                }
                 int slot = CombatLoadout.Select(p, npc);
                 if (slot < 0) continue;
                 bool recentAttacker = age >= 0 && age <= 300 && attacker?["npc_index"]?.GetValue<int>() == i
