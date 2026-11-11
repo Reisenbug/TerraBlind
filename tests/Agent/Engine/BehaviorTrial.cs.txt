@@ -4189,7 +4189,7 @@ public sealed class BehaviorTrial : ModSystem
             ["prompt"] = prompt, ["spawn"] = jungleSpawn.DeepClone(), ["before"] = before,
             ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["model"] = "gpt-6.1-sol", ["effort"] = "low",
             ["natural_encounters"] = NaturalEncounters, ["stage"] = stage, ["terrain_edits"] = 0,
-            ["mining_speed_multiplier"] = 3,
+            ["mining_speed_multiplier"] = BoundaryInputPlayer.MiningSpeedMultiplier,
             ["resumed_from"] = QueenResumeRoot,
             ["package_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
                 File.ReadAllBytes(Path.Combine(Main.SavePath, "Mods", "TerraBlind.tmod"))))
@@ -4364,6 +4364,7 @@ public sealed class BehaviorTrial : ModSystem
         });
         File.WriteAllText(Path.Combine(Main.SavePath, "queen-start.json"), new JsonObject
         { ["prompt"] = prompt, ["before"] = before.DeepClone(), ["spawn"] = jungleSpawn?.DeepClone(), ["model"] = "gpt-6.1-sol", ["effort"] = "low",
+            ["mining_speed_multiplier"] = BoundaryInputPlayer.MiningSpeedMultiplier,
             ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["natural_encounters"] = NaturalEncounters,
             ["resumed_from"] = QueenResumeRoot }.ToJsonString());
         using var journal = new StreamWriter(Path.Combine(Main.SavePath, "queen-samples.jsonl")) { AutoFlush = true };
@@ -5989,6 +5990,7 @@ public sealed class BehaviorTrial : ModSystem
 
 public sealed class BoundaryInputPlayer : ModPlayer
 {
+    public const int MiningSpeedMultiplier = 6;
     public static Action<Player> Drive;
     bool reportedMiningSpeed;
     public override void SetControls() { if (Player.whoAmI == Main.myPlayer) Drive?.Invoke(Player); }
@@ -5998,11 +6000,11 @@ public sealed class BoundaryInputPlayer : ModPlayer
             && Environment.GetEnvironmentVariable("TB_FULL_CRAFT_TRIAL") == "1")
         {
             float before = Player.pickSpeed;
-            Player.pickSpeed /= 3;
+            Player.pickSpeed /= MiningSpeedMultiplier;
             if (!reportedMiningSpeed)
             {
                 reportedMiningSpeed = true;
-                Console.WriteLine($"TRIAL_MINING_SPEED multiplier=3 before={before:R} after={Player.pickSpeed:R}");
+                Console.WriteLine($"TRIAL_MINING_SPEED multiplier={MiningSpeedMultiplier} before={before:R} after={Player.pickSpeed:R}");
             }
         }
     }
