@@ -81,10 +81,21 @@ static class GatherTests
             "successful inventory progress hit a lifetime thirty-two-action limit");
         var stalledSource = new World { NavigationStalled = true };
         var stalledResult = await Gather.Run(Targets, 5, stalledSource, default);
-        Check(!stalledResult["ok"].GetValue<bool>() && stalledSource.Actions.Count == 1
+        Check(!stalledResult["ok"].GetValue<bool>() && stalledSource.Actions.Count == 2
             && stalledResult["outcome"].ToString() == "navigation_no_progress"
+            && stalledResult["blocked_sources"].AsArray().Count == 2
             && stalledResult["last_result"]["result"]["navigation"]["reason"].ToString() == "local_oscillation",
-            "gather retried adjacent sources after failed navigation instead of preserving the blocker");
+            "gather failed to try distinct sources once or lost their navigation blockers");
+        var alternateSource = new World { FirstNavigationStalled = true };
+        var alternateResult = await Gather.Run(Targets, 5, alternateSource, default);
+        Check(alternateSource.Actions.SequenceEqual(new[] { "npc", "tile" })
+            && alternateResult["targets"][0]["actual"].GetValue<int>() == 1
+            && alternateResult["blocked_sources"].AsArray().Count == 1,
+            "one blocked source prevented another executable source from making inventory progress");
+        alternateSource.FirstNavigationStalled = false;
+        alternateResult = await Gather.Run(Targets, 5, alternateSource, default);
+        Check(alternateResult["ok"].GetValue<bool>() && alternateSource.Actions.Count == 3,
+            "a later collection inherited a permanent source blacklist or repeated completed collection");
         var weakTool = new World { CollectionStalled = true };
         var weakResult = await Gather.Run(Targets, 5, weakTool, default);
         Check(weakTool.Actions.Count == 1 && weakResult["outcome"].ToString() == "collection_no_progress"
@@ -946,7 +957,7 @@ static class GatherTests
     {
         public bool Gain = true, Drop, Empty, Dead, WaitForever, Unsafe, Ambiguous, Obstructed, NavigationStalled, CollectionStalled, OutsideMiningRange;
         public bool LostMiningReach, RecoverOnRetry, PickupBlocked, FullDuringAction, TypeSpaceBlocked;
-        public bool FarEnemy, EnemyApproaches;
+        public bool FarEnemy, EnemyApproaches, FirstNavigationStalled;
         public int MiningDamage;
         public CancellationTokenSource Cancel;
         public int Stops;
@@ -972,7 +983,7 @@ static class GatherTests
             if (FullDuringAction) return new JsonObject { ["outcome"] = "inventory_full", ["item_type"] = candidate["item_type"].DeepClone() };
             Cancel?.Cancel(); token.ThrowIfCancellationRequested();
             if (WaitForever) await Task.Delay(Timeout.Infinite, token);
-            if (NavigationStalled) return new JsonObject { ["error"] = "cannot_reach_collect_target",
+            if (NavigationStalled || FirstNavigationStalled && Actions.Count == 1) return new JsonObject { ["error"] = "cannot_reach_collect_target",
                 ["navigation"] = new JsonObject { ["outcome"] = "no_progress", ["reason"] = "local_oscillation" } };
             if (CollectionStalled) return new JsonObject { ["outcome"] = "no_progress", ["reason"] = "tool_weak" };
             if (LostMiningReach && (Actions.Count == 1 || !RecoverOnRetry))

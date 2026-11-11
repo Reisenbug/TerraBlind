@@ -60,6 +60,7 @@ public static class Gather
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
         var timer = Stopwatch.StartNew();
         var attempts = new Dictionary<string, int>();
+        var unreachable = new HashSet<string>();
         var inventoryBefore = new Dictionary<int, int>();
         var unproductiveTiles = new Dictionary<int, JsonArray>();
         JsonObject scene = null, last = null;
@@ -113,6 +114,7 @@ public static class Gather
                 var candidate = available
                     .Where(CanPickup)
                     .Where(c => c["blocked_reason"] == null)
+                    .Where(c => !unreachable.Contains(c["id"].ToString()))
                     .Where(c => attempts.GetValueOrDefault(c["id"].ToString()) < 2)
                     .OrderBy(c => c["distance"].GetValue<float>() + (c["kind"].ToString() == "drop" ? -1000 : c["kind"].ToString() == "npc" ? -20 : 0))
                     .FirstOrDefault();
@@ -121,9 +123,10 @@ public static class Gather
                     outcome = available.Any(c => !CanPickup(c)) || targets.Any(t => Count(t) < t.Count
                         && scene["item_space"]?[t.ItemType.ToString()]?.GetValue<bool>() == false)
                         ? "inventory_full" : available.Length == 0 ? "source_unavailable"
+                        : available.All(c => unreachable.Contains(c["id"].ToString())) ? "navigation_no_progress"
                         : available.All(c => c["blocked_reason"] != null)
                             ? available[0]["blocked_reason"]?.ToString() ?? "source_blocked" : "attempt_limit";
-                    foreach (var source in available)
+                    foreach (var source in available.Where(c => !unreachable.Contains(c["id"].ToString())))
                         blockedSources.Add(new JsonObject { ["candidate"] = source.DeepClone(),
                             ["reason"] = !CanPickup(source) ? "inventory_full"
                                 : source["blocked_reason"] != null
@@ -141,7 +144,18 @@ public static class Gather
                 { outcome = "inventory_full"; break; }
                 if (last["result"]?["navigation"]?["outcome"]?.ToString() == "no_progress"
                     || candidate["kind"].ToString() == "drop" && last["result"]?["outcome"]?.ToString() == "no_progress")
-                { outcome = "navigation_no_progress"; break; }
+                {
+                    foreach (var source in available.Where(c => c["id"].ToString() == id
+                        || candidate["kind"].ToString() == "tile" && c["kind"].ToString() == "tile"
+                            && c["item_type"].ToString() == candidate["item_type"].ToString()
+                            && Math.Abs(c["x"].GetValue<int>() - candidate["x"].GetValue<int>()) <= 1
+                            && Math.Abs(c["y"].GetValue<int>() - candidate["y"].GetValue<int>()) <= 1))
+                        unreachable.Add(source["id"].ToString());
+                    blockedSources.Add(new JsonObject { ["candidate"] = candidate.DeepClone(),
+                        ["reason"] = "navigation_no_progress", ["attempts"] = attempts[id],
+                        ["result"] = last["result"].DeepClone() });
+                    continue;
+                }
                 if (last["result"]?["outcome"]?.ToString() == "no_progress")
                 {
                     if (candidate["kind"].ToString() == "tile" && attempts[id] < 2
