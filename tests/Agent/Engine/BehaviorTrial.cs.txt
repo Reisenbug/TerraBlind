@@ -70,6 +70,11 @@ public sealed class BehaviorTrial : ModSystem
     static bool ShortJungleTrial => Environment.GetEnvironmentVariable("TB_SHORT_JUNGLE_TRIAL") == "1";
     static bool ProgressionTrial => Environment.GetEnvironmentVariable("TB_PROGRESSION_TRIAL") == "1";
     Stopwatch shortJungleClock;
+    Stopwatch queenClock;
+    double queenSampleMs, queenCoveredMs, queenUncoveredMs, queenRespawnMs, queenComputeMs;
+    double queenGapStart = -1;
+    bool queenGapWarned;
+    readonly JsonArray queenGaps = new();
     JsonObject jungleSpawn, firstJungleAction;
     string progressionStage;
     int mechanicalSkulls;
@@ -565,6 +570,34 @@ public sealed class BehaviorTrial : ModSystem
             for (int i = 0; i < Main.maxNPCs; i++)
                 if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
         var p = Main.LocalPlayer;
+        if (queenClock != null)
+        {
+            double now = queenClock.Elapsed.TotalMilliseconds, elapsed = now - queenSampleMs;
+            queenSampleMs = now;
+            bool covered = RecedingNav.Active || MineCoordinator.IsActive || ItemUseCoordinator.IsActive || ActExecutor.IsActive
+                || PlaceAnywhere.IsRunning || FightCoordinator.IsActive || FightCoordinator.AttackAnimationActive
+                || (bool)EscapeField.GetValue(null) || p.itemAnimation > 0 || p.controlUseItem
+                || p.controlLeft || p.controlRight || p.controlJump;
+            if (p.dead) queenRespawnMs += elapsed;
+            else if (covered) queenCoveredMs += elapsed;
+            else queenUncoveredMs += elapsed;
+            if (RecedingNav.Active && !(bool)FieldReadyProperty.GetValue(null)) queenComputeMs += elapsed;
+            if (!p.dead && !covered)
+            {
+                if (queenGapStart < 0) { queenGapStart = now; queenGapWarned = false; }
+                if (!queenGapWarned && now - queenGapStart >= 10000)
+                {
+                    queenGapWarned = true;
+                    Console.WriteLine("QUEEN_UNCOVERED_WARNING " + QueenCoverage().ToJsonString());
+                }
+            }
+            else if (queenGapStart >= 0)
+            {
+                queenGaps.Add(new JsonObject { ["started_ms"] = queenGapStart, ["ended_ms"] = now,
+                    ["duration_ms"] = now - queenGapStart });
+                queenGapStart = -1;
+            }
+        }
         if (handoffProbeTick)
             typeof(AgentTools).GetMethod("ContinuePreparedNode", HiddenStatic).Invoke(null, new object[] { CancellationToken.None });
         if (samplingEvasion)
@@ -4352,6 +4385,11 @@ public sealed class BehaviorTrial : ModSystem
         }
     }
 
+    JsonObject QueenCoverage() => new() { ["covered_ms"] = queenCoveredMs, ["uncovered_ms"] = queenUncoveredMs,
+        ["respawn_ms"] = queenRespawnMs, ["navigation_compute_ms"] = queenComputeMs,
+        ["current_gap_ms"] = queenGapStart < 0 ? 0 : queenClock.Elapsed.TotalMilliseconds - queenGapStart,
+        ["gaps"] = queenGaps.DeepClone() };
+
     async Task QueenGoalTrial()
     {
         if (string.IsNullOrEmpty(QueenResumeRoot)) await OnMain(() =>
@@ -4370,6 +4408,7 @@ public sealed class BehaviorTrial : ModSystem
         int targetHealth = int.Parse(Environment.GetEnvironmentVariable("TB_QUEEN_TARGET_HEALTH") ?? "240");
         string prompt = "/goal 前往丛林地下，获得至少240点永久生命上限，制作荆棘旋刃，召唤并击败蜂王。生命水晶、毒刺、丛林孢子、箱子并行规划：240血前以水晶为主要目标，其他资源和箱子在去水晶的路上近便时获取；达到240血后推进荆棘旋刃与蜂王，路上仍择机收集近便水晶和箱子。生命水晶及时使用。先利用find_descent与descent_route的丛林主道出发，赶路时完成材料知识查询和后续路线准备。结合当前地形地图安排采集及蜂巢场地。背包有星怒和足量木头，本轮持续鱼鳃与光芒效果。低血量唤醒观察，当前动作继续执行。持续推进直到真实结果通过宿主验收。";
         prompt = prompt.Replace("240", targetHealth.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        prompt += "本轮要求25分钟内达到300点永久生命并击败蜂王。以持续执行和实际进度安排路线，材料与场地准备期间提前完成后继判断。";
         prompt += "本轮验证途中反应：首段行动前用task_policy挂整趟反应，途中继续完善，让近便资源拾取、背包整理和压力板局部恢复直接在脚本内执行；可读取task_reactions模板并按现场修改。200血以上零死亡，关注动作交接和超过10秒的停顿。";
         if (!string.IsNullOrEmpty(QueenResumeRoot))
         {
@@ -4442,6 +4481,7 @@ public sealed class BehaviorTrial : ModSystem
             }
         }
         var clock = Stopwatch.StartNew();
+        await OnMain(() => { queenClock = clock; return true; });
         var deaths = new JsonArray(); bool wasDead = false;
         long? healthMs = null, chakramMs = null, queenSpawnMs = null;
         await OnMain(() =>
@@ -4477,9 +4517,13 @@ public sealed class BehaviorTrial : ModSystem
                 File.WriteAllText(Path.Combine(Main.SavePath, "queen-progress.json"), new JsonObject
                 { ["ok"] = completed, ["elapsed_ms"] = clock.ElapsedMilliseconds, ["target_health"] = targetHealth, ["health_target_ms"] = healthMs,
                     ["chakram_ms"] = chakramMs, ["queen_spawn_ms"] = queenSpawnMs, ["deaths"] = deaths.DeepClone(),
-                    ["boss"] = boss.DeepClone(), ["after"] = state.DeepClone() }.ToJsonString());
+                    ["boss"] = boss.DeepClone(), ["coverage"] = await OnMain(QueenCoverage), ["after"] = state.DeepClone() }.ToJsonString());
                 if (completed)
-                { Console.WriteLine($"QUEEN_GOAL_PASS elapsed_ms={clock.ElapsedMilliseconds} target_health={targetHealth} health_target_ms={healthMs} chakram_ms={chakramMs} queen_spawn_ms={queenSpawnMs} deaths={deaths.Count}"); return; }
+                {
+                    if (clock.Elapsed.TotalMinutes > 25) throw new Exception("queen goal completed after the 25 minute limit");
+                    Console.WriteLine($"QUEEN_GOAL_PASS elapsed_ms={clock.ElapsedMilliseconds} target_health={targetHealth} health_target_ms={healthMs} chakram_ms={chakramMs} queen_spawn_ms={queenSpawnMs} deaths={deaths.Count}"); return;
+                }
+                if (clock.Elapsed.TotalMinutes >= 25) throw new Exception("queen goal exceeded the 25 minute limit; checkpoint retained");
                 if (NativeAgent.Status is "failed" or "idle") throw new Exception("queen goal stopped before verification: " + NativeAgent.Status);
             }
         }
@@ -4488,6 +4532,7 @@ public sealed class BehaviorTrial : ModSystem
             await OnMain(() =>
             {
                 NativeAgent.Stop();
+                queenClock = null;
                 Player.SavePlayer(Main.ActivePlayerFileData);
                 WorldFile.SaveWorld(false);
                 Console.WriteLine("QUEEN_CHECKPOINT_SAVED root=" + Main.SavePath);
