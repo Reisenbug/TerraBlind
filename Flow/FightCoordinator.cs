@@ -250,8 +250,11 @@ namespace TerraBlind
                 || p.HeldItem.createTile >= 0 && (primaryItemUse || p.itemTime > 0);
             int closeWeapon = -1;
             NPC closeThreat = mining && !placing ? FindNearest(p, !IsActive, out closeWeapon, closeOnly: true) : null;
+            bool miningAction = AgentTools.ControlSession.Active
+                && AgentControlSession.Behavior(AgentTools.ControlSession.Tool) == ControlBehavior.Mining;
             bool itemBusy = placing || mining && !_attackNext && closeThreat == null || !mining && (primaryItemUse || ItemUseCoordinator.IsActive
-                || AgentTools.ControlSession.Active && AgentTools.ControlSession.Tool is not ("nav_to" or "fight" or "gather" or "collect_treasure"));
+                || AgentTools.ControlSession.Active && !miningAction
+                    && AgentTools.ControlSession.Tool is not ("nav_to" or "fight" or "gather" or "collect_treasure"));
             if (itemBusy)
             {
                 _idleDefense = false;

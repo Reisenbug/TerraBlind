@@ -2040,6 +2040,8 @@ public sealed class BehaviorTrial : ModSystem
             for (int mode = 0; mode < 2; mode++)
             {
                 int wallX = 0, floorY = 0;
+                long miningTicket = 0;
+                int approachAttackFrames = 0;
                 await OnMain(() =>
                 {
                     NativeAgent.Stop(); Halt.All(); Manual.On = false; Main.playerInventory = false;
@@ -2062,9 +2064,21 @@ public sealed class BehaviorTrial : ModSystem
                     for (int y = floorY - 3; y < floorY; y++) WorldGen.PlaceTile(wallX, y, TileID.Hive, mute: true, forced: true);
                     target = NPC.NewNPC(p.GetSource_Misc("mining-defense-probe"), (int)p.Center.X - 120, (int)p.Center.Y, NPCID.BlueSlime);
                     var enemy = Main.npc[target]; enemy.aiStyle = -1; enemy.velocity = Vector2.Zero;
-                    enemy.noGravity = enemy.noTileCollide = enemy.dontTakeDamage = true; enemy.damage = 1;
+                    enemy.noGravity = enemy.noTileCollide = true; enemy.damage = 1;
+                    enemy.life = enemy.lifeMax = 20000;
                     sourceInputSamples.Clear(); samplingSources = true;
+                    var session = (AgentControlSession)SessionField.GetValue(null);
+                    if (session.Begin("mine", null, out miningTicket) != null)
+                        throw new Exception("native mining probe could not acquire controls");
                     if (mode == 1) FightCoordinator.Start(20);
+                    return true;
+                });
+                await Task.Delay(750);
+                await OnMain(() =>
+                {
+                    approachAttackFrames = sourceInputSamples.Select(sample => sample.Split(','))
+                        .Count(sample => sample[9] == ItemID.ThornChakram.ToString() && int.Parse(sample[7]) > 0);
+                    int x = Main.spawnTileX;
                     MineCoordinator.Start(new MineRequest { Dir = MineDir.Right, StartWx = x, StartWy = floorY - 1,
                         TargetWx = x + 4, TargetWy = floorY - 1 });
                     return true;
@@ -2076,14 +2090,20 @@ public sealed class BehaviorTrial : ModSystem
                     samplingSources = false;
                     int remaining = Enumerable.Range(floorY - 3, 3).Count(y => Main.tile[wallX, y].HasTile);
                     var result = new JsonObject { ["attack_enabled"] = mode == 1, ["elapsed_ms"] = clock.ElapsedMilliseconds,
+                        ["approach_attack_frames"] = approachAttackFrames, ["target_hp"] = Main.npc[target].life,
                         ["outcome"] = MineCoordinator.Outcome, ["remaining"] = remaining,
                         ["samples"] = new JsonArray(sourceInputSamples.Select(sample => (JsonNode)JsonValue.Create(sample)).ToArray()) };
-                    FightCoordinator.Stop(); MineCoordinator.Stop(); return result;
+                    FightCoordinator.Stop(); MineCoordinator.Stop();
+                    ((AgentControlSession)SessionField.GetValue(null)).End(miningTicket);
+                    return result;
                 }));
             }
             File.WriteAllText(Path.Combine(Main.SavePath, "mining-defense.json"), stages.ToJsonString());
             if (stages.Any(stage => stage["remaining"].GetValue<int>() != 0 || stage["outcome"].ToString() != "done"))
                 throw new Exception("native mining/defense failed; inspect mining-defense.json");
+            if (stages[0]["approach_attack_frames"].GetValue<int>() != 0
+                || stages[1]["approach_attack_frames"].GetValue<int>() == 0 || stages[1]["target_hp"].GetValue<int>() >= 20000)
+                throw new Exception("native mining approach defense failed; inspect mining-defense.json");
             Console.WriteLine("MINING_DEFENSE_PASS native_tiles=true attack_off_and_on=true");
             return;
         }

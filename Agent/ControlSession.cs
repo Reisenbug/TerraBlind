@@ -70,7 +70,7 @@ public sealed class AgentControlSession
         delegates = name switch
         {
             "nav_to" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Placement, ControlBehavior.Direct, ControlBehavior.Attack },
-            "mine" or "mine_vein" or "chop_wood" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Direct },
+            "mine" or "mine_vein" or "chop_wood" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Direct, ControlBehavior.Attack },
             "place_at" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Placement, ControlBehavior.Direct },
             "gather" or "collect_treasure" or "build_house" or "hell_run" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Placement,
                 ControlBehavior.Direct, ControlBehavior.Workflow, ControlBehavior.Attack, ControlBehavior.Dodge },

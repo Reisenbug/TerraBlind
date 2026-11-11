@@ -548,6 +548,20 @@ static class GatherTests
             FightCoordinator.Tick(p, true);
             Check(p.selectedItem == 1 && p.controlUseItem,
                 "holding an idle building item indefinitely suppressed defense");
+            foreach (string tool in new[] { "mine", "mine_vein", "chop_wood" })
+            {
+                FightCoordinator.Stop(); FightCoordinator.Start(40);
+                Check(AgentTools.ControlSession.Begin(tool, null, out long ticket) == null,
+                    "mining action could not acquire controls");
+                try
+                {
+                    p.selectedItem = 0; p.itemAnimation = p.itemTime = 0; p.controlUseItem = false;
+                    FightCoordinator.Tick(p, true);
+                    Check(p.selectedItem == 1 && p.controlUseItem,
+                        tool + " blocked defense while approaching between tool animations");
+                }
+                finally { AgentTools.ControlSession.End(ticket); }
+            }
             var oldVelocity = p.velocity;
             try
             {

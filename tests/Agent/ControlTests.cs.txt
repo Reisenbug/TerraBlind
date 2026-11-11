@@ -100,6 +100,18 @@ static class ControlTests
         Check(session.Check(ControlBehavior.Mining, use, delegated: true) != null,
             "navigation delegation bypassed an independent mining prohibition");
         session.End(next); policy.Release(noMining); policy.Release(claim);
+        foreach (string tool in new[] { "mine", "mine_vein", "chop_wood" })
+        {
+            claim = policy.Claim(ControlChannels.All, ControlLifetime.Task, null, "mining with defense");
+            policy.ConfirmReleased(claim);
+            Check(session.Begin(tool, claim, out long mining) == null
+                && session.Check(ControlBehavior.Attack, use, delegated: true) == null,
+                tool + " did not delegate its claimed item channel for defense");
+            string noAttack = policy.Deny(new[] { ControlBehavior.Attack }, ControlLifetime.Task, null, "hold fire");
+            Check(session.Check(ControlBehavior.Attack, use, delegated: true) != null,
+                tool + " defense bypassed an explicit attack prohibition");
+            session.End(mining); policy.Release(noAttack); policy.Release(claim);
+        }
         Check(AgentControlSession.RequiredChannels("act", System.Text.Json.Nodes.JsonNode.Parse(
             "{\"steps\":[{\"keys\":[\"right\"],\"until\":{\"frames\":10}}]}").AsObject()) == movement,
             "movement-only primitive falsely requires item ownership");
