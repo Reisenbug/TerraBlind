@@ -331,6 +331,11 @@ public sealed class BehaviorTrial : ModSystem
     public override void OnWorldLoad()
     {
         if (!enabled || !ShortJungleTrial && !ProgressionTrial) return;
+        if (ProgressionTrial && !string.IsNullOrEmpty(QueenResumeRoot))
+        {
+            jungleSpawn = JsonNode.Parse(File.ReadAllText(Path.Combine(QueenResumeRoot, "progression-cobalt-start.json")))["spawn"].DeepClone().AsObject();
+            return;
+        }
         var weights = Main.remixWorld ? TileID.Sets.RemixJungleBiome : TileID.Sets.JungleBiome;
         var spawn = SurfaceBiomeSearch.Find(Main.maxTilesX, Main.maxTilesY, (int)Main.worldSurface, Main.spawnTileX,
             Main.buffScanAreaWidth, Main.buffScanAreaHeight, SceneMetrics.JungleTileThreshold, (x, y) =>
@@ -424,12 +429,21 @@ public sealed class BehaviorTrial : ModSystem
         if (Terraria.Social.SocialAPI.Cloud != null) Terraria.Social.SocialAPI.Cloud.EnabledByDefault = false;
         WorldGen.clearWorld();
         if (!string.IsNullOrEmpty(QueenResumeRoot))
+        {
             foreach (string relative in new[] { "Worlds/Checks.wld", "Worlds/Checks.twld", "Players/JS_behavior_trial.plr", "Players/JS_behavior_trial.tplr" })
             {
                 string destination = Path.Combine(Main.SavePath, relative);
                 Directory.CreateDirectory(Path.GetDirectoryName(destination));
                 File.Copy(Path.Combine(QueenResumeRoot, relative), destination, true);
             }
+            string programs = Path.Combine(QueenResumeRoot, "TerraBlindAgent", "programs");
+            if (ProgressionTrial && Directory.Exists(programs))
+                foreach (string source in Directory.EnumerateFiles(programs, "*", SearchOption.AllDirectories))
+                {
+                    string destination = Path.Combine(Main.SavePath, "TerraBlindAgent", "programs", Path.GetRelativePath(programs, source));
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination)); File.Copy(source, destination, true);
+                }
+        }
         WorldFile.GetAllMetadata(Path.Combine(Main.SavePath, "Worlds", "Checks.wld"), false).SetAsActive();
         var player = string.IsNullOrEmpty(QueenResumeRoot) ? PlayerFileData.CreateAndSave(new Player { name = "JS behavior trial" })
             : Player.LoadPlayer(Path.Combine(Main.SavePath, "Players", "JS_behavior_trial.plr"), false);
@@ -3893,15 +3907,25 @@ public sealed class BehaviorTrial : ModSystem
         await OnMain(() =>
         {
             var p = Main.LocalPlayer;
-            if ((stage == null || stage == "cobalt") && (jungleSpawn == null || !p.ZoneJungle || !p.ZoneOverworldHeight
+            bool resume = stage != null && !string.IsNullOrEmpty(QueenResumeRoot);
+            if (!resume && (stage == null || stage == "cobalt") && (jungleSpawn == null || !p.ZoneJungle || !p.ZoneOverworldHeight
                 || Main.GameMode != 0 || p.statLifeMax != 100 || p.ConsumedLifeCrystals != 0))
                 throw new Exception("short collection requires a fresh 100 HP classic jungle surface spawn");
             if (stage == "cobalt" && (NPC.downedBoss3 || Main.hardMode || p.HasItem(ItemID.CobaltShield)))
                 throw new Exception("progression requires undefeated Skeletron and no Cobalt Shield");
-            if (stage == null || stage == "cobalt")
+            if (!resume && (stage == null || stage == "cobalt"))
             {
                 jungleSpawn["actual_biome"] = "jungle";
                 jungleSpawn["actual_position"] = new JsonObject { ["x"] = p.position.X / 16, ["y"] = p.position.Y / 16 };
+            }
+            string checkpoint = Path.Combine(QueenResumeRoot ?? "", prefix + "-progress.json");
+            if (resume && File.Exists(checkpoint))
+            {
+                var saved = JsonNode.Parse(File.ReadAllText(checkpoint))["after"]["player"];
+                var position = new Vector2(saved["pos"]["x"].GetValue<float>(), saved["pos"]["y"].GetValue<float>());
+                if (!saved["on_ground"].GetValue<bool>() || saved["dead"].GetValue<bool>()
+                    || Collision.SolidCollision(position, p.width, p.height)) throw new Exception("progression checkpoint requires a living clear grounded position");
+                p.Teleport(position); p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
             }
             progressionStage = stage; firstJungleAction = null; shortJungleClock = null;
             Player.SavePlayer(Main.ActivePlayerFileData); WorldFile.SaveWorld(false);
@@ -3932,6 +3956,8 @@ public sealed class BehaviorTrial : ModSystem
             ["prompt"] = prompt, ["spawn"] = jungleSpawn.DeepClone(), ["before"] = before,
             ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["model"] = "gpt-6.1-sol", ["effort"] = "low",
             ["natural_encounters"] = NaturalEncounters, ["stage"] = stage, ["terrain_edits"] = 0,
+            ["mining_speed_multiplier"] = 3,
+            ["resumed_from"] = QueenResumeRoot,
             ["package_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
                 File.ReadAllBytes(Path.Combine(Main.SavePath, "Mods", "TerraBlind.tmod"))))
         }.ToJsonString());
@@ -5705,4 +5731,9 @@ public sealed class BoundaryInputPlayer : ModPlayer
 {
     public static Action<Player> Drive;
     public override void SetControls() { if (Player.whoAmI == Main.myPlayer) Drive?.Invoke(Player); }
+    public override void PostUpdateEquips()
+    {
+        if (Player.whoAmI == Main.myPlayer && Terraria.Program.LaunchParameters.ContainsKey("-agentbehaviorcheck")
+            && Environment.GetEnvironmentVariable("TB_FULL_CRAFT_TRIAL") == "1") Player.pickSpeed /= 3;
+    }
 }
