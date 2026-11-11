@@ -22,12 +22,12 @@ public class AgentContactEscape : ModSystem
     int lavaStillFrames;
     bool lavaItemStarted;
 
-    bool EscapeLava(Player player)
+    bool UseEmergencyItem(Player player)
     {
         if (lavaItem != null)
         {
             frames++;
-            bool protectedNow = player.lavaImmune || player.lavaTime > 0;
+            bool protectedNow = !player.suffocating && (player.lavaImmune || player.lavaTime > 0);
             bool returned = Vector2.DistanceSquared(player.position, lavaPosition) > 256 * 256;
             if (protectedNow || returned || frames >= 180 || lavaItemStarted && !ItemUseCoordinator.IsActive)
             {
@@ -44,13 +44,17 @@ public class AgentContactEscape : ModSystem
             { ItemUseCoordinator.Start(lavaItem); lavaItemStarted = true; }
             return true;
         }
-        if (AgentTools.ContactEscapeActive || player.lavaImmune || player.lavaTime > 0
-            || !Collision.LavaCollision(player.position, player.width, player.height))
+        bool lava = !player.lavaImmune && player.lavaTime <= 0 && Collision.LavaCollision(player.position, player.width, player.height);
+        var contact = player.suffocating ? Collision.HurtTiles(player.position, player.width, player.height, player)
+            : new Collision.HurtTile { type = -1 };
+        bool suffocating = contact.type >= 0 && TileID.Sets.Suffocate[contact.type];
+        if (AgentTools.ContactEscapeActive || !lava && !suffocating)
         { lavaStillFrames = 0; lavaPosition = player.position; return false; }
         lavaStillFrames = Vector2.DistanceSquared(player.position, lavaPosition) < 4 ? lavaStillFrames + 1 : 0;
         lavaPosition = player.position;
-        int slot = Array.FindIndex(player.inventory, 0, 50, item => !item.IsAir && item.buffType == BuffID.ObsidianSkin);
-        if (slot < 0 && lavaStillFrames >= 15)
+        int slot = lava && !suffocating
+            ? Array.FindIndex(player.inventory, 0, 50, item => !item.IsAir && item.buffType == BuffID.ObsidianSkin) : -1;
+        if (slot < 0 && (suffocating || lavaStillFrames >= 15))
             foreach (int type in new[] { ItemID.RecallPotion, ItemID.MagicMirror, ItemID.IceMirror })
             { slot = Array.FindIndex(player.inventory, 0, 50, item => !item.IsAir && item.type == type); if (slot >= 0) break; }
         if (slot < 0) return false;
@@ -61,7 +65,7 @@ public class AgentContactEscape : ModSystem
         frames = 0; lavaItemStarted = false;
         AgentTools.ContactEscapeActive = true;
         AgentTools.LastContactEscape = new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["status"] = "using_emergency_item",
-            ["reason"] = "unprotected_lava", ["item_type"] = itemType, ["hp_start"] = player.statLife,
+            ["reason"] = suffocating ? "suffocation" : "unprotected_lava", ["item_type"] = itemType, ["hp_start"] = player.statLife,
             ["start_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y } };
         DiagLog.Write("[agent_lava_escape] " + AgentTools.LastContactEscape.ToJsonString());
         return true;
@@ -185,7 +189,7 @@ public class AgentContactEscape : ModSystem
             AgentTools.ContactEscapeActive = false; attemptedDamageTick = -1; return;
         }
         if (lavaItem != null && !AgentTools.ContactEscapeActive) { ItemUseCoordinator.Stop(); lavaItem = null; }
-        if (EscapeLava(player)) return;
+        if (UseEmergencyItem(player)) return;
         bool touching = Harmful(player.position, player, includeLava: false);
         if (!AgentTools.ContactEscapeActive)
         {
