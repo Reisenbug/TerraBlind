@@ -30,7 +30,9 @@ static class ScriptTests
         await TestDecisionChannels();
         await TestDecisionTravel();
         GatherTests.DecisionMovement();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=3 model_calls=0");
+        await ReactiveHostIntegration();
+        await ReactiveHostIntegration(itemUse: true);
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=5 model_calls=0");
     }
 
     static async Task TestDecisionChannels()
@@ -1682,15 +1684,17 @@ static class ScriptTests
         }
     }
 
-    static async Task ReactiveHostIntegration()
+    static async Task ReactiveHostIntegration(bool itemUse = false)
     {
         var agent = new NativeAgent(); agent.Load();
         var http = HttpServerSystem.Handler;
         var player = Terraria.Main.LocalPlayer;
         var position = player.position;
+        int animation = player.itemAnimation, animationPumps = 0;
         bool dead = player.dead, suffocating = player.suffocating;
         int starts = 0, polls = 0, stops = 0;
         bool readingWhileMoving = false, actingAfterStop = false;
+        bool? actedDuringAnimation = null;
         string original = null;
         try
         {
@@ -1700,7 +1704,11 @@ static class ScriptTests
             {
                 if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
                 if (path == "/nav_recede_stop") { stops++; RecedingNav.Active = false; }
-                if (path == "/act") actingAfterStop = !RecedingNav.Active && stops == 1;
+                if (path == "/act")
+                {
+                    actingAfterStop = !RecedingNav.Active && stops == 1;
+                    actedDuringAnimation = player.itemAnimation > 0;
+                }
                 if (path == "/nav_recede_done")
                 {
                     polls++;
@@ -1712,16 +1720,20 @@ static class ScriptTests
                         player.position = new System.Numerics.Vector2(320, 160);
                         return (200, "{\"done\":true}");
                     }
-                    if (polls == 2) readingWhileMoving = RecedingNav.Active && stops == 0;
+                    if (polls == 2)
+                    {
+                        readingWhileMoving = RecedingNav.Active && stops == 0;
+                        player.itemAnimation = 12;
+                    }
                     return (200, "{\"done\":false}");
                 }
                 return (200, "{}");
             };
             var task = AgentTools.Execute("run_script", new JsonObject { ["workflow"] = "reactive-host-" + Guid.NewGuid().ToString("N"),
-                ["code"] = """
+                ["code"] = $$$"""
                     on('nearby_chest',event=>{
                       if(event.evidence.x===1) tool('inventory_review');
-                      else tool('act',{steps:[{keys:['right'],until:{frames:1}}]});
+                      else tool('act',{steps:[{keys:['right'],use:{{{(itemUse ? "true" : "false")}}},until:{frames:1}}]});
                       return {handled:true};
                     });
                     tool('watch',{events:['nearby_chest']});
@@ -1731,12 +1743,15 @@ static class ScriptTests
             while (!task.IsCompleted)
             {
                 Check(timer.Elapsed.TotalSeconds < 10, "reactive host navigation deadlocked");
+                if (stops == 1 && ++animationPumps >= 20) player.itemAnimation = 0;
                 agent.PostUpdateEverything(); await Task.Delay(1);
             }
             var result = JsonNode.Parse(await task);
             Check(result["ok"].GetValue<bool>() && result["value"]["done"].GetValue<bool>()
                 && starts == 2 && readingWhileMoving && actingAfterStop,
                 "production reaction dispatch failed query/movement handoff: " + result + " starts=" + starts + " stops=" + stops);
+            Check(actedDuringAnimation == !itemUse,
+                "reaction movement waited for attack animation or item use interrupted it: itemUse=" + itemUse);
             var action = AgentTools.Actions.Summary().First(a => a["handle"]?.ToString() == original);
             Check(action["attempt"].GetValue<int>() == 1 && action["status"].ToString() == "completed" && !AgentTools.ControlSession.Active,
                 "reaction replaced the original action or leaked its controls");
@@ -1751,6 +1766,7 @@ static class ScriptTests
         {
             AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Watches.Reset(); AgentTools.Plan.Reset();
             player.position = position; player.dead = dead; player.suffocating = suffocating;
+            player.itemAnimation = animation;
             HttpServerSystem.Handler = http; agent.Unload();
         }
     }

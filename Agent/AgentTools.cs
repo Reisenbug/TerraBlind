@@ -1104,7 +1104,7 @@ public static partial class AgentTools
             return new JsonObject { ["error"] = "reaction_action_lifecycle",
                 ["detail"] = "事件中直接调用nav_to/gather/use_item等，宿主交接并恢复原动作。任务句柄控制交回Agent执行。" }.ToJsonString();
         if (reactions?.Handling == true && AgentControlSession.ActionTool(name) && reactions.BeforeAction != null)
-            await reactions.BeforeAction(name, token);
+            await reactions.BeforeAction(name, args, token);
         if (reactions?.Handling == true) return await Execute(name, args, token);
         if (!ActionTasks.Supports(name))
             return await ExecuteWithTaskPolicy(name, args, name is "action_start" or "action_queue" || name == "action_control" && Text(args, "command") == "resume" ? root : token);
@@ -1200,15 +1200,15 @@ public static partial class AgentTools
         bool paused = false;
         Action restore = null;
         var previous = reactions.BeforeAction;
-        reactions.BeforeAction = async (name, ct) =>
+        reactions.BeforeAction = async (name, args, ct) =>
         {
             if (name == "fight") return;
             bool changesRoute = name is "nav_to" or "gather" or "mine" or "mine_vein" or "chop_wood" or "use_item"
                 or "place_at" or "act" or "collect_treasure" or "build_house" or "hell_run" or "combat_reposition";
             if (changesRoute && !paused && pause != null) { await pause(ct); paused = true; }
-            if (restore != null) return;
-            while (await NativeAgent.OnMain(() => Main.LocalPlayer.itemAnimation > 0, ct)) await NativeAgent.NextUpdate(ct);
-            restore = await NativeAgent.OnMain(ControlSession.SuspendPrimary, ct);
+            if ((AgentControlSession.RequiredChannels(name, args) & ControlChannels.ItemUse) != 0)
+                while (await NativeAgent.OnMain(() => Main.LocalPlayer.itemAnimation > 0, ct)) await NativeAgent.NextUpdate(ct);
+            if (restore == null) restore = await NativeAgent.OnMain(ControlSession.SuspendPrimary, ct);
         };
         try
         {

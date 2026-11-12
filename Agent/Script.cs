@@ -25,7 +25,7 @@ public static class AgentScript
         Action retired;
         public bool Active { get; private set; } = true;
         public bool Handling { get; set; }
-        public Func<string, CancellationToken, Task> BeforeAction;
+        public Func<string, JsonObject, CancellationToken, Task> BeforeAction;
         public bool TryEnter()
         {
             lock (gate)
