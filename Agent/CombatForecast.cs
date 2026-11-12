@@ -24,6 +24,7 @@ public sealed class CombatForecast : ModSystem
     static JsonObject executionAbort;
     static string context;
     static long sequence, lastAttempt;
+    static int refreshing;
     static JsonObject unavailable;
 
     public override void OnWorldUnload() => Close();
@@ -84,7 +85,7 @@ public sealed class CombatForecast : ModSystem
             }
             pending = null;
         }
-        if (pending == null && Stopwatch.GetElapsedTime(lastAttempt).TotalMilliseconds >= 1000)
+        if (pending == null && Volatile.Read(ref refreshing) == 0 && Stopwatch.GetElapsedTime(lastAttempt).TotalMilliseconds >= 1000)
         {
             lastAttempt = Stopwatch.GetTimestamp();
             var player = Main.LocalPlayer;
@@ -286,6 +287,19 @@ public sealed class CombatForecast : ModSystem
     }
 
     public static async Task<JsonObject> Refresh(JsonObject args, Func<JsonObject> observe, CancellationToken token)
+    {
+        Interlocked.Increment(ref refreshing);
+        try
+        {
+            var queued = await NativeAgent.OnMain(() =>
+                prepared?.Id == args["combat_candidate"]?["forecast_id"]?.GetValue<long>() ? null : pending?.Work, token);
+            if (queued != null && !queued.IsCompleted) await Task.WhenAny(queued).WaitAsync(token);
+            return await RefreshReady(args, observe, token);
+        }
+        finally { Interlocked.Decrement(ref refreshing); }
+    }
+
+    static async Task<JsonObject> RefreshReady(JsonObject args, Func<JsonObject> observe, CancellationToken token)
     {
         long started = Stopwatch.GetTimestamp();
         string requestedContext = args["combat_candidate"]?["context"]?.ToString();

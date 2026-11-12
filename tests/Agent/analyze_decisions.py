@@ -13,7 +13,8 @@ for argument in sys.argv[1:]:
     weapons = set(report.get('policy_config', {}).get('weapon_order', []))
     weapon_enemy_samples = [s for s in samples if s['enemies'] and s['held_type'] in weapons]
     weapon_uses = [s for s in weapon_enemy_samples if s['attack'] or s['item_animation'] > 0]
-    damage = {s['last_damage']['tick']: s['last_damage'] for s in samples if s.get('last_damage')}
+    damage = {s['last_damage']['tick']: s['last_damage'] for s in samples
+        if s.get('last_damage') and s['last_damage']['tick'] >= samples[0]['tick']}
     anchor = samples[0]
     stationary_start = anchor['elapsed_ms']
     stationary = []
