@@ -220,8 +220,9 @@ public sealed class ScriptLibrary
                     if(answer!=='follow_route'){
                       const keys=[answer.endsWith('left')?'left':'right'];
                       if(answer.startsWith('jump_')) keys.push('jump');
+                      const began=Date.now();
                       const moved=tool('act',{steps:[{keys,until:{frames:12}}]});
-                      print({decision_motion_result:answer,result:moved.outcome??moved.error});
+                      print({decision_motion_result:answer,elapsed_ms:Date.now()-began,result:moved.outcome??moved.error});
                       return handled();
                     }
                   }
