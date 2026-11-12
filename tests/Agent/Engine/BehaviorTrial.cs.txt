@@ -4536,37 +4536,60 @@ public sealed class BehaviorTrial : ModSystem
         string[] dimensions = variant == "baseline" ? Array.Empty<string>() : variant.Split(',');
         if (dimensions.Any(d => d is not ("weapon" or "movement" or "opportunity")))
             throw new ArgumentException("Unknown comparison dimension: " + variant);
+        bool strongWeapon = Environment.GetEnvironmentVariable("TB_DECISION_STRONG_WEAPON") == "1";
+        int startIndex = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_ROUTE_START") ?? "-1");
+        int health = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_HEALTH") ?? "100");
         await OnMain(() =>
         {
             var player = Main.LocalPlayer;
-            player.inventory[4].SetDefaults(ItemID.WoodenBow);
+            player.inventory[4].SetDefaults(strongWeapon ? ItemID.Starfury : ItemID.WoodenBow);
             player.inventory[5].SetDefaults(ItemID.ThrowingKnife); player.inventory[5].stack = 250;
             player.inventory[6].SetDefaults(ItemID.WoodenArrow); player.inventory[6].stack = 500;
             if (Environment.GetEnvironmentVariable("TB_DECISION_UNARMED") == "1")
                 foreach (var item in player.inventory.Where(CombatLoadout.Usable)) item.TurnToAir();
             return true;
         });
-        var before = await Call("get_state", new JsonObject());
         var descent = await Call("find_descent", new JsonObject { ["name"] = "jungle" });
         if (descent["found"]?.GetValue<bool>() != true) throw new Exception("No natural jungle descent: " + descent);
         var route = await Call("descent_route", new JsonObject { ["name"] = "jungle", ["limit"] = 500 });
         var line = route["line"].AsArray();
-        var waypoints = new JsonArray(new JsonObject { ["x"] = descent["x"].DeepClone(), ["y"] = descent["y"].DeepClone() });
-        foreach (int index in new[] { 80, 160, 240, 320 })
+        if (startIndex >= line.Count) throw new ArgumentException("Comparison start is outside the natural route");
+        await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            if (startIndex >= 0)
+            {
+                p.Teleport(new Vector2(line[startIndex][0].GetValue<int>() * 16 + 8 - p.width / 2f,
+                    line[startIndex][1].GetValue<int>() * 16 + 8 - p.height / 2f));
+                p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            }
+            p.ConsumedLifeCrystals = (health - 100) / 20;
+            p.statLife = p.statLifeMax = p.statLifeMax2 = health;
+            return true;
+        });
+        var before = await Call("get_state", new JsonObject());
+        var opportunities = new JsonObject();
+        foreach (string name in new[] { "Heart", "Containers", "JunglePlants" })
+            opportunities[name] = await Call("find_tiles", new JsonObject { ["name"] = name, ["n"] = 20, ["max_dist"] = 80,
+                ["frame_x"] = name == "JunglePlants" ? 144 : null });
+        var waypoints = new JsonArray();
+        if (startIndex < 0) waypoints.Add(new JsonObject { ["x"] = descent["x"].DeepClone(), ["y"] = descent["y"].DeepClone() });
+        foreach (int index in Enumerable.Range(1, startIndex < 0 ? 4 : 6).Select(i => Math.Max(0, startIndex) + i * 80))
             if (index < line.Count) waypoints.Add(new JsonObject { ["x"] = line[index][0].DeepClone(), ["y"] = line[index][1].DeepClone() });
         var config = new JsonObject
         {
             ["decisions"] = new JsonArray(dimensions.Select(d => (JsonNode)JsonValue.Create(d)).ToArray()),
             ["instruction"] = "Travel into the underground jungle efficiently. Handle enemies while keeping the journey moving. Collect useful nearby resources and chests when worth the detour. Use terrain and retreat when equipment is inadequate.",
             ["resources"] = JsonNode.Parse("[{\"item_type\":29,\"count\":10,\"tile_type\":12,\"tile_name\":\"Heart\"},{\"item_type\":331,\"count\":6,\"tile_type\":61,\"tile_name\":\"JunglePlants\",\"frame_x\":144},{\"item_type\":209,\"count\":9}]"),
-            ["weapon_order"] = new JsonArray(ItemID.WoodenBow, ItemID.ThrowingKnife, ItemID.CopperShortsword),
+            ["weapon_order"] = new JsonArray(strongWeapon ? ItemID.Starfury : ItemID.WoodenBow, ItemID.ThrowingKnife, ItemID.CopperShortsword),
             ["max_detour_tiles"] = 10, ["health_reserve"] = 30, ["allow_trigger_removal"] = true,
             ["trash_types"] = new JsonArray(), ["drop_types"] = new JsonArray(),
             ["decision_interval_ms"] = 750, ["decision_max_age_ms"] = 2000
         };
         var policy = await Call("task_policy", new JsonObject { ["operation"] = "get" });
-        await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = policy["revision"].DeepClone(),
+        var registered = await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = policy["revision"].DeepClone(),
             ["code"] = "const input=" + config.ToJsonString() + ";\n" + ScriptLibrary.Example("decision_reactions")["code"] });
+        if (registered["error"] != null) throw new Exception("Comparison policy rejected: " + registered);
         string script = "const route=" + waypoints.ToJsonString() + ";const results=[];for(let i=0;i<route.length;i++){"
             + "const r=step('leg_'+i,()=>tool('nav_to',route[i]));results.push({i,done:r.done,error:r.error??null,reason:r.reason??null});"
             + "if(r.done!==true)return {status:'yield',blocked:results};}return {status:'done',results};";
@@ -4619,9 +4642,10 @@ public sealed class BehaviorTrial : ModSystem
             File.WriteAllText(Path.Combine(Main.SavePath, "decision-comparison.json"), new JsonObject
             {
                 ["variant"] = variant, ["seed"] = Main.ActiveWorldFileData.SeedText,
+                ["route_start_index"] = startIndex, ["start_health"] = health, ["strong_weapon"] = strongWeapon,
                 ["unarmed"] = Environment.GetEnvironmentVariable("TB_DECISION_UNARMED") == "1",
                 ["elapsed_ms"] = clock.ElapsedMilliseconds, ["waypoints"] = waypoints,
-                ["before"] = before, ["after"] = after, ["samples"] = samples, ["action"] = action
+                ["before"] = before, ["nearby_natural_sources"] = opportunities, ["after"] = after, ["samples"] = samples, ["action"] = action
             }.ToJsonString());
         }
         Console.WriteLine("DECISION_COMPARISON_RECORDED variant=" + variant + " samples=" + samples.Count);
