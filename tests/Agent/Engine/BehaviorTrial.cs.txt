@@ -4628,7 +4628,8 @@ public sealed class BehaviorTrial : ModSystem
         int duration = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_SECONDS") ?? "40");
         int health = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_HEALTH") ?? "200");
         var warmup = Stopwatch.StartNew();
-        while (!await OnMain(() => VanillaNavigationDemo.Instance.WorkerReady))
+        var workerReady = typeof(VanillaNavigationDemo).GetProperty("WorkerReady", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        while (!await OnMain(() => (bool)workerReady.GetValue(VanillaNavigationDemo.Instance)))
         {
             if (warmup.Elapsed.TotalSeconds > 90) throw new Exception("Native movement worker did not become ready before the encounter");
             await Task.Delay(250);
