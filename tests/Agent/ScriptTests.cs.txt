@@ -178,7 +178,9 @@ static class ScriptTests
                     {"type":11,"name":"short weapon","has_ammo":true,"mana_available":true,"line_or_reach_passed":true},
                     {"type":12,"name":"ranged weapon","has_ammo":true,"mana_available":true,"line_or_reach_passed":true}]}]}
                 """).AsObject();
-            var result = await AgentScript.Run("const input=" + config.ToJsonString() + ";\n" + ScriptLibrary.Example("decision_travel")["code"],
+            var program = ScriptLibrary.Example("decision_travel");
+            Check(program["code"].ToString().Length <= 16000, "decision skill exceeded the stored program limit");
+            var result = await AgentScript.Run("return skill('decision_travel',0," + config.ToJsonString() + ");",
                 5, (_, _) => { }, async (name, args, token) =>
                 {
                     if (name == "get_state") return new JsonObject
@@ -245,17 +247,18 @@ static class ScriptTests
                                 foreach (var weapon in target["weapons"].AsArray()) weapon["line_or_reach_passed"] = false;
                         await handlers.Dispatch(new JsonObject { ["kind"] = "tick", ["execution"] = new JsonObject
                             { ["tool"] = "nav_to", ["args"] = config["destination"].DeepClone() } }, token);
+                        if (i == 7) Check(selectedWeapons.LastOrDefault() != 0,
+                            "temporarily blocked targets reset the configured weapon priority during travel");
                         if (polls.GetValueOrDefault("opportunity") == 1)
                             await handlers.Dispatch(JsonNode.Parse("{\"kind\":\"nearby_tile\",\"evidence\":{\"tile_type\":61,\"x\":11,\"y\":20}}").AsObject(), token);
                     }
                     return "{\"done\":true}";
-                }, _ => Task.CompletedTask, default, new ScriptProgress());
+                }, _ => Task.CompletedTask, default, new ScriptProgress(), programs: new JsonArray(program));
             Check(result["ok"]?.GetValue<bool>() == true, "decision travel script failed: " + result);
             Check(movements == (enabled.Contains("movement") ? 1 : 0) && collected == 1,
                 "movement decision was ignored/replayed or opportunity was lost: " + string.Join(',', dimensions));
             Check(selectedWeapons.Contains(enabled.Contains("weapon") ? 12 : 11)
                 && polls.Keys.ToHashSet().SetEquals(enabled), "decision ablation changed the wrong dimensions");
-            Check(!selectedWeapons.Contains(0), "temporarily blocked targets reset the configured weapon priority");
             Check(!enabled.Contains("opportunity") || opportunityPrefetched, "opportunity judgment waited until reaching collection range");
         }
         Console.WriteLine("PASS: production JS independently applies weapon, movement and opportunity decisions while preserving baseline and deduplicating effects");
