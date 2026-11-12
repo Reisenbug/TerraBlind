@@ -110,6 +110,15 @@ static class ScriptTests
         Check(refresh.Token.IsCancellationRequested, "stopping decisions retained a previous request");
         await Task.Delay(10);
         Check(channels.CompletionVersion == completedVersion, "retired requests woke a replacement task");
+        var retired = new ScriptDecisionChannels();
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var late = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+        retired.Poll(Request("late"), (input, token) => { entered.SetResult(true); return late.Task; });
+        await entered.Task;
+        retired.Reset();
+        late.SetResult(new JsonObject());
+        await Task.Delay(10);
+        Check(retired.CompletionVersion == 0, "an uncancellable retired response woke a new task");
         using var handler = new DecisionHandler();
         using var http = new System.Net.Http.HttpClient(handler);
         var criteria = new JsonObject { ["retreat"] = "Retreat with the selected weapon" };
@@ -127,7 +136,7 @@ static class ScriptTests
     {
         Console.WriteLine("DECISION_TEMPLATE_CHARS " + string.Join(' ', new[] { "decision_reactions", "joint_reactions", "joint_combat" }
             .Select(name => name + "=" + ScriptLibrary.Example(name)["code"].ToString().Length)));
-        foreach (string scenario in new[] { "pending", "follow", "move", "invalid", "unsafe", "replayed" })
+        foreach (string scenario in new[] { "pending", "follow", "move", "invalid", "unsafe", "replayed", "projectile_only" })
         {
             int acted = 0, selected = 0, judged = 0;
             var input = new JsonObject { ["context"] = "journey", ["destination"] = new JsonObject { ["x"] = 50, ["y"] = 20 },
@@ -141,6 +150,11 @@ static class ScriptTests
                 """).AsObject();
             if (scenario == "pending") combat["forecast"]["status"] = "pending";
             if (scenario == "unsafe") combat["forecast"]["plans"][1]["movement_available"] = false;
+            if (scenario == "projectile_only")
+            {
+                combat["targets"] = new JsonArray();
+                combat["projectiles"] = new JsonArray(new JsonObject { ["damage"] = 20 });
+            }
             var report = await AgentScript.Run("const input=" + input.ToJsonString() + ";\n" + ScriptLibrary.Example("joint_combat")["code"],
                 5, (_, _) => { }, (name, args, _) =>
                 {
@@ -151,7 +165,8 @@ static class ScriptTests
                         judged++;
                         Check(args["questions"]["response"]["criteria"].AsObject().Count == 2
                             && args["state"]["forecast_id"].GetValue<int>() == 11
-                            && args["state"]["weapons"][0]["type"].GetValue<int>() == 279,
+                            && (scenario == "projectile_only" ? args["state"]["weapons"].AsArray().Count == 0
+                                : args["state"]["weapons"][0]["type"].GetValue<int>() == 279),
                             "joint judgment lost coherent movement/weapon alternatives or source forecast");
                         result = new JsonObject { ["status"] = "ready", ["request_id"] = 1, ["request_age_ms"] = 200,
                             ["input_state"] = args["state"].DeepClone(), ["result"] = new JsonObject { ["elapsed_ms"] = 150,
@@ -171,7 +186,7 @@ static class ScriptTests
                     return Task.FromResult(result.ToJsonString());
                 }, _ => Task.CompletedTask, default);
             Check(report["ok"].GetValue<bool>() && judged == (scenario == "pending" ? 0 : 1)
-                && acted == (scenario is "move" or "invalid" ? 1 : 0) && selected == (scenario == "follow" ? 1 : 0),
+                && acted == (scenario is "move" or "invalid" or "projectile_only" ? 1 : 0) && selected == (scenario == "follow" ? 1 : 0),
                 "joint policy waited, replayed effects or ignored an unavailable candidate: " + scenario + " " + report);
             if (scenario == "invalid") Check(report["value"]["applied"].GetValue<bool>() == false,
                 "host rejection was reported as an applied movement");

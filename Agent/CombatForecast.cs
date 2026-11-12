@@ -304,41 +304,70 @@ public sealed class CombatForecast : ModSystem
         long started = Stopwatch.GetTimestamp();
         string requestedContext = args["combat_candidate"]?["context"]?.ToString();
         CancellationTokenSource refreshLifetime = null;
-        var request = await NativeAgent.OnMain(() =>
+        bool reserved = await NativeAgent.OnMain(() =>
         {
-            var reference = args["combat_candidate"].AsObject();
-            long id = reference["forecast_id"].GetValue<long>();
-            if (requestedContext == context && prepared?.Id == id) return (Job: (Forecast)null, Error: (JsonObject)null);
-            if (requestedContext != context || !retained.TryGetValue(id, out var original))
-                return (Job: (Forecast)null, Error: new JsonObject { ["error"] = "combat_forecast_replaced" });
-            var plan = original.Work.Result["plans"].AsArray().FirstOrDefault(p => p["id"].ToString() == reference["plan_id"]?.ToString());
-            if (plan == null || plan["movement"].ToString() == "follow_route")
-                return (Job: (Forecast)null, Error: new JsonObject { ["error"] = "combat_candidate_missing" });
+            if (requestedContext == context && prepared?.Id == args["combat_candidate"]?["forecast_id"]?.GetValue<long>()) return false;
             var player = Main.LocalPlayer;
-            var walk = StateSpacePlanner.PeekWalkIntent();
-            int[] prefix = StateSpacePlanner.PeekMovementControls(12);
-            if (prefix.Length < 6 && walk != null) prefix = Enumerable.Repeat(walk.Value.Direction > 0 ? 2 : 1, 12).ToArray();
-            if (prefix.Length == 0 && !RecedingNav.Active) prefix = new int[12];
-            if (prefix.Length == 0) return (Job: (Forecast)null,
-                Error: new JsonObject { ["error"] = "combat_candidate_no_handoff_prefix" });
-            try
-            {
-                long captureStarted = Stopwatch.GetTimestamp();
-                int x = (int)player.Center.X / 16, y = (int)player.Center.Y / 16;
-                var snapshot = VanillaFrame.Capture(player, Rectangle.Intersect(new Rectangle(x - 32, y - 16, 64, 96),
-                    new Rectangle(0, 0, Main.maxTilesX, Main.maxTilesY)), true);
-                var anchor = VanillaPrediction.Observe(player, false);
-                long freshId = ++sequence, tick = (long)Main.GameUpdateCount;
-                var scene = observe();
-                refreshLifetime = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
-                var job = new Forecast(freshId, tick, snapshot, scene, prefix, original.Destination,
-                    Generate(freshId, tick, snapshot, scene, prefix, original.Destination, walk,
-                        Stopwatch.GetElapsedTime(captureStarted).TotalMilliseconds, refreshLifetime.Token, plan["movement"].ToString()), anchor);
-                return (Job: job, Error: (JsonObject)null);
-            }
-            catch (NotSupportedException error)
-            { return (Job: (Forecast)null, Error: new JsonObject { ["error"] = "combat_candidate_capture_unavailable", ["reason"] = error.Message }); }
+            if (!(FightCoordinator.IsActive || FightCoordinator.IsIdleDefending)
+                || FightCoordinator.NavigationSnapshotPending) return false;
+            FightCoordinator.NavigationSnapshotPending = true;
+            DiagLog.Write("[combat_capture_boundary] waiting tick=" + Main.GameUpdateCount + " animation=" + player.itemAnimation
+                + " item_time=" + player.itemTime + " weapon=" + player.HeldItem.type);
+            return true;
         }, token);
+        (Forecast Job, JsonObject Error) request;
+        try
+        {
+            while (reserved && !await NativeAgent.OnMain(() => Main.LocalPlayer.dead
+                || Main.LocalPlayer.itemAnimation == 0 && Main.LocalPlayer.itemTime == 0, token))
+                await NativeAgent.NextUpdate(token);
+            request = await NativeAgent.OnMain(() =>
+            {
+                var reference = args["combat_candidate"].AsObject();
+                long id = reference["forecast_id"].GetValue<long>();
+                if (requestedContext == context && prepared?.Id == id) return (Job: (Forecast)null, Error: (JsonObject)null);
+                if (requestedContext != context || !retained.TryGetValue(id, out var original))
+                    return (Job: (Forecast)null, Error: new JsonObject { ["error"] = "combat_forecast_replaced" });
+                var plan = original.Work.Result["plans"].AsArray().FirstOrDefault(p => p["id"].ToString() == reference["plan_id"]?.ToString());
+                if (plan == null || plan["movement"].ToString() == "follow_route")
+                    return (Job: (Forecast)null, Error: new JsonObject { ["error"] = "combat_candidate_missing" });
+                var player = Main.LocalPlayer;
+                if (player.dead) return (Job: (Forecast)null, Error: new JsonObject { ["error"] = "combat_candidate_player_dead" });
+                var walk = StateSpacePlanner.PeekWalkIntent();
+                int[] prefix = StateSpacePlanner.PeekMovementControls(12);
+                if (prefix.Length < 6 && walk != null) prefix = Enumerable.Repeat(walk.Value.Direction > 0 ? 2 : 1, 12).ToArray();
+                if (prefix.Length == 0 && !RecedingNav.Active) prefix = new int[12];
+                if (prefix.Length == 0) return (Job: (Forecast)null,
+                    Error: new JsonObject { ["error"] = "combat_candidate_no_handoff_prefix" });
+                try
+                {
+                    long captureStarted = Stopwatch.GetTimestamp();
+                    int x = (int)player.Center.X / 16, y = (int)player.Center.Y / 16;
+                    var snapshot = VanillaFrame.Capture(player, Rectangle.Intersect(new Rectangle(x - 32, y - 16, 64, 96),
+                        new Rectangle(0, 0, Main.maxTilesX, Main.maxTilesY)), true);
+                    var anchor = VanillaPrediction.Observe(player, false);
+                    long freshId = ++sequence, tick = (long)Main.GameUpdateCount;
+                    var scene = observe();
+                    refreshLifetime = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
+                    var job = new Forecast(freshId, tick, snapshot, scene, prefix, original.Destination,
+                        Generate(freshId, tick, snapshot, scene, prefix, original.Destination, walk,
+                            Stopwatch.GetElapsedTime(captureStarted).TotalMilliseconds, refreshLifetime.Token, plan["movement"].ToString()), anchor);
+                    return (Job: job, Error: (JsonObject)null);
+                }
+                catch (NotSupportedException error)
+                { return (Job: (Forecast)null, Error: new JsonObject { ["error"] = "combat_candidate_capture_unavailable", ["reason"] = error.Message }); }
+            }, token);
+        }
+        finally
+        {
+            if (reserved) await NativeAgent.OnMain(() =>
+            {
+                FightCoordinator.NavigationSnapshotPending = false;
+                DiagLog.Write("[combat_capture_boundary] released tick=" + Main.GameUpdateCount
+                    + " elapsed_ms=" + Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+                return true;
+            }, default);
+        }
         if (request.Error != null) return request.Error;
         if (request.Job == null) return args;
         try

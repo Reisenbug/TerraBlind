@@ -50,8 +50,6 @@ public sealed class ScriptLibrary
             const plan=r.input_state.plans.find(p=>p.id===r.result.answers.response.choice);
             let applied;
             if(!plan?.movement_available) applied={error:'landing_unresolved'};
-            else if(plan.weapon_type>0&&!c.targets.some(n=>n.weapons.some(w=>w.type===plan.weapon_type&&w.has_ammo&&w.mana_available)))
-              applied={error:'weapon_unavailable'};
             else if(plan.movement==='follow_route') applied=plan.weapon_type>0?tool('set_combat',{weapon_type:plan.weapon_type}):{};
             else applied=tool('act',{steps:[{keys:['right'],until:{frames:1}}],combat_candidate:{
               context:input.context,forecast_id:r.input_state.forecast_id,plan_id:plan.id}});
