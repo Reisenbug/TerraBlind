@@ -2081,6 +2081,24 @@ public sealed class Engine : ModSystem
                 stopOnDamage: request["stop_on_damage"]?.GetValue<bool>() == true,
                 captureEnd: request["capture_end"]?.GetValue<bool>() == true,
                 maxFrames: command == "native_replay" ? 405 : 240);
+        if (command == "combat_replays")
+        {
+            var branches = request["branches"].AsArray();
+            if (branches.Count is < 1 or > 8) throw new ArgumentException("combat_replays_requires_1_to_8_branches");
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            var predictor = new VanillaPrediction(request["snapshot"].AsObject());
+            double prepareMs = timer.Elapsed.TotalMilliseconds;
+            var results = new JsonArray();
+            foreach (var branch in branches)
+            {
+                var result = predictor.Predict(branch["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray(),
+                    detailed: false, stopOnDamage: true);
+                result["id"] = branch["id"].DeepClone();
+                results.Add(result);
+            }
+            return new JsonObject { ["branches"] = results, ["prepare_ms"] = prepareMs,
+                ["total_ms"] = timer.Elapsed.TotalMilliseconds };
+        }
         if (command == "transit_contract")
         {
             Setup(new JsonObject { ["equipment"] = new JsonArray((int)ItemID.SandstorminaBottle, (int)ItemID.HermesBoots, (int)ItemID.CobaltShield) });

@@ -4586,6 +4586,40 @@ public sealed class BehaviorTrial : ModSystem
         }
     }
 
+    async Task CheckCombatBatch()
+    {
+        var method = typeof(VanillaNavigationDemo).GetMethod("Observe", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var snapshot = await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            int x = (int)p.Center.X / 16, y = (int)p.Center.Y / 16;
+            return VanillaFrame.Capture(p, Rectangle.Intersect(new Rectangle(x - 32, y - 16, 64, 96),
+                new Rectangle(0, 0, Main.maxTilesX, Main.maxTilesY)), true);
+        });
+        Task<JsonObject> Observe(JsonObject request) => (Task<JsonObject>)method.Invoke(VanillaNavigationDemo.Instance,
+            new object[] { request, CancellationToken.None });
+        var branches = new JsonArray(new[] { 0, 1, 2, 5, 6 }.Select(keys => (JsonNode)new JsonObject {
+            ["id"] = keys.ToString(), ["controls"] = new JsonArray(Enumerable.Repeat(keys, 24).Concat(Enumerable.Repeat(0, 48))
+                .Select(k => (JsonNode)JsonValue.Create(k)).ToArray()) }).ToArray());
+        var batched = await Observe(new JsonObject { ["command"] = "combat_replays", ["snapshot"] = snapshot.DeepClone(), ["branches"] = branches.DeepClone() });
+        var clock = Stopwatch.StartNew();
+        int frames = 0;
+        foreach (var branch in branches)
+        {
+            var single = await Observe(new JsonObject { ["command"] = "replay", ["snapshot"] = snapshot.DeepClone(),
+                ["controls"] = branch["controls"].DeepClone(), ["detailed"] = false, ["stop_on_damage"] = true });
+            var match = batched["branches"].AsArray().First(b => b["id"].ToString() == branch["id"].ToString());
+            if (!JsonNode.DeepEquals(single["frames"], match["frames"]) || !JsonNode.DeepEquals(single["outcome"], match["outcome"]))
+                throw new Exception("Combat batch diverged from single replay: " + branch["id"]);
+            frames += single["frames"].AsArray().Count;
+        }
+        var report = new JsonObject { ["passed"] = true, ["branches"] = branches.Count, ["matched_frames"] = frames,
+            ["batch_roundtrip_ms"] = batched["roundtrip_ms"].DeepClone(), ["batch_engine_ms"] = batched["total_ms"].DeepClone(),
+            ["single_replays_ms"] = clock.Elapsed.TotalMilliseconds };
+        File.WriteAllText(Path.Combine(Main.SavePath, "combat-batch-check.json"), report.ToJsonString());
+        Console.WriteLine("COMBAT_BATCH_CHECK " + report.ToJsonString());
+    }
+
     async Task DecisionComparison(string variant)
     {
         string[] dimensions = variant == "baseline" ? Array.Empty<string>() : variant.Split(',');
@@ -4627,6 +4661,7 @@ public sealed class BehaviorTrial : ModSystem
             p.statLife = p.statLifeMax = p.statLifeMax2 = health;
             return true;
         });
+        if (Environment.GetEnvironmentVariable("TB_DECISION_BATCH_CHECK") == "1") await CheckCombatBatch();
         var before = await Call("get_state", new JsonObject());
         var opportunities = new JsonObject();
         foreach (string name in new[] { "Heart", "Containers", "JunglePlants" })

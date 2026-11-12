@@ -139,13 +139,16 @@ public sealed class CombatForecast : ModSystem
     {
         var clock = Stopwatch.StartNew();
         var movements = new JsonArray();
-        foreach (var (name, keys) in new[] { ("follow_route", -1), ("left", 1), ("right", 2), ("jump_left", 5), ("jump_right", 6) })
+        var definitions = new[] { ("follow_route", -1), ("left", 1), ("right", 2), ("jump_left", 5), ("jump_right", 6) };
+        var inputs = definitions.ToDictionary(d => d.Item1, d => prefix.Concat(Enumerable.Repeat(d.Item2 < 0 ? 0 : d.Item2, d.Item2 < 0 ? 0 : 24))
+            .Concat(Enumerable.Repeat(0, 48)).ToArray());
+        var batch = await VanillaNavigationDemo.Instance.Observe(new JsonObject { ["command"] = "combat_replays",
+            ["snapshot"] = snapshot.DeepClone(), ["branches"] = new JsonArray(inputs.Select(pair => (JsonNode)new JsonObject {
+                ["id"] = pair.Key, ["controls"] = new JsonArray(pair.Value.Select(k => (JsonNode)JsonValue.Create(k)).ToArray()) }).ToArray()) }, token);
+        foreach (var (name, keys) in definitions)
         {
-            int[] controls = prefix.Concat(Enumerable.Repeat(keys < 0 ? 0 : keys, keys < 0 ? 0 : 24))
-                .Concat(Enumerable.Repeat(0, 48)).ToArray();
-            var response = await VanillaNavigationDemo.Instance.Observe(new JsonObject { ["command"] = "replay",
-                ["snapshot"] = snapshot.DeepClone(), ["controls"] = new JsonArray(controls.Select(k => (JsonNode)JsonValue.Create(k)).ToArray()),
-                ["detailed"] = false, ["stop_on_damage"] = true }, token);
+            int[] controls = inputs[name];
+            var response = batch["branches"].AsArray().First(branch => branch["id"].ToString() == name);
             var trace = response["frames"].AsArray();
             int minimum = prefix.Length + (keys < 0 ? 0 : 24);
             int landing = trace.Select((frame, index) => (frame, index))
@@ -161,8 +164,7 @@ public sealed class CombatForecast : ModSystem
                 ["execution_frames"] = count, ["end"] = end?.DeepClone(),
                 ["route_progress_tiles"] = end == null ? null : startDistance - Distance(Number(end["x"]) / 16, Number(end["y"]) / 16, destination),
                 ["damage"] = trace.Count == 0 ? null : scene["player"]["hp"].GetValue<int>() - trace.Min(f => f["hp"].GetValue<int>()),
-                ["engine_ms"] = response["elapsed_ms"]?.DeepClone(), ["roundtrip_ms"] = response["roundtrip_ms"]?.DeepClone(),
-                ["queue_ms"] = response["queue_ms"]?.DeepClone(),
+                ["engine_ms"] = response["elapsed_ms"]?.DeepClone(),
                 ["controls"] = new JsonArray(controls.Take(count).Select(k => (JsonNode)JsonValue.Create(k)).ToArray()),
                 ["trajectory"] = new JsonArray(trace.Take(count).Select(f => f.DeepClone()).ToArray()) };
             movement["linear_threat_overlap"] = ThreatOverlap(scene, trace, count);
@@ -178,6 +180,8 @@ public sealed class CombatForecast : ModSystem
             ["walk_intent"] = walk == null ? null : new JsonObject { ["direction"] = walk.Value.Direction,
                 ["target_x_pixels"] = walk.Value.TargetX, ["arrival_pixels"] = walk.Value.ArrivalPixels },
             ["known_route_frames"] = prefix.Length, ["capture_ms"] = captureMs, ["compute_ms"] = clock.Elapsed.TotalMilliseconds,
+            ["batch_prepare_ms"] = batch["prepare_ms"]?.DeepClone(), ["batch_engine_ms"] = batch["total_ms"]?.DeepClone(),
+            ["batch_roundtrip_ms"] = batch["roundtrip_ms"]?.DeepClone(), ["batch_queue_ms"] = batch["queue_ms"]?.DeepClone(),
             ["movements"] = movements,
             ["scope"] = "Real vanilla player physics. All alternatives start with prefix_source: queued_controls are already scheduled; closed_loop_walk_intent extrapolates the observed walk direction for 48 frames and may extend beyond its arrival threshold. Then move for 24 frames and release keys until landing. Enemy/projectile AI and subsequent navigation are not simulated." };
     }
