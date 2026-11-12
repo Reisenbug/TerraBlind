@@ -109,6 +109,9 @@ public sealed class ScriptDecisionChannels
                     ["request_age_ms"] = Stopwatch.GetElapsedTime(current.Started).TotalMilliseconds,
                     ["input_state"] = current.Input.DeepClone(), ["result"] = answer.DeepClone() };
                 current.AnswerStarted = current.Started;
+                DiagLog.Write("[script_decision_channel] " + new JsonObject { ["channel"] = name, ["context"] = context,
+                    ["request_id"] = current.Sequence, ["request_age_ms"] = current.Answer["request_age_ms"].DeepClone(),
+                    ["result"] = answer.DeepClone() }.ToJsonString());
                 current.Pending = null;
             }
             JsonObject result = null;

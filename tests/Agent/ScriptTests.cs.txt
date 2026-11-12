@@ -96,7 +96,7 @@ static class ScriptTests
             new[] { "opportunity" }, new[] { "weapon", "movement", "opportunity" } })
         {
             var enabled = dimensions.ToHashSet();
-            int movements = 0, collected = 0;
+            int movements = 0, collected = 0, assessments = 0;
             var selectedWeapons = new List<int>();
             var polls = new Dictionary<string, int>();
             var config = JsonNode.Parse("""
@@ -121,7 +121,9 @@ static class ScriptTests
                     if (name == "watch") return "{}";
                     if (name == "combat_assess") return combat.ToJsonString();
                     if (name == "inspect_terrain") return "{\"near_body_tiles\":[],\"player_bounds\":{\"left\":10,\"right\":11}}";
-                    if (name == "opportunity_assess") return "{\"ok\":true,\"approach_direct_distance\":2,\"route_relation\":{\"extra_direct_distance\":0},\"hazards\":[]}";
+                    if (name == "opportunity_assess") return new JsonObject { ["ok"] = true,
+                        ["approach_direct_distance"] = enabled.Contains("opportunity") && ++assessments <= 2 ? 20 : 2,
+                        ["route_relation"] = new JsonObject { ["extra_direct_distance"] = 0 }, ["hazards"] = new JsonArray() }.ToJsonString();
                     if (name == "inventory_review") return "{\"empty_slots\":[10],\"inventory\":[]}";
                     if (name == "set_combat") { selectedWeapons.Add(args["weapon_type"].GetValue<int>()); return "{}"; }
                     if (name == "act") { movements++; return "{\"outcome\":\"done\"}"; }

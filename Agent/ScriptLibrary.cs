@@ -137,7 +137,7 @@ public sealed class ScriptLibrary
               }
               return {retry:true};
             });
-            let combatChoice='';
+            let combatChoice='',decisionWeapon=originalCombat.combat_weapon_type;
             on('tick',event=>{
               const destination=event.execution?.tool==='nav_to'?event.execution.args:config.destination;
               const combat=tool('combat_assess',{radius:25});
@@ -167,8 +167,11 @@ public sealed class ScriptLibrary
                     'Which available weapon best handles these enemies while the player continues the journey?',criteria);
                   if(r){
                     const type=Number(r.result.answers.response.choice.slice(7));
-                    const applied=tool('set_combat',{weapon_type:type});
-                    accept('weapon',r,applied.error??'weapon_type:'+type);
+                    if(type!==decisionWeapon){
+                      const applied=tool('set_combat',{weapon_type:type});
+                      if(!applied.error) decisionWeapon=type;
+                      accept('weapon',r,applied.error??'weapon_type:'+type);
+                    } else accept('weapon',r,'unchanged');
                   }
                 }
               }
@@ -205,12 +208,14 @@ public sealed class ScriptLibrary
                 }
               }
               if(dimensions.has('opportunity')&&opportunities.size){
-                const [id,opportunity]=opportunities.entries().next().value;
+                const px=combat.player.pos.x/16,py=combat.player.pos.y/16;
+                const [id,opportunity]=[...opportunities].sort((a,b)=>
+                  Math.hypot(a[1].point.x-px,a[1].point.y-py)-Math.hypot(b[1].point.x-px,b[1].point.y-py))[0];
                 const assessment=tool('opportunity_assess',{x:opportunity.point.x,y:opportunity.point.y,
                   ...(destination?{destination}:{})});
-                if(!assessment.ok||assessment.approach_direct_distance>config.max_detour_tiles)
+                if(!assessment.ok)
                   opportunities.delete(id);
-                else {
+                else if(assessment.approach_direct_distance<=config.max_detour_tiles){
                   const r=judge('opportunity',id,{...scene,opportunity,assessment,resources:config.resources,
                     inventory:state(['inventory_counts']).inventory_counts},
                     'Is collecting this observed opportunity now worth the detour, exposure and inventory cost for this journey?',

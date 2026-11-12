@@ -485,6 +485,7 @@ public static class AgentScript
                     if (text?.Length > 1000) logTruncations.Add(new JsonObject
                         { ["index"] = logs.Count, ["original_chars"] = text.Length, ["retained_chars"] = 1000 });
                     logs.Add(Clip(text ?? "null", 1000));
+                    DiagLog.Write("[script_log] " + Clip(text ?? "null", 1000));
                 }));
                 engine.SetValue("__stepEnter", new Func<string, string>(id =>
                     ((reactions.Handling ? handlerProgress : progress) ?? throw new InvalidOperationException("step需要run_script.workflow。 ")).Enter(id).ToJsonString()));
