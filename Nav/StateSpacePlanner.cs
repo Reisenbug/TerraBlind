@@ -2208,6 +2208,23 @@ namespace TerraBlind
         public static bool IsActive => _execFrames != null || _walkActive;
         public static bool ReservesItemUse => _airPlace.HasValue || _execFrames?.Exists(frame => frame.Place) == true;
 
+        internal static int[] PeekMovementControls(int maxFrames)
+        {
+            if (_walkActive || _execFrames == null || _airPlace.HasValue || _placeStall > 0 || _jpWaitFrames > 0)
+                return Array.Empty<int>();
+            var controls = new List<int>();
+            for (int i = _execIdx; i < _execFrames.Count && controls.Count < maxFrames; i++)
+            {
+                var frame = _execFrames[i];
+                if (frame.Place) break;
+                controls.Add((int)((frame.Left ? VanillaKeys.Left : VanillaKeys.None)
+                    | (frame.Right ? VanillaKeys.Right : VanillaKeys.None)
+                    | (frame.Jump ? VanillaKeys.Jump : VanillaKeys.None)
+                    | (frame.Down ? VanillaKeys.Down : VanillaKeys.None)));
+            }
+            return controls.ToArray();
+        }
+
         // 闭环走路:不开环重放计划帧(起点偏了会平移整条边),而是朝目标 X 按键、到位即止,自我纠正。
         // 到位【不】刹车:vx 要带进下一条边(跳跃需要助跑速度,别归零)。
         static bool _walkActive;
