@@ -2075,6 +2075,8 @@ public static partial class AgentTools
                 result = await Call("/act", args, token);
                 if (!Rejected(result)) result = await Wait("/act_status", "active", "/act_stop", 120, token,
                     reactionContext: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
+                if (args["combat_candidate"] != null)
+                    result = await NativeAgent.OnMain(() => CombatForecast.Receipt(args, result), token);
                 break;
             case "fight":
                 if (!await NativeAgent.OnMain(() => AgentPermissions.Attack, token))

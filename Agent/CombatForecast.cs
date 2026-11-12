@@ -20,6 +20,7 @@ public sealed class CombatForecast : ModSystem
     static Forecast pending, ready;
     static Forecast executing;
     static JsonObject executingMovement;
+    static JsonObject executionAbort;
     static string context;
     static long sequence, lastAttempt;
     static JsonObject unavailable;
@@ -29,7 +30,7 @@ public sealed class CombatForecast : ModSystem
     public static void Reset()
     {
         if (executing != null && ActExecutor.IsActive && AgentTools.ControlSession.OwnsDirectMovement) ActExecutor.Stop();
-        executing = null; executingMovement = null;
+        executing = null; executingMovement = null; executionAbort = null;
         lifetime.Cancel(); lifetime.Dispose(); lifetime = new();
         pending = ready = null; retained.Clear(); context = null; unavailable = null; lastAttempt = 0;
     }
@@ -37,15 +38,20 @@ public sealed class CombatForecast : ModSystem
     public override void PostUpdateEverything()
     {
         if (executing == null) return;
-        if (!ActExecutor.IsActive || !AgentTools.ControlSession.OwnsDirectMovement)
+        if (!AgentTools.ControlSession.OwnsDirectMovement)
         { executing = null; executingMovement = null; return; }
         int index = checked((int)((long)Main.GameUpdateCount - executing.Tick)) - 1;
         var trace = executingMovement["trajectory"].AsArray();
         if (index < 0 || index >= trace.Count) return;
         if (VanillaAsyncMovement.StateMatches(Main.LocalPlayer, trace[index].AsObject(), true, out var reason, out var mismatch)
-            && VanillaFrame.ContextMatches(executing.Snapshot, Main.LocalPlayer, out reason, trace, firstFrame: index, frameCount: 6)) return;
-        DiagLog.Write("[combat_candidate_abort] " + new JsonObject { ["forecast_id"] = executing.Id,
-            ["frame"] = index, ["reason"] = reason, ["difference"] = mismatch });
+            && VanillaFrame.ContextMatches(executing.Snapshot, Main.LocalPlayer, out reason, trace, firstFrame: index, frameCount: 6))
+        {
+            if (!ActExecutor.IsActive) { executing = null; executingMovement = null; }
+            return;
+        }
+        executionAbort = new JsonObject { ["forecast_id"] = executing.Id,
+            ["frame"] = index, ["reason"] = reason, ["difference"] = mismatch };
+        DiagLog.Write("[combat_candidate_abort] " + executionAbort.ToJsonString());
         ActExecutor.Stop(); executing = null; executingMovement = null;
     }
 
@@ -64,12 +70,12 @@ public sealed class CombatForecast : ModSystem
                 retained[pending.Id] = pending;
                 foreach (long id in retained.Keys.Order().SkipLast(2).ToArray()) retained.Remove(id);
                 ready = pending; unavailable = null;
-                DiagLog.Write("[combat_forecast] " + result);
+                DiagLog.Write("[combat_forecast] " + result.ToJsonString());
             }
             catch (Exception error)
             {
                 unavailable = new JsonObject { ["status"] = "unavailable", ["reason"] = error.GetBaseException().Message };
-                DiagLog.Write("[combat_forecast] " + unavailable);
+                DiagLog.Write("[combat_forecast] " + unavailable.ToJsonString());
             }
             pending = null;
         }
@@ -91,7 +97,7 @@ public sealed class CombatForecast : ModSystem
                 {
                     long started = Stopwatch.GetTimestamp();
                     int x = (int)player.Center.X / 16, y = (int)player.Center.Y / 16;
-                    var area = Rectangle.Intersect(new Rectangle(x - 48, y - 24, 96, 144),
+                    var area = Rectangle.Intersect(new Rectangle(x - 32, y - 16, 64, 96),
                         new Rectangle(0, 0, Main.maxTilesX, Main.maxTilesY));
                     var snapshot = VanillaFrame.Capture(player, area, true);
                     long id = ++sequence, tick = (long)Main.GameUpdateCount;
@@ -159,10 +165,15 @@ public sealed class CombatForecast : ModSystem
                 ["queue_ms"] = response["queue_ms"]?.DeepClone(),
                 ["controls"] = new JsonArray(controls.Take(count).Select(k => (JsonNode)JsonValue.Create(k)).ToArray()),
                 ["trajectory"] = new JsonArray(trace.Take(count).Select(f => f.DeepClone()).ToArray()) };
+            movement["linear_threat_overlap"] = ThreatOverlap(scene, trace, count);
+            movement["path_samples_pixels"] = new JsonArray(trace.Take(count).Select((f, i) => (f, i))
+                .Where(e => e.i % 6 == 0 || e.i + 1 == count).Select(e => (JsonNode)new JsonArray(e.i + 1,
+                    Number(e.f["x"]), Number(e.f["y"]))).ToArray());
             movements.Add(movement);
         }
         return new JsonObject { ["status"] = "ready", ["id"] = id, ["sample_tick"] = tick,
             ["sample_player"] = scene["player"].DeepClone(),
+            ["snapshot_area"] = snapshot["area"].DeepClone(),
             ["prefix_source"] = walk == null ? "queued_controls" : "closed_loop_walk_intent",
             ["walk_intent"] = walk == null ? null : new JsonObject { ["direction"] = walk.Value.Direction,
                 ["target_x_pixels"] = walk.Value.TargetX, ["arrival_pixels"] = walk.Value.ArrivalPixels },
@@ -172,6 +183,32 @@ public sealed class CombatForecast : ModSystem
     }
 
     static double Number(JsonNode value) => double.Parse(value.ToString(), System.Globalization.CultureInfo.InvariantCulture);
+
+    static JsonObject ThreatOverlap(JsonObject scene, JsonArray trace, int count)
+    {
+        int contacts = 0, shots = 0, first = 0;
+        double halfWidth = Number(scene["player"]["size_pixels"]["width"]) / 2,
+            halfHeight = Number(scene["player"]["size_pixels"]["height"]) / 2;
+        void Compare(JsonNode enemy, bool projectile)
+        {
+            double x = Number(enemy["x"]) * 16, y = Number(enemy["y"]) * 16,
+                vx = Number(enemy["vx_pixels_per_tick"]), vy = Number(enemy["vy_pixels_per_tick"]),
+                width = halfWidth + Number(enemy["width_tiles"]) * 8,
+                height = halfHeight + Number(enemy["height_tiles"]) * 8;
+            for (int i = 0; i < count; i++)
+            {
+                if (Math.Abs(Number(trace[i]["x"]) + halfWidth - x - vx * (i + 1)) >= width
+                    || Math.Abs(Number(trace[i]["y"]) + halfHeight - y - vy * (i + 1)) >= height) continue;
+                if (projectile) shots++; else contacts++;
+                if (first == 0 || i + 1 < first) first = i + 1;
+            }
+        }
+        foreach (var target in scene["targets"].AsArray().Where(n => Number(n["contact_damage"]) > 0)) Compare(target, false);
+        foreach (var shot in scene["projectiles"].AsArray()) Compare(shot, true);
+        return new JsonObject { ["npc_object_frames"] = contacts, ["projectile_object_frames"] = shots,
+            ["first_frame"] = first > 0 ? first : null, ["assumption"] = "constant entity velocity; overlaps are not confirmed damage" };
+    }
+
     static double Distance(double x, double y, JsonObject goal)
         => Math.Sqrt(Math.Pow(x - Number(goal["x"]), 2) + Math.Pow(y - Number(goal["y"]), 2));
 
@@ -244,10 +281,18 @@ public sealed class CombatForecast : ModSystem
             else steps.Add(new JsonObject { ["keys"] = names, ["until"] = new JsonObject { ["frames"] = 1 } });
         }
         if (type > 0) CombatLoadout.PreferredType = type;
-        executing = forecast; executingMovement = movement.AsObject();
+        executing = forecast; executingMovement = movement.AsObject(); executionAbort = null;
         var prepared = args.DeepClone().AsObject(); prepared["steps"] = steps;
         DiagLog.Write("[combat_candidate_apply] " + new JsonObject { ["forecast_id"] = forecast.Id,
             ["plan_id"] = plan["id"].DeepClone(), ["age_frames"] = offset, ["remaining_frames"] = trajectory.Count - offset });
         return prepared;
+    }
+
+    public static JsonObject Receipt(JsonObject args, JsonObject result)
+    {
+        if (executionAbort?["forecast_id"]?.ToString() != args["combat_candidate"]?["forecast_id"]?.ToString()) return result;
+        result["error"] = "combat_candidate_changed_during_execution";
+        result["forecast_abort"] = executionAbort.DeepClone();
+        return result;
     }
 }
