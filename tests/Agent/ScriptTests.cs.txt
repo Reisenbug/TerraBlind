@@ -1778,6 +1778,7 @@ static class ScriptTests
             player.position = new System.Numerics.Vector2(160, 160); player.dead = player.suffocating = false;
             HttpServerSystem.Handler = (path, payload) =>
             {
+                if (path == "/json_roundtrip") return (200, payload);
                 if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
                 if (path == "/nav_recede_stop") { stops++; RecedingNav.Active = false; }
                 if (path == "/act")
@@ -1805,6 +1806,12 @@ static class ScriptTests
                 }
                 return (200, "{}");
             };
+            var serialized = AgentTools.Call("/json_roundtrip", new JsonObject {
+                ["frames"] = new JsonArray(12, 24), ["metadata"] = JsonValue.Create(new { FrameCount = 24 }) }, default);
+            while (!serialized.IsCompleted) { agent.PostUpdateEverything(); await Task.Delay(1); }
+            var echoed = await serialized;
+            Check(echoed["frames"][1].GetValue<int>() == 24 && echoed["metadata"]["FrameCount"].GetValue<int>() == 24,
+                "native JSON values lost their serializer metadata at the HTTP boundary");
             var task = AgentTools.Execute("run_script", new JsonObject { ["workflow"] = "reactive-host-" + Guid.NewGuid().ToString("N"),
                 ["code"] = $$$"""
                     on('nearby_chest',event=>{

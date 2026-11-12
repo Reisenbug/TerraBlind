@@ -628,8 +628,7 @@ public static partial class AgentTools
             args = CombatForecast.Prepare(args);
             if (args["error"] != null) return args;
         }
-        var response = HttpServerSystem.Dispatch(path, args?.ToJsonString(new System.Text.Json.JsonSerializerOptions
-        { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) ?? "{}");
+        var response = HttpServerSystem.Dispatch(path, args?.ToJsonString(ModelJson) ?? "{}");
         var result = JsonNode.Parse(response.Body) as JsonObject
             ?? throw new InvalidOperationException($"{path} 未返回 JSON 对象。");
         if (response.Status >= 400 && result["error"] == null) result["error"] = $"status {response.Status}";
