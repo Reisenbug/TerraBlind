@@ -104,6 +104,7 @@ static class ScriptTests
         {
             var enabled = dimensions.ToHashSet();
             int movements = 0, collected = 0, assessments = 0;
+            bool opportunityPrefetched = false;
             var selectedWeapons = new List<int>();
             var polls = new Dictionary<string, int>();
             var sceneContexts = new Dictionary<string, string>();
@@ -138,7 +139,11 @@ static class ScriptTests
                     if (name == "inventory_review") return "{\"empty_slots\":[10],\"inventory\":[]}";
                     if (name == "set_combat") { selectedWeapons.Add(args["weapon_type"].GetValue<int>()); return "{}"; }
                     if (name == "act") { movements++; return "{\"outcome\":\"done\"}"; }
-                    if (name == "gather") { collected++; return "{\"outcome\":\"enough\"}"; }
+                    if (name == "gather")
+                    {
+                        Check(!enabled.Contains("opportunity") || assessments > 2, "speculative opportunity started gathering outside its budget");
+                        collected++; return "{\"outcome\":\"enough\"}";
+                    }
                     if (name == "jev_judge")
                     {
                         string channel = args["channel"].ToString();
@@ -151,6 +156,7 @@ static class ScriptTests
                         }
                         if (channel == "opportunity" && collected == 0)
                         {
+                            if (!polls.ContainsKey(channel)) opportunityPrefetched = args["state"]["assessment"]["approach_direct_distance"].GetValue<int>() == 20;
                             firstOpportunityContext ??= args["context"].ToString();
                             Check(args["context"].ToString() == firstOpportunityContext,
                                 "a nearer observation cancelled the opportunity judgment before its answer");
@@ -189,6 +195,7 @@ static class ScriptTests
                 "movement decision was ignored/replayed or opportunity was lost: " + string.Join(',', dimensions));
             Check(selectedWeapons.Contains(enabled.Contains("weapon") ? 12 : 11)
                 && polls.Keys.ToHashSet().SetEquals(enabled), "decision ablation changed the wrong dimensions");
+            Check(!enabled.Contains("opportunity") || opportunityPrefetched, "opportunity judgment waited until reaching collection range");
         }
         Console.WriteLine("PASS: production JS independently applies weapon, movement and opportunity decisions while preserving baseline and deduplicating effects");
     }

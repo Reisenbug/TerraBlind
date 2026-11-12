@@ -239,19 +239,20 @@ public sealed class ScriptLibrary
                 if(!assessment.ok||opportunity.resource&&!opportunity.drop&&(!assessment.target.has_tile
                   ||assessment.target.tile_type!==opportunity.resource.tile_type))
                   opportunities.delete(id);
-                else if(assessment.approach_direct_distance<=config.max_detour_tiles){
+                else if(assessment.approach_direct_distance<=25){
                   activeOpportunity=id;
                   let take;
                   if(dimensions.has('opportunity')){
                     const r=judge('opportunity',decisionContext+':'+id,{...scene,opportunity,assessment,resources:config.resources,
+                      collection_budget:{approach_tiles:config.max_detour_tiles,extra_distance_tiles:config.max_detour_tiles},
                       inventory:state(['inventory_counts']).inventory_counts},
-                      'Is collecting this observed opportunity now worth the detour, exposure and inventory cost for this journey?',
-                      {take:'Collect this opportunity now, then resume the current journey.',pass:'Continue the journey and leave this opportunity.'});
-                    if(r){
+                      'Is this opportunity worth collecting when passing nearby on this journey, given the resource goals, route, threats and inventory? Collection starts within collection_budget.',
+                      {take:'Collect this opportunity when within the approach budget, then resume the journey.',pass:'Continue the journey and leave this opportunity.'});
+                    if(r&&assessment.approach_direct_distance<=config.max_detour_tiles){
                       accept('opportunity',r,r.result.answers.response.choice);
                       take=r.result.answers.response.choice==='take';
                     }
-                  } else take=worthwhile(opportunity.point,event);
+                  } else if(assessment.approach_direct_distance<=config.max_detour_tiles) take=worthwhile(opportunity.point,event);
                   if(take!=null){opportunities.delete(id);activeOpportunity=null;}
                   if(take){
                     approvedOpportunity=true;
