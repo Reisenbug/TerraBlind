@@ -4570,7 +4570,7 @@ public sealed class BehaviorTrial : ModSystem
         string script = "const route=" + waypoints.ToJsonString() + ";const results=[];for(let i=0;i<route.length;i++){"
             + "const r=step('leg_'+i,()=>tool('nav_to',route[i]));results.push({i,done:r.done,error:r.error??null,reason:r.reason??null});"
             + "if(r.done!==true)return {status:'yield',blocked:results};}return {status:'done',results};";
-        var fight = await Call("action_start", new JsonObject { ["tool"] = "fight", ["args"] = new JsonObject { ["seconds"] = 120, ["max_dist"] = 25 } });
+        var fight = await Call("action_start", new JsonObject { ["tool"] = "fight", ["args"] = new JsonObject { ["seconds"] = 120d, ["max_dist"] = 25 } });
         var travel = await Call("action_start", new JsonObject { ["tool"] = "run_script", ["args"] = new JsonObject
             { ["workflow"] = "decision-comparison", ["code"] = script } });
         var samples = new JsonArray(); var clock = Stopwatch.StartNew();
@@ -4602,7 +4602,7 @@ public sealed class BehaviorTrial : ModSystem
                 {
                     var attack = await Call("action_query", new JsonObject { ["handle"] = fight["handle"].DeepClone() });
                     if (attack["status"]?.ToString() == "completed")
-                        fight = await Call("action_start", new JsonObject { ["tool"] = "fight", ["args"] = new JsonObject { ["seconds"] = 120, ["max_dist"] = 25 } });
+                        fight = await Call("action_start", new JsonObject { ["tool"] = "fight", ["args"] = new JsonObject { ["seconds"] = 120d, ["max_dist"] = 25 } });
                 }
                 if (samples.Count % 4 == 0)
                     File.WriteAllText(Path.Combine(Main.SavePath, "decision-comparison-progress.json"), new JsonObject
