@@ -41,7 +41,7 @@ public sealed class ScriptLibrary
               questions:{response:{type:'choice',instructions:
                 'Which available movement and weapon combination best avoids incoming damage and keeps this journey progressing?',criteria}}});
             if(r.status==='pending'||r.request_id===input.last_request) return {status:r.status};
-            const record={decision:'combat',request:r.request_id,request_age_ms:r.request_age_ms,model_ms:r.result.elapsed_ms};
+            const record={decision:'combat',request:r.request_id,request_age_ms:r.request_age_ms,ready_wait_ms:r.ready_wait_ms,model_ms:r.result.elapsed_ms};
             if(r.status==='failed'){
               print({...record,error:r.result.error});return {request_id:r.request_id,error:r.result.error};
             }

@@ -130,6 +130,8 @@ for argument in sys.argv[1:]:
             'safe_landing_candidates': sum(m['safe_landing'] for f in forecasts for m in f['movements'])},
         'channel_results': {key: {'count': len(values),
             'errors': collections.Counter(v['result']['error'] for v in values if v['result'].get('error')),
+            'median_ready_wait_ms': round(statistics.median(v['ready_wait_ms'] for v in values if v.get('ready_wait_ms') is not None), 1)
+                if any(v.get('ready_wait_ms') is not None for v in values) else None,
             'median_age_ms': round(statistics.median(v['request_age_ms'] for v in values), 1)} for key, values in channels.items()},
         'adoptions': {key: {'count': len(values),
             'actions': dict(collections.Counter(v.get('action', v.get('error')) for v in values)),

@@ -74,6 +74,7 @@ static class ScriptTests
         await Task.Delay(10);
         var answered = channels.Poll(first, Judge);
         Check(answered["status"].ToString() == "ready" && answered["input_state"]["x"].GetValue<int>() == 10
+            && answered["ready_wait_ms"].GetValue<double>() >= 0
             && answered["result"]["answers"]["choice"]["choice"].ToString() == "retreat",
             "background decision lost its sampled scene or typed answer");
         answered["input_state"]["x"] = -100;

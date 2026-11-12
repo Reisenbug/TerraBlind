@@ -68,7 +68,7 @@ public sealed class ScriptDecisionChannels
     sealed class Channel
     {
         public string Context, Questions;
-        public long Started, AnswerStarted, Sequence;
+        public long Started, AnswerStarted, CompletedAt, AnswerCompletedAt, Sequence;
         public CancellationTokenSource Lifetime = new();
         public Task<JsonObject> Pending;
         public JsonObject Input, Answer;
@@ -109,8 +109,10 @@ public sealed class ScriptDecisionChannels
                     ["request_age_ms"] = Stopwatch.GetElapsedTime(current.Started).TotalMilliseconds,
                     ["input_state"] = current.Input.DeepClone(), ["result"] = answer.DeepClone() };
                 current.AnswerStarted = current.Started;
+                current.AnswerCompletedAt = current.CompletedAt;
                 DiagLog.Write("[script_decision_channel] " + new JsonObject { ["channel"] = name, ["context"] = context,
                     ["request_id"] = current.Sequence, ["request_age_ms"] = current.Answer["request_age_ms"].DeepClone(),
+                    ["ready_wait_ms"] = current.CompletedAt == 0 ? null : Stopwatch.GetElapsedTime(current.CompletedAt).TotalMilliseconds,
                     ["result"] = answer.DeepClone() }.ToJsonString());
                 current.Pending = null;
             }
@@ -121,6 +123,7 @@ public sealed class ScriptDecisionChannels
                 if (age <= maxAge || current.Answer["result"]?["error"] != null)
                 {
                     result = (JsonObject)current.Answer.DeepClone(); result["request_age_ms"] = age;
+                    result["ready_wait_ms"] = current.AnswerCompletedAt == 0 ? null : Stopwatch.GetElapsedTime(current.AnswerCompletedAt).TotalMilliseconds;
                     result["status"] = result["result"]?["error"] == null ? "ready" : "failed";
                 }
             }
@@ -130,7 +133,12 @@ public sealed class ScriptDecisionChannels
                 current.Input = (JsonObject)request["state"].DeepClone();
                 current.Started = Stopwatch.GetTimestamp(); current.Sequence = ++sequence;
                 var lifetime = current.Lifetime.Token;
-                current.Pending = Task.Run(() => judge(request, lifetime), lifetime);
+                current.CompletedAt = 0;
+                current.Pending = Task.Run(async () =>
+                {
+                    try { return await judge(request, lifetime); }
+                    finally { current.CompletedAt = Stopwatch.GetTimestamp(); }
+                }, lifetime);
             }
             result ??= new JsonObject { ["status"] = "pending" };
             result["channel"] = name; result["context"] = context;
