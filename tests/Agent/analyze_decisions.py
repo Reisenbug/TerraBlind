@@ -9,6 +9,9 @@ for argument in sys.argv[1:]:
     root = Path(argument)
     report = json.loads((root / 'decision-comparison.json').read_text())
     samples = report['samples']
+    weapons = set(report.get('policy_config', {}).get('weapon_order', []))
+    weapon_enemy_samples = [s for s in samples if s['enemies'] and s['held_type'] in weapons]
+    weapon_uses = [s for s in weapon_enemy_samples if s['attack'] or s['item_animation'] > 0]
     damage = {s['last_damage']['tick']: s['last_damage'] for s in samples if s.get('last_damage')}
     anchor = samples[0]
     stationary_start = anchor['elapsed_ms']
@@ -93,6 +96,9 @@ for argument in sys.argv[1:]:
         'stationary_over_2s_count': len(stationary),
         'longest_stationary_seconds': round(max(stationary, default=0) / 1000, 2),
         'enemy_samples': sum(bool(s['enemies']) for s in samples),
+        'weapon_enemy_samples': len(weapon_enemy_samples),
+        'weapon_use_enemy_samples': len(weapon_uses),
+        'moving_weapon_use_samples': sum(math.hypot(s['vx'], s['vy']) > 0.1 for s in weapon_uses),
         'requests': dict(requests), 'choices': dict(choices),
         'channel_results': {key: {'count': len(values),
             'errors': collections.Counter(v['result']['error'] for v in values if v['result'].get('error')),
