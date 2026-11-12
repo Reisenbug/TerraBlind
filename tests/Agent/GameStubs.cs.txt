@@ -336,9 +336,12 @@ namespace TerraBlind
     public static class StateSpacePlanner { public static bool PreserveTerrain, ReservesItemUse; }
     public static class CombatForecast
     {
+        public static Func<JsonObject, CancellationToken, Task<JsonObject>> RefreshHandler;
+        public static Func<JsonObject, JsonObject> PrepareHandler;
         public static void Reset() { }
         public static JsonObject Poll(JsonObject args, JsonObject scene) => new() { ["status"] = "unavailable", ["reason"] = "engine_not_linked" };
-        public static JsonObject Prepare(JsonObject args) => new() { ["error"] = "engine_not_linked" };
+        public static JsonObject Prepare(JsonObject args) => PrepareHandler?.Invoke(args) ?? new() { ["error"] = "engine_not_linked" };
+        public static Task<JsonObject> Refresh(JsonObject args, Func<JsonObject> observe, CancellationToken token) => RefreshHandler?.Invoke(args, token) ?? Task.FromResult(args);
         public static JsonObject Receipt(JsonObject args, JsonObject result) => result;
     }
     public static class VanillaNavBridge { public static bool Enabled; public static string Stage = "Moving"; }

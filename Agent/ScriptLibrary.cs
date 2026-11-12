@@ -33,9 +33,11 @@ public sealed class ScriptLibrary
             const weapons=[...new Map(c.targets.flatMap(n=>n.weapons).map(({line_or_reach_passed,...w})=>[w.type,w])).values()];
             const r=tool('jev_judge',{channel:'combat',context:input.context,interval_ms:input.interval_ms??750,
               max_age_ms:input.max_age_ms??2000,state:{instruction:input.instruction??'',destination:input.destination,
-                current_player_pixels:c.player,targets:c.targets.map(({weapons,...n})=>n),projectiles:c.projectiles,
+                current_tick:c.tick,current_player_pixels:c.player,targets:c.targets.map(({weapons,...n})=>n),projectiles:c.projectiles,
+                sample_targets:f.sample_targets,sample_projectiles:f.sample_projectiles,
                 weapons,recent_damage:c.recent_damage,
                 forecast_id:f.id,sample_tick:f.sample_tick,age_frames:f.age_frames,sample_player_pixels:f.sample_player,
+                comparison_frames:f.comparison_frames,
                 scope:f.scope,known_route_frames:f.known_route_frames,prefix_source:f.prefix_source,walk_intent:f.walk_intent,
                 movements,plans:f.plans},
               questions:{response:{type:'choice',instructions:
@@ -53,7 +55,8 @@ public sealed class ScriptLibrary
             else if(plan.movement==='follow_route') applied=plan.weapon_type>0?tool('set_combat',{weapon_type:plan.weapon_type}):{};
             else applied=tool('act',{steps:[{keys:['right'],until:{frames:1}}],combat_candidate:{
               context:input.context,forecast_id:r.input_state.forecast_id,plan_id:plan.id}});
-            print({...record,choice:r.result.answers.response.choice,action:applied.error??applied.outcome??'follow_route'});
+            print({...record,choice:r.result.answers.response.choice,action:applied.error??applied.outcome??'follow_route',
+              reason:applied.reason,decision_forecast_id:applied.decision_forecast_id,execution_forecast_id:applied.execution_forecast_id});
             return {request_id:r.request_id,applied:!applied.error,weapon_type:plan?.weapon_type,error:applied.error??null};
             """);
         if (name is "reactive_travel" or "task_reactions" or "decision_travel" or "decision_reactions" or "joint_reactions") return Template(name,

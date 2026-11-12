@@ -152,7 +152,7 @@ public static class AgentScript
         tools.Add(new JsonObject { ["type"] = "function", ["function"] = new JsonObject
         {
             ["name"] = "combat_assess",
-            ["description"] = "只读观察附近普通敌怪、弹幕和快捷栏武器检查。forecast:true配合context和destination后台推演共享行动候选，原动作继续。forecast返回pending/ready/unavailable、采样帧、已排队路线长度、各移动的落点/地形伤害/推进及组合武器的射界检查。敌人运动用匀速假设。act携combat_candidate引用可执行选中组合，宿主校验实际状态和沿途地形并逐帧检测偏离。follow_route组合只需set_combat更新武器。",
+            ["description"] = "只读观察附近普通敌怪、弹幕和快捷栏武器检查。forecast:true配合context和destination后台推演候选。所有移动在同一comparison_frames内比较伤害、直线目标距离变化、匀速威胁相交和射界；follow_route只预测已知控制段，之后导航标记未知。safe_landing另检查换位动作的完整落地过程。act携combat_candidate引用表达移动与武器意图；宿主保持原动作运行，同时从当前位置重算该动作，通过校验后交接并逐帧检测偏离。follow_route组合用set_combat更新武器。",
             ["parameters"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject
                 { ["radius"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 60 },
                   ["forecast"] = new JsonObject { ["type"] = "boolean" }, ["context"] = new JsonObject { ["type"] = "string" },

@@ -14,10 +14,11 @@ namespace TerraBlind;
 public sealed class CombatForecast : ModSystem
 {
     sealed record Forecast(long Id, long Tick, JsonObject Snapshot, JsonObject Scene, int[] Prefix,
-        JsonObject Destination, Task<JsonObject> Work);
+        JsonObject Destination, Task<JsonObject> Work, JsonObject Anchor = null);
     static readonly Dictionary<long, Forecast> retained = new();
     static CancellationTokenSource lifetime = new();
     static Forecast pending, ready;
+    static Forecast prepared;
     static Forecast executing;
     static JsonObject executingMovement;
     static JsonObject executionAbort;
@@ -25,14 +26,18 @@ public sealed class CombatForecast : ModSystem
     static long sequence, lastAttempt;
     static JsonObject unavailable;
 
-    public override void OnWorldUnload() => Reset();
-    public override void Unload() => Reset();
-    public static void Reset()
+    public override void OnWorldUnload() => Close();
+    public override void Unload() => Close();
+    static void Close()
     {
         if (executing != null && ActExecutor.IsActive && AgentTools.ControlSession.OwnsDirectMovement) ActExecutor.Stop();
         executing = null; executingMovement = null; executionAbort = null;
+        Reset();
+    }
+    public static void Reset()
+    {
         lifetime.Cancel(); lifetime.Dispose(); lifetime = new();
-        pending = ready = null; retained.Clear(); context = null; unavailable = null; lastAttempt = 0;
+        pending = ready = prepared = null; retained.Clear(); context = null; unavailable = null; lastAttempt = 0;
     }
 
     public override void PostUpdateEverything()
@@ -83,10 +88,10 @@ public sealed class CombatForecast : ModSystem
         {
             lastAttempt = Stopwatch.GetTimestamp();
             var player = Main.LocalPlayer;
-            int[] prefix = StateSpacePlanner.PeekMovementControls(48);
+            int[] prefix = StateSpacePlanner.PeekMovementControls(24);
             var walk = StateSpacePlanner.PeekWalkIntent();
             if (prefix.Length < 6 && walk != null)
-                prefix = Enumerable.Repeat(walk.Value.Direction > 0 ? 2 : 1, 48).ToArray();
+                prefix = Enumerable.Repeat(walk.Value.Direction > 0 ? 2 : 1, 24).ToArray();
             if (!VanillaNavigationDemo.Instance.WorkerReady)
                 unavailable = new JsonObject { ["status"] = "unavailable", ["reason"] = "worker_warming" };
             else if (prefix.Length < 6)
@@ -135,55 +140,80 @@ public sealed class CombatForecast : ModSystem
     }
 
     static async Task<JsonObject> Generate(long id, long tick, JsonObject snapshot, JsonObject scene, int[] prefix,
-        JsonObject destination, (int Direction, float TargetX, float ArrivalPixels)? walk, double captureMs, CancellationToken token)
+        JsonObject destination, (int Direction, float TargetX, float ArrivalPixels)? walk, double captureMs, CancellationToken token,
+        string executionName = null)
     {
         var clock = Stopwatch.StartNew();
         var movements = new JsonArray();
-        var definitions = new[] { ("follow_route", -1), ("left", 1), ("right", 2), ("jump_left", 5), ("jump_right", 6) };
-        var inputs = definitions.ToDictionary(d => d.Item1, d => prefix.Concat(Enumerable.Repeat(d.Item2 < 0 ? 0 : d.Item2, d.Item2 < 0 ? 0 : 24))
-            .Concat(Enumerable.Repeat(0, 48)).ToArray());
+        bool execution = executionName != null;
+        int horizon = execution ? prefix.Length + 24 : Math.Min(24, prefix.Length);
+        var definitions = new[] { ("follow_route", -1), ("left", 1), ("right", 2), ("jump_left", 5), ("jump_right", 6) }
+            .Where(d => !execution || d.Item1 == executionName).ToArray();
+        var inputs = definitions.ToDictionary(d => d.Item1, d => d.Item2 < 0 ? prefix.Take(horizon).ToArray()
+            : (execution ? prefix : Array.Empty<int>()).Concat(Enumerable.Repeat(d.Item2, 24)).Concat(Enumerable.Repeat(0, 48)).ToArray());
         var batch = await VanillaNavigationDemo.Instance.Observe(new JsonObject { ["command"] = "combat_replays",
             ["snapshot"] = snapshot.DeepClone(), ["branches"] = new JsonArray(inputs.Select(pair => (JsonNode)new JsonObject {
                 ["id"] = pair.Key, ["controls"] = new JsonArray(pair.Value.Select(k => (JsonNode)JsonValue.Create(k)).ToArray()) }).ToArray()) }, token);
+        if (!execution && walk != null)
+        {
+            double center = Number(scene["player"]["pos"]["x"]) + Number(scene["player"]["size_pixels"]["width"]) / 2;
+            bool Arrived(double x) => walk.Value.Direction > 0 ? walk.Value.TargetX - x <= walk.Value.ArrivalPixels
+                : walk.Value.TargetX - x >= -walk.Value.ArrivalPixels;
+            if (Arrived(center)) throw new InvalidOperationException("walk_intent_already_arrived");
+            var baseline = batch["branches"].AsArray().First(branch => branch["id"].ToString() == "follow_route")["frames"].AsArray();
+            int reached = baseline.Select((f, i) => (f, i)).Where(e => Arrived(Number(e.f["x"])
+                + Number(scene["player"]["size_pixels"]["width"]) / 2)).Select(e => e.i + 1).FirstOrDefault();
+            if (reached > 0) horizon = Math.Min(horizon, reached);
+        }
         foreach (var (name, keys) in definitions)
         {
             int[] controls = inputs[name];
             var response = batch["branches"].AsArray().First(branch => branch["id"].ToString() == name);
             var trace = response["frames"].AsArray();
-            int minimum = prefix.Length + (keys < 0 ? 0 : 24);
-            int landing = trace.Select((frame, index) => (frame, index))
+            int minimum = execution ? prefix.Length + 24 : 24;
+            int landing = keys < 0 ? 0 : trace.Select((frame, index) => (frame, index))
                 .Where(e => e.index + 1 >= minimum && e.frame["grounded"]?.GetValue<bool>() == true
                     && e.frame["dead"]?.GetValue<bool>() == false && e.frame["hp"].GetValue<int>() >= scene["player"]["hp"].GetValue<int>())
                 .Select(e => e.index + 1).FirstOrDefault();
             int count = landing > 0 ? landing : trace.Count;
-            var end = count > 0 ? trace[count - 1] : null;
+            int compared = Math.Min(horizon, trace.Count);
+            var end = compared > 0 ? trace[compared - 1] : null;
             var player = scene["player"];
             double startDistance = Distance(Number(player["pos"]["x"]) / 16, Number(player["pos"]["y"]) / 16, destination);
-            var movement = new JsonObject { ["id"] = name, ["safe_landing"] = landing > 0,
+            var movement = new JsonObject { ["id"] = name, ["safe_landing"] = keys < 0 ? (bool?)null : landing > 0,
                 ["outcome"] = response["outcome"]?.DeepClone(), ["landing_frame"] = landing > 0 ? landing : null,
-                ["execution_frames"] = count, ["end"] = end?.DeepClone(),
+                ["execution_frames"] = keys < 0 ? (int?)null : count, ["end"] = end?.DeepClone(),
+                ["comparison_frames"] = horizon, ["observed_comparison_frames"] = compared, ["comparison_complete"] = compared == horizon,
+                ["target_sample_frame"] = Math.Min(12, compared),
                 ["route_progress_tiles"] = end == null ? null : startDistance - Distance(Number(end["x"]) / 16, Number(end["y"]) / 16, destination),
-                ["damage"] = trace.Count == 0 ? null : scene["player"]["hp"].GetValue<int>() - trace.Min(f => f["hp"].GetValue<int>()),
+                ["damage"] = compared == 0 ? null : scene["player"]["hp"].GetValue<int>() - trace.Take(compared).Min(f => f["hp"].GetValue<int>()),
                 ["engine_ms"] = response["elapsed_ms"]?.DeepClone(),
                 ["controls"] = new JsonArray(controls.Take(count).Select(k => (JsonNode)JsonValue.Create(k)).ToArray()),
                 ["trajectory"] = new JsonArray(trace.Take(count).Select(f => f.DeepClone()).ToArray()) };
-            movement["linear_threat_overlap"] = ThreatOverlap(scene, trace, count);
-            movement["path_samples_pixels"] = new JsonArray(trace.Take(count).Select((f, i) => (f, i))
-                .Where(e => e.i % 6 == 0 || e.i + 1 == count).Select(e => (JsonNode)new JsonArray(e.i + 1,
+            movement["linear_threat_overlap"] = ThreatOverlap(scene, trace, compared);
+            movement["path_samples_pixels"] = new JsonArray(trace.Take(compared).Select((f, i) => (f, i))
+                .Where(e => e.i % 6 == 0 || e.i + 1 == compared).Select(e => (JsonNode)new JsonArray(e.i + 1,
                     Number(e.f["x"]), Number(e.f["y"]))).ToArray());
             movements.Add(movement);
         }
         return new JsonObject { ["status"] = "ready", ["id"] = id, ["sample_tick"] = tick,
             ["sample_player"] = scene["player"].DeepClone(),
+            ["sample_targets"] = new JsonArray(scene["targets"].AsArray().Select(n => {
+                var target = n.DeepClone().AsObject(); target.Remove("weapons"); return (JsonNode)target; }).ToArray()),
+            ["sample_projectiles"] = scene["projectiles"].DeepClone(),
             ["snapshot_area"] = snapshot["area"].DeepClone(),
             ["prefix_source"] = walk == null ? "queued_controls" : "closed_loop_walk_intent",
             ["walk_intent"] = walk == null ? null : new JsonObject { ["direction"] = walk.Value.Direction,
                 ["target_x_pixels"] = walk.Value.TargetX, ["arrival_pixels"] = walk.Value.ArrivalPixels },
             ["known_route_frames"] = prefix.Length, ["capture_ms"] = captureMs, ["compute_ms"] = clock.Elapsed.TotalMilliseconds,
+            ["known_route_controls"] = new JsonArray(prefix.Select(k => (JsonNode)JsonValue.Create(k)).ToArray()),
+            ["destination"] = destination.DeepClone(), ["progress_metric"] = "straight_line_distance_to_goal",
+            ["comparison_frames"] = horizon, ["mode"] = execution ? "execution" : "comparison",
             ["batch_prepare_ms"] = batch["prepare_ms"]?.DeepClone(), ["batch_engine_ms"] = batch["total_ms"]?.DeepClone(),
             ["batch_roundtrip_ms"] = batch["roundtrip_ms"]?.DeepClone(), ["batch_queue_ms"] = batch["queue_ms"]?.DeepClone(),
             ["movements"] = movements,
-            ["scope"] = "Real vanilla player physics. All alternatives start with prefix_source: queued_controls are already scheduled; closed_loop_walk_intent extrapolates the observed walk direction for 48 frames and may extend beyond its arrival threshold. Then move for 24 frames and release keys until landing. Enemy/projectile AI and subsequent navigation are not simulated." };
+            ["scope"] = execution ? "Fresh execution proof: observed movement prefix, then selected input for 24 frames, then release until landing."
+                : "All comparison metrics cover the same comparison_frames starting now, up to 24. Baseline replays queued keys or the current walk intent until its arrival threshold; later navigation is unknown. Alternatives apply their input immediately for 24 frames; safe_landing separately checks the longer landing continuation. Entity motion is a constant-velocity hypothesis." };
     }
 
     static double Number(JsonNode value) => double.Parse(value.ToString(), System.Globalization.CultureInfo.InvariantCulture);
@@ -210,6 +240,7 @@ public sealed class CombatForecast : ModSystem
         foreach (var target in scene["targets"].AsArray().Where(n => Number(n["contact_damage"]) > 0)) Compare(target, false);
         foreach (var shot in scene["projectiles"].AsArray()) Compare(shot, true);
         return new JsonObject { ["npc_object_frames"] = contacts, ["projectile_object_frames"] = shots,
+            ["evaluated_frames"] = count,
             ["first_frame"] = first > 0 ? first : null, ["assumption"] = "constant entity velocity; overlaps are not confirmed damage" };
     }
 
@@ -230,7 +261,7 @@ public sealed class CombatForecast : ModSystem
                 var targetChecks = new JsonArray();
                 foreach (var target in forecast.Scene["targets"].AsArray().Take(3))
                 {
-                    int frame = Math.Min(forecast.Prefix.Length + 12, movement["trajectory"].AsArray().Count) - 1;
+                    int frame = movement["target_sample_frame"].GetValue<int>() - 1;
                     if (frame < 0) continue;
                     var predicted = movement["trajectory"][frame];
                     var source = new Vector2(predicted["x"].GetValue<float>() + player.width / 2f,
@@ -252,24 +283,121 @@ public sealed class CombatForecast : ModSystem
         return plans;
     }
 
+    public static async Task<JsonObject> Refresh(JsonObject args, Func<JsonObject> observe, CancellationToken token)
+    {
+        long started = Stopwatch.GetTimestamp();
+        string requestedContext = args["combat_candidate"]?["context"]?.ToString();
+        CancellationTokenSource refreshLifetime = null;
+        var request = await NativeAgent.OnMain(() =>
+        {
+            var reference = args["combat_candidate"].AsObject();
+            long id = reference["forecast_id"].GetValue<long>();
+            if (requestedContext == context && prepared?.Id == id) return (Job: (Forecast)null, Error: (JsonObject)null);
+            if (requestedContext != context || !retained.TryGetValue(id, out var original))
+                return (Job: (Forecast)null, Error: new JsonObject { ["error"] = "combat_forecast_replaced" });
+            var plan = original.Work.Result["plans"].AsArray().FirstOrDefault(p => p["id"].ToString() == reference["plan_id"]?.ToString());
+            if (plan == null || plan["movement"].ToString() == "follow_route")
+                return (Job: (Forecast)null, Error: new JsonObject { ["error"] = "combat_candidate_missing" });
+            var player = Main.LocalPlayer;
+            var walk = StateSpacePlanner.PeekWalkIntent();
+            int[] prefix = StateSpacePlanner.PeekMovementControls(12);
+            if (prefix.Length < 6 && walk != null) prefix = Enumerable.Repeat(walk.Value.Direction > 0 ? 2 : 1, 12).ToArray();
+            if (prefix.Length == 0 && !RecedingNav.Active) prefix = new int[12];
+            if (prefix.Length == 0) return (Job: (Forecast)null,
+                Error: new JsonObject { ["error"] = "combat_candidate_no_handoff_prefix" });
+            try
+            {
+                long captureStarted = Stopwatch.GetTimestamp();
+                int x = (int)player.Center.X / 16, y = (int)player.Center.Y / 16;
+                var snapshot = VanillaFrame.Capture(player, Rectangle.Intersect(new Rectangle(x - 32, y - 16, 64, 96),
+                    new Rectangle(0, 0, Main.maxTilesX, Main.maxTilesY)), true);
+                var anchor = VanillaPrediction.Observe(player, false);
+                long freshId = ++sequence, tick = (long)Main.GameUpdateCount;
+                var scene = observe();
+                refreshLifetime = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
+                var job = new Forecast(freshId, tick, snapshot, scene, prefix, original.Destination,
+                    Generate(freshId, tick, snapshot, scene, prefix, original.Destination, walk,
+                        Stopwatch.GetElapsedTime(captureStarted).TotalMilliseconds, refreshLifetime.Token, plan["movement"].ToString()), anchor);
+                return (Job: job, Error: (JsonObject)null);
+            }
+            catch (NotSupportedException error)
+            { return (Job: (Forecast)null, Error: new JsonObject { ["error"] = "combat_candidate_capture_unavailable", ["reason"] = error.Message }); }
+        }, token);
+        if (request.Error != null) return request.Error;
+        if (request.Job == null) return args;
+        try
+        {
+            var result = await request.Job.Work;
+            return await NativeAgent.OnMain(() =>
+            {
+                if (requestedContext != context) return new JsonObject { ["error"] = "combat_forecast_replaced" };
+                var movement = result["movements"][0].AsObject();
+                if (movement["safe_landing"]?.GetValue<bool>() != true)
+                    return new JsonObject { ["error"] = "combat_candidate_landing_unresolved" };
+                var invalid = CheckState(request.Job, movement, out int offset);
+                if (invalid != null)
+                {
+                    invalid["execution_forecast_id"] = request.Job.Id;
+                    invalid["age_frames"] = offset; invalid["lead_frames"] = request.Job.Prefix.Length;
+                    invalid["elapsed_ms"] = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                    invalid["batch_queue_ms"] = result["batch_queue_ms"]?.DeepClone();
+                    invalid["batch_engine_ms"] = result["batch_engine_ms"]?.DeepClone();
+                    DiagLog.Write("[combat_candidate_refresh_rejected] " + invalid.ToJsonString());
+                    return invalid;
+                }
+                var reference = args["combat_candidate"].AsObject();
+                if (!retained.TryGetValue(reference["forecast_id"].GetValue<long>(), out var original))
+                    return new JsonObject { ["error"] = "combat_forecast_replaced" };
+                var plan = original.Work.Result["plans"].AsArray().First(p => p["id"].ToString() == reference["plan_id"].ToString());
+                result["plans"] = new JsonArray(plan.DeepClone());
+                prepared = request.Job;
+                var refreshed = args.DeepClone().AsObject();
+                refreshed["combat_candidate"]["decision_forecast_id"] = reference["forecast_id"].DeepClone();
+                refreshed["combat_candidate"]["forecast_id"] = prepared.Id;
+                refreshed["combat_candidate"]["lead_frames"] = prepared.Prefix.Length;
+                DiagLog.Write("[combat_candidate_refresh] " + new JsonObject { ["decision_forecast_id"] = reference["forecast_id"].DeepClone(),
+                    ["execution_forecast_id"] = prepared.Id, ["lead_frames"] = prepared.Prefix.Length,
+                    ["age_frames"] = offset, ["elapsed_ms"] = Stopwatch.GetElapsedTime(started).TotalMilliseconds }.ToJsonString());
+                return refreshed;
+            }, token);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        { return new JsonObject { ["error"] = "combat_forecast_replaced" }; }
+        finally { refreshLifetime?.Dispose(); }
+    }
+
+    static JsonObject CheckState(Forecast forecast, JsonObject movement, out int offset)
+    {
+        offset = checked((int)((long)Main.GameUpdateCount - forecast.Tick));
+        var trajectory = movement["trajectory"].AsArray();
+        if (offset < 0 || offset >= Math.Min(trajectory.Count, forecast.Prefix.Length + 24))
+            return new JsonObject { ["error"] = "combat_candidate_expired", ["age_frames"] = offset };
+        var expected = offset == 0 ? forecast.Anchor : trajectory[offset - 1].AsObject();
+        var player = Main.LocalPlayer;
+        string reason = null, mismatch = null;
+        if (expected == null || !VanillaAsyncMovement.StateMatches(player, expected, true, out reason, out mismatch))
+            return new JsonObject { ["error"] = "combat_candidate_changed", ["reason"] = expected == null ? "missing_anchor" : reason,
+                ["difference"] = expected == null ? null : mismatch };
+        if (!VanillaFrame.ContextMatches(forecast.Snapshot, player, out reason, trajectory, firstFrame: offset))
+            return new JsonObject { ["error"] = "combat_candidate_changed", ["reason"] = reason };
+        return null;
+    }
+
     public static JsonObject Prepare(JsonObject args)
     {
         var reference = args["combat_candidate"].AsObject();
-        if (reference["context"]?.ToString() != context || !retained.TryGetValue(reference["forecast_id"].GetValue<long>(), out var forecast))
+        if (reference["context"]?.ToString() != context || prepared?.Id != reference["forecast_id"].GetValue<long>())
             return new JsonObject { ["error"] = "combat_forecast_replaced" };
+        var forecast = prepared;
         var result = forecast.Work.Result;
         var plan = result["plans"].AsArray().FirstOrDefault(p => p["id"].ToString() == reference["plan_id"]?.ToString());
         if (plan == null || plan["movement"].ToString() == "follow_route") return new JsonObject { ["error"] = "combat_candidate_missing" };
         var movement = result["movements"].AsArray().First(m => m["id"].ToString() == plan["movement"].ToString());
         if (!movement["safe_landing"].GetValue<bool>()) return new JsonObject { ["error"] = "combat_candidate_landing_unresolved" };
-        int offset = checked((int)((long)Main.GameUpdateCount - forecast.Tick));
+        var invalid = CheckState(forecast, movement.AsObject(), out int offset);
+        if (invalid != null) return invalid;
         var trajectory = movement["trajectory"].AsArray();
-        if (offset < 1 || offset >= trajectory.Count)
-            return new JsonObject { ["error"] = "combat_candidate_expired", ["age_frames"] = offset };
         var player = Main.LocalPlayer;
-        if (!VanillaAsyncMovement.StateMatches(player, trajectory[offset - 1].AsObject(), true, out var reason, out var mismatch)
-            || !VanillaFrame.ContextMatches(forecast.Snapshot, player, out reason, trajectory, firstFrame: offset))
-            return new JsonObject { ["error"] = "combat_candidate_changed", ["reason"] = reason, ["difference"] = mismatch };
         int type = plan["weapon_type"].GetValue<int>();
         if (type > 0 && !player.inventory.Take(10).Any(w => w.type == type && CombatLoadout.Usable(w)
             && (w.useAmmo <= 0 || player.HasAmmo(w)) && w.mana * player.manaCost <= player.statMana))
@@ -286,14 +414,17 @@ public sealed class CombatForecast : ModSystem
         }
         if (type > 0) CombatLoadout.PreferredType = type;
         executing = forecast; executingMovement = movement.AsObject(); executionAbort = null;
-        var prepared = args.DeepClone().AsObject(); prepared["steps"] = steps;
+        prepared = null;
+        var payload = args.DeepClone().AsObject(); payload["steps"] = steps;
         DiagLog.Write("[combat_candidate_apply] " + new JsonObject { ["forecast_id"] = forecast.Id,
             ["plan_id"] = plan["id"].DeepClone(), ["age_frames"] = offset, ["remaining_frames"] = trajectory.Count - offset });
-        return prepared;
+        return payload;
     }
 
     public static JsonObject Receipt(JsonObject args, JsonObject result)
     {
+        result["decision_forecast_id"] = args["combat_candidate"]?["decision_forecast_id"]?.DeepClone();
+        result["execution_forecast_id"] = args["combat_candidate"]?["forecast_id"]?.DeepClone();
         if (executionAbort?["forecast_id"]?.ToString() != args["combat_candidate"]?["forecast_id"]?.ToString()) return result;
         result["error"] = "combat_candidate_changed_during_execution";
         result["forecast_abort"] = executionAbort.DeepClone();

@@ -1008,6 +1008,11 @@ public static partial class AgentTools
         long script = scriptInvocation.Value;
         try
         {
+            if (name == "act" && args["combat_candidate"] != null)
+            {
+                args = await CombatForecast.Refresh(args, () => CombatAssessment(25), token);
+                if (Rejected(args)) return args.ToJsonString();
+            }
             if (action)
             {
                 var denied = await NativeAgent.OnMain(() =>
@@ -1108,6 +1113,11 @@ public static partial class AgentTools
         if (reactions?.Handling == true && name is "action_control" or "action_start" or "action_queue" or "control" or "task_policy")
             return new JsonObject { ["error"] = "reaction_action_lifecycle",
                 ["detail"] = "事件中直接调用nav_to/gather/use_item等，宿主交接并恢复原动作。任务句柄控制交回Agent执行。" }.ToJsonString();
+        if (name == "act" && args["combat_candidate"] != null)
+        {
+            args = await CombatForecast.Refresh(args, () => CombatAssessment(25), token);
+            if (Rejected(args)) return args.ToJsonString();
+        }
         if (reactions?.Handling == true && AgentControlSession.ActionTool(name) && reactions.BeforeAction != null)
             await reactions.BeforeAction(name, args, token);
         if (reactions?.Handling == true) return await Execute(name, args, token);
