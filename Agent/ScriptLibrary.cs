@@ -41,7 +41,7 @@ public sealed class ScriptLibrary
                 scope:f.scope,known_route_frames:f.known_route_frames,prefix_source:f.prefix_source,walk_intent:f.walk_intent,
                 movements,plans:f.plans},
               questions:{response:{type:'choice',instructions:
-                'Which available movement and weapon combination best avoids incoming damage and keeps this journey progressing?',criteria}}});
+                'Which available movement and weapon combination best avoids incoming damage while carrying out state.instruction?',criteria}}});
             if(r.status==='pending'||r.request_id===input.last_request) return {status:r.status};
             const record={decision:'combat',request:r.request_id,request_age_ms:r.request_age_ms,ready_wait_ms:r.ready_wait_ms,model_ms:r.result.elapsed_ms};
             if(r.status==='failed'){

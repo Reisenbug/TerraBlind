@@ -35,7 +35,8 @@ static class ScriptTests
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=8 model_calls=0");
+        await ReactiveFightIntegration();
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=9 model_calls=0");
     }
 
     static async Task TestDecisionChannels()
@@ -323,6 +324,7 @@ static class ScriptTests
         await TaskPolicyIntegration();
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
+        await ReactiveFightIntegration();
         await AtomicActionPolicy();
         await ResolvedNavigationClearance();
         await HouseTools();
@@ -1882,6 +1884,60 @@ static class ScriptTests
             player.itemAnimation = animation;
             HttpServerSystem.Handler = http; agent.Unload();
             CombatForecast.RefreshHandler = null; CombatForecast.PrepareHandler = null;
+        }
+    }
+
+    static async Task ReactiveFightIntegration()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var http = HttpServerSystem.Handler;
+        bool attack = AgentPermissions.Attack;
+        int polls = 0, moves = 0, stops = 0;
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentPermissions.Attack = true;
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/fight" && JsonNode.Parse(payload)?["active"]?.GetValue<bool>() == false) stops++;
+                if (path == "/fight_active")
+                {
+                    polls++;
+                    if (polls == 2) AgentTools.Watches.Emit("nearby_chest", "fight-event", new JsonObject());
+                    return (200, new JsonObject { ["active"] = polls < 8 }.ToJsonString());
+                }
+                if (path == "/act")
+                {
+                    Check(polls < 8 && stops == 0, "fight reaction waited for the attack action to end");
+                    moves++;
+                }
+                return (200, "{}");
+            };
+            var task = AgentTools.Execute("run_script", new JsonObject {
+                ["workflow"] = "reactive-fight-" + Guid.NewGuid().ToString("N"),
+                ["code"] = """
+                    on('nearby_chest',event=>{
+                      if(event.execution.tool!=='fight') throw new Error('missing_fight_context');
+                      tool('act',{steps:[{keys:['left'],until:{frames:1}}]});
+                      return {handled:true};
+                    });
+                    tool('watch',{events:['nearby_chest']});
+                    return tool('fight',{seconds:10});
+                    """ }, default);
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            {
+                Check(timer.Elapsed.TotalSeconds < 10, "fight reaction deadlocked");
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+            var result = JsonNode.Parse(await task);
+            Check(result["ok"].GetValue<bool>() && moves == 1 && stops == 1 && !AgentTools.ControlSession.Active,
+                "fight reaction lost the attack action or leaked controls: " + result);
+            Console.WriteLine("PASS: fight dispatches reactive movement before completion while retaining its attack action");
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Watches.Reset(); AgentTools.Plan.Reset();
+            AgentPermissions.Attack = attack; HttpServerSystem.Handler = http; agent.Unload();
         }
     }
 

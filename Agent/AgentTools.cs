@@ -883,7 +883,9 @@ public static partial class AgentTools
                     if (reactionContext != null) await ReactAtBoundary(token, context: reactionContext);
                     return status;
                 }
-                if (reactionContext != null)
+                if (reactionContext != null && stop == "/fight")
+                    await ReactAtBoundary(token, context: reactionContext);
+                else if (reactionContext != null)
                 {
                     JsonObject completed = null;
                     await ReactAtBoundary(token, pause: async ct =>
@@ -2101,7 +2103,8 @@ public static partial class AgentTools
                 else result = await Call("/fight", args, token);
                 if (!Rejected(result))
                 {
-                    result = await Wait("/fight_active", "active", "/fight", Math.Clamp((int)Math.Ceiling(args["seconds"]?.GetValue<double>() ?? 10), 1, 120), token);
+                    result = await Wait("/fight_active", "active", "/fight", Math.Clamp((int)Math.Ceiling(args["seconds"]?.GetValue<double>() ?? 10), 1, 120), token,
+                        reactionContext: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
                     await Call("/fight", new JsonObject { ["active"] = false }, token);
                     if (Text(result, "outcome") == "timeout")
                         result = new JsonObject { ["outcome"] = "duration_elapsed",

@@ -92,6 +92,8 @@ public sealed class CombatForecast : ModSystem
             var walk = StateSpacePlanner.PeekWalkIntent();
             if (prefix.Length < 6 && walk != null)
                 prefix = Enumerable.Repeat(walk.Value.Direction > 0 ? 2 : 1, 24).ToArray();
+            if (prefix.Length == 0 && !RecedingNav.Active && !ActExecutor.IsActive && !AgentPermissions.Dodge)
+                prefix = new int[24];
             if (!VanillaNavigationDemo.Instance.WorkerReady)
                 unavailable = new JsonObject { ["status"] = "unavailable", ["reason"] = "worker_warming" };
             else if (prefix.Length < 6)
@@ -202,7 +204,7 @@ public sealed class CombatForecast : ModSystem
                 var target = n.DeepClone().AsObject(); target.Remove("weapons"); return (JsonNode)target; }).ToArray()),
             ["sample_projectiles"] = scene["projectiles"].DeepClone(),
             ["snapshot_area"] = snapshot["area"].DeepClone(),
-            ["prefix_source"] = walk == null ? "queued_controls" : "closed_loop_walk_intent",
+            ["prefix_source"] = walk != null ? "closed_loop_walk_intent" : prefix.All(k => k == 0) ? "idle_inputs" : "queued_controls",
             ["walk_intent"] = walk == null ? null : new JsonObject { ["direction"] = walk.Value.Direction,
                 ["target_x_pixels"] = walk.Value.TargetX, ["arrival_pixels"] = walk.Value.ArrivalPixels },
             ["known_route_frames"] = prefix.Length, ["capture_ms"] = captureMs, ["compute_ms"] = clock.Elapsed.TotalMilliseconds,
