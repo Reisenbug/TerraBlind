@@ -46,10 +46,11 @@ public static class AgentScript
             lock (gate) { Active = false; wait = servicing; if (wait) retired = finish; }
             if (!wait) finish();
         }
-        long lastTick;
-        public bool TickDue()
+        long lastTick, lastDecisionVersion;
+        public bool TickDue(long decisionVersion = 0)
         {
-            if (Stopwatch.GetElapsedTime(lastTick).TotalMilliseconds < 250) return false;
+            if (decisionVersion == lastDecisionVersion && Stopwatch.GetElapsedTime(lastTick).TotalMilliseconds < 250) return false;
+            lastDecisionVersion = decisionVersion;
             lastTick = Stopwatch.GetTimestamp();
             return true;
         }

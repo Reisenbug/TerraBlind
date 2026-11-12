@@ -1199,7 +1199,7 @@ public static partial class AgentTools
             {
                 var notices = await NativeAgent.OnMain(() => Watches.TakeForScript(kinds), token);
                 JsonObject notice = notices.FirstOrDefault()?.AsObject();
-                if (notice == null && kinds.Contains("tick") && reactions.TickDue()) notice = new JsonObject { ["kind"] = "tick" };
+                if (notice == null && kinds.Contains("tick") && reactions.TickDue(DecisionChannels.CompletionVersion)) notice = new JsonObject { ["kind"] = "tick" };
                 if (notice != null)
                 {
                     notice["execution"] = context?.DeepClone();

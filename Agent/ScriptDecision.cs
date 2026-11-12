@@ -77,6 +77,8 @@ public sealed class ScriptDecisionChannels
     readonly object gate = new();
     readonly Dictionary<string, Channel> channels = new();
     long sequence;
+    long completionVersion;
+    public long CompletionVersion => Interlocked.Read(ref completionVersion);
 
     public JsonObject Poll(JsonObject args, Func<JsonObject, CancellationToken, Task<JsonObject>> judge)
     {
@@ -139,6 +141,12 @@ public sealed class ScriptDecisionChannels
                     try { return await judge(request, lifetime); }
                     finally { current.CompletedAt = Stopwatch.GetTimestamp(); }
                 }, lifetime);
+                _ = current.Pending.ContinueWith(completed =>
+                {
+                    lock (gate)
+                        if (!lifetime.IsCancellationRequested && ReferenceEquals(current.Pending, completed))
+                            Interlocked.Increment(ref completionVersion);
+                }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             }
             result ??= new JsonObject { ["status"] = "pending" };
             result["channel"] = name; result["context"] = context;

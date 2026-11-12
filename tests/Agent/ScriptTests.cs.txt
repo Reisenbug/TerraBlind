@@ -74,7 +74,12 @@ static class ScriptTests
         await WaitFor(3);
         var calls = pending.ToArray();
         foreach (var call in calls) call.Reply.SetResult(JsonNode.Parse("{\"answers\":{\"choice\":{\"choice\":\"retreat\"}},\"elapsed_ms\":20}").AsObject());
-        await Task.Delay(10);
+        for (int i = 0; i < 2000 && channels.CompletionVersion < 3; i++) await Task.Delay(1);
+        Check(channels.CompletionVersion == 3, "completed decision channels did not notify script scheduling");
+        var reactions = new AgentScript.Reactions();
+        Check(reactions.TickDue() && !reactions.TickDue(), "ordinary reaction tick lost its throttle");
+        Check(reactions.TickDue(channels.CompletionVersion) && !reactions.TickDue(channels.CompletionVersion),
+            "a decision answer did not wake the next reaction exactly once");
         var answered = channels.Poll(first, Judge);
         Check(answered["status"].ToString() == "ready" && answered["input_state"]["x"].GetValue<int>() == 10
             && answered["ready_wait_ms"].GetValue<double>() >= 0
@@ -100,8 +105,11 @@ static class ScriptTests
         var failed = channels.Poll(first, Judge);
         Check(failed["status"].ToString() == "failed" && failed["result"]["error"].ToString() == "jev_http_error",
             "network failure became a no/continue answer");
+        long completedVersion = channels.CompletionVersion;
         channels.Reset();
         Check(refresh.Token.IsCancellationRequested, "stopping decisions retained a previous request");
+        await Task.Delay(10);
+        Check(channels.CompletionVersion == completedVersion, "retired requests woke a replacement task");
         using var handler = new DecisionHandler();
         using var http = new System.Net.Http.HttpClient(handler);
         var criteria = new JsonObject { ["retreat"] = "Retreat with the selected weapon" };
