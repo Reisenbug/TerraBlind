@@ -2543,6 +2543,8 @@ public static partial class AgentTools
                 ["max_hp"] = p.statLifeMax2,
                 ["pos"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y },
                 ["velocity"] = new JsonObject { ["x"] = p.velocity.X, ["y"] = p.velocity.Y },
+                ["size_pixels"] = new JsonObject { ["width"] = p.width, ["height"] = p.height },
+                ["controls"] = new JsonObject { ["left"] = p.controlLeft, ["right"] = p.controlRight, ["jump"] = p.controlJump },
                 ["extra_jump_available"] = p.AnyExtraJumpUsable(), ["wing_time"] = p.wingTime },
             ["projectiles"] = new JsonArray(Main.projectile.Where(shot => shot != null && shot.active && shot.hostile && shot.damage > 0
                 && Microsoft.Xna.Framework.Vector2.Distance(shot.Center, p.Center) <= radius * 16)

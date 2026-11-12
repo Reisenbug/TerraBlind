@@ -105,7 +105,8 @@ static class ScriptTests
                 """).AsObject();
             config["decisions"] = new JsonArray(dimensions.Select(d => (JsonNode)JsonValue.Create(d)).ToArray());
             var combat = JsonNode.Parse("""
-                {"tick":10,"player":{"hp":100,"pos":{"x":160,"y":320}},"targets":[
+                {"tick":10,"player":{"hp":100,"pos":{"x":160,"y":320},"size_pixels":{"width":20,"height":42},
+                  "velocity":{"x":3.2,"y":-4.8},"controls":{"right":true}},"targets":[
                   {"who":0,"type":42,"attackable":true,"contact_damage":20,"distance_tiles":5,"weapons":[
                     {"type":11,"name":"short weapon","has_ammo":true,"mana_available":true,"line_or_reach_passed":true},
                     {"type":12,"name":"ranged weapon","has_ammo":true,"mana_available":true,"line_or_reach_passed":true}]}]}
@@ -131,6 +132,11 @@ static class ScriptTests
                     if (name == "jev_judge")
                     {
                         string channel = args["channel"].ToString();
+                        var playerScene = args["state"]["combat"]["player"];
+                        Check(playerScene["pos"] == null && playerScene["x"].GetValue<double>() == 10.625
+                            && playerScene["y"].GetValue<double>() == 21.3125 && playerScene["vx"].GetValue<double>() == 12
+                            && playerScene["vy"].GetValue<double>() == -18 && args["state"]["coordinates"] != null,
+                            "decision scene mixed pixel and tile coordinates");
                         polls[channel] = polls.GetValueOrDefault(channel) + 1;
                         if (polls[channel] == 1) return "{\"status\":\"pending\",\"in_flight\":true}";
                         string choice = channel == "weapon" ? "weapon_12" : channel == "movement" ? "jump_right" : "take";

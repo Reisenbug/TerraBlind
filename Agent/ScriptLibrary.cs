@@ -155,7 +155,22 @@ public sealed class ScriptLibrary
                 if(weapon){choice={target,weapon};break;}
               }
               const terrain=tool('inspect_terrain',{radius:10});
-              const scene={instruction:config.instruction??'',destination,combat,terrain};
+              let scene;
+              if(dimensions.size){
+                const player=combat.player;
+                const body=player.size_pixels;
+                const spatialCombat={...combat,player:{hp:player.hp,max_hp:player.max_hp,
+                  x:(player.pos.x+body.width/2)/16,y:(player.pos.y+body.height/2)/16,
+                  width:body.width/16,height:body.height/16,
+                  vx:player.velocity.x*60/16,vy:player.velocity.y*60/16,
+                  controls:player.controls,extra_jump_available:player.extra_jump_available,wing_time:player.wing_time},
+                  targets:combat.targets.map(({vx_pixels_per_tick,vy_pixels_per_tick,...n})=>
+                    ({...n,vx:vx_pixels_per_tick*60/16,vy:vy_pixels_per_tick*60/16})),
+                  projectiles:(combat.projectiles??[]).map(({vx_pixels_per_tick,vy_pixels_per_tick,...p})=>
+                    ({...p,vx:vx_pixels_per_tick*60/16,vy:vy_pixels_per_tick*60/16}))};
+                scene={instruction:config.instruction??'',destination,combat:spatialCombat,terrain,
+                  coordinates:'World tiles; x right, y down. Entity x/y are centers; vx/vy are tiles per second. Terrain coordinates are tile cells.'};
+              }
               const encounter=combat.targets.filter(n=>n.contact_damage>0).map(n=>n.who+':'+n.type).join(',');
               if(dimensions.has('weapon')&&encounter){
                 const weapons=new Map();
@@ -191,9 +206,9 @@ public sealed class ScriptLibrary
                     jump_right:'Move right and hold jump for 12 frames, then resume the journey.'});
                 if(r){
                   const answer=r.result.answers.response.choice;
-                  const dx=combat.player.pos.x-r.input_state.combat.player.pos.x;
-                  const dy=combat.player.pos.y-r.input_state.combat.player.pos.y;
-                  if(dx*dx+dy*dy>(config.decision_max_displacement_tiles??6)**2*256)
+                  const dx=scene.combat.player.x-r.input_state.combat.player.x;
+                  const dy=scene.combat.player.y-r.input_state.combat.player.y;
+                  if(dx*dx+dy*dy>(config.decision_max_displacement_tiles??6)**2)
                     accept('movement',r,'discarded_displacement');
                   else {
                     accept('movement',r,answer);
