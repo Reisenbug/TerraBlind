@@ -33,9 +33,10 @@ public sealed class ScriptLibrary
             const state=fields=>tool('get_state',{fields});
             const originalCombat=state(['agent']).agent;
             const dimensions=new Set(config.decisions??defaultDecisions);
+            const decisionContext=String(Date.now());
             const queuedOpportunities=defaultDecisions.includes('opportunity')||dimensions.has('opportunity');
             const usedDecisions={},opportunities=new Map();
-            let approvedOpportunity=false;
+            let approvedOpportunity=false,activeOpportunity=null;
             const judge=(dimension,context,scene,instructions,criteria)=>{
               const r=tool('jev_judge',{channel:dimension,context,state:scene,
                 interval_ms:config.decision_interval_ms??750,max_age_ms:config.decision_max_age_ms??2000,
@@ -178,8 +179,8 @@ public sealed class ScriptLibrary
                 for(const target of combat.targets) for(const weapon of target.weapons)
                   if(weapon.has_ammo&&weapon.mana_available) weapons.set(weapon.type,weapon);
                 if(weapons.size>1){
-                  const criteria=Object.fromEntries([...weapons].map(([type,weapon])=>['weapon_'+type,weapon]));
-                  const r=judge('weapon',encounter,scene,
+                  const criteria=Object.fromEntries([...weapons].map(([type,{line_or_reach_passed,...weapon}])=>['weapon_'+type,weapon]));
+                  const r=judge('weapon',decisionContext,scene,
                     'Which available weapon best handles these enemies while the player continues the journey?',criteria);
                   if(r){
                     const type=Number(r.result.answers.response.choice.slice(7));
@@ -203,7 +204,7 @@ public sealed class ScriptLibrary
                 const movementScene={...scene,combat:{...scene.combat,
                   targets:scene.combat.targets.map(({weapons,...n})=>({...n,dx:n.x-player.x,dy:n.y-player.y})),
                   projectiles:scene.combat.projectiles.map(p=>({...p,dx:p.x-player.x,dy:p.y-player.y}))}};
-                const r=judge('movement',encounter+':'+destination.x+':'+destination.y,movementScene,
+                const r=judge('movement',decisionContext+':'+destination.x+':'+destination.y,movementScene,
                   'Which movement best avoids enemy contact and projectile damage over the next half second, considering the local terrain? Attacks can continue during every movement. The journey resumes after the response.',
                   {follow_route:'Keep the currently observed movement keys in combat.player.controls while navigation continues.',
                     left:'Move left for 12 frames, then resume the journey.',right:'Move right for 12 frames, then resume the journey.',
@@ -230,16 +231,19 @@ public sealed class ScriptLibrary
               }
               if(queuedOpportunities&&opportunities.size){
                 const px=combat.player.pos.x/16,py=combat.player.pos.y/16;
-                const [id,opportunity]=[...opportunities].sort((a,b)=>
+                const [id,opportunity]=activeOpportunity&&opportunities.has(activeOpportunity)
+                  ?[activeOpportunity,opportunities.get(activeOpportunity)]:[...opportunities].sort((a,b)=>
                   Math.hypot(a[1].point.x-px,a[1].point.y-py)-Math.hypot(b[1].point.x-px,b[1].point.y-py))[0];
                 const assessment=tool('opportunity_assess',{x:opportunity.point.x,y:opportunity.point.y,
                   ...(destination?{destination}:{})});
-                if(!assessment.ok)
+                if(!assessment.ok||opportunity.resource&&!opportunity.drop&&(!assessment.target.has_tile
+                  ||assessment.target.tile_type!==opportunity.resource.tile_type))
                   opportunities.delete(id);
                 else if(assessment.approach_direct_distance<=config.max_detour_tiles){
+                  activeOpportunity=id;
                   let take;
                   if(dimensions.has('opportunity')){
-                    const r=judge('opportunity',id,{...scene,opportunity,assessment,resources:config.resources,
+                    const r=judge('opportunity',decisionContext+':'+id,{...scene,opportunity,assessment,resources:config.resources,
                       inventory:state(['inventory_counts']).inventory_counts},
                       'Is collecting this observed opportunity now worth the detour, exposure and inventory cost for this journey?',
                       {take:'Collect this opportunity now, then resume the current journey.',pass:'Continue the journey and leave this opportunity.'});
@@ -248,7 +252,7 @@ public sealed class ScriptLibrary
                       take=r.result.answers.response.choice==='take';
                     }
                   } else take=worthwhile(opportunity.point,event);
-                  if(take!=null) opportunities.delete(id);
+                  if(take!=null){opportunities.delete(id);activeOpportunity=null;}
                   if(take){
                     approvedOpportunity=true;
                     try {
@@ -258,7 +262,7 @@ public sealed class ScriptLibrary
                     } finally {approvedOpportunity=false;}
                     return handled();
                   }
-                }
+                } else activeOpportunity=null;
               }
               const thorn=destination&&terrain.near_body_tiles.find(t=>(config.contact_pass_types??[]).includes(t.type)
                 &&t.touch_damage>0&&(t.in_body||t.x===terrain.player_bounds.right+1&&destination.x>t.x

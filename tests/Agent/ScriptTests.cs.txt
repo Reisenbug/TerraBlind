@@ -25,6 +25,13 @@ static class ScriptTests
 
     static void Check(bool ok, string detail) { if (!ok) throw new Exception(detail); }
 
+    public static async Task Decisions()
+    {
+        await TestDecisionChannels();
+        await TestDecisionTravel();
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=2 model_calls=0");
+    }
+
     static async Task TestDecisionChannels()
     {
         var channels = new ScriptDecisionChannels();
@@ -99,6 +106,8 @@ static class ScriptTests
             int movements = 0, collected = 0, assessments = 0;
             var selectedWeapons = new List<int>();
             var polls = new Dictionary<string, int>();
+            var sceneContexts = new Dictionary<string, string>();
+            string firstOpportunityContext = null;
             var config = JsonNode.Parse("""
                 {"destination":{"x":50,"y":20},"resources":[{"item_type":20,"count":1,"tile_type":61,"tile_name":"JunglePlants"}],
                  "weapon_order":[11,12],"max_detour_tiles":10,"health_reserve":30}
@@ -123,6 +132,7 @@ static class ScriptTests
                     if (name == "combat_assess") return combat.ToJsonString();
                     if (name == "inspect_terrain") return "{\"near_body_tiles\":[],\"player_bounds\":{\"left\":10,\"right\":11}}";
                     if (name == "opportunity_assess") return new JsonObject { ["ok"] = true,
+                        ["target"] = new JsonObject { ["has_tile"] = true, ["tile_type"] = 61 },
                         ["approach_direct_distance"] = enabled.Contains("opportunity") && ++assessments <= 2 ? 20 : 2,
                         ["route_relation"] = new JsonObject { ["extra_direct_distance"] = 0 }, ["hazards"] = new JsonArray() }.ToJsonString();
                     if (name == "inventory_review") return "{\"empty_slots\":[10],\"inventory\":[]}";
@@ -132,12 +142,30 @@ static class ScriptTests
                     if (name == "jev_judge")
                     {
                         string channel = args["channel"].ToString();
+                        if (channel is "movement" or "weapon")
+                        {
+                            string context = args["context"].ToString();
+                            Check(!sceneContexts.TryGetValue(channel, out var previous) || previous == context,
+                                "nearby enemy changes cancelled the same journey's decision channel");
+                            sceneContexts[channel] = context;
+                        }
+                        if (channel == "opportunity" && collected == 0)
+                        {
+                            firstOpportunityContext ??= args["context"].ToString();
+                            Check(args["context"].ToString() == firstOpportunityContext,
+                                "a nearer observation cancelled the opportunity judgment before its answer");
+                        }
                         var playerScene = args["state"]["combat"]["player"];
                         Check(playerScene["pos"] == null && playerScene["x"].GetValue<double>() == 10.625
                             && playerScene["y"].GetValue<double>() == 21.3125 && playerScene["vx"].GetValue<double>() == 12
                             && playerScene["vy"].GetValue<double>() == -18 && args["state"]["coordinates"] != null,
                             "decision scene mixed pixel and tile coordinates");
                         polls[channel] = polls.GetValueOrDefault(channel) + 1;
+                        if (channel == "movement" && polls[channel] == 1)
+                        {
+                            var newcomer = combat["targets"][0].DeepClone(); newcomer["who"] = 2;
+                            combat["targets"].AsArray().Add(newcomer);
+                        }
                         if (polls[channel] == 1) return "{\"status\":\"pending\",\"in_flight\":true}";
                         string choice = channel == "weapon" ? "weapon_12" : channel == "movement" ? "jump_right" : "take";
                         return new JsonObject { ["status"] = "ready", ["request_id"] = 1, ["request_age_ms"] = 20,
@@ -148,8 +176,12 @@ static class ScriptTests
                     var handlers = AgentScript.CurrentReactions.Value;
                     await handlers.Dispatch(JsonNode.Parse("{\"kind\":\"nearby_tile\",\"evidence\":{\"tile_type\":61,\"x\":12,\"y\":20}}").AsObject(), token);
                     for (int i = 0; i < 8; i++)
+                    {
                         await handlers.Dispatch(new JsonObject { ["kind"] = "tick", ["execution"] = new JsonObject
                             { ["tool"] = "nav_to", ["args"] = config["destination"].DeepClone() } }, token);
+                        if (polls.GetValueOrDefault("opportunity") == 1)
+                            await handlers.Dispatch(JsonNode.Parse("{\"kind\":\"nearby_tile\",\"evidence\":{\"tile_type\":61,\"x\":11,\"y\":20}}").AsObject(), token);
+                    }
                     return "{\"done\":true}";
                 }, _ => Task.CompletedTask, default, new ScriptProgress());
             Check(result["ok"]?.GetValue<bool>() == true, "decision travel script failed: " + result);
