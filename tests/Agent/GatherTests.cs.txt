@@ -789,6 +789,8 @@ static class GatherTests
         Console.WriteLine("PASS: NPC evasion reacts to hostile trajectories, avoids blocked movement and ignores friendly or distant shots");
     }
 
+    public static void DecisionMovement() => IdleDefense();
+
     static void IdleDefense()
     {
         var p = Main.LocalPlayer;
@@ -828,6 +830,19 @@ static class GatherTests
             FightCoordinator.Tick(p, true);
             Check(p.controlUseItem, "attack did not resume after placement finished");
             AgentTools.ControlSession.End(ticket);
+            foreach (var channels in new[] { ControlChannels.Movement, ControlChannels.ItemUse, ControlChannels.All })
+            {
+                Check(AgentTools.ControlSession.Begin("act", null, out long direct, channels) == null,
+                    "direct movement could not acquire its requested channels");
+                try
+                {
+                    FightCoordinator.Stop(); p.itemAnimation = p.itemTime = 0; p.controlUseItem = false;
+                    FightCoordinator.Tick(p, true);
+                    Check(p.controlUseItem == (channels == ControlChannels.Movement),
+                        "direct input reserved the wrong attack channel: " + channels);
+                }
+                finally { AgentTools.ControlSession.End(direct); }
+            }
             string claim = AgentTools.Control.Claim(ControlChannels.All, ControlLifetime.Task, null, "test ownership");
             FightCoordinator.Tick(p, true);
             Check(!p.controlUseItem, "thinking defense overrode agent claim");

@@ -19,6 +19,7 @@ public sealed class AgentControlSession
 
     public AgentControlSession(AgentControlPolicy policy) { this.policy = policy; }
     public bool PrimaryActive => current != 0;
+    internal bool OwnsItemUse => current != 0 && (primaryChannels & ControlChannels.ItemUse) != 0;
     internal bool OwnsDirectMovement => current != 0 && tool == "act" && (primaryChannels & ControlChannels.Movement) != 0;
     public bool Active => current != 0 || attackTicket != 0;
     public string Tool => tool ?? (attackTicket != 0 ? "fight" : null);

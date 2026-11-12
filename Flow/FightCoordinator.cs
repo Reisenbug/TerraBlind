@@ -257,7 +257,7 @@ namespace TerraBlind
             bool miningAction = AgentTools.ControlSession.Active
                 && AgentControlSession.Behavior(AgentTools.ControlSession.Tool) == ControlBehavior.Mining;
             bool itemBusy = placing || mining && !_attackNext && closeThreat == null || !mining && (primaryItemUse || ItemUseCoordinator.IsActive
-                || AgentTools.ControlSession.Active && !miningAction
+                || AgentTools.ControlSession.OwnsItemUse && !miningAction
                     && AgentTools.ControlSession.Tool is not ("nav_to" or "fight" or "gather" or "collect_treasure"));
             if (itemBusy)
             {

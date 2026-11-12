@@ -29,7 +29,8 @@ static class ScriptTests
     {
         await TestDecisionChannels();
         await TestDecisionTravel();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=2 model_calls=0");
+        GatherTests.DecisionMovement();
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=3 model_calls=0");
     }
 
     static async Task TestDecisionChannels()
