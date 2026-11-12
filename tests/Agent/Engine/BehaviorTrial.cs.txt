@@ -4628,8 +4628,14 @@ public sealed class BehaviorTrial : ModSystem
         int duration = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_SECONDS") ?? "40");
         int health = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_HEALTH") ?? "200");
         var warmup = Stopwatch.StartNew();
+        var start = await OnMain(() => Main.LocalPlayer.position);
         var workerReady = typeof(VanillaNavigationDemo).GetProperty("WorkerReady", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-        while (!await OnMain(() => (bool)workerReady.GetValue(VanillaNavigationDemo.Instance)))
+        while (!await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            p.position = start; p.velocity = Vector2.Zero; p.immune = true; p.immuneTime = 60;
+            return (bool)workerReady.GetValue(VanillaNavigationDemo.Instance);
+        }))
         {
             if (warmup.Elapsed.TotalSeconds > 90) throw new Exception("Native movement worker did not become ready before the encounter");
             await Task.Delay(250);
@@ -4639,6 +4645,7 @@ public sealed class BehaviorTrial : ModSystem
         var anchor = await OnMain(() =>
         {
             var p = Main.LocalPlayer;
+            p.position = start; p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)start.Y / 16;
             foreach (var item in p.inventory.Where(CombatLoadout.Usable)) item.TurnToAir();
             p.inventory[4].SetDefaults(ItemID.ThrowingKnife); p.inventory[4].stack = 250; p.selectedItem = 4;
             p.ConsumedLifeCrystals = (health - 100) / 20;
@@ -4676,6 +4683,7 @@ public sealed class BehaviorTrial : ModSystem
                 var measured = await OnMain(() =>
                 {
                     var p = Main.LocalPlayer;
+                    if (samples.Count == 0) { p.immune = false; p.immuneTime = 0; }
                     if (spawns.Count < 8 && !spawned.Any(i => Main.npc[i].active && Main.npc[i].type == NPCID.Hornet)
                         && clock.ElapsedMilliseconds >= spawns.Count * 2500)
                         foreach (int dx in new[] { 200, -200, 160, -160 })
@@ -4695,7 +4703,7 @@ public sealed class BehaviorTrial : ModSystem
                         ["item_animation"] = p.itemAnimation, ["held_type"] = p.HeldItem.type,
                         ["selected_slot"] = p.selectedItem, ["mouse_interface"] = p.mouseInterface,
                         ["delay_use_item"] = p.delayUseItem, ["no_items"] = p.noItems, ["cced"] = p.CCed,
-                        ["item_time"] = p.itemTime, ["reuse_delay"] = p.reuseDelay, ["inventory_open"] = Main.playerInventory,
+                        ["item_time"] = p.itemTime, ["reuse_delay"] = p.reuseDelay, ["inventory_open"] = Main.playerInventory, ["focused"] = Main.hasFocus,
                         ["enemies"] = new JsonArray(Main.npc.Where(n => n.active && !n.friendly && n.damage > 0
                             && Vector2.Distance(n.Center, p.Center) < 480).Select(n => (JsonNode)new JsonObject {
                                 ["who"] = n.whoAmI, ["type"] = n.type, ["hp"] = n.life }).ToArray()),
@@ -4723,6 +4731,7 @@ public sealed class BehaviorTrial : ModSystem
                 ["policy_config"] = new JsonObject { ["weapon_order"] = new JsonArray((int)ItemID.ThrowingKnife) },
                 ["seed"] = Main.ActiveWorldFileData.SeedText, ["start_health"] = health, ["spawns"] = spawns,
                 ["worker_warmup_ms"] = warmup.ElapsedMilliseconds,
+                ["preparation_position_held"] = true,
                 ["elapsed_ms"] = clock.ElapsedMilliseconds, ["waypoints"] = new JsonArray(),
                 ["before"] = before, ["after"] = await Call("get_state", new JsonObject()), ["samples"] = samples, ["action"] = action
             }.ToJsonString());
