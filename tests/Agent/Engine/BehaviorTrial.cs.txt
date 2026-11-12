@@ -4551,8 +4551,13 @@ public sealed class BehaviorTrial : ModSystem
         });
         var descent = await Call("find_descent", new JsonObject { ["name"] = "jungle" });
         if (descent["found"]?.GetValue<bool>() != true) throw new Exception("No natural jungle descent: " + descent);
-        var route = await Call("descent_route", new JsonObject { ["name"] = "jungle", ["limit"] = 500 });
+        var route = await Call("descent_route", new JsonObject { ["name"] = "jungle", ["limit"] = startIndex < 0 ? 500 : 512 });
         var line = route["line"].AsArray();
+        if (startIndex >= 0 && route["next_offset"] != null)
+        {
+            var next = await Call("descent_route", new JsonObject { ["name"] = "jungle", ["offset"] = route["next_offset"].DeepClone(), ["limit"] = 288 });
+            foreach (var point in next["line"].AsArray()) line.Add(point.DeepClone());
+        }
         if (startIndex >= line.Count) throw new ArgumentException("Comparison start is outside the natural route");
         await OnMain(() =>
         {
@@ -4586,9 +4591,12 @@ public sealed class BehaviorTrial : ModSystem
             ["trash_types"] = new JsonArray(), ["drop_types"] = new JsonArray(),
             ["decision_interval_ms"] = 750, ["decision_max_age_ms"] = 2000
         };
+        var program = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "comparison_reactions",
+            ["expected_revision"] = 0, ["code"] = ScriptLibrary.Example("decision_reactions")["code"].DeepClone() });
+        if (program["error"] != null) throw new Exception("Comparison skill rejected: " + program);
         var policy = await Call("task_policy", new JsonObject { ["operation"] = "get" });
         var registered = await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = policy["revision"].DeepClone(),
-            ["code"] = "const input=" + config.ToJsonString() + ";\n" + ScriptLibrary.Example("decision_reactions")["code"] });
+            ["code"] = "skill('comparison_reactions'," + program["revision"] + "," + config.ToJsonString() + ",'journey');" });
         if (registered["error"] != null) throw new Exception("Comparison policy rejected: " + registered);
         string script = "const route=" + waypoints.ToJsonString() + ";const results=[];for(let i=0;i<route.length;i++){"
             + "const r=step('leg_'+i,()=>tool('nav_to',route[i]));results.push({i,done:r.done,error:r.error??null,reason:r.reason??null});"
