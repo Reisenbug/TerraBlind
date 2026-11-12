@@ -199,6 +199,7 @@ namespace TerraBlind
             bool evading = false;
             if ((processing || IsActive) && !p.dead && !Manual.On && AgentNetwork.CanAutomate
                 && !PvpDuel.Active && !PlayerCombat.Active && !AgentTools.ContactEscapeActive
+                && !AgentTools.ControlSession.OwnsDirectMovement
                 && AgentPermissions.CanDodge(delegated: true))
             {
                 bool bossMovement = false;

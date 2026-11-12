@@ -8,6 +8,7 @@ public sealed class AgentControlSession
 {
     readonly AgentControlPolicy policy;
     long sequence, current;
+    ControlChannels primaryChannels;
     int resetGeneration;
     string tool, claim;
     long attackTicket;
@@ -18,6 +19,7 @@ public sealed class AgentControlSession
 
     public AgentControlSession(AgentControlPolicy policy) { this.policy = policy; }
     public bool PrimaryActive => current != 0;
+    internal bool OwnsDirectMovement => current != 0 && tool == "act" && (primaryChannels & ControlChannels.Movement) != 0;
     public bool Active => current != 0 || attackTicket != 0;
     public string Tool => tool ?? (attackTicket != 0 ? "fight" : null);
     public static bool ActionTool(string name) => name is "nav_to" or "mine" or "mine_vein" or "chop_wood"
@@ -67,6 +69,7 @@ public sealed class AgentControlSession
                 ["prepared_in_same_script"] = script != 0 && script == releasedScript }.ToJsonString());
         scriptInvocation = script;
         tool = name; claim = controlClaim; current = ticket = ++sequence;
+        primaryChannels = channels;
         delegates = name switch
         {
             "nav_to" => new[] { ControlBehavior.Navigation, ControlBehavior.Mining, ControlBehavior.Placement, ControlBehavior.Direct, ControlBehavior.Attack },
@@ -120,6 +123,7 @@ public sealed class AgentControlSession
         releasedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         releasedScript = scriptInvocation; releasedTool = tool;
         current = 0; tool = claim = null; delegates = Array.Empty<ControlBehavior>();
+        primaryChannels = ControlChannels.None;
     }
 
     internal Action SuspendPrimary()
@@ -127,6 +131,7 @@ public sealed class AgentControlSession
         long saved = current, savedScript = scriptInvocation;
         int generation = resetGeneration;
         string savedTool = tool, savedClaim = claim;
+        var savedChannels = primaryChannels;
         var savedDelegates = delegates;
         current = 0; tool = claim = null; delegates = Array.Empty<ControlBehavior>();
         return () =>
@@ -134,6 +139,7 @@ public sealed class AgentControlSession
             if (generation != resetGeneration) return;
             if (current != 0) throw new InvalidOperationException("事件动作尚未释放控制权。");
             current = saved; scriptInvocation = savedScript;
+            primaryChannels = savedChannels;
             tool = savedTool; claim = savedClaim; delegates = savedDelegates;
         };
     }

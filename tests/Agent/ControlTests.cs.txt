@@ -16,6 +16,16 @@ static class ControlTests
         Check(AgentControlSession.RequiredChannels("fight", new System.Text.Json.Nodes.JsonObject()) == ControlChannels.ItemUse,
             "attack requires movement ownership");
         parallel.End(navTicket);
+        Check(parallel.Begin("act", null, out long direct, ControlChannels.Movement) == null && parallel.OwnsDirectMovement,
+            "explicit short movement did not own its movement channel");
+        var restoreDirect = parallel.SuspendPrimary();
+        Check(!parallel.OwnsDirectMovement, "suspended movement retained input ownership");
+        Check(parallel.Begin("act", null, out long hand, ControlChannels.ItemUse) == null && !parallel.OwnsDirectMovement,
+            "item-only intervention incorrectly suppressed evasive movement");
+        parallel.End(hand); restoreDirect();
+        Check(parallel.OwnsDirectMovement, "reaction failed to restore the original movement ownership");
+        parallel.End(direct);
+        Check(!parallel.OwnsDirectMovement, "completed movement retained authority over later dodging");
         var policy = new AgentControlPolicy();
         var movement = ControlChannels.Movement;
         var use = ControlChannels.ItemUse;
