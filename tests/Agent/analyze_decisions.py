@@ -1,6 +1,7 @@
 import collections
 import json
 import math
+import re
 from pathlib import Path
 import statistics
 import sys
@@ -26,20 +27,31 @@ for argument in sys.argv[1:]:
     if samples[-1]['elapsed_ms'] - stationary_start >= 2000:
         stationary.append(samples[-1]['elapsed_ms'] - stationary_start)
     unique_lines = set()
+    markers = ('script_decision_request', 'script_decision_result', 'script_decision_channel', 'script_log',
+        'combat_forecast', 'combat_forecast_unavailable', 'combat_candidate_apply', 'combat_candidate_abort')
+    pattern = re.compile(r'\[(' + '|'.join(markers) + r')\] ')
+    decoder = json.JSONDecoder()
     for path in (root / 'TerraBlindLogs').glob('*/**/*.log'):
         if 'latest' not in path.parts:
-            for line in path.read_text(errors='replace').splitlines():
-                if any(marker in line for marker in ('[script_decision_request]', '[script_decision_result]', '[script_decision_channel]', '[script_log]',
-                    '[combat_forecast]', '[combat_candidate_apply]', '[combat_candidate_abort]')):
-                    unique_lines.add(line)
+            content = path.read_text(errors='replace')
+            for match in pattern.finditer(content):
+                try:
+                    payload, _ = decoder.raw_decode(content, match.end())
+                except json.JSONDecodeError:
+                    continue
+                prefix = content[content.rfind('\n', 0, match.start()) + 1:match.start()]
+                unique_lines.add(prefix + '[' + match.group(1) + '] ' + json.dumps(payload, sort_keys=True))
     answers = []
     valid_choices = set()
     requests = collections.Counter()
     channels = collections.defaultdict(list)
     applied = collections.defaultdict(list)
     forecasts = []
+    unavailable = collections.Counter()
     candidate_events = collections.Counter()
     for line in unique_lines:
+        if '[combat_forecast_unavailable] ' in line:
+            unavailable[json.loads(line.split('[combat_forecast_unavailable] ', 1)[1])['reason']] += 1
         if '[combat_forecast] ' in line:
             payload = json.loads(line.split('[combat_forecast] ', 1)[1])
             if payload.get('status') == 'ready':
@@ -111,6 +123,7 @@ for argument in sys.argv[1:]:
         'moving_weapon_use_samples': sum(math.hypot(s['vx'], s['vy']) > 0.1 for s in weapon_uses),
         'requests': dict(requests), 'choices': dict(choices),
         'forecasts': {'completed': len(forecasts), 'candidate_events': dict(candidate_events),
+            'unavailable': dict(unavailable),
             'median_compute_ms': round(statistics.median(f['compute_ms'] for f in forecasts), 1) if forecasts else None,
             'median_capture_ms': round(statistics.median(f['capture_ms'] for f in forecasts), 1) if forecasts else None,
             'queued_prefix_frames': dict(collections.Counter(f['known_route_frames'] for f in forecasts)),
