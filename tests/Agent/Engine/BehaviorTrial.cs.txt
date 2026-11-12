@@ -4620,6 +4620,85 @@ public sealed class BehaviorTrial : ModSystem
         Console.WriteLine("COMBAT_BATCH_CHECK " + report.ToJsonString());
     }
 
+    async Task CheckCombatDamage()
+    {
+        bool traceDamage = Environment.GetEnvironmentVariable("TB_DECISION_DAMAGE_TRACE") == "1";
+        var method = typeof(VanillaNavigationDemo).GetMethod("Observe", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Task<JsonObject> Observe(JsonObject request) => (Task<JsonObject>)method.Invoke(VanillaNavigationDemo.Instance,
+            new object[] { request, CancellationToken.None });
+        var cases = new JsonArray();
+        Vector2 anchor = await OnMain(() => Main.LocalPlayer.position);
+        int cx = (int)(anchor.X + Main.LocalPlayer.width / 2f) / 16;
+        int floor = (int)(anchor.Y + Main.LocalPlayer.height + 1) / 16;
+        try
+        {
+            await OnMain(() =>
+            {
+                BoundaryInputPlayer.Drive = p =>
+                { p.position = anchor; p.velocity = Vector2.Zero; p.immune = true; p.immuneTime = 60; p.controlUseItem = false; };
+                for (int x = cx - 2; x <= cx + 2; x++)
+                    for (int y = floor - 18; y <= floor; y++) Main.tile[x, y].ClearEverything();
+                return true;
+            });
+            foreach (string scenario in new[] { "healthy", "poison", "spikes", "fall" })
+            {
+                var snapshot = await OnMain(() =>
+                {
+                    var p = Main.LocalPlayer;
+                    for (int x = cx - 2; x <= cx + 2; x++)
+                    { var tile = Main.tile[x, floor]; tile.HasTile = true; tile.TileType = scenario == "spikes" ? TileID.Spikes : TileID.Dirt; }
+                    p.position = new Vector2(cx * 16 + 8 - p.width / 2f, floor * 16 - p.height - (scenario == "fall" ? 12 * 16 : 0));
+                    p.velocity = new Vector2(0, scenario == "fall" ? 10 : 0);
+                    p.dead = false; p.immune = false; p.immuneTime = 0; Array.Clear(p.hurtCooldowns);
+                    p.ConsumedLifeCrystals = 5; p.statLife = p.statLifeMax = p.statLifeMax2 = 200;
+                    p.itemAnimation = p.itemTime = 0; p.controlUseItem = false;
+                    p.fallStart = p.fallStart2 = scenario == "fall" ? floor - 31 : (int)p.position.Y / 16;
+                    Array.Clear(p.buffType); Array.Clear(p.buffTime); p.lifeRegen = p.lifeRegenCount = 0;
+                    if (scenario == "poison") { p.AddBuff(BuffID.Poisoned, 600); p.lifeRegenCount = -119; }
+                    int y = (int)p.Center.Y / 16;
+                    return VanillaFrame.Capture(p, new Rectangle(cx - 32, y - 16, 64, 96), true);
+                });
+                var controls = new JsonArray(Enumerable.Repeat(0, 72).Select(k => (JsonNode)JsonValue.Create(k)).ToArray());
+                var stopped = await Observe(new JsonObject { ["command"] = "replay", ["snapshot"] = snapshot.DeepClone(),
+                    ["controls"] = controls.DeepClone(), ["detailed"] = false, ["stop_on_damage"] = true });
+                var full = await Observe(new JsonObject { ["command"] = "replay", ["snapshot"] = snapshot.DeepClone(),
+                    ["controls"] = controls.DeepClone(), ["detailed"] = false, ["stop_on_damage"] = false });
+                JsonObject batch = null;
+                if (traceDamage)
+                    batch = await Observe(new JsonObject { ["command"] = "combat_replays", ["snapshot"] = snapshot.DeepClone(), ["trace_damage"] = true,
+                        ["branches"] = new JsonArray(new JsonObject { ["id"] = scenario, ["controls"] = controls.DeepClone() }) });
+                var row = new JsonObject { ["scenario"] = scenario, ["snapshot"] = snapshot,
+                    ["stopped"] = stopped, ["full"] = full, ["batch"] = batch };
+                cases.Add(row);
+                if (traceDamage && !JsonNode.DeepEquals(full["frames"], batch["branches"][0]["frames"]))
+                    throw new Exception("Damage tracing changed native trajectory: " + scenario);
+                if (scenario is "healthy" or "poison")
+                {
+                    if (full["outcome"].ToString() != "complete" || full["frames"].AsArray().Count != 72
+                        || full["frames"][71]["grounded"]?.GetValue<bool>() != true)
+                        throw new Exception("Damage probe did not complete standing trajectory: " + scenario);
+                    if (traceDamage && batch["branches"][0]["hurt_events"].AsArray().Count != 0)
+                        throw new Exception("Native hurt event occurred in passive case: " + scenario);
+                }
+                else if (stopped["outcome"].ToString() != "damaged" || traceDamage && batch["branches"][0]["hurt_events"].AsArray().Count == 0)
+                    throw new Exception("Native damage was not detected: " + scenario);
+                if (scenario == "poison" && (stopped["frames"].AsArray().Count >= 24 || full["frames"][71]["hp"].GetValue<int>() >= 200))
+                    throw new Exception("Poison probe did not reproduce premature interruption");
+                Console.WriteLine("COMBAT_DAMAGE_CASE " + new JsonObject { ["scenario"] = scenario,
+                    ["stopped_frames"] = stopped["frames"].AsArray().Count, ["full_frames"] = full["frames"].AsArray().Count,
+                    ["end_hp"] = full["frames"].AsArray()[^1]["hp"].DeepClone(),
+                    ["hurt_events"] = batch?["branches"]?[0]?["hurt_events"]?.DeepClone() }.ToJsonString());
+            }
+        }
+        finally
+        {
+            await OnMain(() => { BoundaryInputPlayer.Drive = null; return true; });
+            File.WriteAllText(Path.Combine(Main.SavePath, "combat-damage-check.json"), new JsonObject {
+                ["trace_damage"] = traceDamage, ["terrain_edits"] = 95, ["cases"] = cases }.ToJsonString());
+        }
+        Console.WriteLine("COMBAT_DAMAGE_CHECK_COMPLETE cases=" + cases.Count + " model_calls=0");
+    }
+
     async Task FightDecisionComparison(string variant)
     {
         if (variant is not ("baseline" or "combat")) throw new ArgumentException("Fight comparison expects baseline or combat");
@@ -4642,6 +4721,7 @@ public sealed class BehaviorTrial : ModSystem
         }
         warmup.Stop();
         Console.WriteLine("DECISION_FIGHT_WORKER_READY warmup_ms=" + warmup.ElapsedMilliseconds);
+        if (Environment.GetEnvironmentVariable("TB_DECISION_DAMAGE_CHECK") == "1") { await CheckCombatDamage(); return; }
         var anchor = await OnMain(() =>
         {
             var p = Main.LocalPlayer;

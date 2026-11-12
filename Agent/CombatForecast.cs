@@ -396,7 +396,20 @@ public sealed class CombatForecast : ModSystem
                 if (requestedContext != context) return new JsonObject { ["error"] = "combat_forecast_replaced" };
                 var movement = result["movements"][0].AsObject();
                 if (movement["safe_landing"]?.GetValue<bool>() != true)
-                    return new JsonObject { ["error"] = "combat_candidate_landing_unresolved" };
+                {
+                    var trace = movement["trajectory"].AsArray();
+                    int grounded = trace.Skip(request.Job.Prefix.Length + 23).Count(f => f["grounded"]?.GetValue<bool>() == true);
+                    var rejection = new JsonObject { ["error"] = "combat_candidate_landing_unresolved",
+                        ["reason"] = movement["outcome"]?.ToString() == "complete"
+                            ? grounded == 0 ? "no_ground_contact_in_horizon" : "health_dropped_before_landing"
+                            : movement["outcome"]?.ToString(),
+                        ["execution_forecast_id"] = request.Job.Id, ["observed_frames"] = trace.Count,
+                        ["requested_frames"] = request.Job.Prefix.Length + 72, ["grounded_frames_after_input"] = grounded,
+                        ["start_hp"] = request.Job.Scene["player"]["hp"].DeepClone(),
+                        ["min_hp"] = trace.Count == 0 ? null : trace.Min(f => f["hp"].GetValue<int>()) };
+                    DiagLog.Write("[combat_candidate_landing_rejected] " + rejection.ToJsonString());
+                    return rejection;
+                }
                 var invalid = CheckState(request.Job, movement, out int offset);
                 if (invalid != null)
                 {
