@@ -2208,6 +2208,9 @@ namespace TerraBlind
         public static bool IsActive => _execFrames != null || _walkActive;
         public static bool ReservesItemUse => _airPlace.HasValue || _execFrames?.Exists(frame => frame.Place) == true;
 
+        internal static (int Direction, float TargetX, float ArrivalPixels)? PeekWalkIntent()
+            => _walkActive ? (_walkDir, _walkTargetCx * 16f + 8f, WalkArrivePx) : null;
+
         internal static int[] PeekMovementControls(int maxFrames)
         {
             if (_walkActive || _execFrames == null || _airPlace.HasValue || _placeStall > 0 || _jpWaitFrames > 0)

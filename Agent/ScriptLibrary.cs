@@ -33,7 +33,8 @@ public sealed class ScriptLibrary
               max_age_ms:input.max_age_ms??2000,state:{instruction:input.instruction??'',destination:input.destination,
                 current_player_pixels:c.player,targets:c.targets.map(({weapons,...n})=>n),projectiles:c.projectiles,
                 forecast_id:f.id,sample_tick:f.sample_tick,age_frames:f.age_frames,sample_player_pixels:f.sample_player,
-                scope:f.scope,known_route_frames:f.known_route_frames,movements,plans:f.plans},
+                scope:f.scope,known_route_frames:f.known_route_frames,prefix_source:f.prefix_source,walk_intent:f.walk_intent,
+                movements,plans:f.plans},
               questions:{response:{type:'choice',instructions:
                 'Which available movement and weapon combination best avoids incoming damage and keeps this journey progressing?',criteria}}});
             if(r.status==='pending'||r.request_id===input.last_request) return {status:r.status};

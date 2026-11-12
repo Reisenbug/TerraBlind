@@ -78,6 +78,9 @@ public sealed class CombatForecast : ModSystem
             lastAttempt = Stopwatch.GetTimestamp();
             var player = Main.LocalPlayer;
             int[] prefix = StateSpacePlanner.PeekMovementControls(48);
+            var walk = StateSpacePlanner.PeekWalkIntent();
+            if (prefix.Length < 6 && walk != null)
+                prefix = Enumerable.Repeat(walk.Value.Direction > 0 ? 2 : 1, 48).ToArray();
             if (!VanillaNavigationDemo.Instance.WorkerReady)
                 unavailable = new JsonObject { ["status"] = "unavailable", ["reason"] = "worker_warming" };
             else if (prefix.Length < 6)
@@ -96,7 +99,7 @@ public sealed class CombatForecast : ModSystem
                     var goal = destination.DeepClone().AsObject();
                     unavailable = null;
                     pending = new Forecast(id, tick, snapshot, frozen, prefix, goal,
-                        Generate(id, tick, snapshot, frozen, prefix, goal,
+                        Generate(id, tick, snapshot, frozen, prefix, goal, walk,
                             Stopwatch.GetElapsedTime(started).TotalMilliseconds, lifetime.Token));
                 }
                 catch (NotSupportedException error)
@@ -126,7 +129,7 @@ public sealed class CombatForecast : ModSystem
     }
 
     static async Task<JsonObject> Generate(long id, long tick, JsonObject snapshot, JsonObject scene, int[] prefix,
-        JsonObject destination, double captureMs, CancellationToken token)
+        JsonObject destination, (int Direction, float TargetX, float ArrivalPixels)? walk, double captureMs, CancellationToken token)
     {
         var clock = Stopwatch.StartNew();
         var movements = new JsonArray();
@@ -160,9 +163,12 @@ public sealed class CombatForecast : ModSystem
         }
         return new JsonObject { ["status"] = "ready", ["id"] = id, ["sample_tick"] = tick,
             ["sample_player"] = scene["player"].DeepClone(),
+            ["prefix_source"] = walk == null ? "queued_controls" : "closed_loop_walk_intent",
+            ["walk_intent"] = walk == null ? null : new JsonObject { ["direction"] = walk.Value.Direction,
+                ["target_x_pixels"] = walk.Value.TargetX, ["arrival_pixels"] = walk.Value.ArrivalPixels },
             ["known_route_frames"] = prefix.Length, ["capture_ms"] = captureMs, ["compute_ms"] = clock.Elapsed.TotalMilliseconds,
             ["movements"] = movements,
-            ["scope"] = "Real vanilla player physics. All alternatives first replay the queued route prefix; movement lasts 24 frames, then releases keys until landing. Enemy and projectile AI are not simulated. Follow_route describes only the known prefix and braking continuation." };
+            ["scope"] = "Real vanilla player physics. All alternatives start with prefix_source: queued_controls are already scheduled; closed_loop_walk_intent extrapolates the observed walk direction for 48 frames and may extend beyond its arrival threshold. Then move for 24 frames and release keys until landing. Enemy/projectile AI and subsequent navigation are not simulated." };
     }
 
     static double Number(JsonNode value) => double.Parse(value.ToString(), System.Globalization.CultureInfo.InvariantCulture);
