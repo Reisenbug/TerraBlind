@@ -4696,8 +4696,32 @@ public sealed class BehaviorTrial : ModSystem
         var initialConfig = (JsonObject)config.DeepClone();
         if (authored) initialConfig["decisions"] = new JsonArray();
         var policy = await Call("task_policy", new JsonObject { ["operation"] = "get" });
+        bool candidateSmoke = Environment.GetEnvironmentVariable("TB_DECISION_CANDIDATE_SMOKE") == "1";
+        if (candidateSmoke) await Call("set_combat", new JsonObject { ["auto_attack"] = true, ["weapon_type"] = ItemID.ThrowingKnife });
+        string policyCode = "skill('comparison_reactions'," + program["revision"] + "," + initialConfig.ToJsonString() + ",'journey');";
+        if (candidateSmoke) policyCode = """
+            let attempts=0;const used=new Set();
+            const pose=p=>({x:p.pos.x,y:p.pos.y,vx:p.velocity.x,vy:p.velocity.y,hp:p.hp});
+            on('tick',event=>{
+              const destination=event.execution?.args;
+              if(attempts>=5||!destination) return {handled:true};
+              const context='candidate-smoke:'+destination.x+':'+destination.y;
+              const c=tool('combat_assess',{forecast:true,context,destination,radius:25}),f=c.forecast;
+              if(f.status!=='ready'||used.has(f.id)||f.age_frames>=f.known_route_frames) return {handled:true};
+              const direction=c.player.controls.left?'left':c.player.controls.right?'right':null;
+              const plan=f.plans.find(p=>p.movement===direction&&p.weapon_type===279&&p.movement_available);
+              if(!plan) return {handled:true};
+              used.add(f.id);attempts++;
+              const r=tool('act',{steps:[{keys:['right'],until:{frames:1}}],combat_candidate:{context,forecast_id:f.id,plan_id:plan.id}});
+              const after=tool('combat_assess').player;
+              print({candidate_smoke:true,attempt:attempts,forecast:f.id,plan:plan.id,age:f.age_frames,
+                outcome:r.outcome,error:r.error,abort:r.forecast_abort??null,before:pose(c.player),after:pose(after)});
+              if(!r.error) attempts=5;
+              return {handled:true};
+            });
+            """;
         var registered = await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = policy["revision"].DeepClone(),
-            ["code"] = "skill('comparison_reactions'," + program["revision"] + "," + initialConfig.ToJsonString() + ",'journey');" });
+            ["code"] = policyCode });
         if (registered["error"] != null) throw new Exception("Comparison policy rejected: " + registered);
         string script = "const route=" + waypoints.ToJsonString() + ";const results=[];for(let i=0;i<route.length;i++){"
             + "const r=step('leg_'+i,()=>tool('nav_to',route[i]));results.push({i,done:r.done,error:r.error??null,reason:r.reason??null});"
@@ -4770,6 +4794,7 @@ public sealed class BehaviorTrial : ModSystem
             File.WriteAllText(Path.Combine(Main.SavePath, "decision-comparison.json"), new JsonObject
             {
                 ["variant"] = variant, ["seed"] = Main.ActiveWorldFileData.SeedText,
+                ["candidate_smoke"] = candidateSmoke,
                 ["route_start_index"] = startIndex, ["start_health"] = health, ["strong_weapon"] = strongWeapon,
                 ["policy_config"] = config.DeepClone(),
                 ["agent_authored"] = authored, ["author_applied_ms"] = authorAppliedMs, ["authored_program"] = authoredProgram,
