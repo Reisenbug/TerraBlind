@@ -38,6 +38,7 @@ public static partial class AgentTools
         }
     }
     static volatile TaskPolicyInstance taskPolicy;
+    internal static readonly ScriptDecisionChannels DecisionChannels = new();
     static int taskPolicyRevision, taskPolicyEpoch;
 
     internal static JsonObject TaskPolicyStatus(bool includeCode = false)
@@ -60,6 +61,7 @@ public static partial class AgentTools
 
     internal static void ClearTaskPolicy(bool resetRevision = false)
     {
+        DecisionChannels.Reset();
         var previous = taskPolicy; taskPolicy = null;
         taskPolicyEpoch++;
         taskPolicyRevision = resetRevision ? 0 : taskPolicyRevision + 1;
@@ -575,6 +577,7 @@ public static partial class AgentTools
     public static void NewTask() { ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
+        DecisionChannels.Reset();
         Actions.CancelAll();
         Watches.Reset();
         RestoreTaskPolicyWatch();
@@ -917,7 +920,7 @@ public static partial class AgentTools
     internal static int QueriesInFlight;
     static readonly AsyncLocal<long> scriptInvocation = new();
     static bool ObservationTool(string name) => name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
-        or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "item_info" or "wiki_search" or "wiki_page"
+        or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "jev_judge" or "item_info" or "wiki_search" or "wiki_page"
         or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status";
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
     {
@@ -1275,6 +1278,8 @@ public static partial class AgentTools
                 return (await NativeAgent.OnMain(() => CombatAssessment(Int(args, "radius", 25)), token)).ToJsonString();
             case "jev_judge":
                 string decisionKey = await NativeAgent.OnMain(() => Config.I.TypeSafeKey?.Trim(), token);
+                if (args["channel"] != null)
+                    return DecisionChannels.Poll(args, (request, ct) => ScriptDecision.Judge(HarvestHttp, decisionKey, request, ct)).ToJsonString();
                 return (await ScriptDecision.Judge(HarvestHttp, decisionKey, args, token)).ToJsonString();
             case "script_program":
                 var library = new ScriptLibrary(System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent", "programs"));

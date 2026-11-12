@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -29,6 +30,7 @@ public static class ScriptDecision
         if (args["state"] is not JsonObject) throw new ArgumentException("state需要包含本次判断事实的对象。");
         var payload = new JsonObject { ["model"] = "jev-latest", ["state"] = args["state"].DeepClone(), ["questions"] = questions };
         if (payload.ToJsonString().Length > 24000) throw new ArgumentException("Jev判断输入超过24000字符，请缩小场景。");
+        DiagLog.Write("[script_decision_request] " + payload.ToJsonString());
         var clock = Stopwatch.StartNew();
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.typesafe.ai/v1/systemone");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
@@ -51,10 +53,99 @@ public static class ScriptDecision
                     || !double.IsFinite(probability) || probability < 0 || probability > 1))
                     throw new ArgumentException("Jev返回了无效概率。");
             }
-            return new JsonObject { ["answers"] = answers.DeepClone(), ["elapsed_ms"] = clock.ElapsedMilliseconds,
+            var result = new JsonObject { ["answers"] = answers.DeepClone(), ["elapsed_ms"] = clock.ElapsedMilliseconds,
                 ["model"] = body["model"]?.DeepClone() };
+            DiagLog.Write("[script_decision_result] " + result.ToJsonString());
+            return result;
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { return new JsonObject { ["error"] = "jev_timeout", ["elapsed_ms"] = clock.ElapsedMilliseconds }; }
+    }
+}
+
+public sealed class ScriptDecisionChannels
+{
+    sealed class Channel
+    {
+        public string Context, Questions;
+        public long Started, AnswerStarted, Sequence;
+        public CancellationTokenSource Lifetime = new();
+        public Task<JsonObject> Pending;
+        public JsonObject Input, Answer;
+    }
+
+    readonly object gate = new();
+    readonly Dictionary<string, Channel> channels = new();
+    long sequence;
+
+    public JsonObject Poll(JsonObject args, Func<JsonObject, CancellationToken, Task<JsonObject>> judge)
+    {
+        string name = args["channel"]?.GetValue<string>();
+        string context = args["context"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 80 || string.IsNullOrWhiteSpace(context) || context.Length > 512)
+            throw new ArgumentException("后台判断需要channel(1..80字符)和context(1..512字符)。");
+        if (args["state"] is not JsonObject || args["questions"] is not JsonObject questions)
+            throw new ArgumentException("后台判断需要state和questions。");
+        int interval = args["interval_ms"]?.GetValue<int>() ?? 500;
+        int maxAge = args["max_age_ms"]?.GetValue<int>() ?? 2000;
+        if (interval is < 100 or > 30000 || maxAge is < 100 or > 30000)
+            throw new ArgumentException("interval_ms和max_age_ms需要100..30000。");
+        string shape = questions.ToJsonString();
+        lock (gate)
+        {
+            if (channels.TryGetValue(name, out var current) && (current.Context != context || current.Questions != shape))
+            { Retire(current); channels.Remove(name); current = null; }
+            if (current == null)
+            {
+                if (channels.Count >= 8) throw new InvalidOperationException("整项任务最多8个后台决策通道。");
+                channels[name] = current = new Channel { Context = context, Questions = shape };
+            }
+            if (current.Pending?.IsCompleted == true)
+            {
+                JsonObject answer;
+                try { answer = current.Pending.GetAwaiter().GetResult(); }
+                catch (Exception error) { answer = new JsonObject { ["error"] = "jev_request_failed", ["detail"] = error.GetBaseException().Message }; }
+                current.Answer = new JsonObject { ["request_id"] = current.Sequence,
+                    ["request_age_ms"] = Stopwatch.GetElapsedTime(current.Started).TotalMilliseconds,
+                    ["input_state"] = current.Input.DeepClone(), ["result"] = answer.DeepClone() };
+                current.AnswerStarted = current.Started;
+                current.Pending = null;
+            }
+            JsonObject result = null;
+            if (current.Answer != null)
+            {
+                double age = Stopwatch.GetElapsedTime(current.AnswerStarted).TotalMilliseconds;
+                if (age <= maxAge || current.Answer["result"]?["error"] != null)
+                {
+                    result = (JsonObject)current.Answer.DeepClone(); result["request_age_ms"] = age;
+                    result["status"] = result["result"]?["error"] == null ? "ready" : "failed";
+                }
+            }
+            if (current.Pending == null && (current.Answer == null || Stopwatch.GetElapsedTime(current.Started).TotalMilliseconds >= interval))
+            {
+                var request = new JsonObject { ["state"] = args["state"].DeepClone(), ["questions"] = questions.DeepClone() };
+                current.Input = (JsonObject)request["state"].DeepClone();
+                current.Started = Stopwatch.GetTimestamp(); current.Sequence = ++sequence;
+                var lifetime = current.Lifetime.Token;
+                current.Pending = Task.Run(() => judge(request, lifetime), lifetime);
+            }
+            result ??= new JsonObject { ["status"] = "pending" };
+            result["channel"] = name; result["context"] = context;
+            result["in_flight"] = current.Pending != null;
+            return result;
+        }
+    }
+
+    static void Retire(Channel channel)
+    {
+        channel.Lifetime.Cancel();
+        if (channel.Pending == null) channel.Lifetime.Dispose();
+        else _ = channel.Pending.ContinueWith(task =>
+        { _ = task.Exception; channel.Lifetime.Dispose(); }, TaskScheduler.Default);
+    }
+
+    public void Reset()
+    {
+        lock (gate) { foreach (var channel in channels.Values) Retire(channel); channels.Clear(); }
     }
 }

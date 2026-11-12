@@ -25,6 +25,71 @@ static class ScriptTests
 
     static void Check(bool ok, string detail) { if (!ok) throw new Exception(detail); }
 
+    static async Task TestDecisionChannels()
+    {
+        var channels = new ScriptDecisionChannels();
+        var pending = new System.Collections.Concurrent.ConcurrentQueue<(JsonObject Input, CancellationToken Token, TaskCompletionSource<JsonObject> Reply)>();
+        Task<JsonObject> Judge(JsonObject input, CancellationToken token)
+        {
+            var reply = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+            pending.Enqueue((input, token, reply));
+            return reply.Task.WaitAsync(token);
+        }
+        async Task WaitFor(int count)
+        {
+            for (int i = 0; i < 2000 && pending.Count < count; i++) await Task.Delay(1);
+            Check(pending.Count == count, "background decision requests did not start independently");
+        }
+        JsonObject Request(string name)
+        {
+            var request = JsonNode.Parse("""
+            {"channel":"weapon","context":"encounter-1","interval_ms":100,"max_age_ms":100,
+             "state":{"x":10},"questions":{"choice":{"type":"choice","instructions":"Choose a concrete action",
+             "criteria":{"continue":"Continue along the route","retreat":"Retreat behind cover"}}}}
+            """).AsObject();
+            request["channel"] = name;
+            return request;
+        }
+        var first = Request("weapon");
+        var started = channels.Poll(first, Judge);
+        Check(started["status"].ToString() == "pending" && started["in_flight"].GetValue<bool>(),
+            "background decision waited for a response or invented an answer");
+        channels.Poll(first, Judge);
+        channels.Poll(Request("movement"), Judge);
+        channels.Poll(Request("opportunity"), Judge);
+        await WaitFor(3);
+        var calls = pending.ToArray();
+        foreach (var call in calls) call.Reply.SetResult(JsonNode.Parse("{\"answers\":{\"choice\":{\"choice\":\"retreat\"}},\"elapsed_ms\":20}").AsObject());
+        await Task.Delay(10);
+        var answered = channels.Poll(first, Judge);
+        Check(answered["status"].ToString() == "ready" && answered["input_state"]["x"].GetValue<int>() == 10
+            && answered["result"]["answers"]["choice"]["choice"].ToString() == "retreat",
+            "background decision lost its sampled scene or typed answer");
+        answered["input_state"]["x"] = -100;
+        Check(channels.Poll(first, Judge)["input_state"]["x"].GetValue<int>() == 10,
+            "script mutated retained decision evidence");
+        await Task.Delay(130);
+        var expired = channels.Poll(first, Judge);
+        Check(expired["status"].ToString() == "pending" && expired["result"] == null,
+            "starting a refresh made an expired decision look fresh");
+        await WaitFor(4);
+        var refresh = pending.ToArray()[3];
+        first["context"] = "encounter-2"; first["state"]["x"] = 30;
+        var changed = channels.Poll(first, Judge);
+        Check(changed["status"].ToString() == "pending" && refresh.Token.IsCancellationRequested,
+            "changing the tactical context reused the previous answer or left its request running");
+        await WaitFor(5);
+        var next = pending.ToArray()[4];
+        next.Reply.SetResult(new JsonObject { ["error"] = "jev_http_error", ["status"] = 503 });
+        await Task.Delay(10);
+        var failed = channels.Poll(first, Judge);
+        Check(failed["status"].ToString() == "failed" && failed["result"]["error"].ToString() == "jev_http_error",
+            "network failure became a no/continue answer");
+        channels.Reset();
+        Check(refresh.Token.IsCancellationRequested, "stopping decisions retained a previous request");
+        Console.WriteLine("PASS: three decision dimensions run without waiting or duplicate requests; context changes, expiry and model errors preserve evidence");
+    }
+
     public static async Task Replay(string path)
     {
         var events = JsonNode.Parse(File.ReadAllText(path)).AsArray();
@@ -214,6 +279,7 @@ static class ScriptTests
             Check(cancelled, "player cancellation became a model answer");
             Console.WriteLine("PASS: JS Jev judgments preserve typed facts, reject invalid choices and propagate cancellation without fallback actions");
         }
+        await TestDecisionChannels();
         string programDirectory = Path.Combine(Path.GetTempPath(), "terrablind-program-" + Guid.NewGuid().ToString("N"));
         try
         {
