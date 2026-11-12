@@ -4531,6 +4531,52 @@ public sealed class BehaviorTrial : ModSystem
         ["current_gap_ms"] = queenGapStart < 0 ? 0 : queenClock.Elapsed.TotalMilliseconds - queenGapStart,
         ["gaps"] = queenGaps.DeepClone() };
 
+    async Task<JsonObject> AuthorDecisionPolicy(JsonObject config, JsonObject before, JsonArray waypoints, CancellationToken token)
+    {
+        if (!ModLoader.TryGetMod("TerraBlind", out var production)) throw new Exception("production mod missing");
+        var schemas = JsonNode.Parse(Encoding.UTF8.GetString(production.GetFileBytes("Agent/Tools.json"))).AsArray();
+        AgentScript.DescribePrograms(schemas);
+        string[] allowed = { "game_api", "get_state", "combat_assess", "inspect_terrain", "script_program" };
+        var tools = new JsonArray(schemas.Where(t => allowed.Contains(t["function"]["name"].ToString())).Select(t => t.DeepClone()).ToArray());
+        var scene = new JsonObject { ["config"] = config.DeepClone(), ["route"] = waypoints.DeepClone() };
+        foreach (string key in new[] { "player", "inventory_slots", "equipment_slots", "buffs", "depth" })
+            scene[key] = before[key]?.DeepClone();
+        string request = "导航已在后台执行。为这趟地下丛林旅程准备并保存一份持续现场反应策略，技能名decision_authored_reactions，参数为input。"
+            + "希望遇怪仍能赶路，结合装备与射界选武器，必要时避伤，沿途判断资源和箱子是否值得拿。请在合适的位置使用后台Jev快速判断，等待回答期间继续当前动作。"
+            + "准备阶段可查询现场、模板与接口并保存技能；行动写入on处理函数，随后由宿主挂到task_policy。"
+            + "已有comparison_reactions可读、可复用，input给本轮目标和预算。最多12次工具调用。保存后简短说明采用了哪些现场判断。\n"
+            + scene.ToJsonString();
+        string model = Environment.GetEnvironmentVariable("TB_DECISION_AUTHOR_MODEL") ?? Config.I.AgentCodexModel;
+        var calls = new JsonArray(); var replies = new JsonArray(); var clock = Stopwatch.StartNew();
+        using var author = new CodexAgent();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(90));
+        try
+        {
+            await author.RunAsync(request, Config.I.AgentCodexPath, Path.Combine(Main.SavePath, "TerraBlindAgent"), model,
+                "你为Terraria游戏内Agent编写可复用的JavaScript现场策略。源码是同步函数体，使用input读取参数，tool调用游戏工具，on注册持续处理函数。\n"
+                    + AgentScript.RuntimeInstructions, tools, async (name, args, ct) =>
+                {
+                    if (!allowed.Contains(name) || calls.Count >= 12) throw new InvalidOperationException("decision author scope exceeded");
+                    if (name == "script_program" && args["operation"]?.ToString() is "save" or "patch"
+                        && args["name"]?.ToString() != "decision_authored_reactions")
+                        throw new InvalidOperationException("author may save only decision_authored_reactions");
+                    string result = await AgentTools.Execute(name, args, ct);
+                    calls.Add(new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["result"] = result });
+                    return result;
+                }, reply => replies.Add(reply), timeout.Token);
+            var saved = await Call("script_program", new JsonObject { ["operation"] = "get", ["name"] = "decision_authored_reactions" });
+            if (saved["found"]?.GetValue<bool>() != true) throw new Exception("author ended without saving a policy");
+            return saved;
+        }
+        finally
+        {
+            File.WriteAllText(Path.Combine(Main.SavePath, "decision-author.json"), new JsonObject
+            { ["model"] = model, ["elapsed_ms"] = clock.ElapsedMilliseconds, ["request"] = request,
+                ["calls"] = calls, ["replies"] = replies, ["usage"] = author.TokenUsage }.ToJsonString());
+        }
+    }
+
     async Task DecisionComparison(string variant)
     {
         string[] dimensions = variant == "baseline" ? Array.Empty<string>() : variant.Split(',');
@@ -4595,9 +4641,12 @@ public sealed class BehaviorTrial : ModSystem
         var program = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "comparison_reactions",
             ["expected_revision"] = 0, ["code"] = ScriptLibrary.Example("decision_reactions")["code"].DeepClone() });
         if (program["error"] != null) throw new Exception("Comparison skill rejected: " + program);
+        bool authored = Environment.GetEnvironmentVariable("TB_DECISION_AUTHOR") == "1";
+        var initialConfig = (JsonObject)config.DeepClone();
+        if (authored) initialConfig["decisions"] = new JsonArray();
         var policy = await Call("task_policy", new JsonObject { ["operation"] = "get" });
         var registered = await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = policy["revision"].DeepClone(),
-            ["code"] = "skill('comparison_reactions'," + program["revision"] + "," + config.ToJsonString() + ",'journey');" });
+            ["code"] = "skill('comparison_reactions'," + program["revision"] + "," + initialConfig.ToJsonString() + ",'journey');" });
         if (registered["error"] != null) throw new Exception("Comparison policy rejected: " + registered);
         string script = "const route=" + waypoints.ToJsonString() + ";const results=[];for(let i=0;i<route.length;i++){"
             + "const r=step('leg_'+i,()=>tool('nav_to',route[i]));results.push({i,done:r.done,error:r.error??null,reason:r.reason??null});"
@@ -4606,6 +4655,11 @@ public sealed class BehaviorTrial : ModSystem
         var travel = await Call("action_start", new JsonObject { ["tool"] = "run_script", ["args"] = new JsonObject
             { ["workflow"] = "decision-comparison", ["code"] = script } });
         var samples = new JsonArray(); var clock = Stopwatch.StartNew();
+        using var authorLifetime = new CancellationTokenSource();
+        var authorTask = authored ? AuthorDecisionPolicy(config, before, waypoints, authorLifetime.Token) : null;
+        JsonObject authoredProgram = null;
+        JsonObject authorFailure = null;
+        long? authorAppliedMs = null;
         JsonObject action = null;
         int duration = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_SECONDS") ?? "180");
         Console.WriteLine("DECISION_COMPARISON_START " + new JsonObject { ["variant"] = variant, ["waypoints"] = waypoints.DeepClone(),
@@ -4628,6 +4682,16 @@ public sealed class BehaviorTrial : ModSystem
                         ["last_damage"] = (DamageField.GetValue(null) as JsonNode)?.DeepClone() };
                 });
                 samples.Add(measured);
+                if (authorTask?.IsCompleted == true && authorAppliedMs == null)
+                {
+                    authoredProgram = await authorTask;
+                    var currentPolicy = await Call("task_policy", new JsonObject { ["operation"] = "get" });
+                    var applied = await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = currentPolicy["revision"].DeepClone(),
+                        ["code"] = "skill('decision_authored_reactions'," + authoredProgram["revision"] + "," + config.ToJsonString() + ",'journey');" });
+                    if (applied["error"] != null) throw new Exception("Authored policy rejected: " + applied);
+                    authorAppliedMs = clock.ElapsedMilliseconds;
+                    Console.WriteLine("DECISION_AUTHOR_APPLIED ms=" + authorAppliedMs);
+                }
                 action = await Call("action_query", new JsonObject { ["handle"] = travel["handle"].DeepClone() });
                 if (measured["dead"].GetValue<bool>() || action["status"]?.ToString() is "completed" or "failed" or "cancelled") break;
                 if (samples.Count % 4 == 0)
@@ -4643,6 +4707,10 @@ public sealed class BehaviorTrial : ModSystem
         }
         finally
         {
+            authorLifetime.Cancel();
+            if (authorTask != null)
+                try { await authorTask; }
+                catch (Exception error) { authorFailure = new JsonObject { ["type"] = error.GetType().Name, ["message"] = error.Message }; }
             await Call("action_control", new JsonObject { ["handle"] = travel["handle"].DeepClone(), ["command"] = "cancel" });
             await Call("action_control", new JsonObject { ["handle"] = fight["handle"].DeepClone(), ["command"] = "cancel" });
             var after = await Call("get_state", new JsonObject());
@@ -4653,11 +4721,14 @@ public sealed class BehaviorTrial : ModSystem
                 ["variant"] = variant, ["seed"] = Main.ActiveWorldFileData.SeedText,
                 ["route_start_index"] = startIndex, ["start_health"] = health, ["strong_weapon"] = strongWeapon,
                 ["policy_config"] = config.DeepClone(),
+                ["agent_authored"] = authored, ["author_applied_ms"] = authorAppliedMs, ["authored_program"] = authoredProgram,
+                ["author_failure"] = authorFailure,
                 ["unarmed"] = Environment.GetEnvironmentVariable("TB_DECISION_UNARMED") == "1",
                 ["elapsed_ms"] = clock.ElapsedMilliseconds, ["waypoints"] = waypoints,
                 ["before"] = before, ["nearby_natural_sources"] = opportunities, ["after"] = after, ["samples"] = samples, ["action"] = action
             }.ToJsonString());
         }
+        if (authored && (authorAppliedMs == null || authorFailure != null)) throw new Exception("Authored decision policy was not applied; inspect decision-author.json");
         Console.WriteLine("DECISION_COMPARISON_RECORDED variant=" + variant + " samples=" + samples.Count);
     }
 
