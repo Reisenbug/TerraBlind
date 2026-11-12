@@ -4707,15 +4707,20 @@ public sealed class BehaviorTrial : ModSystem
               if(attempts>=5||!destination) return {handled:true};
               const context='candidate-smoke:'+destination.x+':'+destination.y;
               const c=tool('combat_assess',{forecast:true,context,destination,radius:25}),f=c.forecast;
-              if(f.status!=='ready'||used.has(f.id)||f.age_frames>=f.known_route_frames) return {handled:true};
+              if(f.status!=='ready'||used.has(f.id)) return {handled:true};
+              if(!f.movements.every(m=>m.comparison_frames===f.comparison_frames&&m.observed_comparison_frames<=f.comparison_frames
+                  &&m.linear_threat_overlap.evaluated_frames===m.observed_comparison_frames)) throw new Error('comparison_window_mismatch');
               const direction=c.player.controls.left?'left':c.player.controls.right?'right':null;
               const plan=f.plans.find(p=>p.movement===direction&&p.weapon_type===279&&p.movement_available);
               if(!plan) return {handled:true};
               used.add(f.id);attempts++;
+              const started=Date.now();
               const r=tool('act',{steps:[{keys:['right'],until:{frames:1}}],combat_candidate:{context,forecast_id:f.id,plan_id:plan.id}});
               const after=tool('combat_assess').player;
               print({candidate_smoke:true,attempt:attempts,forecast:f.id,plan:plan.id,age:f.age_frames,
-                outcome:r.outcome,error:r.error,abort:r.forecast_abort??null,before:pose(c.player),after:pose(after)});
+                elapsed_ms:Date.now()-started,outcome:r.outcome,error:r.error,reason:r.reason,difference:r.difference,
+                fresh_age:r.age_frames,lead_frames:r.lead_frames,abort:r.forecast_abort??null,
+                decision_forecast_id:r.decision_forecast_id,execution_forecast_id:r.execution_forecast_id,before:pose(c.player),after:pose(after)});
               if(!r.error) attempts=5;
               return {handled:true};
             });

@@ -82,6 +82,28 @@ for argument in sys.argv[1:]:
                 applied[payload['decision']].append(payload)
     answers = [a for a in answers if a['answers']['response'].get('choice') in valid_choices]
     choices = collections.Counter(a['answers']['response']['choice'] for a in answers)
+    window_checks = 0
+    for forecast in forecasts:
+        if forecast.get('mode') != 'comparison':
+            continue
+        horizon = forecast['comparison_frames']
+        assert 0 < horizon <= 24, ('invalid comparison window', forecast['id'], horizon)
+        baseline = next(m for m in forecast['movements'] if m['id'] == 'follow_route')
+        assert baseline['controls'][:horizon] == forecast['known_route_controls'][:horizon], ('baseline changed queued inputs', forecast['id'])
+        for movement in forecast['movements']:
+            observed = min(horizon, len(movement['trajectory']))
+            assert movement['comparison_frames'] == horizon and movement['observed_comparison_frames'] == observed, ('unequal windows', forecast['id'], movement['id'])
+            assert movement['comparison_complete'] == (observed == horizon), ('hidden incomplete window', forecast['id'], movement['id'])
+            assert movement['linear_threat_overlap']['evaluated_frames'] == observed, ('unequal threat window', forecast['id'], movement['id'])
+            if observed:
+                assert movement['path_samples_pixels'][-1][0] == observed, ('path samples extend past comparison', forecast['id'], movement['id'])
+                expected = movement['trajectory'][observed - 1]
+                assert all(movement['end'][key] == expected[key] for key in ('x', 'y', 'vx', 'vy')), ('wrong comparison endpoint', forecast['id'], movement['id'])
+                source = forecast['sample_player']['pos']
+                goal = forecast['destination']
+                progress = math.hypot(source['x'] / 16 - goal['x'], source['y'] / 16 - goal['y']) - math.hypot(expected['x'] / 16 - goal['x'], expected['y'] / 16 - goal['y'])
+                assert abs(movement['route_progress_tiles'] - progress) < 1e-6, ('wrong progress window', forecast['id'], movement['id'])
+            window_checks += 1
     latencies = [a['elapsed_ms'] for a in answers]
     workflow = report['after'].get('script_workflows', {}).get('decision-comparison', {})
     inventory = report['after']['inventory_slots']
@@ -123,11 +145,12 @@ for argument in sys.argv[1:]:
         'moving_weapon_use_samples': sum(math.hypot(s['vx'], s['vy']) > 0.1 for s in weapon_uses),
         'requests': dict(requests), 'choices': dict(choices),
         'forecasts': {'completed': len(forecasts), 'candidate_events': dict(candidate_events),
+            'equal_window_checks': window_checks,
             'unavailable': dict(unavailable),
             'median_compute_ms': round(statistics.median(f['compute_ms'] for f in forecasts), 1) if forecasts else None,
             'median_capture_ms': round(statistics.median(f['capture_ms'] for f in forecasts), 1) if forecasts else None,
             'queued_prefix_frames': dict(collections.Counter(f['known_route_frames'] for f in forecasts)),
-            'safe_landing_candidates': sum(m['safe_landing'] for f in forecasts for m in f['movements'])},
+            'safe_landing_candidates': sum(m.get('safe_landing') is True for f in forecasts for m in f['movements'])},
         'channel_results': {key: {'count': len(values),
             'errors': collections.Counter(v['result']['error'] for v in values if v['result'].get('error')),
             'median_ready_wait_ms': round(statistics.median(v['ready_wait_ms'] for v in values if v.get('ready_wait_ms') is not None), 1)
