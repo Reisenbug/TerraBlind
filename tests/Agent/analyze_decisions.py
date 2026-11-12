@@ -29,18 +29,28 @@ for argument in sys.argv[1:]:
     for path in (root / 'TerraBlindLogs').glob('*/**/*.log'):
         if 'latest' not in path.parts:
             for line in path.read_text(errors='replace').splitlines():
-                if any(marker in line for marker in ('[script_decision_request]', '[script_decision_result]', '[script_decision_channel]', '[script_log]')):
+                if any(marker in line for marker in ('[script_decision_request]', '[script_decision_result]', '[script_decision_channel]', '[script_log]',
+                    '[combat_forecast]', '[combat_candidate_apply]', '[combat_candidate_abort]')):
                     unique_lines.add(line)
     answers = []
     valid_choices = set()
     requests = collections.Counter()
     channels = collections.defaultdict(list)
     applied = collections.defaultdict(list)
+    forecasts = []
+    candidate_events = collections.Counter()
     for line in unique_lines:
+        if '[combat_forecast] ' in line:
+            payload = json.loads(line.split('[combat_forecast] ', 1)[1])
+            if payload.get('status') == 'ready':
+                forecasts.append(payload)
+        for marker in ('apply', 'abort'):
+            if '[combat_candidate_' + marker + '] ' in line:
+                candidate_events[marker] += 1
         if '[script_decision_request] ' in line:
             payload = json.loads(line.split('[script_decision_request] ', 1)[1])
             criteria = payload['questions'].get('response', {}).get('criteria', {})
-            dimension = 'weapon' if any(k.startswith('weapon_') for k in criteria) else 'movement' if 'follow_route' in criteria else 'opportunity' if 'take' in criteria else 'probe'
+            dimension = 'combat' if any('_weapon_' in k for k in criteria) else 'weapon' if any(k.startswith('weapon_') for k in criteria) else 'movement' if 'follow_route' in criteria else 'opportunity' if 'take' in criteria else 'probe'
             requests[dimension] += 1
             if dimension != 'probe':
                 valid_choices.update(criteria)
@@ -100,6 +110,11 @@ for argument in sys.argv[1:]:
         'weapon_use_enemy_samples': len(weapon_uses),
         'moving_weapon_use_samples': sum(math.hypot(s['vx'], s['vy']) > 0.1 for s in weapon_uses),
         'requests': dict(requests), 'choices': dict(choices),
+        'forecasts': {'completed': len(forecasts), 'candidate_events': dict(candidate_events),
+            'median_compute_ms': round(statistics.median(f['compute_ms'] for f in forecasts), 1) if forecasts else None,
+            'median_capture_ms': round(statistics.median(f['capture_ms'] for f in forecasts), 1) if forecasts else None,
+            'queued_prefix_frames': dict(collections.Counter(f['known_route_frames'] for f in forecasts)),
+            'safe_landing_candidates': sum(m['safe_landing'] for f in forecasts for m in f['movements'])},
         'channel_results': {key: {'count': len(values),
             'errors': collections.Counter(v['result']['error'] for v in values if v['result'].get('error')),
             'median_age_ms': round(statistics.median(v['request_age_ms'] for v in values), 1)} for key, values in channels.items()},

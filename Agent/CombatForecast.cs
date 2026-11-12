@@ -94,6 +94,7 @@ public sealed class CombatForecast : ModSystem
                     long id = ++sequence, tick = (long)Main.GameUpdateCount;
                     var frozen = scene.DeepClone().AsObject();
                     var goal = destination.DeepClone().AsObject();
+                    unavailable = null;
                     pending = new Forecast(id, tick, snapshot, frozen, prefix, goal,
                         Generate(id, tick, snapshot, frozen, prefix, goal,
                             Stopwatch.GetElapsedTime(started).TotalMilliseconds, lifetime.Token));
@@ -101,6 +102,10 @@ public sealed class CombatForecast : ModSystem
                 catch (NotSupportedException error)
                 { unavailable = new JsonObject { ["status"] = "unavailable", ["reason"] = error.Message }; }
             }
+            if (unavailable != null) DiagLog.Write("[combat_forecast_unavailable] " + new JsonObject {
+                ["tick"] = Main.GameUpdateCount, ["reason"] = unavailable["reason"]?.DeepClone(),
+                ["queued_frames"] = prefix.Length, ["held_type"] = player.HeldItem.type,
+                ["item_animation"] = player.itemAnimation, ["item_time"] = player.itemTime });
         }
         if (ready != null && (long)Main.GameUpdateCount - ready.Tick < 120)
         {
@@ -185,8 +190,10 @@ public sealed class CombatForecast : ModSystem
                         predicted["y"].GetValue<float>() + player.height / 2f);
                     var position = new Vector2(target["x"].GetValue<float>() * 16, target["y"].GetValue<float>() * 16)
                         + new Vector2(target["vx_pixels_per_tick"].GetValue<float>(), target["vy_pixels_per_tick"].GetValue<float>()) * (frame + 1);
-                    targetChecks.Add(new JsonObject { ["who"] = target["who"].DeepClone(), ["type"] = target["type"].DeepClone(),
-                        ["sample_frame"] = frame + 1, ["distance_tiles"] = Vector2.Distance(source, position) / 16,
+                    movement["target_sample_frame"] = frame + 1;
+                    movement["target_distances_tiles"] ??= new JsonObject();
+                    movement["target_distances_tiles"][target["who"].ToString()] = Vector2.Distance(source, position) / 16;
+                    targetChecks.Add(new JsonObject { ["who"] = target["who"].DeepClone(),
                         ["line_or_reach_passed"] = weapon != null && FightCoordinator.CanHitTargetFrom(player, weapon, source, position, target["width_tiles"].GetValue<float>() * 8) });
                 }
                 plans.Add(new JsonObject { ["id"] = movement["id"] + "_weapon_" + type,
