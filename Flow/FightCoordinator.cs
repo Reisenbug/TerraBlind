@@ -38,21 +38,24 @@ namespace TerraBlind
             || !ContentSamples.ProjectilesByType.TryGetValue(item.shoot, out var shot) || shot.tileCollide || shot.ownerHitCheck;
 
         internal static bool CanHitTarget(Player player, Item weapon, Vector2 target, float targetRadius = 0)
+            => CanHitTargetFrom(player, weapon, player.Center, target, targetRadius);
+
+        internal static bool CanHitTargetFrom(Player player, Item weapon, Vector2 source, Vector2 target, float targetRadius = 0)
         {
             if (weapon.shoot <= 0)
-                return !weapon.noMelee && Vector2.Distance(player.Center, target)
+                return !weapon.noMelee && Vector2.Distance(source, target)
                     <= Math.Max(32, Math.Max(weapon.width, weapon.height) * weapon.scale + player.width / 2f) + targetRadius
-                    && Collision.CanHitLine(player.Center, 4, 4, target, 4, 4);
+                    && Collision.CanHitLine(source, 4, 4, target, 4, 4);
             int shotType = weapon.shoot;
             if (weapon.useAmmo > 0 && !player.PickAmmo(weapon, out shotType, out _, out _, out _, out _, true)) return false;
             if (ContentSamples.ProjectilesByType.TryGetValue(shotType, out var shot))
             {
-                if (shot.aiStyle == ProjAIStyleID.ShortSword && Vector2.Distance(player.Center, target)
+                if (shot.aiStyle == ProjAIStyleID.ShortSword && Vector2.Distance(source, target)
                     > weapon.shootSpeed * 14 + new Vector2(shot.width, shot.height).Length() * weapon.scale / 2 + targetRadius)
                     return false;
                 if (!shot.tileCollide && !shot.ownerHitCheck) return true;
             }
-            return Collision.CanHitLine(player.Center, 4, 4, target, 4, 4);
+            return Collision.CanHitLine(source, 4, 4, target, 4, 4);
         }
 
         internal static bool TempleTargetAllowed(Player player, NPC npc)

@@ -101,6 +101,7 @@ public sealed class AgentControlSession
     {
         if (name == "fight") return ControlChannels.ItemUse;
         if (name != "act") return ControlChannels.All;
+        if (args["combat_candidate"] != null) return ControlChannels.Movement;
         var channels = ControlChannels.None;
         foreach (var step in args["steps"]?.AsArray() ?? new JsonArray())
         {

@@ -61,6 +61,7 @@ public static partial class AgentTools
 
     internal static void ClearTaskPolicy(bool resetRevision = false)
     {
+        CombatForecast.Reset();
         DecisionChannels.Reset();
         var previous = taskPolicy; taskPolicy = null;
         taskPolicyEpoch++;
@@ -622,6 +623,11 @@ public static partial class AgentTools
     internal static Task<JsonObject> Call(string path, JsonObject args, CancellationToken token) => NativeAgent.OnMain(() =>
     {
         token.ThrowIfCancellationRequested();
+        if (path == "/act" && args?["combat_candidate"] != null)
+        {
+            args = CombatForecast.Prepare(args);
+            if (args["error"] != null) return args;
+        }
         var response = HttpServerSystem.Dispatch(path, args?.ToJsonString(new System.Text.Json.JsonSerializerOptions
         { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) ?? "{}");
         var result = JsonNode.Parse(response.Body) as JsonObject
@@ -1275,7 +1281,12 @@ public static partial class AgentTools
             case "nearby_drops":
                 return new JsonObject { ["drops"] = await NativeAgent.OnMain(() => NearbyDrops.Read(Int(args, "radius", 25)), token) }.ToJsonString();
             case "combat_assess":
-                return (await NativeAgent.OnMain(() => CombatAssessment(Int(args, "radius", 25)), token)).ToJsonString();
+                return (await NativeAgent.OnMain(() =>
+                {
+                    var scene = CombatAssessment(Int(args, "radius", 25));
+                    if (Bool(args, "forecast")) scene["forecast"] = CombatForecast.Poll(args, scene);
+                    return scene;
+                }, token)).ToJsonString();
             case "jev_judge":
                 string decisionKey = await NativeAgent.OnMain(() => Config.I.TypeSafeKey?.Trim(), token);
                 if (args["channel"] != null)

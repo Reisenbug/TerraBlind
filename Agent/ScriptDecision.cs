@@ -24,8 +24,8 @@ public static class ScriptDecision
                 throw new ArgumentException("每个判断需要instructions。");
             string type = value["type"]?.ToString();
             if (type is not ("choice" or "noul")) throw new ArgumentException("仅支持choice/noul判断。");
-            if (type == "choice" && (value["criteria"] is not JsonObject criteria || criteria.Count is < 2 or > 16))
-                throw new ArgumentException("choice需要2..16个命名候选criteria。");
+            if (type == "choice" && (value["criteria"] is not JsonObject criteria || criteria.Count is < 2 or > 64))
+                throw new ArgumentException("choice需要2..64个命名候选criteria。");
         }
         if (args["state"] is not JsonObject) throw new ArgumentException("state需要包含本次判断事实的对象。");
         var payload = new JsonObject { ["model"] = "jev-latest", ["state"] = args["state"].DeepClone(), ["questions"] = questions };

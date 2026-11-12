@@ -334,6 +334,12 @@ namespace TerraBlind
     public static class PlaceCoordinator { public static bool IsActive; }
     public static class PlaceWalls { public static bool IsRunning; }
     public static class StateSpacePlanner { public static bool PreserveTerrain, ReservesItemUse; }
+    public static class CombatForecast
+    {
+        public static void Reset() { }
+        public static JsonObject Poll(JsonObject args, JsonObject scene) => new() { ["status"] = "unavailable", ["reason"] = "engine_not_linked" };
+        public static JsonObject Prepare(JsonObject args) => new() { ["error"] = "engine_not_linked" };
+    }
     public static class VanillaNavBridge { public static bool Enabled; public static string Stage = "Moving"; }
     public sealed class GameWoodHarvest : IWoodHarvestWorld
     {

@@ -152,10 +152,18 @@ public static class AgentScript
         tools.Add(new JsonObject { ["type"] = "function", ["function"] = new JsonObject
         {
             ["name"] = "combat_assess",
-            ["description"] = "只读观察附近普通敌怪和快捷栏武器对各目标的当前检查：距离、接触伤害、可攻击性、弹药、魔力、射界/近战距离。recent_damage为实际最近受伤证据。line_or_reach_passed复用现有战斗检查，不代表弹道一定命中。供脚本选择威胁、武器、继续移动或调整位置。",
+            ["description"] = "只读观察附近普通敌怪、弹幕和快捷栏武器检查。forecast:true配合context和destination后台推演共享行动候选，原动作继续。forecast返回pending/ready/unavailable、采样帧、已排队路线长度、各移动的落点/地形伤害/推进及组合武器的射界检查。敌人运动用匀速假设。act携combat_candidate引用可执行选中组合，宿主校验实际状态和沿途地形并逐帧检测偏离。follow_route组合只需set_combat更新武器。",
             ["parameters"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject
-                { ["radius"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 60 } } }
+                { ["radius"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 60 },
+                  ["forecast"] = new JsonObject { ["type"] = "boolean" }, ["context"] = new JsonObject { ["type"] = "string" },
+                  ["destination"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject {
+                    ["x"] = new JsonObject { ["type"] = "integer" }, ["y"] = new JsonObject { ["type"] = "integer" } }, ["required"] = new JsonArray("x", "y") } } }
         } });
+        tools.First(t => t["function"]?["name"]?.ToString() == "act")["function"]["parameters"]["properties"]["combat_candidate"] =
+            new JsonObject { ["type"] = "object", ["properties"] = new JsonObject {
+                ["context"] = new JsonObject { ["type"] = "string" }, ["forecast_id"] = new JsonObject { ["type"] = "integer" },
+                ["plan_id"] = new JsonObject { ["type"] = "string" } }, ["required"] = new JsonArray("context", "forecast_id", "plan_id"),
+                ["description"] = "combat_assess候选引用；宿主用经过状态校验的剩余按键序列替换steps，同时选择组合武器。占用移动通道，自动攻击继续。" };
         var findTiles = tools.First(t => t["function"]?["name"]?.ToString() == "find_tiles")["function"];
         findTiles["parameters"]["properties"]["include_locked"] = new JsonObject { ["type"] = "boolean", ["default"] = false,
             ["description"] = "查箱子时可设true以包含上锁箱；结果locked给出当前锁状态。" };
