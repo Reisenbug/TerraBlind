@@ -2551,6 +2551,7 @@ public static partial class AgentTools
                 .OrderBy(shot => Microsoft.Xna.Framework.Vector2.Distance(shot.Center, p.Center)).Take(12)
                 .Select(shot => (JsonNode)new JsonObject { ["type"] = shot.type, ["damage"] = shot.damage,
                     ["x"] = shot.Center.X / 16, ["y"] = shot.Center.Y / 16,
+                    ["width_tiles"] = shot.width / 16f, ["height_tiles"] = shot.height / 16f,
                     ["vx_pixels_per_tick"] = shot.velocity.X * (shot.extraUpdates + 1),
                     ["vy_pixels_per_tick"] = shot.velocity.Y * (shot.extraUpdates + 1) }).ToArray()),
             ["targets"] = new JsonArray(targets.Select(n => (JsonNode)new JsonObject
@@ -2558,6 +2559,7 @@ public static partial class AgentTools
                 ["who"] = n.whoAmI, ["type"] = n.type, ["hp"] = n.life, ["contact_damage"] = n.damage,
                 ["name"] = Lang.GetNPCNameValue(n.type),
                 ["x"] = n.Center.X / 16, ["y"] = n.Center.Y / 16,
+                ["width_tiles"] = n.width / 16f, ["height_tiles"] = n.height / 16f,
                 ["vx_pixels_per_tick"] = n.velocity.X, ["vy_pixels_per_tick"] = n.velocity.Y,
                 ["distance_tiles"] = Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) / 16,
                 ["attackable"] = n.CanBeChasedBy(p) && FightCoordinator.TempleTargetAllowed(p, n),

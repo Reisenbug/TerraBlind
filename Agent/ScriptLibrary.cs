@@ -33,6 +33,7 @@ public sealed class ScriptLibrary
             const state=fields=>tool('get_state',{fields});
             const originalCombat=state(['agent']).agent;
             const dimensions=new Set(config.decisions??defaultDecisions);
+            const queuedOpportunities=defaultDecisions.includes('opportunity')||dimensions.has('opportunity');
             const usedDecisions={},opportunities=new Map();
             let approvedOpportunity=false;
             const judge=(dimension,context,scene,instructions,criteria)=>{
@@ -82,7 +83,7 @@ public sealed class ScriptLibrary
             const collect=(resource,point,drop,event)=>{
               const actual=count(resource.item_type);
               if(actual>=resource.count) return handled();
-              if(dimensions.has('opportunity')&&!approvedOpportunity){
+              if(queuedOpportunities&&!approvedOpportunity){
                 opportunities.set('resource:'+resource.item_type+':'+point.x+':'+point.y,{resource,point,drop});
                 return handled();
               }
@@ -112,7 +113,7 @@ public sealed class ScriptLibrary
               return resource?collect(resource,drop,true,event):handled();
             });
             on('nearby_chest',event=>{
-              if(dimensions.has('opportunity')){
+              if(queuedOpportunities){
                 opportunities.set('chest:'+event.evidence.x+':'+event.evidence.y,{point:event.evidence,chest:true});
                 return handled();
               }
@@ -198,9 +199,13 @@ public sealed class ScriptLibrary
                 combatChoice=key;
               }
               if(dimensions.has('movement')&&destination&&(encounter||combat.projectiles?.length)){
-                const r=judge('movement',encounter+':'+destination.x+':'+destination.y,scene,
-                  'Which short response best preserves travel progress while handling the observed enemies and attacks? Use the local grid, equipment and recent results.',
-                  {follow_route:'Continue the current navigation; shooting may continue.',
+                const player=scene.combat.player;
+                const movementScene={...scene,combat:{...scene.combat,
+                  targets:scene.combat.targets.map(({weapons,...n})=>({...n,dx:n.x-player.x,dy:n.y-player.y})),
+                  projectiles:scene.combat.projectiles.map(p=>({...p,dx:p.x-player.x,dy:p.y-player.y}))}};
+                const r=judge('movement',encounter+':'+destination.x+':'+destination.y,movementScene,
+                  'Which movement best avoids enemy contact and projectile damage over the next half second, considering the local terrain? Attacks can continue during every movement. The journey resumes after the response.',
+                  {follow_route:'Keep the currently observed movement keys in combat.player.controls while navigation continues.',
                     left:'Move left for 12 frames, then resume the journey.',right:'Move right for 12 frames, then resume the journey.',
                     jump_left:'Move left and hold jump for 12 frames, then resume the journey.',
                     jump_right:'Move right and hold jump for 12 frames, then resume the journey.'});
@@ -222,7 +227,7 @@ public sealed class ScriptLibrary
                   }
                 }
               }
-              if(dimensions.has('opportunity')&&opportunities.size){
+              if(queuedOpportunities&&opportunities.size){
                 const px=combat.player.pos.x/16,py=combat.player.pos.y/16;
                 const [id,opportunity]=[...opportunities].sort((a,b)=>
                   Math.hypot(a[1].point.x-px,a[1].point.y-py)-Math.hypot(b[1].point.x-px,b[1].point.y-py))[0];
@@ -231,21 +236,26 @@ public sealed class ScriptLibrary
                 if(!assessment.ok)
                   opportunities.delete(id);
                 else if(assessment.approach_direct_distance<=config.max_detour_tiles){
-                  const r=judge('opportunity',id,{...scene,opportunity,assessment,resources:config.resources,
-                    inventory:state(['inventory_counts']).inventory_counts},
-                    'Is collecting this observed opportunity now worth the detour, exposure and inventory cost for this journey?',
-                    {take:'Collect this opportunity now, then resume the current journey.',pass:'Continue the journey and leave this opportunity.'});
-                  if(r){
-                    accept('opportunity',r,r.result.answers.response.choice); opportunities.delete(id);
-                    if(r.result.answers.response.choice==='take'){
-                      approvedOpportunity=true;
-                      try {
-                        if(opportunity.chest){
-                          if(makeSpace()) tool('collect_treasure',{x:opportunity.point.x,y:opportunity.point.y});
-                        } else collect(opportunity.resource,opportunity.point,opportunity.drop,event);
-                      } finally {approvedOpportunity=false;}
-                      return handled();
+                  let take;
+                  if(dimensions.has('opportunity')){
+                    const r=judge('opportunity',id,{...scene,opportunity,assessment,resources:config.resources,
+                      inventory:state(['inventory_counts']).inventory_counts},
+                      'Is collecting this observed opportunity now worth the detour, exposure and inventory cost for this journey?',
+                      {take:'Collect this opportunity now, then resume the current journey.',pass:'Continue the journey and leave this opportunity.'});
+                    if(r){
+                      accept('opportunity',r,r.result.answers.response.choice);
+                      take=r.result.answers.response.choice==='take';
                     }
+                  } else take=worthwhile(opportunity.point,event);
+                  if(take!=null) opportunities.delete(id);
+                  if(take){
+                    approvedOpportunity=true;
+                    try {
+                      if(opportunity.chest){
+                        if(makeSpace()) tool('collect_treasure',{x:opportunity.point.x,y:opportunity.point.y});
+                      } else collect(opportunity.resource,opportunity.point,opportunity.drop,event);
+                    } finally {approvedOpportunity=false;}
+                    return handled();
                   }
                 }
               }
@@ -262,7 +272,7 @@ public sealed class ScriptLibrary
             const tileTypes=[...new Set(config.resources.map(r=>r.tile_type).filter(Number.isInteger))];
             tool('watch',{events:[...(tileTypes.length?['nearby_tile']:[]),'nearby_drop','nearby_chest','inventory_full'],
               tile_types:tileTypes,
-              radius:25,loot_chests_in_reach:!dimensions.has('opportunity')});
+              radius:25,loot_chests_in_reach:!queuedOpportunities});
             if(policyOnly) return {registered:true};
             try { return step('travel',()=>tool('nav_to',config.destination)); }
             finally { tool('set_combat',{auto_attack:originalCombat.auto_attack,weapon_type:originalCombat.combat_weapon_type}); }
