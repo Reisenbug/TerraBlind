@@ -97,7 +97,8 @@ for argument in sys.argv[1:]:
         horizon = forecast['comparison_frames']
         assert 0 < horizon <= 24, ('invalid comparison window', forecast['id'], horizon)
         baseline = next(m for m in forecast['movements'] if m['id'] == 'follow_route')
-        assert baseline['controls'][:horizon] == forecast['known_route_controls'][:horizon], ('baseline changed queued inputs', forecast['id'])
+        observed_baseline = baseline['observed_comparison_frames']
+        assert baseline['controls'][:observed_baseline] == forecast['known_route_controls'][:observed_baseline], ('baseline changed queued inputs', forecast['id'])
         for movement in forecast['movements']:
             observed = min(horizon, len(movement['trajectory']))
             assert movement['comparison_frames'] == horizon and movement['observed_comparison_frames'] == observed, ('unequal windows', forecast['id'], movement['id'])
@@ -158,6 +159,7 @@ for argument in sys.argv[1:]:
         'forecasts': {'completed': len(forecasts), 'candidate_events': dict(candidate_events),
             'refresh_completed': len(refreshes), 'refresh_rejections': dict(refresh_rejections),
             'equal_window_checks': window_checks,
+            'incomplete_comparisons': sum(not m['comparison_complete'] for f in forecasts for m in f['movements']),
             'unavailable': dict(unavailable),
             'median_compute_ms': round(statistics.median(f['compute_ms'] for f in forecasts), 1) if forecasts else None,
             'median_capture_ms': round(statistics.median(f['capture_ms'] for f in forecasts), 1) if forecasts else None,

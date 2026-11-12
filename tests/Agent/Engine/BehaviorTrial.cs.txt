@@ -4663,7 +4663,7 @@ public sealed class BehaviorTrial : ModSystem
         }
         var before = await Call("get_state", new JsonObject());
         Task<JsonObject> StartFight(int seconds) => Call("action_start", new JsonObject { ["tool"] = "run_script", ["args"] = new JsonObject {
-            ["workflow"] = "decision-fight", ["code"] = "return tool('fight',{seconds:" + seconds + ",max_dist:30,npc_types:[" + NPCID.Hornet + "]});" } });
+            ["workflow"] = "decision-fight", ["code"] = "return tool('fight',{seconds:" + seconds + ",max_dist:30});" } });
         var fight = await StartFight(duration);
         var samples = new JsonArray(); var spawns = new JsonArray(); var clock = Stopwatch.StartNew();
         var spawned = new List<int>();
@@ -4693,6 +4693,9 @@ public sealed class BehaviorTrial : ModSystem
                         ["hp"] = p.statLife, ["dead"] = p.dead, ["x"] = p.position.X, ["y"] = p.position.Y,
                         ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["attack"] = p.controlUseItem,
                         ["item_animation"] = p.itemAnimation, ["held_type"] = p.HeldItem.type,
+                        ["selected_slot"] = p.selectedItem, ["mouse_interface"] = p.mouseInterface,
+                        ["delay_use_item"] = p.delayUseItem, ["no_items"] = p.noItems, ["cced"] = p.CCed,
+                        ["item_time"] = p.itemTime, ["reuse_delay"] = p.reuseDelay, ["inventory_open"] = Main.playerInventory,
                         ["enemies"] = new JsonArray(Main.npc.Where(n => n.active && !n.friendly && n.damage > 0
                             && Vector2.Distance(n.Center, p.Center) < 480).Select(n => (JsonNode)new JsonObject {
                                 ["who"] = n.whoAmI, ["type"] = n.type, ["hp"] = n.life }).ToArray()),
