@@ -4620,8 +4620,116 @@ public sealed class BehaviorTrial : ModSystem
         Console.WriteLine("COMBAT_BATCH_CHECK " + report.ToJsonString());
     }
 
+    async Task FightDecisionComparison(string variant)
+    {
+        if (variant is not ("baseline" or "combat")) throw new ArgumentException("Fight comparison expects baseline or combat");
+        bool model = variant == "combat";
+        bool codeDodge = !model && Environment.GetEnvironmentVariable("TB_DECISION_IDLE_BASELINE") != "1";
+        int duration = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_SECONDS") ?? "40");
+        int health = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_HEALTH") ?? "200");
+        var warmup = Stopwatch.StartNew();
+        while (!await OnMain(() => VanillaNavigationDemo.Instance.WorkerReady))
+        {
+            if (warmup.Elapsed.TotalSeconds > 90) throw new Exception("Native movement worker did not become ready before the encounter");
+            await Task.Delay(250);
+        }
+        warmup.Stop();
+        Console.WriteLine("DECISION_FIGHT_WORKER_READY warmup_ms=" + warmup.ElapsedMilliseconds);
+        var anchor = await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            foreach (var item in p.inventory.Where(CombatLoadout.Usable)) item.TurnToAir();
+            p.inventory[4].SetDefaults(ItemID.ThrowingKnife); p.inventory[4].stack = 250; p.selectedItem = 4;
+            p.ConsumedLifeCrystals = (health - 100) / 20;
+            p.statLife = p.statLifeMax = p.statLifeMax2 = health;
+            return p.Center;
+        });
+        await Call("set_combat", new JsonObject { ["auto_attack"] = true, ["auto_dodge"] = codeDodge, ["weapon_type"] = ItemID.ThrowingKnife });
+        if (model)
+        {
+            var helper = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "joint_combat",
+                ["expected_revision"] = 0, ["code"] = ScriptLibrary.Example("joint_combat")["code"].DeepClone() });
+            if (helper["error"] != null) throw new Exception("Joint fight skill rejected: " + helper);
+            var input = new JsonObject { ["context"] = "native-hornet-fight", ["interval_ms"] = 750, ["max_age_ms"] = 2000,
+                ["destination"] = new JsonObject { ["x"] = anchor.X / 16, ["y"] = anchor.Y / 16 },
+                ["instruction"] = "Fight the nearby enemies with throwing knives. Evade contact and stingers using the natural terrain. Stay within 20 tiles horizontally and 10 tiles vertically of the destination; keep jumps low." };
+            var policy = await Call("task_policy", new JsonObject { ["operation"] = "get" });
+            var registered = await Call("task_policy", new JsonObject { ["operation"] = "set",
+                ["expected_revision"] = policy["revision"].DeepClone(),
+                ["code"] = "const config=" + input.ToJsonString() + ";let last=null;on('tick',()=>{const r=skill('joint_combat',"
+                    + helper["revision"] + ",{...config,last_request:last},'combat');if(r.request_id)last=r.request_id;return {handled:true};});" });
+            if (registered["error"] != null) throw new Exception("Joint fight policy rejected: " + registered);
+        }
+        var before = await Call("get_state", new JsonObject());
+        Task<JsonObject> StartFight(int seconds) => Call("action_start", new JsonObject { ["tool"] = "run_script", ["args"] = new JsonObject {
+            ["workflow"] = "decision-fight", ["code"] = "return tool('fight',{seconds:" + seconds + ",max_dist:30,npc_types:[" + NPCID.Hornet + "]});" } });
+        var fight = await StartFight(duration);
+        var samples = new JsonArray(); var spawns = new JsonArray(); var clock = Stopwatch.StartNew();
+        var spawned = new List<int>();
+        JsonObject action = null;
+        Console.WriteLine("DECISION_FIGHT_START variant=" + variant + " code_dodge=" + codeDodge);
+        try
+        {
+            while (clock.Elapsed.TotalSeconds < duration)
+            {
+                var measured = await OnMain(() =>
+                {
+                    var p = Main.LocalPlayer;
+                    if (spawns.Count < 8 && !spawned.Any(i => Main.npc[i].active && Main.npc[i].type == NPCID.Hornet)
+                        && clock.ElapsedMilliseconds >= spawns.Count * 2500)
+                        foreach (int dx in new[] { 200, -200, 160, -160 })
+                        {
+                            var point = p.Center + new Vector2(dx, -64);
+                            if (Collision.SolidCollision(point - new Vector2(20), 40, 40)
+                                || !Collision.CanHitLine(p.Center, 4, 4, point, 4, 4)) continue;
+                            int who = NPC.NewNPC(new EntitySource_Misc("DecisionFightTrial"), (int)point.X, (int)point.Y, NPCID.Hornet);
+                            spawned.Add(who);
+                            spawns.Add(new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["who"] = who,
+                                ["x"] = Main.npc[who].position.X, ["y"] = Main.npc[who].position.Y, ["hp"] = Main.npc[who].life });
+                            break;
+                        }
+                    return new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["tick"] = Main.GameUpdateCount,
+                        ["hp"] = p.statLife, ["dead"] = p.dead, ["x"] = p.position.X, ["y"] = p.position.Y,
+                        ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["attack"] = p.controlUseItem,
+                        ["item_animation"] = p.itemAnimation, ["held_type"] = p.HeldItem.type,
+                        ["enemies"] = new JsonArray(Main.npc.Where(n => n.active && !n.friendly && n.damage > 0
+                            && Vector2.Distance(n.Center, p.Center) < 480).Select(n => (JsonNode)new JsonObject {
+                                ["who"] = n.whoAmI, ["type"] = n.type, ["hp"] = n.life }).ToArray()),
+                        ["hostile_projectiles"] = Main.projectile.Count(pj => pj.active && pj.hostile),
+                        ["last_damage"] = (DamageField.GetValue(null) as JsonNode)?.DeepClone() };
+                });
+                samples.Add(measured);
+                action = await Call("action_query", new JsonObject { ["handle"] = fight["handle"].DeepClone() });
+                if (measured["dead"].GetValue<bool>() || action["status"]?.ToString() is "failed" or "cancelled") break;
+                if (action["status"]?.ToString() == "completed")
+                {
+                    if (spawns.Count >= 8) break;
+                    fight = await StartFight(Math.Max(1, duration - (int)clock.Elapsed.TotalSeconds));
+                }
+                await Task.Delay(250);
+            }
+        }
+        finally
+        {
+            await Call("action_control", new JsonObject { ["handle"] = fight["handle"].DeepClone(), ["command"] = "cancel" });
+            var policy = await Call("task_policy", new JsonObject { ["operation"] = "get" });
+            await Call("task_policy", new JsonObject { ["operation"] = "clear", ["expected_revision"] = policy["revision"].DeepClone() });
+            File.WriteAllText(Path.Combine(Main.SavePath, "decision-comparison.json"), new JsonObject {
+                ["variant"] = variant, ["fight_trial"] = true, ["code_dodge"] = codeDodge, ["terrain_edits"] = 0, ["unarmed"] = false,
+                ["policy_config"] = new JsonObject { ["weapon_order"] = new JsonArray((int)ItemID.ThrowingKnife) },
+                ["seed"] = Main.ActiveWorldFileData.SeedText, ["start_health"] = health, ["spawns"] = spawns,
+                ["worker_warmup_ms"] = warmup.ElapsedMilliseconds,
+                ["elapsed_ms"] = clock.ElapsedMilliseconds, ["waypoints"] = new JsonArray(),
+                ["before"] = before, ["after"] = await Call("get_state", new JsonObject()), ["samples"] = samples, ["action"] = action
+            }.ToJsonString());
+        }
+        if (spawns.Count == 0) throw new Exception("No open native hornet spawn was found; terrain unchanged");
+        Console.WriteLine("DECISION_FIGHT_RECORDED variant=" + variant + " samples=" + samples.Count + " spawns=" + spawns.Count);
+    }
+
     async Task DecisionComparison(string variant)
     {
+        if (Environment.GetEnvironmentVariable("TB_DECISION_FIGHT_TRIAL") == "1") { await FightDecisionComparison(variant); return; }
         string[] dimensions = variant == "baseline" ? Array.Empty<string>() : variant.Split(',');
         if (dimensions.Any(d => d is not ("weapon" or "movement" or "opportunity" or "combat")))
             throw new ArgumentException("Unknown comparison dimension: " + variant);

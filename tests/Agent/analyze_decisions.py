@@ -28,7 +28,8 @@ for argument in sys.argv[1:]:
         stationary.append(samples[-1]['elapsed_ms'] - stationary_start)
     unique_lines = set()
     markers = ('script_decision_request', 'script_decision_result', 'script_decision_channel', 'script_log',
-        'combat_forecast', 'combat_forecast_unavailable', 'combat_candidate_apply', 'combat_candidate_abort')
+        'combat_forecast', 'combat_forecast_unavailable', 'combat_candidate_apply', 'combat_candidate_abort',
+        'combat_candidate_refresh', 'combat_candidate_refresh_rejected')
     pattern = re.compile(r'\[(' + '|'.join(markers) + r')\] ')
     decoder = json.JSONDecoder()
     for path in (root / 'TerraBlindLogs').glob('*/**/*.log'):
@@ -49,6 +50,8 @@ for argument in sys.argv[1:]:
     forecasts = []
     unavailable = collections.Counter()
     candidate_events = collections.Counter()
+    refreshes = []
+    refresh_rejections = collections.Counter()
     for line in unique_lines:
         if '[combat_forecast_unavailable] ' in line:
             unavailable[json.loads(line.split('[combat_forecast_unavailable] ', 1)[1])['reason']] += 1
@@ -59,6 +62,11 @@ for argument in sys.argv[1:]:
         for marker in ('apply', 'abort'):
             if '[combat_candidate_' + marker + '] ' in line:
                 candidate_events[marker] += 1
+        if '[combat_candidate_refresh] ' in line:
+            refreshes.append(json.loads(line.split('[combat_candidate_refresh] ', 1)[1]))
+        if '[combat_candidate_refresh_rejected] ' in line:
+            rejected = json.loads(line.split('[combat_candidate_refresh_rejected] ', 1)[1])
+            refresh_rejections[(rejected.get('error', '') + ':' + str(rejected.get('reason', ''))).rstrip(':')] += 1
         if '[script_decision_request] ' in line:
             payload = json.loads(line.split('[script_decision_request] ', 1)[1])
             criteria = payload['questions'].get('response', {}).get('criteria', {})
@@ -125,6 +133,9 @@ for argument in sys.argv[1:]:
                 observed_resources[resource].append({'count': count, 'seconds': round(sample['elapsed_ms'] / 1000, 2)})
     print(json.dumps({
         'root': root.name, 'variant': report['variant'], 'seed': report['seed'],
+        'fight_trial': report.get('fight_trial', False), 'code_dodge': report.get('code_dodge'),
+        'spawned_enemies': len(report.get('spawns', [])),
+        'hostile_projectile_samples': sum(s.get('hostile_projectiles', 0) > 0 for s in samples),
         'unarmed': report['unarmed'], 'seconds': round(report['elapsed_ms'] / 1000, 2),
         'completed_legs': sum(s['status'] == 'completed' for s in workflow.get('steps', [])),
         'total_legs': len(report['waypoints']), 'status': report['action']['status'],
@@ -145,6 +156,7 @@ for argument in sys.argv[1:]:
         'moving_weapon_use_samples': sum(math.hypot(s['vx'], s['vy']) > 0.1 for s in weapon_uses),
         'requests': dict(requests), 'choices': dict(choices),
         'forecasts': {'completed': len(forecasts), 'candidate_events': dict(candidate_events),
+            'refresh_completed': len(refreshes), 'refresh_rejections': dict(refresh_rejections),
             'equal_window_checks': window_checks,
             'unavailable': dict(unavailable),
             'median_compute_ms': round(statistics.median(f['compute_ms'] for f in forecasts), 1) if forecasts else None,
