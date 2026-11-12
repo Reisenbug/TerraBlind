@@ -301,7 +301,7 @@ namespace TerraBlind
             Cursor.AimPx(aim.X, aim.Y);
 
             p.selectedItem = weaponSlot;
-            if (idle) p.delayUseItem = p.mouseInterface = false;
+            p.delayUseItem = p.mouseInterface = false;
             p.controlUseItem = CanHitTarget(p, p.HeldItem, target.Center, target.width / 2f);
             _usingItem = p.controlUseItem;
             RememberAnimation(p, true);

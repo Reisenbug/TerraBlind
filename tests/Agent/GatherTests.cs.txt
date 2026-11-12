@@ -810,6 +810,11 @@ static class GatherTests
             FightCoordinator.Tick(p, true);
             Check(p.controlUseItem && !FightCoordinator.IsActive, "thinking defense failed or became a managed fight");
             Check(!p.delayUseItem && !p.mouseInterface, "UI suppression blocked thinking defense");
+            FightCoordinator.Start(40);
+            p.delayUseItem = p.mouseInterface = true;
+            FightCoordinator.Tick(p, true);
+            Check(p.controlUseItem && !p.delayUseItem && !p.mouseInterface, "open inventory blocked an explicit fight");
+            FightCoordinator.Stop(); FightCoordinator.Tick(p, true);
             AgentPermissions.Attack = false;
             FightCoordinator.Tick(p, true);
             Check(!p.controlUseItem, "attack denial retained thinking defense");
