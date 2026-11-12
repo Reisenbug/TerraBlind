@@ -26,7 +26,7 @@ public sealed class ScriptLibrary
             """
             const c=tool('combat_assess',{radius:25,forecast:true,context:input.context,destination:input.destination});
             const f=c.forecast;
-            if(c.boss_present||f.status!=='ready'||f.plans.length<2) return {status:f.status};
+            if(c.boss_present||f.status!=='ready'||f.plans.length<2) return {status:f.status,reason:f.reason};
             const criteria=Object.fromEntries(f.plans.map(p=>[p.id,{movement:p.movement,weapon_type:p.weapon_type}]));
             const movements=f.movements.map(({engine_ms,roundtrip_ms,queue_ms,...m})=>m);
             const r=tool('jev_judge',{channel:'combat',context:input.context,interval_ms:input.interval_ms??750,
@@ -224,10 +224,12 @@ public sealed class ScriptLibrary
                   }
                 }
               }
-              const key=choice?choice.weapon.type+':'+choice.target.who:'none';
+              const fallback=config.weapon_order.find(type=>combat.targets.some(n=>n.weapons.some(w=>w.type===type&&w.has_ammo&&w.mana_available)))
+                ??originalCombat.combat_weapon_type;
+              const key=choice?choice.weapon.type+':'+choice.target.who:'preferred:'+fallback;
               if((!dimensions.has('weapon')&&(!dimensions.has('combat')||!jointChosen)||!encounter)&&key!==combatChoice){
                 const r=tool('set_combat',choice?{auto_attack:true,weapon_type:choice.weapon.type}
-                  :{auto_attack:originalCombat.auto_attack,weapon_type:originalCombat.combat_weapon_type});
+                  :{auto_attack:originalCombat.auto_attack,weapon_type:fallback});
                 if(r.error) return {handled:false,reason:r.error};
                 combatChoice=key;
               }

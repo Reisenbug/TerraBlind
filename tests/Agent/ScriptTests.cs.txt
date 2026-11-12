@@ -240,6 +240,9 @@ static class ScriptTests
                     await handlers.Dispatch(JsonNode.Parse("{\"kind\":\"nearby_tile\",\"evidence\":{\"tile_type\":61,\"x\":12,\"y\":20}}").AsObject(), token);
                     for (int i = 0; i < 8; i++)
                     {
+                        if (i == 6)
+                            foreach (var target in combat["targets"].AsArray())
+                                foreach (var weapon in target["weapons"].AsArray()) weapon["line_or_reach_passed"] = false;
                         await handlers.Dispatch(new JsonObject { ["kind"] = "tick", ["execution"] = new JsonObject
                             { ["tool"] = "nav_to", ["args"] = config["destination"].DeepClone() } }, token);
                         if (polls.GetValueOrDefault("opportunity") == 1)
@@ -252,6 +255,7 @@ static class ScriptTests
                 "movement decision was ignored/replayed or opportunity was lost: " + string.Join(',', dimensions));
             Check(selectedWeapons.Contains(enabled.Contains("weapon") ? 12 : 11)
                 && polls.Keys.ToHashSet().SetEquals(enabled), "decision ablation changed the wrong dimensions");
+            Check(!selectedWeapons.Contains(0), "temporarily blocked targets reset the configured weapon priority");
             Check(!enabled.Contains("opportunity") || opportunityPrefetched, "opportunity judgment waited until reaching collection range");
         }
         Console.WriteLine("PASS: production JS independently applies weapon, movement and opportunity decisions while preserving baseline and deduplicating effects");
