@@ -11,7 +11,7 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -21,9 +21,10 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
-        if (name is "reactive_travel" or "task_reactions") return Template(name,
-            "task_reactions只注册整趟任务的处理函数，用于task_policy初始化；目的地从event.execution的实际导航读取。reactive_travel另需destination并执行单段导航。input包含resources（item_type/count/tile_type/tile_name及可选frame_x/frame_y）、weapon_order、trash_types/drop_types、max_detour_tiles、health_reserve、contact_pass_types、allow_trigger_removal。资源来源提前查证，丢弃名单按任务需要填写。策略覆盖机会、背包、压力板、植物接触伤害和威胁；接近与绕行预算可由Agent修改，实际路线仍由导航验证。",
-            "const policyOnly=" + (name == "task_reactions" ? "true" : "false") + ";\n" + """
+        if (name is "reactive_travel" or "task_reactions" or "decision_travel" or "decision_reactions") return Template(name,
+            "task_reactions和decision_reactions注册整趟任务策略，目的地从event.execution的实际导航读取；travel版本另需destination并执行单段导航。input包含resources（item_type/count/tile_type/tile_name及可选frame_x/frame_y）、weapon_order、trash_types/drop_types、max_detour_tiles、health_reserve、contact_pass_types、allow_trigger_removal。decision版本默认启用weapon/movement/opportunity三维后台判断，decisions数组可单独启停作对照；instruction给当前意图，decision_interval_ms、decision_max_age_ms和decision_max_displacement_tiles调整更新及应用条件。判断期间原动作继续，只有执行具体干预才暂停并恢复。print记录每次采用的request_id、选择、耗时和动作结果。资源来源提前查证，策略源码可随现场修改。",
+            "const policyOnly=" + (name is "task_reactions" or "decision_reactions" ? "true" : "false") + ";\n"
+            + "const defaultDecisions=" + (name.StartsWith("decision_") ? "['weapon','movement','opportunity']" : "[]") + ";\n" + """
             const config=typeof input==='undefined'?null:input;
             if(!config||!policyOnly&&!config.destination||!Array.isArray(config.resources)||!Array.isArray(config.weapon_order)
                 ||!Number.isFinite(config.max_detour_tiles)||!Number.isFinite(config.health_reserve))
@@ -31,6 +32,26 @@ public sealed class ScriptLibrary
             const handled=()=>({handled:true});
             const state=fields=>tool('get_state',{fields});
             const originalCombat=state(['agent']).agent;
+            const dimensions=new Set(config.decisions??defaultDecisions);
+            const usedDecisions={},opportunities=new Map();
+            let approvedOpportunity=false;
+            const judge=(dimension,context,scene,instructions,criteria)=>{
+              const r=tool('jev_judge',{channel:dimension,context,state:scene,
+                interval_ms:config.decision_interval_ms??750,max_age_ms:config.decision_max_age_ms??2000,
+                questions:{response:{type:'choice',instructions,criteria}}});
+              if(r.status==='pending'||usedDecisions[dimension]===r.request_id) return null;
+              if(r.status==='failed'){
+                usedDecisions[dimension]=r.request_id;
+                print({decision:dimension,request:r.request_id,error:r.result.error});
+                return null;
+              }
+              return r;
+            };
+            const accept=(dimension,r,action)=>{
+              usedDecisions[dimension]=r.request_id;
+              print({decision:dimension,request:r.request_id,choice:r.result.answers.response.choice,
+                request_age_ms:r.request_age_ms,model_ms:r.result.elapsed_ms,action});
+            };
             const count=type=>state(['inventory_counts']).inventory_counts[type]??0;
             const same=(a,b)=>a.x===b.x&&a.y===b.y&&a.type===b.type&&a.frame_x===b.frame_x&&a.frame_y===b.frame_y;
             const protectedTypes=new Set([...config.resources.map(r=>r.item_type),...config.weapon_order,...(config.protected_types??[])]);
@@ -56,10 +77,15 @@ public sealed class ScriptLibrary
               const a=tool('opportunity_assess',{x:point.x,y:point.y,...(destination?{destination}:{})});
               if(!a.ok||a.approach_direct_distance>config.max_detour_tiles
                   ||destination&&(a.route_relation?.extra_direct_distance??Infinity)>config.max_detour_tiles) return false;
-              return !a.hazards.some(h=>h.on_direct_corridor&&['lava','falling_block','trap_tile'].includes(h.kind));
+              return approvedOpportunity||!a.hazards.some(h=>h.on_direct_corridor&&['lava','falling_block','trap_tile'].includes(h.kind));
             };
             const collect=(resource,point,drop,event)=>{
               const actual=count(resource.item_type);
+              if(actual>=resource.count) return handled();
+              if(dimensions.has('opportunity')&&!approvedOpportunity){
+                opportunities.set('resource:'+resource.item_type+':'+point.x+':'+point.y,{resource,point,drop});
+                return handled();
+              }
               if(actual>=resource.count||!worthwhile(point,event)) return handled();
               if(!makeSpace()) return {handled:false,reason:'inventory_policy_needs_review'};
               const target={item_type:resource.item_type,count:Math.min(resource.count,actual+1)};
@@ -86,6 +112,10 @@ public sealed class ScriptLibrary
               return resource?collect(resource,drop,true,event):handled();
             });
             on('nearby_chest',event=>{
+              if(dimensions.has('opportunity')){
+                opportunities.set('chest:'+event.evidence.x+':'+event.evidence.y,{point:event.evidence,chest:true});
+                return handled();
+              }
               if(!worthwhile(event.evidence,event)) return handled();
               if(!makeSpace()) return {handled:false,reason:'inventory_policy_needs_review'};
               const r=tool('collect_treasure',{x:event.evidence.x,y:event.evidence.y});
@@ -111,6 +141,7 @@ public sealed class ScriptLibrary
             on('tick',event=>{
               const destination=event.execution?.tool==='nav_to'?event.execution.args:config.destination;
               const combat=tool('combat_assess',{radius:25});
+              if(dimensions.size&&combat.boss_present) return handled();
               const attacker=combat.recent_damage?.attacker;
               const recent=attacker&&combat.tick-combat.recent_damage.tick<=120;
               const threats=combat.targets.filter(n=>n.attackable&&(n.distance_tiles<=8
@@ -123,14 +154,81 @@ public sealed class ScriptLibrary
                   &&w.has_ammo&&w.mana_available&&w.line_or_reach_passed)).find(Boolean);
                 if(weapon){choice={target,weapon};break;}
               }
+              const terrain=tool('inspect_terrain',{radius:10});
+              const scene={instruction:config.instruction??'',destination,combat,terrain};
+              const encounter=combat.targets.filter(n=>n.contact_damage>0).map(n=>n.who+':'+n.type).join(',');
+              if(dimensions.has('weapon')&&encounter){
+                const weapons=new Map();
+                for(const target of combat.targets) for(const weapon of target.weapons)
+                  if(weapon.has_ammo&&weapon.mana_available) weapons.set(weapon.type,weapon);
+                if(weapons.size>1){
+                  const criteria=Object.fromEntries([...weapons].map(([type,weapon])=>['weapon_'+type,weapon]));
+                  const r=judge('weapon',encounter,scene,
+                    'Which available weapon best handles these enemies while the player continues the journey?',criteria);
+                  if(r){
+                    const type=Number(r.result.answers.response.choice.slice(7));
+                    const applied=tool('set_combat',{weapon_type:type});
+                    accept('weapon',r,applied.error??'weapon_type:'+type);
+                  }
+                }
+              }
               const key=choice?choice.weapon.type+':'+choice.target.who:'none';
-              if(key!==combatChoice){
+              if((!dimensions.has('weapon')||!encounter)&&key!==combatChoice){
                 const r=tool('set_combat',choice?{auto_attack:true,weapon_type:choice.weapon.type}
                   :{auto_attack:originalCombat.auto_attack,weapon_type:originalCombat.combat_weapon_type});
                 if(r.error) return {handled:false,reason:r.error};
                 combatChoice=key;
               }
-              const terrain=tool('inspect_terrain');
+              if(dimensions.has('movement')&&destination&&(encounter||combat.projectiles?.length)){
+                const r=judge('movement',encounter+':'+destination.x+':'+destination.y,scene,
+                  'Which short response best preserves travel progress while handling the observed enemies and attacks? Use the local grid, equipment and recent results.',
+                  {follow_route:'Continue the current navigation; shooting may continue.',
+                    left:'Move left for 12 frames, then resume the journey.',right:'Move right for 12 frames, then resume the journey.',
+                    jump_left:'Move left and hold jump for 12 frames, then resume the journey.',
+                    jump_right:'Move right and hold jump for 12 frames, then resume the journey.'});
+                if(r){
+                  const answer=r.result.answers.response.choice;
+                  const dx=combat.player.pos.x-r.input_state.combat.player.pos.x;
+                  const dy=combat.player.pos.y-r.input_state.combat.player.pos.y;
+                  if(dx*dx+dy*dy>(config.decision_max_displacement_tiles??6)**2*256)
+                    accept('movement',r,'discarded_displacement');
+                  else {
+                    accept('movement',r,answer);
+                    if(answer!=='follow_route'){
+                      const keys=[answer.endsWith('left')?'left':'right'];
+                      if(answer.startsWith('jump_')) keys.push('jump');
+                      const moved=tool('act',{steps:[{keys,until:{frames:12}}]});
+                      print({decision_motion_result:answer,result:moved.outcome??moved.error});
+                      return handled();
+                    }
+                  }
+                }
+              }
+              if(dimensions.has('opportunity')&&opportunities.size){
+                const [id,opportunity]=opportunities.entries().next().value;
+                const assessment=tool('opportunity_assess',{x:opportunity.point.x,y:opportunity.point.y,
+                  ...(destination?{destination}:{})});
+                if(!assessment.ok||assessment.approach_direct_distance>config.max_detour_tiles)
+                  opportunities.delete(id);
+                else {
+                  const r=judge('opportunity',id,{...scene,opportunity,assessment,resources:config.resources,
+                    inventory:state(['inventory_counts']).inventory_counts},
+                    'Is collecting this observed opportunity now worth the detour, exposure and inventory cost for this journey?',
+                    {take:'Collect this opportunity now, then resume the current journey.',pass:'Continue the journey and leave this opportunity.'});
+                  if(r){
+                    accept('opportunity',r,r.result.answers.response.choice); opportunities.delete(id);
+                    if(r.result.answers.response.choice==='take'){
+                      approvedOpportunity=true;
+                      try {
+                        if(opportunity.chest){
+                          if(makeSpace()) tool('collect_treasure',{x:opportunity.point.x,y:opportunity.point.y});
+                        } else collect(opportunity.resource,opportunity.point,opportunity.drop,event);
+                      } finally {approvedOpportunity=false;}
+                      return handled();
+                    }
+                  }
+                }
+              }
               const thorn=destination&&terrain.near_body_tiles.find(t=>(config.contact_pass_types??[]).includes(t.type)
                 &&t.touch_damage>0&&(t.in_body||t.x===terrain.player_bounds.right+1&&destination.x>t.x
                   ||t.x===terrain.player_bounds.left-1&&destination.x<t.x));
@@ -144,7 +242,7 @@ public sealed class ScriptLibrary
             const tileTypes=[...new Set(config.resources.map(r=>r.tile_type).filter(Number.isInteger))];
             tool('watch',{events:[...(tileTypes.length?['nearby_tile']:[]),'nearby_drop','nearby_chest','inventory_full'],
               tile_types:tileTypes,
-              radius:25,loot_chests_in_reach:true});
+              radius:25,loot_chests_in_reach:!dimensions.has('opportunity')});
             if(policyOnly) return {registered:true};
             try { return step('travel',()=>tool('nav_to',config.destination)); }
             finally { tool('set_combat',{auto_attack:originalCombat.auto_attack,weapon_type:originalCombat.combat_weapon_type}); }

@@ -90,6 +90,69 @@ static class ScriptTests
         Console.WriteLine("PASS: three decision dimensions run without waiting or duplicate requests; context changes, expiry and model errors preserve evidence");
     }
 
+    static async Task TestDecisionTravel()
+    {
+        foreach (string[] dimensions in new[] { Array.Empty<string>(), new[] { "weapon" }, new[] { "movement" },
+            new[] { "opportunity" }, new[] { "weapon", "movement", "opportunity" } })
+        {
+            var enabled = dimensions.ToHashSet();
+            int movements = 0, collected = 0;
+            var selectedWeapons = new List<int>();
+            var polls = new Dictionary<string, int>();
+            var config = JsonNode.Parse("""
+                {"destination":{"x":50,"y":20},"resources":[{"item_type":20,"count":1,"tile_type":61,"tile_name":"JunglePlants"}],
+                 "weapon_order":[11,12],"max_detour_tiles":10,"health_reserve":30}
+                """).AsObject();
+            config["decisions"] = new JsonArray(dimensions.Select(d => (JsonNode)JsonValue.Create(d)).ToArray());
+            var combat = JsonNode.Parse("""
+                {"tick":10,"player":{"hp":100,"pos":{"x":160,"y":320}},"targets":[
+                  {"who":0,"type":42,"attackable":true,"contact_damage":20,"distance_tiles":5,"weapons":[
+                    {"type":11,"name":"short weapon","has_ammo":true,"mana_available":true,"line_or_reach_passed":true},
+                    {"type":12,"name":"ranged weapon","has_ammo":true,"mana_available":true,"line_or_reach_passed":true}]}]}
+                """).AsObject();
+            var result = await AgentScript.Run("const input=" + config.ToJsonString() + ";\n" + ScriptLibrary.Example("decision_travel")["code"],
+                5, (_, _) => { }, async (name, args, token) =>
+                {
+                    if (name == "get_state") return new JsonObject
+                    {
+                        ["agent"] = new JsonObject { ["auto_attack"] = true, ["combat_weapon_type"] = 0 },
+                        ["inventory_counts"] = new JsonObject { ["20"] = collected }
+                    }.ToJsonString();
+                    if (name == "watch") return "{}";
+                    if (name == "combat_assess") return combat.ToJsonString();
+                    if (name == "inspect_terrain") return "{\"near_body_tiles\":[],\"player_bounds\":{\"left\":10,\"right\":11}}";
+                    if (name == "opportunity_assess") return "{\"ok\":true,\"approach_direct_distance\":2,\"route_relation\":{\"extra_direct_distance\":0},\"hazards\":[]}";
+                    if (name == "inventory_review") return "{\"empty_slots\":[10],\"inventory\":[]}";
+                    if (name == "set_combat") { selectedWeapons.Add(args["weapon_type"].GetValue<int>()); return "{}"; }
+                    if (name == "act") { movements++; return "{\"outcome\":\"done\"}"; }
+                    if (name == "gather") { collected++; return "{\"outcome\":\"enough\"}"; }
+                    if (name == "jev_judge")
+                    {
+                        string channel = args["channel"].ToString();
+                        polls[channel] = polls.GetValueOrDefault(channel) + 1;
+                        if (polls[channel] == 1) return "{\"status\":\"pending\",\"in_flight\":true}";
+                        string choice = channel == "weapon" ? "weapon_12" : channel == "movement" ? "jump_right" : "take";
+                        return new JsonObject { ["status"] = "ready", ["request_id"] = 1, ["request_age_ms"] = 20,
+                            ["input_state"] = args["state"].DeepClone(), ["result"] = new JsonObject { ["elapsed_ms"] = 20,
+                                ["answers"] = new JsonObject { ["response"] = new JsonObject { ["choice"] = choice } } } }.ToJsonString();
+                    }
+                    Check(name == "nav_to", "unexpected decision travel action: " + name);
+                    var handlers = AgentScript.CurrentReactions.Value;
+                    await handlers.Dispatch(JsonNode.Parse("{\"kind\":\"nearby_tile\",\"evidence\":{\"tile_type\":61,\"x\":12,\"y\":20}}").AsObject(), token);
+                    for (int i = 0; i < 8; i++)
+                        await handlers.Dispatch(new JsonObject { ["kind"] = "tick", ["execution"] = new JsonObject
+                            { ["tool"] = "nav_to", ["args"] = config["destination"].DeepClone() } }, token);
+                    return "{\"done\":true}";
+                }, _ => Task.CompletedTask, default, new ScriptProgress());
+            Check(result["ok"]?.GetValue<bool>() == true, "decision travel script failed: " + result);
+            Check(movements == (enabled.Contains("movement") ? 1 : 0) && collected == 1,
+                "movement decision was ignored/replayed or opportunity was lost: " + string.Join(',', dimensions));
+            Check(selectedWeapons.Contains(enabled.Contains("weapon") ? 12 : 11)
+                && polls.Keys.ToHashSet().SetEquals(enabled), "decision ablation changed the wrong dimensions");
+        }
+        Console.WriteLine("PASS: production JS independently applies weapon, movement and opportunity decisions while preserving baseline and deduplicating effects");
+    }
+
     public static async Task Replay(string path)
     {
         var events = JsonNode.Parse(File.ReadAllText(path)).AsArray();
@@ -280,6 +343,7 @@ static class ScriptTests
             Console.WriteLine("PASS: JS Jev judgments preserve typed facts, reject invalid choices and propagate cancellation without fallback actions");
         }
         await TestDecisionChannels();
+        await TestDecisionTravel();
         string programDirectory = Path.Combine(Path.GetTempPath(), "terrablind-program-" + Guid.NewGuid().ToString("N"));
         try
         {

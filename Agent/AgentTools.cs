@@ -2537,18 +2537,36 @@ public static partial class AgentTools
             && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) <= radius * 16)
             .OrderBy(n => Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center)).Take(8);
         return new JsonObject { ["tick"] = Main.GameUpdateCount, ["recent_damage"] = LastDamage?.DeepClone(),
+            ["boss_present"] = Main.npc.Any(n => n != null && n.active && n.boss
+                && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) < 3200),
             ["player"] = new JsonObject { ["hp"] = p.statLife,
-                ["pos"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y } },
+                ["max_hp"] = p.statLifeMax2,
+                ["pos"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y },
+                ["velocity"] = new JsonObject { ["x"] = p.velocity.X, ["y"] = p.velocity.Y },
+                ["extra_jump_available"] = p.AnyExtraJumpUsable(), ["wing_time"] = p.wingTime },
+            ["projectiles"] = new JsonArray(Main.projectile.Where(shot => shot != null && shot.active && shot.hostile && shot.damage > 0
+                && Microsoft.Xna.Framework.Vector2.Distance(shot.Center, p.Center) <= radius * 16)
+                .OrderBy(shot => Microsoft.Xna.Framework.Vector2.Distance(shot.Center, p.Center)).Take(12)
+                .Select(shot => (JsonNode)new JsonObject { ["type"] = shot.type, ["damage"] = shot.damage,
+                    ["x"] = shot.Center.X / 16, ["y"] = shot.Center.Y / 16,
+                    ["vx_pixels_per_tick"] = shot.velocity.X * (shot.extraUpdates + 1),
+                    ["vy_pixels_per_tick"] = shot.velocity.Y * (shot.extraUpdates + 1) }).ToArray()),
             ["targets"] = new JsonArray(targets.Select(n => (JsonNode)new JsonObject
             {
                 ["who"] = n.whoAmI, ["type"] = n.type, ["hp"] = n.life, ["contact_damage"] = n.damage,
+                ["name"] = Lang.GetNPCNameValue(n.type),
                 ["x"] = n.Center.X / 16, ["y"] = n.Center.Y / 16,
+                ["vx_pixels_per_tick"] = n.velocity.X, ["vy_pixels_per_tick"] = n.velocity.Y,
                 ["distance_tiles"] = Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) / 16,
                 ["attackable"] = n.CanBeChasedBy(p) && FightCoordinator.TempleTargetAllowed(p, n),
                 ["weapons"] = new JsonArray(p.inventory.Take(10).Select((item, slot) => (item, slot))
                     .Where(entry => CombatLoadout.Usable(entry.item)).Select(entry => (JsonNode)new JsonObject
                     {
-                        ["slot"] = entry.slot, ["type"] = entry.item.type, ["damage"] = p.GetWeaponDamage(entry.item),
+                        ["slot"] = entry.slot, ["type"] = entry.item.type, ["name"] = entry.item.Name,
+                        ["damage"] = p.GetWeaponDamage(entry.item), ["use_time_ticks"] = entry.item.useTime,
+                        ["projectile_type"] = entry.item.shoot, ["shoot_speed"] = entry.item.shootSpeed,
+                        ["consumable"] = entry.item.consumable, ["mana_cost"] = entry.item.mana,
+                        ["needs_clear_line"] = FightCoordinator.NeedsClearLine(entry.item),
                         ["has_ammo"] = entry.item.useAmmo <= 0 || p.HasAmmo(entry.item),
                         ["mana_available"] = entry.item.mana * p.manaCost <= p.statMana,
                         ["line_or_reach_passed"] = FightCoordinator.CanHitTarget(p, entry.item, n.Center, n.width / 2f)
