@@ -348,7 +348,7 @@ public sealed class BehaviorTrial : ModSystem
     public override void OnWorldLoad()
     {
         if (!enabled || !ShortJungleTrial && !ProgressionTrial && Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") != "1") return;
-        if (FullQueenRun)
+        if (FullQueenRun && Environment.GetEnvironmentVariable("TB_DECISION_COMPARE") == null)
         {
             VanillaNavBridge.Enabled = false;
             jungleSpawn = new JsonObject { ["x"] = Main.spawnTileX, ["y"] = Main.spawnTileY,
@@ -4531,8 +4531,106 @@ public sealed class BehaviorTrial : ModSystem
         ["current_gap_ms"] = queenGapStart < 0 ? 0 : queenClock.Elapsed.TotalMilliseconds - queenGapStart,
         ["gaps"] = queenGaps.DeepClone() };
 
+    async Task DecisionComparison(string variant)
+    {
+        string[] dimensions = variant == "baseline" ? Array.Empty<string>() : variant.Split(',');
+        if (dimensions.Any(d => d is not ("weapon" or "movement" or "opportunity")))
+            throw new ArgumentException("Unknown comparison dimension: " + variant);
+        await OnMain(() =>
+        {
+            var player = Main.LocalPlayer;
+            player.inventory[4].SetDefaults(ItemID.WoodenBow);
+            player.inventory[5].SetDefaults(ItemID.ThrowingKnife); player.inventory[5].stack = 250;
+            player.inventory[6].SetDefaults(ItemID.WoodenArrow); player.inventory[6].stack = 500;
+            if (Environment.GetEnvironmentVariable("TB_DECISION_UNARMED") == "1")
+                foreach (var item in player.inventory.Where(CombatLoadout.Usable)) item.TurnToAir();
+            return true;
+        });
+        var before = await Call("get_state", new JsonObject());
+        var descent = await Call("find_descent", new JsonObject { ["name"] = "jungle" });
+        if (descent["found"]?.GetValue<bool>() != true) throw new Exception("No natural jungle descent: " + descent);
+        var route = await Call("descent_route", new JsonObject { ["name"] = "jungle", ["limit"] = 500 });
+        var line = route["line"].AsArray();
+        var waypoints = new JsonArray(new JsonObject { ["x"] = descent["x"].DeepClone(), ["y"] = descent["y"].DeepClone() });
+        foreach (int index in new[] { 80, 160, 240, 320 })
+            if (index < line.Count) waypoints.Add(new JsonObject { ["x"] = line[index][0].DeepClone(), ["y"] = line[index][1].DeepClone() });
+        var config = new JsonObject
+        {
+            ["decisions"] = new JsonArray(dimensions.Select(d => (JsonNode)JsonValue.Create(d)).ToArray()),
+            ["instruction"] = "Travel into the underground jungle efficiently. Handle enemies while keeping the journey moving. Collect useful nearby resources and chests when worth the detour. Use terrain and retreat when equipment is inadequate.",
+            ["resources"] = JsonNode.Parse("[{\"item_type\":29,\"count\":10,\"tile_type\":12,\"tile_name\":\"Heart\"},{\"item_type\":331,\"count\":6,\"tile_type\":61,\"tile_name\":\"JunglePlants\",\"frame_x\":144},{\"item_type\":209,\"count\":9}]"),
+            ["weapon_order"] = new JsonArray(ItemID.WoodenBow, ItemID.ThrowingKnife, ItemID.CopperShortsword),
+            ["max_detour_tiles"] = 10, ["health_reserve"] = 30, ["allow_trigger_removal"] = true,
+            ["trash_types"] = new JsonArray(), ["drop_types"] = new JsonArray(),
+            ["decision_interval_ms"] = 750, ["decision_max_age_ms"] = 2000
+        };
+        var policy = await Call("task_policy", new JsonObject { ["operation"] = "get" });
+        await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = policy["revision"].DeepClone(),
+            ["code"] = "const input=" + config.ToJsonString() + ";\n" + ScriptLibrary.Example("decision_reactions")["code"] });
+        string script = "const route=" + waypoints.ToJsonString() + ";const results=[];for(let i=0;i<route.length;i++){"
+            + "const r=step('leg_'+i,()=>tool('nav_to',route[i]));results.push({i,done:r.done,error:r.error??null,reason:r.reason??null});"
+            + "if(r.done!==true)return {status:'yield',blocked:results};}return {status:'done',results};";
+        var fight = await Call("action_start", new JsonObject { ["tool"] = "fight", ["args"] = new JsonObject { ["seconds"] = 120, ["max_dist"] = 25 } });
+        var travel = await Call("action_start", new JsonObject { ["tool"] = "run_script", ["args"] = new JsonObject
+            { ["workflow"] = "decision-comparison", ["code"] = script } });
+        var samples = new JsonArray(); var clock = Stopwatch.StartNew();
+        JsonObject action = null;
+        int duration = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_SECONDS") ?? "180");
+        Console.WriteLine("DECISION_COMPARISON_START " + new JsonObject { ["variant"] = variant, ["waypoints"] = waypoints.DeepClone(),
+            ["seed"] = Main.ActiveWorldFileData.SeedText, ["model"] = dimensions.Length > 0 ? "jev-latest" : null });
+        try
+        {
+            while (clock.Elapsed.TotalSeconds < duration)
+            {
+                await Task.Delay(250);
+                var measured = await OnMain(() =>
+                {
+                    var p = Main.LocalPlayer;
+                    return new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["tick"] = Main.GameUpdateCount,
+                        ["hp"] = p.statLife, ["dead"] = p.dead, ["x"] = p.position.X, ["y"] = p.position.Y,
+                        ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["attack"] = p.controlUseItem,
+                        ["item_animation"] = p.itemAnimation, ["held_type"] = p.HeldItem.type,
+                        ["enemies"] = new JsonArray(Main.npc.Where(n => n.active && !n.friendly && n.damage > 0
+                            && Vector2.Distance(n.Center, p.Center) < 400).Select(n => (JsonNode)new JsonObject
+                            { ["who"] = n.whoAmI, ["type"] = n.type, ["hp"] = n.life }).ToArray()),
+                        ["last_damage"] = (DamageField.GetValue(null) as JsonNode)?.DeepClone() };
+                });
+                samples.Add(measured);
+                action = await Call("action_query", new JsonObject { ["handle"] = travel["handle"].DeepClone() });
+                if (measured["dead"].GetValue<bool>() || action["status"]?.ToString() is "completed" or "failed" or "cancelled") break;
+                if (samples.Count % 4 == 0)
+                {
+                    var attack = await Call("action_query", new JsonObject { ["handle"] = fight["handle"].DeepClone() });
+                    if (attack["status"]?.ToString() == "completed")
+                        fight = await Call("action_start", new JsonObject { ["tool"] = "fight", ["args"] = new JsonObject { ["seconds"] = 120, ["max_dist"] = 25 } });
+                }
+                if (samples.Count % 4 == 0)
+                    File.WriteAllText(Path.Combine(Main.SavePath, "decision-comparison-progress.json"), new JsonObject
+                        { ["variant"] = variant, ["sample"] = measured.DeepClone(), ["action_status"] = action["status"]?.DeepClone() }.ToJsonString());
+            }
+        }
+        finally
+        {
+            await Call("action_control", new JsonObject { ["handle"] = travel["handle"].DeepClone(), ["command"] = "cancel" });
+            await Call("action_control", new JsonObject { ["handle"] = fight["handle"].DeepClone(), ["command"] = "cancel" });
+            var after = await Call("get_state", new JsonObject());
+            var finalPolicy = await Call("task_policy", new JsonObject { ["operation"] = "get" });
+            await Call("task_policy", new JsonObject { ["operation"] = "clear", ["expected_revision"] = finalPolicy["revision"].DeepClone() });
+            File.WriteAllText(Path.Combine(Main.SavePath, "decision-comparison.json"), new JsonObject
+            {
+                ["variant"] = variant, ["seed"] = Main.ActiveWorldFileData.SeedText,
+                ["unarmed"] = Environment.GetEnvironmentVariable("TB_DECISION_UNARMED") == "1",
+                ["elapsed_ms"] = clock.ElapsedMilliseconds, ["waypoints"] = waypoints,
+                ["before"] = before, ["after"] = after, ["samples"] = samples, ["action"] = action
+            }.ToJsonString());
+        }
+        Console.WriteLine("DECISION_COMPARISON_RECORDED variant=" + variant + " samples=" + samples.Count);
+    }
+
     async Task QueenGoalTrial()
     {
+        if (Environment.GetEnvironmentVariable("TB_DECISION_COMPARE") is string comparison)
+        { await DecisionComparison(comparison); return; }
         if (!FullQueenRun && string.IsNullOrEmpty(QueenResumeRoot)) await OnMain(() =>
         {
             var player = Main.LocalPlayer;
