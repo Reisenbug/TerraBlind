@@ -26,6 +26,8 @@ public sealed class CombatForecast : ModSystem
     static long sequence, lastAttempt;
     static int refreshing;
     static JsonObject unavailable;
+    static JsonObject deferredArgs;
+    static long deferredTick;
 
     public override void OnWorldUnload() => Close();
     public override void Unload() => Close();
@@ -38,11 +40,19 @@ public sealed class CombatForecast : ModSystem
     public static void Reset()
     {
         lifetime.Cancel(); lifetime.Dispose(); lifetime = new();
-        pending = ready = prepared = null; retained.Clear(); context = null; unavailable = null; lastAttempt = 0;
+        pending = ready = prepared = null; retained.Clear(); context = null; unavailable = deferredArgs = null; lastAttempt = 0;
     }
 
     public override void PostUpdateEverything()
     {
+        if (deferredArgs != null && pending == null && Volatile.Read(ref refreshing) == 0 && !ActExecutor.IsActive
+            && Main.LocalPlayer.itemAnimation == 0 && Main.LocalPlayer.itemTime == 0 && !Main.LocalPlayer.dead)
+        {
+            var args = deferredArgs; deferredArgs = null; lastAttempt = 0;
+            var result = Poll(args, AgentTools.CombatAssessment(args["radius"]?.GetValue<int>() ?? 25));
+            DiagLog.Write("[combat_capture_deferred] wait_frames=" + ((long)Main.GameUpdateCount - deferredTick)
+                + " status=" + result["status"]);
+        }
         if (executing == null) return;
         if (!AgentTools.ControlSession.OwnsDirectMovement)
         { executing = null; executingMovement = null; return; }
@@ -115,9 +125,17 @@ public sealed class CombatForecast : ModSystem
                     pending = new Forecast(id, tick, snapshot, frozen, prefix, goal,
                         Generate(id, tick, snapshot, frozen, prefix, goal, walk,
                             Stopwatch.GetElapsedTime(started).TotalMilliseconds, lifetime.Token));
+                    deferredArgs = null;
                 }
                 catch (NotSupportedException error)
-                { unavailable = new JsonObject { ["status"] = "unavailable", ["reason"] = error.Message }; }
+                {
+                    unavailable = new JsonObject { ["status"] = "unavailable", ["reason"] = error.Message };
+                    if (error.Message == "active_item_use")
+                    {
+                        deferredArgs = args.DeepClone().AsObject(); deferredTick = (long)Main.GameUpdateCount;
+                        unavailable["status"] = "pending"; unavailable["deferred"] = true;
+                    }
+                }
             }
             if (unavailable != null) DiagLog.Write("[combat_forecast_unavailable] " + new JsonObject {
                 ["tick"] = Main.GameUpdateCount, ["reason"] = unavailable["reason"]?.DeepClone(),

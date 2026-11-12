@@ -2554,7 +2554,7 @@ public static partial class AgentTools
         }, token);
     }
 
-    static JsonObject CombatAssessment(int radius)
+    internal static JsonObject CombatAssessment(int radius)
     {
         if (radius is < 1 or > 60) throw new ArgumentException("radius需要1..60格。");
         var p = Main.LocalPlayer;
