@@ -4533,6 +4533,15 @@ public sealed class BehaviorTrial : ModSystem
 
     async Task<JsonObject> AuthorDecisionPolicy(JsonObject config, JsonObject before, JsonArray waypoints, CancellationToken token)
     {
+        if (Environment.GetEnvironmentVariable("TB_DECISION_AUTHOR_REPLAY") is string source)
+        {
+            var previous = JsonNode.Parse(File.ReadAllText(source));
+            var restored = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "decision_authored_reactions",
+                ["expected_revision"] = 0, ["code"] = previous["code"].DeepClone() });
+            File.WriteAllText(Path.Combine(Main.SavePath, "decision-author.json"), new JsonObject
+                { ["mode"] = "replay", ["source"] = source, ["model_calls"] = 0, ["program"] = restored.DeepClone() }.ToJsonString());
+            return restored;
+        }
         if (!ModLoader.TryGetMod("TerraBlind", out var production)) throw new Exception("production mod missing");
         var schemas = JsonNode.Parse(Encoding.UTF8.GetString(production.GetFileBytes("Agent/Tools.json"))).AsArray();
         AgentScript.DescribePrograms(schemas);
@@ -4723,6 +4732,7 @@ public sealed class BehaviorTrial : ModSystem
                 ["policy_config"] = config.DeepClone(),
                 ["agent_authored"] = authored, ["author_applied_ms"] = authorAppliedMs, ["authored_program"] = authoredProgram,
                 ["author_failure"] = authorFailure,
+                ["author_replay_source"] = Environment.GetEnvironmentVariable("TB_DECISION_AUTHOR_REPLAY"),
                 ["unarmed"] = Environment.GetEnvironmentVariable("TB_DECISION_UNARMED") == "1",
                 ["elapsed_ms"] = clock.ElapsedMilliseconds, ["waypoints"] = waypoints,
                 ["before"] = before, ["nearby_natural_sources"] = opportunities, ["after"] = after, ["samples"] = samples, ["action"] = action
