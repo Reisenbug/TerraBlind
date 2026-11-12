@@ -11,7 +11,7 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_combat" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -21,6 +21,37 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "joint_combat") return Template(name,
+            "单次tick的共享战斗决策。先将本示例保存为同名skill；decision_reactions使用decisions:['combat']并传combat_skill_revision。input含context、destination、instruction、last_request及interval_ms/max_age_ms。候选后台计算，pending期间原动作继续。返回request_id和applied供调用者去重；宿主执行前核对轨迹，执行期间检测偏离。",
+            """
+            const c=tool('combat_assess',{radius:25,forecast:true,context:input.context,destination:input.destination});
+            const f=c.forecast;
+            if(c.boss_present||f.status!=='ready'||f.plans.length<2) return {status:f.status};
+            const criteria=Object.fromEntries(f.plans.map(p=>[p.id,{movement:p.movement,weapon_type:p.weapon_type}]));
+            const movements=f.movements.map(({engine_ms,roundtrip_ms,queue_ms,...m})=>m);
+            const r=tool('jev_judge',{channel:'combat',context:input.context,interval_ms:input.interval_ms??750,
+              max_age_ms:input.max_age_ms??2000,state:{instruction:input.instruction??'',destination:input.destination,
+                current_player_pixels:c.player,targets:c.targets.map(({weapons,...n})=>n),projectiles:c.projectiles,
+                forecast_id:f.id,sample_tick:f.sample_tick,age_frames:f.age_frames,sample_player_pixels:f.sample_player,
+                scope:f.scope,known_route_frames:f.known_route_frames,movements,plans:f.plans},
+              questions:{response:{type:'choice',instructions:
+                'Which available movement and weapon combination best avoids incoming damage and keeps this journey progressing?',criteria}}});
+            if(r.status==='pending'||r.request_id===input.last_request) return {status:r.status};
+            const record={decision:'combat',request:r.request_id,request_age_ms:r.request_age_ms,model_ms:r.result.elapsed_ms};
+            if(r.status==='failed'){
+              print({...record,error:r.result.error});return {request_id:r.request_id,error:r.result.error};
+            }
+            const plan=r.input_state.plans.find(p=>p.id===r.result.answers.response.choice);
+            let applied;
+            if(!plan?.movement_available) applied={error:'landing_unresolved'};
+            else if(plan.weapon_type>0&&!c.targets.some(n=>n.weapons.some(w=>w.type===plan.weapon_type&&w.has_ammo&&w.mana_available)))
+              applied={error:'weapon_unavailable'};
+            else if(plan.movement==='follow_route') applied=plan.weapon_type>0?tool('set_combat',{weapon_type:plan.weapon_type}):{};
+            else applied=tool('act',{steps:[{keys:['right'],until:{frames:1}}],combat_candidate:{
+              context:input.context,forecast_id:r.input_state.forecast_id,plan_id:plan.id}});
+            print({...record,choice:r.result.answers.response.choice,action:applied.error??applied.outcome??'follow_route'});
+            return {request_id:r.request_id,applied:!applied.error,weapon_type:plan?.weapon_type,error:applied.error??null};
+            """);
         if (name is "reactive_travel" or "task_reactions" or "decision_travel" or "decision_reactions") return Template(name,
             "task_reactions和decision_reactions注册整趟任务策略，目的地从event.execution的实际导航读取；travel版本另需destination并执行单段导航。input包含resources（item_type/count/tile_type/tile_name及可选frame_x/frame_y）、weapon_order、trash_types/drop_types、max_detour_tiles、health_reserve、contact_pass_types、allow_trigger_removal。decision版本默认启用weapon/movement/opportunity三维后台判断，decisions数组可单独启停作对照；instruction给当前意图，decision_interval_ms、decision_max_age_ms和decision_max_displacement_tiles调整更新及应用条件。判断期间原动作继续，只有执行具体干预才暂停并恢复。print记录每次采用的request_id、选择、耗时和动作结果。资源来源提前查证，策略源码可随现场修改。",
             "const policyOnly=" + (name is "task_reactions" or "decision_reactions" ? "true" : "false") + ";\n"
@@ -139,9 +170,10 @@ public sealed class ScriptLibrary
               }
               return {retry:true};
             });
-            let combatChoice='',decisionWeapon=originalCombat.combat_weapon_type;
+            let combatChoice='',decisionWeapon=originalCombat.combat_weapon_type,jointChosen=false;
             on('tick',event=>{
               const destination=event.execution?.tool==='nav_to'?event.execution.args:config.destination;
+              const forecastContext=decisionContext+':'+destination?.x+':'+destination?.y;
               const combat=tool('combat_assess',{radius:25});
               if(dimensions.size&&combat.boss_present) return handled();
               const attacker=combat.recent_damage?.attacker;
@@ -193,11 +225,18 @@ public sealed class ScriptLibrary
                 }
               }
               const key=choice?choice.weapon.type+':'+choice.target.who:'none';
-              if((!dimensions.has('weapon')||!encounter)&&key!==combatChoice){
+              if((!dimensions.has('weapon')&&(!dimensions.has('combat')||!jointChosen)||!encounter)&&key!==combatChoice){
                 const r=tool('set_combat',choice?{auto_attack:true,weapon_type:choice.weapon.type}
                   :{auto_attack:originalCombat.auto_attack,weapon_type:originalCombat.combat_weapon_type});
                 if(r.error) return {handled:false,reason:r.error};
                 combatChoice=key;
+              }
+              if(dimensions.has('combat')&&encounter&&destination){
+                const r=skill('joint_combat',config.combat_skill_revision,{context:forecastContext,destination,
+                  instruction:config.instruction,last_request:usedDecisions.combat,
+                  interval_ms:config.decision_interval_ms,max_age_ms:config.decision_max_age_ms},'combat');
+                if(r.request_id) usedDecisions.combat=r.request_id;
+                if(r.applied){decisionWeapon=r.weapon_type;jointChosen=true;}
               }
               if(dimensions.has('movement')&&destination&&(encounter||combat.projectiles?.length)){
                 const player=scene.combat.player;

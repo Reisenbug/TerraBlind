@@ -29,10 +29,11 @@ static class ScriptTests
     {
         await TestDecisionChannels();
         await TestDecisionTravel();
+        await TestJointDecision();
         GatherTests.DecisionMovement();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=5 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=6 model_calls=0");
     }
 
     static async Task TestDecisionChannels()
@@ -98,6 +99,59 @@ static class ScriptTests
         channels.Reset();
         Check(refresh.Token.IsCancellationRequested, "stopping decisions retained a previous request");
         Console.WriteLine("PASS: three decision dimensions run without waiting or duplicate requests; context changes, expiry and model errors preserve evidence");
+    }
+
+    static async Task TestJointDecision()
+    {
+        foreach (string scenario in new[] { "pending", "follow", "move", "invalid", "unsafe", "replayed" })
+        {
+            int acted = 0, selected = 0, judged = 0;
+            var input = new JsonObject { ["context"] = "journey", ["destination"] = new JsonObject { ["x"] = 50, ["y"] = 20 },
+                ["last_request"] = scenario == "replayed" ? 1 : 0 };
+            var combat = JsonNode.Parse("""
+                {"player":{"hp":100},"targets":[{"who":1,"weapons":[{"type":279,"has_ammo":true,"mana_available":true}]}],
+                 "projectiles":[],"forecast":{"status":"ready","id":11,"sample_tick":10,"age_frames":12,"known_route_frames":40,
+                 "sample_player":{},"scope":"test engine boundary","movements":[{"id":"follow_route"},{"id":"left"}],
+                 "plans":[{"id":"follow_route_weapon_279","movement":"follow_route","weapon_type":279,"movement_available":true},
+                          {"id":"left_weapon_279","movement":"left","weapon_type":279,"movement_available":true}]}}
+                """).AsObject();
+            if (scenario == "pending") combat["forecast"]["status"] = "pending";
+            if (scenario == "unsafe") combat["forecast"]["plans"][1]["movement_available"] = false;
+            var report = await AgentScript.Run("const input=" + input.ToJsonString() + ";\n" + ScriptLibrary.Example("joint_combat")["code"],
+                5, (_, _) => { }, (name, args, _) =>
+                {
+                    JsonObject result;
+                    if (name == "combat_assess") result = combat;
+                    else if (name == "jev_judge")
+                    {
+                        judged++;
+                        Check(args["questions"]["response"]["criteria"].AsObject().Count == 2
+                            && args["state"]["forecast_id"].GetValue<int>() == 11,
+                            "joint judgment lost coherent movement/weapon alternatives or source forecast");
+                        result = new JsonObject { ["status"] = "ready", ["request_id"] = 1, ["request_age_ms"] = 200,
+                            ["input_state"] = args["state"].DeepClone(), ["result"] = new JsonObject { ["elapsed_ms"] = 150,
+                                ["answers"] = new JsonObject { ["response"] = new JsonObject {
+                                    ["choice"] = scenario == "follow" ? "follow_route_weapon_279" : "left_weapon_279" } } } };
+                    }
+                    else if (name == "set_combat") { selected++; result = new JsonObject(); }
+                    else
+                    {
+                        Check(name == "act" && args["combat_candidate"]["forecast_id"].GetValue<int>() == 11
+                            && args["combat_candidate"]["plan_id"].ToString() == "left_weapon_279",
+                            "joint action lost its host-validated candidate reference");
+                        acted++;
+                        result = scenario == "invalid" ? new JsonObject { ["error"] = "combat_candidate_changed" }
+                            : new JsonObject { ["outcome"] = "done" };
+                    }
+                    return Task.FromResult(result.ToJsonString());
+                }, _ => Task.CompletedTask, default);
+            Check(report["ok"].GetValue<bool>() && judged == (scenario == "pending" ? 0 : 1)
+                && acted == (scenario is "move" or "invalid" ? 1 : 0) && selected == (scenario == "follow" ? 1 : 0),
+                "joint policy waited, replayed effects or ignored an unavailable candidate: " + scenario + " " + report);
+            if (scenario == "invalid") Check(report["value"]["applied"].GetValue<bool>() == false,
+                "host rejection was reported as an applied movement");
+        }
+        Console.WriteLine("PASS: joint combat skill shares movement/weapon candidates, continues while pending, deduplicates and preserves host rejection");
     }
 
     static async Task TestDecisionTravel()

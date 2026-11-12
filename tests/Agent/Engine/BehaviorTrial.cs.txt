@@ -4589,7 +4589,7 @@ public sealed class BehaviorTrial : ModSystem
     async Task DecisionComparison(string variant)
     {
         string[] dimensions = variant == "baseline" ? Array.Empty<string>() : variant.Split(',');
-        if (dimensions.Any(d => d is not ("weapon" or "movement" or "opportunity")))
+        if (dimensions.Any(d => d is not ("weapon" or "movement" or "opportunity" or "combat")))
             throw new ArgumentException("Unknown comparison dimension: " + variant);
         bool strongWeapon = Environment.GetEnvironmentVariable("TB_DECISION_STRONG_WEAPON") == "1";
         int startIndex = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_ROUTE_START") ?? "-1");
@@ -4647,6 +4647,13 @@ public sealed class BehaviorTrial : ModSystem
             ["trash_types"] = new JsonArray(), ["drop_types"] = new JsonArray(),
             ["decision_interval_ms"] = 750, ["decision_max_age_ms"] = 2000
         };
+        if (dimensions.Contains("combat"))
+        {
+            var helper = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "joint_combat",
+                ["expected_revision"] = 0, ["code"] = ScriptLibrary.Example("joint_combat")["code"].DeepClone() });
+            if (helper["error"] != null) throw new Exception("Joint skill rejected: " + helper);
+            config["combat_skill_revision"] = helper["revision"].DeepClone();
+        }
         var program = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "comparison_reactions",
             ["expected_revision"] = 0, ["code"] = ScriptLibrary.Example("decision_reactions")["code"].DeepClone() });
         if (program["error"] != null) throw new Exception("Comparison skill rejected: " + program);
