@@ -4586,7 +4586,8 @@ public sealed class BehaviorTrial : ModSystem
             ["decisions"] = new JsonArray(dimensions.Select(d => (JsonNode)JsonValue.Create(d)).ToArray()),
             ["instruction"] = "Travel into the underground jungle efficiently. Handle enemies while keeping the journey moving. Collect useful nearby resources and chests when worth the detour. Use terrain and retreat when equipment is inadequate.",
             ["resources"] = JsonNode.Parse("[{\"item_type\":29,\"count\":10,\"tile_type\":12,\"tile_name\":\"Heart\"},{\"item_type\":331,\"count\":6,\"tile_type\":61,\"tile_name\":\"JunglePlants\",\"frame_x\":144},{\"item_type\":209,\"count\":9}]"),
-            ["weapon_order"] = new JsonArray(strongWeapon ? ItemID.Starfury : ItemID.WoodenBow, ItemID.ThrowingKnife, ItemID.CopperShortsword),
+            ["weapon_order"] = Environment.GetEnvironmentVariable("TB_DECISION_WEAPON_ORDER") is string weaponOrder
+                ? JsonNode.Parse(weaponOrder) : new JsonArray(strongWeapon ? ItemID.Starfury : ItemID.WoodenBow, ItemID.ThrowingKnife, ItemID.CopperShortsword),
             ["max_detour_tiles"] = 10, ["health_reserve"] = 30, ["allow_trigger_removal"] = true,
             ["trash_types"] = new JsonArray(), ["drop_types"] = new JsonArray(),
             ["decision_interval_ms"] = 750, ["decision_max_age_ms"] = 2000
@@ -4651,6 +4652,7 @@ public sealed class BehaviorTrial : ModSystem
             {
                 ["variant"] = variant, ["seed"] = Main.ActiveWorldFileData.SeedText,
                 ["route_start_index"] = startIndex, ["start_health"] = health, ["strong_weapon"] = strongWeapon,
+                ["policy_config"] = config.DeepClone(),
                 ["unarmed"] = Environment.GetEnvironmentVariable("TB_DECISION_UNARMED") == "1",
                 ["elapsed_ms"] = clock.ElapsedMilliseconds, ["waypoints"] = waypoints,
                 ["before"] = before, ["nearby_natural_sources"] = opportunities, ["after"] = after, ["samples"] = samples, ["action"] = action
