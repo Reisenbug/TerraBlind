@@ -98,18 +98,30 @@ static class ScriptTests
             "network failure became a no/continue answer");
         channels.Reset();
         Check(refresh.Token.IsCancellationRequested, "stopping decisions retained a previous request");
+        using var handler = new DecisionHandler();
+        using var http = new System.Net.Http.HttpClient(handler);
+        var criteria = new JsonObject { ["retreat"] = "Retreat with the selected weapon" };
+        for (int i = 0; i < 49; i++) criteria["movement_weapon_" + i] = "A concrete movement and weapon combination";
+        var wide = await ScriptDecision.Judge(http, "test-key", new JsonObject { ["state"] = new JsonObject(),
+            ["questions"] = new JsonObject { ["route"] = new JsonObject { ["type"] = "choice",
+                ["instructions"] = "Which concrete combination fits this situation?", ["criteria"] = criteria } } }, default);
+        Check(wide["answers"]["route"]["choice"].ToString() == "retreat"
+            && handler.Sent["questions"]["route"]["criteria"].AsObject().Count == 50,
+            "joint movement/weapon choices were truncated before transport");
         Console.WriteLine("PASS: three decision dimensions run without waiting or duplicate requests; context changes, expiry and model errors preserve evidence");
     }
 
     static async Task TestJointDecision()
     {
+        Console.WriteLine("DECISION_TEMPLATE_CHARS " + string.Join(' ', new[] { "decision_reactions", "joint_reactions", "joint_combat" }
+            .Select(name => name + "=" + ScriptLibrary.Example(name)["code"].ToString().Length)));
         foreach (string scenario in new[] { "pending", "follow", "move", "invalid", "unsafe", "replayed" })
         {
             int acted = 0, selected = 0, judged = 0;
             var input = new JsonObject { ["context"] = "journey", ["destination"] = new JsonObject { ["x"] = 50, ["y"] = 20 },
                 ["last_request"] = scenario == "replayed" ? 1 : 0 };
             var combat = JsonNode.Parse("""
-                {"player":{"hp":100},"targets":[{"who":1,"weapons":[{"type":279,"has_ammo":true,"mana_available":true}]}],
+                {"player":{"hp":100},"targets":[{"who":1,"contact_damage":20,"weapons":[{"type":279,"has_ammo":true,"mana_available":true}]}],
                  "projectiles":[],"forecast":{"status":"ready","id":11,"sample_tick":10,"age_frames":12,"known_route_frames":40,
                  "sample_player":{},"scope":"test engine boundary","movements":[{"id":"follow_route"},{"id":"left"}],
                  "plans":[{"id":"follow_route_weapon_279","movement":"follow_route","weapon_type":279,"movement_available":true},
@@ -126,7 +138,8 @@ static class ScriptTests
                     {
                         judged++;
                         Check(args["questions"]["response"]["criteria"].AsObject().Count == 2
-                            && args["state"]["forecast_id"].GetValue<int>() == 11,
+                            && args["state"]["forecast_id"].GetValue<int>() == 11
+                            && args["state"]["weapons"][0]["type"].GetValue<int>() == 279,
                             "joint judgment lost coherent movement/weapon alternatives or source forecast");
                         result = new JsonObject { ["status"] = "ready", ["request_id"] = 1, ["request_age_ms"] = 200,
                             ["input_state"] = args["state"].DeepClone(), ["result"] = new JsonObject { ["elapsed_ms"] = 150,
@@ -455,6 +468,7 @@ static class ScriptTests
         }
         await TestDecisionChannels();
         await TestDecisionTravel();
+        await TestJointDecision();
         string programDirectory = Path.Combine(Path.GetTempPath(), "terrablind-program-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -1392,7 +1406,7 @@ static class ScriptTests
         string code = "const input=" + Config().ToJsonString() + ";\n" + ScriptLibrary.Example("reactive_travel")["code"];
         var result = await AgentScript.Run(code, 5, (_, _) => { }, Execute, _ => Task.CompletedTask, default, new ScriptProgress());
         Check(result["ok"].GetValue<bool>() && result["value"]["done"].GetValue<bool>(), "reactive travel example failed: " + result);
-        Check(effects.SequenceEqual(new[] { "remove_plate", "inventory_trash", "collect:331", "collect:209", "chest", "inventory_drop", "weapon:65", "pass_thorn", "weapon:0", "weapon:0" })
+        Check(effects.SequenceEqual(new[] { "remove_plate", "inventory_trash", "collect:331", "collect:209", "chest", "inventory_drop", "weapon:65", "pass_thorn", "weapon:3507", "weapon:0" })
             && navStarts == 2 && stock[331] == 1 && stock[209] == 1,
             "reactive travel missed a branch, chased an unwanted/lava drop or looted a distant chest: " + string.Join(',', effects));
         foreach (bool permitted in new[] { true, false })

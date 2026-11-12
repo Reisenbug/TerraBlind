@@ -4655,7 +4655,7 @@ public sealed class BehaviorTrial : ModSystem
             config["combat_skill_revision"] = helper["revision"].DeepClone();
         }
         var program = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "comparison_reactions",
-            ["expected_revision"] = 0, ["code"] = ScriptLibrary.Example("decision_reactions")["code"].DeepClone() });
+            ["expected_revision"] = 0, ["code"] = ScriptLibrary.Example(dimensions.Contains("combat") ? "joint_reactions" : "decision_reactions")["code"].DeepClone() });
         if (program["error"] != null) throw new Exception("Comparison skill rejected: " + program);
         bool authored = Environment.GetEnvironmentVariable("TB_DECISION_AUTHOR") == "1";
         var initialConfig = (JsonObject)config.DeepClone();

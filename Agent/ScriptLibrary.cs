@@ -11,7 +11,7 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_combat" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -22,16 +22,19 @@ public sealed class ScriptLibrary
     public static JsonObject Example(string name)
     {
         if (name == "joint_combat") return Template(name,
-            "单次tick的共享战斗决策。先将本示例保存为同名skill；decision_reactions使用decisions:['combat']并传combat_skill_revision。input含context、destination、instruction、last_request及interval_ms/max_age_ms。候选后台计算，pending期间原动作继续。返回request_id和applied供调用者去重；宿主执行前核对轨迹，执行期间检测偏离。",
+            "单次tick的共享战斗决策。先将本示例保存为同名skill；joint_reactions传combat_skill_revision。input含context、destination、instruction、last_request及interval_ms/max_age_ms。候选后台计算，pending期间原动作继续。返回request_id和applied供调用者去重；宿主执行前核对轨迹，执行期间检测偏离。",
             """
             const c=tool('combat_assess',{radius:25,forecast:true,context:input.context,destination:input.destination});
             const f=c.forecast;
             if(c.boss_present||f.status!=='ready'||f.plans.length<2) return {status:f.status,reason:f.reason};
+            if(!c.targets.some(n=>n.contact_damage>0)&&!c.projectiles.length) return {status:'no_threat'};
             const criteria=Object.fromEntries(f.plans.map(p=>[p.id,{movement:p.movement,weapon_type:p.weapon_type}]));
             const movements=f.movements.map(({engine_ms,roundtrip_ms,queue_ms,...m})=>m);
+            const weapons=[...new Map(c.targets.flatMap(n=>n.weapons).map(({line_or_reach_passed,...w})=>[w.type,w])).values()];
             const r=tool('jev_judge',{channel:'combat',context:input.context,interval_ms:input.interval_ms??750,
               max_age_ms:input.max_age_ms??2000,state:{instruction:input.instruction??'',destination:input.destination,
                 current_player_pixels:c.player,targets:c.targets.map(({weapons,...n})=>n),projectiles:c.projectiles,
+                weapons,recent_damage:c.recent_damage,
                 forecast_id:f.id,sample_tick:f.sample_tick,age_frames:f.age_frames,sample_player_pixels:f.sample_player,
                 scope:f.scope,known_route_frames:f.known_route_frames,prefix_source:f.prefix_source,walk_intent:f.walk_intent,
                 movements,plans:f.plans},
@@ -53,10 +56,10 @@ public sealed class ScriptLibrary
             print({...record,choice:r.result.answers.response.choice,action:applied.error??applied.outcome??'follow_route'});
             return {request_id:r.request_id,applied:!applied.error,weapon_type:plan?.weapon_type,error:applied.error??null};
             """);
-        if (name is "reactive_travel" or "task_reactions" or "decision_travel" or "decision_reactions") return Template(name,
+        if (name is "reactive_travel" or "task_reactions" or "decision_travel" or "decision_reactions" or "joint_reactions") return Template(name,
             "task_reactions和decision_reactions注册整趟任务策略，目的地从event.execution的实际导航读取；travel版本另需destination并执行单段导航。input包含resources（item_type/count/tile_type/tile_name及可选frame_x/frame_y）、weapon_order、trash_types/drop_types、max_detour_tiles、health_reserve、contact_pass_types、allow_trigger_removal。decision版本默认启用weapon/movement/opportunity三维后台判断，decisions数组可单独启停作对照；instruction给当前意图，decision_interval_ms、decision_max_age_ms和decision_max_displacement_tiles调整更新及应用条件。判断期间原动作继续，只有执行具体干预才暂停并恢复。print记录每次采用的request_id、选择、耗时和动作结果。资源来源提前查证，策略源码可随现场修改。",
-            "const policyOnly=" + (name is "task_reactions" or "decision_reactions" ? "true" : "false") + ";\n"
-            + "const defaultDecisions=" + (name.StartsWith("decision_") ? "['weapon','movement','opportunity']" : "[]") + ";\n" + """
+            "const policyOnly=" + (name is "task_reactions" or "decision_reactions" or "joint_reactions" ? "true" : "false") + ";\n"
+            + "const defaultDecisions=" + (name == "joint_reactions" ? "['combat','opportunity']" : name.StartsWith("decision_") ? "['weapon','movement','opportunity']" : "[]") + ";\n" + """
             const config=typeof input==='undefined'?null:input;
             if(!config||!policyOnly&&!config.destination||!Array.isArray(config.resources)||!Array.isArray(config.weapon_order)
                 ||!Number.isFinite(config.max_detour_tiles)||!Number.isFinite(config.health_reserve))
@@ -234,13 +237,15 @@ public sealed class ScriptLibrary
                 if(r.error) return {handled:false,reason:r.error};
                 combatChoice=key;
               }
-              if(dimensions.has('combat')&&encounter&&destination){
+            """ + (name == "joint_reactions" ? """
+              if(dimensions.has('combat')&&destination){
                 const r=skill('joint_combat',config.combat_skill_revision,{context:forecastContext,destination,
                   instruction:config.instruction,last_request:usedDecisions.combat,
                   interval_ms:config.decision_interval_ms,max_age_ms:config.decision_max_age_ms},'combat');
                 if(r.request_id) usedDecisions.combat=r.request_id;
                 if(r.applied){decisionWeapon=r.weapon_type;jointChosen=true;}
               }
+            """ : "") + """
               if(dimensions.has('movement')&&destination&&(encounter||combat.projectiles?.length)){
                 const player=scene.combat.player;
                 const movementScene={...scene,combat:{...scene.combat,
