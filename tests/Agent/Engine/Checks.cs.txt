@@ -21,6 +21,76 @@ public sealed class Engine : Mod { }
 
 public static class NavigationExecutionChecks
 {
+    public static void VerifyDigDownSupport()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var player = Main.LocalPlayer;
+        var position = player.position; var velocity = player.velocity; var pick = player.inventory[1];
+        float speed = player.pickSpeed; bool noFall = player.noFallDmg, solid = Main.tileSolid[TileID.Dirt];
+        bool templeSolid = Main.tileSolid[TileID.LihzahrdBrick];
+        int blockedColumn = Trap.FootBlockCol, blockedRow = Trap.FootBlockRow;
+        var killHooks = typeof(TileLoader).GetField("HookCanKillTile", hidden);
+        var previousHooks = killHooks.GetValue(null);
+        var cells = (from x in Enumerable.Range(10, 3) from y in Enumerable.Range(13, 3) select new Point(x, y)).ToArray();
+        if (cells.Any(point => Main.tile[point].HasTile || Main.tile[point].LiquidAmount != 0 || Main.tile[point].WallType != 0))
+            throw new InvalidOperationException("dig support contract requires empty fixture cells");
+        try
+        {
+            Main.tileSolid[TileID.Dirt] = true;
+            Main.tileSolid[TileID.LihzahrdBrick] = true;
+            if (previousHooks == null) killHooks.SetValue(null, Array.CreateInstance(killHooks.FieldType.GetElementType(), 0));
+            player.inventory[1] = new Item { type = ItemID.CopperPickaxe, stack = 1, pick = 35, useTime = 15, tileBoost = -1 };
+            player.pickSpeed = 1; player.noFallDmg = true; player.velocity = Vector2.Zero;
+            foreach (string shape in new[] { "half", "full", "slope_right", "slope_left", "half_only", "triple_columns", "unmineable" })
+            {
+                foreach (var point in cells) Main.tile[point].ClearEverything();
+                int columns = shape == "triple_columns" ? 3 : 2;
+                for (int x = 10; x < 10 + columns; x++)
+                    for (int y = shape == "half_only" ? 15 : 14; y <= 15; y++) Main.tile[x, y].ResetToType(TileID.Dirt);
+                player.position = new Vector2(shape == "triple_columns" ? 175 : 165.643f, shape == "full" ? 182 : 174);
+                if (shape != "full")
+                {
+                    var support = Main.tile[10, 13]; support.ResetToType(shape == "unmineable" ? TileID.LihzahrdBrick : TileID.Dirt);
+                    support.IsHalfBlock = !shape.StartsWith("slope");
+                    if (shape.StartsWith("slope")) support.Slope = shape == "slope_right" ? SlopeType.SlopeDownRight : SlopeType.SlopeDownLeft;
+                }
+                int center = (int)(player.Center.X / 16);
+                var context = new StateSpacePlanner.PlanCtx { DistField = new Dictionary<(int, int), int> { [(center, 14)] = 1 } };
+                var raw = typeof(StateSpacePlanner).GetMethod("DigDownFrom", hidden).Invoke(null,
+                    new object[] { context, player.position.X, center, 13, 100 });
+                if (shape == "unmineable")
+                {
+                    if (raw != null || Trap.FootBlockCol != 10 || Trap.FootBlockRow != 13)
+                        throw new InvalidOperationException("unmineable support was skipped while digging deeper");
+                    Console.WriteLine("DIG_SUPPORT shape=unmineable accepted=false blocking_tile=(10,13)");
+                    continue;
+                }
+                if (raw == null) throw new InvalidOperationException("valid support fixture produced no digging edge: " + shape);
+                var result = ((StateSpacePlanner.SSNode node, List<(int wx, int wy)> tiles, float cost))raw;
+                Console.WriteLine($"DIG_SUPPORT shape={shape} tiles={string.Join(';', result.tiles)} cost_frames={result.cost}");
+                int expected = shape == "half_only" ? 1 : columns + (shape == "full" ? 0 : 1);
+                if (result.tiles.Contains((10, 13)) != (shape != "full") || result.tiles.Count != expected)
+                    throw new InvalidOperationException("digging edge omitted its actual support or changed the full-block footprint: " + shape);
+                foreach (var (x, y) in result.tiles) Main.tile[x, y].ClearEverything();
+                if (!shape.StartsWith("slope"))
+                {
+                    var movement = Collision.TileCollision(player.position, new Vector2(0, 1), player.width, player.height);
+                    if (movement.Y <= 0) throw new InvalidOperationException("planned excavation left the native player supported: " + shape);
+                }
+            }
+            Console.WriteLine("NAVIGATION_DIG_SUPPORT_CONTRACTS_COMPLETE checks=7 native_collision=true model_calls=0");
+        }
+        finally
+        {
+            foreach (var point in cells) Main.tile[point].ClearEverything();
+            player.position = position; player.velocity = velocity; player.inventory[1] = pick;
+            player.pickSpeed = speed; player.noFallDmg = noFall; Main.tileSolid[TileID.Dirt] = solid;
+            Main.tileSolid[TileID.LihzahrdBrick] = templeSolid;
+            Trap.FootBlockCol = blockedColumn; Trap.FootBlockRow = blockedRow;
+            killHooks.SetValue(null, previousHooks);
+        }
+    }
+
     public static void VerifyNudgeHandoff()
     {
         const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;

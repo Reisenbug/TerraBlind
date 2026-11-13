@@ -1168,24 +1168,25 @@ namespace TerraBlind
         {
             // 【身体压哪几列就查哪几列】。原来是 ccx + 中心偏向的邻列,写死两列。而 20px 的身子
             // 跨 3 列是常态,漏掉的那一列照样撑着人,挖完两列人掉不下去。用 TouchCols 问真话。
-            int y = ccy + 1;   // the single row directly under the feet
+            int y = ccy + 1;
             var (footL, footR) = Predicates.TouchCols(px, PhysicsSimulator.PlayerW);
             var tiles = new List<(int, int)>();
             float cost = 0f;
+            for (int row = ccy; row <= y; row++)
             for (int c = footL; c <= footR; c++)
-                if (DigSolid(c, y))
+                if (DigSolid(c, row))
                 {
-                    int fc = DigTable.CostFrames(c, y);
+                    int fc = DigTable.CostFrames(c, row);
                     if (fc >= DigTable.Unmineable)
                     {
                         // 【报出去,不是烂在这儿】。身体压的每一列都空了才掉得下去,一列黑曜石整条边就没了
                         //。而旁边挪一格,压的那几列常常都挖得动。记下来,TRAP 时 Unstick 会来换站位。
-                        Trap.FootBlockCol = c; Trap.FootBlockRow = y;
-                        if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: unmineable ({c},{y})");
+                        Trap.FootBlockCol = c; Trap.FootBlockRow = row;
+                        if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: unmineable ({c},{row})");
                         return null;   // unbreakable (attached object / pick too weak) → route around
                     }
                     cost += fc;
-                    tiles.Add((c, y));
+                    tiles.Add((c, row));
                 }
             if (tiles.Count == 0) { if (SegDiag) DiagLog.Write("[ss-digdown] NULL: nothing solid underfoot"); return null; }   // free fall / walk handles it
             // 挖开脚下之后人会掉到哪。出口那道岩浆门槛问的是"落点现在有没有地",而这一格现在【就是】
