@@ -2261,6 +2261,8 @@ namespace TerraBlind
         static List<ExecStep> _ssSteps;
         static int _ssStepIdx;
         static bool _ssDispatched;
+        enum StepPhase { Executing, Aligning, Mining, ClearingHeadroom, HeadroomReady }
+        static StepPhase _stepPhase;
         static uint _stepStartTick;        // watchdog soft clock: start of the current NO-MOTION window (slides while moving)
         static uint _stepDispatchTick;     // watchdog hard clock: when the step was dispatched (never slides)
         static long _stepTimeoutTicks;     // soft deadline (est × 1.75 + 60, capped 1min), frozen position
@@ -2271,7 +2273,11 @@ namespace TerraBlind
         static int _lastExecFrameCount;    // how many frames ApplyControls replayed for the current edge
         public static bool StepsActive => _ssSteps != null && _ssStepIdx < _ssSteps.Count;
 
-        public static void StopSteps() { _ssSteps = null; _ssStepIdx = 0; _ssDispatched = false; }
+        public static void StopSteps()
+        {
+            if (_stepPhase == StepPhase.Aligning) SettleAt.Stop();
+            _ssSteps = null; _ssStepIdx = 0; _ssDispatched = false; _stepPhase = StepPhase.Executing;
+        }
 
         public static bool PreserveTerrain;
 
@@ -2290,7 +2296,7 @@ namespace TerraBlind
                 return;
             }
             StopExec();
-            _ssSteps = steps; _ssStepIdx = 0; _ssDispatched = false;
+            _ssSteps = steps; _ssStepIdx = 0; _ssDispatched = false; _stepPhase = StepPhase.Executing;
             DiagLog.Write($"[ss-steps] start n={steps.Count}");
         }
 
@@ -2299,7 +2305,7 @@ namespace TerraBlind
             if (!StepsActive) return;
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { StopSteps(); return; }
-            bool busy = IsActive || SkillExecutor.IsActive || MineCoordinator.IsActive || BridgeBuilder.IsRunning;
+            bool busy = IsActive || SkillExecutor.IsActive || MineCoordinator.IsActive || BridgeBuilder.IsRunning || SettleAt.IsRunning;
 
             // 看门狗:每个动作都有死线。所有计划层的免疫机制(miss/revisit/shock/循环检测)都活在重规划周期里,而重规划要等 ExecRunning 清零
             //。一个永不终止的执行器(77s 的 PillarWait)就能饿死整套免疫系统。软钟(动就续)防误杀,硬钟(绝对)防步内自嗨死循环。
@@ -2327,7 +2333,17 @@ namespace TerraBlind
             if (_ssDispatched)
             {
                 if (busy) return;
-                if (_ssPrevStep?.Dig == true && MineCoordinator.Outcome != "done")
+                if (_stepPhase == StepPhase.Aligning)
+                {
+                    if (SettleAt.Outcome != "done")
+                    {
+                        _execFailCode = "mining_alignment_" + SettleAt.Outcome;
+                        DiagLog.Write($"[ss-steps] alignment failed outcome={SettleAt.Outcome} position={p.position}; reselect route");
+                        StopSteps(); DiagLog.EndRun(); return;
+                    }
+                    _stepPhase = StepPhase.Executing; _ssDispatched = false;
+                }
+                if (_stepPhase is StepPhase.Mining or StepPhase.ClearingHeadroom && MineCoordinator.Outcome != "done")
                 {
                     string outcome = MineCoordinator.Outcome;
                     if (outcome == "lava_risk")
@@ -2340,6 +2356,13 @@ namespace TerraBlind
                     StopSteps(); DiagLog.EndRun();
                     return;
                 }
+                if (_stepPhase == StepPhase.ClearingHeadroom)
+                {
+                    _stepPhase = StepPhase.HeadroomReady; _ssDispatched = false;
+                }
+            }
+            if (_ssDispatched)
+            {
                 if (p.velocity.Y != 0f) return;     // wait until landed + settled before advancing
                 // 诊断:计划帧数 vs 执行实际重放了多少帧。差 ~1 说明落地/推进的时机差一帧(= 那 ~3px = vx*1帧 的接缝漂移)。
                 if (_ssPrevStep != null && _ssPrevStep.Frames != null && _ssPrevStep.Frames.Count > 0)
@@ -2348,7 +2371,7 @@ namespace TerraBlind
                     DiagLog.Trc($"[ss-framecmp] kind={EdgeKind(_ssPrevStep)} planFrames={_ssPrevStep.Frames.Count} execFrames={_lastExecFrameCount} planLand=({lf.Px:0.##},{lf.Py:0.##}) execLand=({p.position.X:0.##},{p.position.Y:0.##}) d(px={(p.position.X - lf.Px):0.##} py={(p.position.Y - lf.Py):0.##}) planVx={lf.Vx:0.###} execVx={p.velocity.X:0.###} dVx={(p.velocity.X - lf.Vx):0.###}");
                 }
                 _ssStepIdx++;
-                _ssDispatched = false;
+                _ssDispatched = false; _stepPhase = StepPhase.Executing;
                 if (!StepsActive)
                 {
                     DiagLog.Write("[ss-steps] done");
@@ -2393,16 +2416,20 @@ namespace TerraBlind
             else if (st.Pillar)
             {
                 // 带 MineTiles 的 pillar 边(DigUp):头顶还堵着就先挖,挖完这一步重新派发才砌。
-                bool blocked = st.MineTiles != null && st.MineTiles.Exists(t => Predicates.IsWall(t.wx, t.wy));
+                bool blocked = _stepPhase != StepPhase.HeadroomReady && st.MineTiles != null && st.MineTiles.Exists(t => Predicates.IsWall(t.wx, t.wy));
                 if (blocked)
                 {
                     int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
                     DiagLog.Write($"[ss-pillar-dig] 头顶还堵着 {st.MineTiles.Count} 格,先挖再砌柱到 {st.TargetCy}");
+                    _stepPhase = StepPhase.ClearingHeadroom;
                     MineCoordinator.Start(new MineRequest { Dir = MineDir.Up, StartWx = ccx, StartWy = sfeet,
                         TargetWx = st.TargetCx, TargetWy = st.TargetCy, MineTiles = st.MineTiles });
                 }
                 else
+                {
+                    _stepPhase = StepPhase.Executing;
                     SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy + 1, true, st.TargetCx);
+                }
             }
             else if (st.Dig)
             {
@@ -2412,10 +2439,13 @@ namespace TerraBlind
                 {
                     if (SettleAt.IsRunning) return;
                     if (SettleAt.Start(st.DigStandCx, out string sw))
-                    { DiagLog.Write($"[ss-dig] 先挪到列{st.DigStandCx}(现在{ccx})再挖"); return; }
-                    DiagLog.Write($"[ss-dig] 挪不到列{st.DigStandCx}:{sw} —— 就地挖");
+                    { _stepPhase = StepPhase.Aligning; DiagLog.Write($"[ss-dig] 先挪到列{st.DigStandCx}(现在{ccx})再挖"); return; }
+                    _execFailCode = "mining_alignment_unavailable";
+                    DiagLog.Write($"[ss-dig] 挪不到列{st.DigStandCx}:{sw}; reselect route");
+                    StopSteps(); return;
                 }
                 int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
+                _stepPhase = StepPhase.Mining;
                 MineCoordinator.Start(new MineRequest { Dir = st.DigDir, StartWx = ccx, StartWy = sfeet, TargetWx = st.TargetCx, TargetWy = st.TargetCy,
                     MineTiles = st.MineTiles, OnlyPlannedTiles = st.DigDir == MineDir.Down && st.MineTiles?.Count > 0 });
             }

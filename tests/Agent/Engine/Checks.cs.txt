@@ -26,38 +26,72 @@ public static class NavigationExecutionChecks
         const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
         var type = typeof(StateSpacePlanner);
         string[] names = { "_ssSteps", "_ssStepIdx", "_ssDispatched", "_ssPrevStep", "_stepTimeoutTicks",
-            "_stepHardTicks", "_stepStartTick", "_stepLastPx", "_stepLastPy", "_execDone", "_execFailCode", "_rolling" };
+            "_stepHardTicks", "_stepStartTick", "_stepLastPx", "_stepLastPy", "_execDone", "_execFailCode", "_rolling", "_stepPhase" };
         var saved = names.ToDictionary(name => name, name => type.GetField(name, hidden).GetValue(null));
         var player = Main.LocalPlayer;
         var velocity = player.velocity;
         string previousOutcome = MineCoordinator.Outcome;
+        string previousSettle = SettleAt.Outcome;
         void Set(string name, object value) => type.GetField(name, hidden).SetValue(null, value);
+        void Phase(string phase) => Set("_stepPhase", Enum.Parse(type.GetField("_stepPhase", hidden).FieldType, phase));
+        void Setup(StateSpacePlanner.ExecStep step, string phase)
+        {
+            MineCoordinator.Stop(); SettleAt.Stop();
+            Set("_ssSteps", new List<StateSpacePlanner.ExecStep> { step });
+            Set("_ssStepIdx", 0); Set("_ssDispatched", true); Set("_ssPrevStep", step);
+            Set("_stepTimeoutTicks", long.MaxValue); Set("_stepHardTicks", long.MaxValue);
+            Set("_execDone", false); Set("_execFailCode", null); Phase(phase);
+        }
+        void Tick() => type.GetMethod("TickSteps", hidden).Invoke(null, null);
         try
         {
-            if (StateSpacePlanner.ExecRunning || MineCoordinator.IsActive || SkillExecutor.IsActive || BridgeBuilder.IsRunning)
+            if (StateSpacePlanner.ExecRunning || MineCoordinator.IsActive || SkillExecutor.IsActive || BridgeBuilder.IsRunning || SettleAt.IsRunning)
                 throw new InvalidOperationException("navigation contract requires idle executors");
             Set("_rolling", false);
             foreach (string outcome in new[] { "out_of_box", "out_of_reach", "stalled", "unbreakable", "no_tiles", "done" })
             {
                 var dig = new StateSpacePlanner.ExecStep { Dig = true, TargetCx = 20, TargetCy = 20 };
-                Set("_ssSteps", new List<StateSpacePlanner.ExecStep> { dig });
-                Set("_ssStepIdx", 0); Set("_ssDispatched", true); Set("_ssPrevStep", dig);
-                Set("_stepTimeoutTicks", long.MaxValue); Set("_stepHardTicks", long.MaxValue);
-                Set("_execDone", false); Set("_execFailCode", null);
+                Setup(dig, "Mining");
                 player.velocity = new Vector2(0, outcome == "done" ? 0 : -3);
                 MineCoordinator.Outcome = outcome;
-                type.GetMethod("TickSteps", hidden).Invoke(null, null);
+                Tick();
                 Console.WriteLine($"MINING_CONTRACT outcome={outcome} steps_active={StateSpacePlanner.StepsActive} done={StateSpacePlanner.ExecDone} fail={StateSpacePlanner.ExecFailCode}");
                 if (StateSpacePlanner.StepsActive || (outcome == "done") != StateSpacePlanner.ExecDone
                     || outcome != "done" && StateSpacePlanner.ExecFailCode != "mining_" + outcome)
                     throw new InvalidOperationException("failed mining retained or advanced its stale plan: " + outcome);
             }
-            Console.WriteLine("NAVIGATION_MINING_CONTRACTS_COMPLETE checks=6 gameplay_loop=false model_calls=0");
+            Setup(new StateSpacePlanner.ExecStep { Dig = true }, "Mining");
+            player.velocity = new Vector2(0, -3); MineCoordinator.Outcome = "done"; Tick();
+            if (!StateSpacePlanner.StepsActive || StateSpacePlanner.ExecDone)
+                throw new InvalidOperationException("successful excavation advanced before actual landing");
+            foreach (string outcome in new[] { "running", "timeout", "done" })
+            {
+                Setup(new StateSpacePlanner.ExecStep { Dig = true, TargetCx = 20, TargetCy = 20 }, "Aligning");
+                player.velocity = Vector2.Zero; MineCoordinator.Outcome = "out_of_box"; SettleAt.Outcome = outcome;
+                typeof(SettleAt).GetField("_running", hidden).SetValue(null, outcome == "running");
+                Tick();
+                if (StateSpacePlanner.ExecDone || StateSpacePlanner.StepsActive != (outcome != "timeout")
+                    || MineCoordinator.IsActive != (outcome == "done")
+                    || outcome != "timeout" && (int)type.GetField("_ssStepIdx", hidden).GetValue(null) != 0)
+                    throw new InvalidOperationException("alignment phase advanced or read stale mining outcome: " + outcome);
+                Console.WriteLine($"ALIGNMENT_CONTRACT outcome={outcome} mine_started={MineCoordinator.IsActive} steps_active={StateSpacePlanner.StepsActive}");
+            }
+            foreach (string outcome in new[] { "out_of_reach", "done" })
+            {
+                Setup(new StateSpacePlanner.ExecStep { Pillar = true }, "ClearingHeadroom");
+                player.velocity = new Vector2(0, -3); MineCoordinator.Outcome = outcome; Tick();
+                if (StateSpacePlanner.ExecDone || StateSpacePlanner.StepsActive != (outcome == "done")
+                    || outcome == "done" && type.GetField("_stepPhase", hidden).GetValue(null).ToString() != "HeadroomReady")
+                    throw new InvalidOperationException("headroom excavation was mistaken for a completed pillar: " + outcome);
+                Console.WriteLine($"HEADROOM_CONTRACT outcome={outcome} steps_active={StateSpacePlanner.StepsActive}");
+            }
+            Console.WriteLine("NAVIGATION_MINING_CONTRACTS_COMPLETE checks=12 gameplay_loop=false model_calls=0");
         }
         finally
         {
+            MineCoordinator.Stop(); SettleAt.Stop();
             foreach (var entry in saved) Set(entry.Key, entry.Value);
-            player.velocity = velocity; MineCoordinator.Outcome = previousOutcome;
+            player.velocity = velocity; MineCoordinator.Outcome = previousOutcome; SettleAt.Outcome = previousSettle;
         }
     }
 }
