@@ -111,7 +111,7 @@ namespace TerraBlind
             var cancellation = _searchCancellation.Token;
             _search = System.Threading.Tasks.Task.Run(() =>
             {
-                try { return StateSpacePlanner.Plan(tx, ty, start, maxExp: Budget, goalSnapCap: 0, coarseStates: true, cancellation: cancellation); }
+                try { return StateSpacePlanner.PlanWithCancellation(cancellation, tx, ty, start, maxExp: Budget, goalSnapCap: 0, coarseStates: true); }
                 catch (System.OperationCanceledException) { throw; }
                 catch (System.Exception e) { DiagLog.Write($"[escape] A* EXC {e.Message}"); return new StateSpacePlanner.SSResult(); }
             }, cancellation);

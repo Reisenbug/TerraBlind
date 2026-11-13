@@ -42,10 +42,11 @@ public static class NavigationExecutionChecks
             using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
             try
             {
-                StateSpacePlanner.Plan(20, 20, cancellation: cancelled.Token);
+                typeof(StateSpacePlanner).GetMethod("PlanWithCancellation", hidden).Invoke(null,
+                    new object[] { cancelled.Token, 20, 20, null, -1, -1, 20000, 0, 0f, true });
                 throw new InvalidOperationException("cancelled planning still entered the world search");
             }
-            catch (OperationCanceledException) { }
+            catch (TargetInvocationException error) when (error.InnerException is OperationCanceledException) { }
             Console.WriteLine("NAVIGATION_RESET_CONTRACTS_COMPLETE checks=3 busy=false stale_dispatch=false cancellation_observed=true model_calls=0");
         }
         finally

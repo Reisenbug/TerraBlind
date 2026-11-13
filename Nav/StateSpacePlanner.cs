@@ -249,7 +249,10 @@ namespace TerraBlind
 
         // goalWx/Wy 是 A* 搜的格,fieldGoal 是缓存罗盘场的键(最终目标) -- 分开才不会每段重建百万格场。
         // fCutoffMul:f=g+h 单调不减,取出的 f > f0*倍数就是连最乐观的路都贵到不可能
-        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue, float fCutoffMul = 0f, bool coarseStates = false, System.Threading.CancellationToken cancellation = default)
+        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue, float fCutoffMul = 0f, bool coarseStates = false)
+            => PlanWithCancellation(default, goalWx, goalWy, startOverride, fieldGoalWx, fieldGoalWy, maxExp, goalSnapCap, fCutoffMul, coarseStates);
+
+        internal static SSResult PlanWithCancellation(System.Threading.CancellationToken cancellation, int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue, float fCutoffMul = 0f, bool coarseStates = false)
         {
             cancellation.ThrowIfCancellationRequested();
             var ctx = new PlanCtx { Coarse = coarseStates };
