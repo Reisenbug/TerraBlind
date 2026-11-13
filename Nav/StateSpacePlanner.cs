@@ -2883,6 +2883,21 @@ namespace TerraBlind
                     best = push.edge; bestCell = push.cell; bestTotal = push.total;
                 }
             }
+            if (best != null && AgentNavigationIntent.RevisionFor(goalWx, goalWy) != 0)
+            {
+                var tactical = new List<AgentNavigationIntent.Candidate>();
+                int baseline = -1;
+                for (int i = 0; i < jigglePool.Count; i++)
+                {
+                    var c = jigglePool[i];
+                    float cost = c.total + (RiskLayer.Enabled ? RiskLayer.Penalty(p, curCx, curCy, c.cell.Item1, c.cell.Item2) : 0);
+                    tactical.Add(new(c.edge.node.Px, c.edge.node.Py, c.edge.frames?.Count ?? 0, cost));
+                    if (c.cell == bestCell && c.edge.Equals(best.Value)) baseline = i;
+                }
+                int chosen = AgentNavigationIntent.Select(goalWx, goalWy, tactical, baseline);
+                if (chosen >= 0)
+                { var c = jigglePool[chosen]; best = c.edge; bestCell = c.cell; bestTotal = c.total; }
+            }
             if (_visited.Add((curCx, curCy))) _visitedQ.Enqueue((curCx, curCy));
             while (_visitedQ.Count > VisitedLen) _visited.Remove(_visitedQ.Dequeue());
             _lastCands = cands; _lastAt = (curCx, curCy, curH); _lastGoal = (goalWx, goalWy);

@@ -36,13 +36,80 @@ static class ScriptTests
         TestMovementExposure();
         await TestTravelManeuver();
         await TacticalSkillInput();
+        await NavigationIntents();
         GatherTests.DecisionMovement();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=16 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=17 model_calls=0");
+    }
+
+    static async Task NavigationIntents()
+    {
+        var player = Terraria.Main.LocalPlayer;
+        var oldPosition = player.position;
+        var oldNpc = Terraria.Main.npc[0];
+        bool oldDead = player.dead, oldNav = RecedingNav.Active, oldBridge = VanillaNavBridge.Enabled;
+        AgentTools.ControlSession.Reset(); AgentTools.Control.Reset();
+        try
+        {
+            player.position = default; player.dead = false;
+            RecedingNav.Active = true; VanillaNavBridge.Enabled = false;
+            Terraria.Main.npc[0] = new Terraria.NPC { active = true, type = 42, position = new(100, 0) };
+            AgentTools.ControlSession.Begin("nav_to", null, out long ticket);
+            var args = new JsonObject { ["mode"] = "withdraw", ["target"] = 0,
+                ["destination"] = new JsonObject { ["x"] = 50, ["y"] = 20 } };
+            var first = AgentNavigationIntent.Update(args);
+            long revision = first["revision"].GetValue<long>();
+            Check(AgentNavigationIntent.RevisionFor(50, 20) == revision && AgentNavigationIntent.RevisionFor(51, 20) == 0,
+                "intent leaked across destinations");
+            var edges = new[] { new AgentNavigationIntent.Candidate(32, 0, 16, 10), new AgentNavigationIntent.Candidate(-32, 0, 16, 20),
+                new AgentNavigationIntent.Candidate(-200, 0, 16, 100) };
+            Check(AgentNavigationIntent.Select(50, 20, edges, 0) == 1, "intent failed to choose separation or exceeded route cost allowance");
+            Check(AgentNavigationIntent.Update(args)["revision"].GetValue<long>() == revision, "renewal invalidated the same intent");
+            string denial = AgentTools.Control.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null, "test");
+            Check(AgentNavigationIntent.RevisionFor(50, 20) == 0, "intent ignored revoked dodge permission");
+            AgentTools.Control.Release(denial);
+            Terraria.Main.npc[0].type = 43;
+            Check(AgentNavigationIntent.RevisionFor(50, 20) == 0, "intent applied to a reused NPC slot");
+            Terraria.Main.npc[0].type = 42;
+            Terraria.Main.npc[0].active = false;
+            Check(AgentNavigationIntent.RevisionFor(50, 20) == 0, "intent survived enemy removal");
+            Terraria.Main.npc[0].active = true;
+            await Task.Delay(2050);
+            Check(AgentNavigationIntent.RevisionFor(50, 20) == 0, "unrefreshed intent did not expire");
+            AgentNavigationIntent.Update(args);
+            AgentTools.ControlSession.End(ticket);
+            AgentTools.ControlSession.Begin("nav_to", null, out ticket);
+            Check(AgentNavigationIntent.RevisionFor(50, 20) == 0, "intent leaked into the next navigation action");
+            AgentTools.ControlSession.End(ticket);
+            Check(AgentNavigationIntent.Cost("cover", 10, 8, false) < AgentNavigationIntent.Cost("cover", 10, 8, true),
+                "cover ignored blocked sight lines");
+        }
+        finally
+        {
+            AgentNavigationIntent.Reset(); AgentTools.ControlSession.Reset(); AgentTools.Control.Reset();
+            player.position = oldPosition; player.dead = oldDead; Terraria.Main.npc[0] = oldNpc;
+            RecedingNav.Active = oldNav; VanillaNavBridge.Enabled = oldBridge;
+        }
+        foreach (bool pending in new[] { true, false })
+        {
+            int updates = 0;
+            var result = await AgentScript.Run("const input={context:'route',destination:{x:50,y:20},instruction:'reach jungle'};"
+                + ScriptLibrary.Example("travel_intent")["code"], 5, (_, _) => { }, (name, args, _) =>
+            {
+                if (name == "combat_assess") return Task.FromResult("{\"targets\":[{\"who\":0,\"type\":42,\"attackable\":true,\"contact_damage\":10,\"distance_tiles\":5}],\"projectiles\":[]}");
+                if (name == "jev_judge") return Task.FromResult(pending ? "{\"status\":\"pending\"}" : new JsonObject {
+                    ["status"] = "ready", ["request_id"] = 1, ["input_state"] = args["state"].DeepClone(),
+                    ["result"] = JsonNode.Parse("{\"answers\":{\"response\":{\"choice\":\"withdraw\"}}}") }.ToJsonString());
+                Check(name == "nav_intent" && args["mode"].ToString() == "withdraw", "intent skill took over movement");
+                updates++; return Task.FromResult("{}");
+            }, _ => Task.CompletedTask, default);
+            Check(result["ok"].GetValue<bool>() && updates == (pending ? 0 : 1), "pending decision stopped navigation or ready intent was lost: " + result);
+        }
+        Console.WriteLine("PASS: navigation intent selects separation, expires, respects ownership and permissions, and publishes without movement handoff");
     }
 
     static async Task TestDecisionChannels()

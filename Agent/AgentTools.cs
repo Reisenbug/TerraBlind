@@ -61,6 +61,7 @@ public static partial class AgentTools
 
     internal static void ClearTaskPolicy(bool resetRevision = false)
     {
+        AgentNavigationIntent.Reset();
         CombatForecast.Reset();
         DecisionChannels.Reset();
         var previous = taskPolicy; taskPolicy = null;
@@ -578,6 +579,7 @@ public static partial class AgentTools
     public static void NewTask() { ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
+        AgentNavigationIntent.Reset();
         DecisionChannels.Reset();
         Actions.CancelAll();
         Watches.Reset();
@@ -1272,7 +1274,7 @@ public static partial class AgentTools
         var before = await NativeAgent.OnMain(() =>
         {
             DiagLog.Write($"[agent] tool {name} {args}");
-            if (!ObservationTool(name) && name is not ("say" or "ask"))
+            if (!ObservationTool(name) && name is not ("say" or "ask" or "nav_intent"))
                 NativeAgent.Progress("开始执行：" + name, "执行 " + name,
                     !PvpDuel.Active && !name.StartsWith("combat_"));
             return name is "get_state" or "say" or "ask" or "wiki_search" or "wiki_page" ? null : Inventory();
@@ -1302,6 +1304,8 @@ public static partial class AgentTools
                     if (Bool(args, "forecast")) scene["forecast"] = CombatForecast.Poll(args, scene);
                     return scene;
                 }, token)).ToJsonString();
+            case "nav_intent":
+                return (await NativeAgent.OnMain(() => AgentNavigationIntent.Update(args), token)).ToJsonString();
             case "jev_judge":
                 string decisionKey = await NativeAgent.OnMain(() => Config.I.TypeSafeKey?.Trim(), token);
                 if (args["channel"] != null)

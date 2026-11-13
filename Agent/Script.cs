@@ -141,6 +141,18 @@ public static class AgentScript
     {
         tools.Add(new JsonObject { ["type"] = "function", ["function"] = new JsonObject
         {
+            ["name"] = "nav_intent",
+            ["description"] = "更新当前nav_to的短时战术意图，原导航持续运行。withdraw增加与target敌怪的间距；cover偏向地形遮挡。意图绑定当前导航动作，持续2秒，可更新；敌怪消失、到达10格间距(withdraw)或动作结束后恢复原评分。continue清除意图。现有候选和物理校验负责执行。",
+            ["parameters"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject
+            {
+                ["mode"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("continue", "withdraw", "cover") },
+                ["target"] = new JsonObject { ["type"] = "integer" },
+                ["destination"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject {
+                    ["x"] = new JsonObject { ["type"] = "integer" }, ["y"] = new JsonObject { ["type"] = "integer" } }, ["required"] = new JsonArray("x", "y") }
+            }, ["required"] = new JsonArray("mode") }
+        } });
+        tools.Add(new JsonObject { ["type"] = "function", ["function"] = new JsonObject
+        {
             ["name"] = "task_policy",
             ["description"] = "整项任务共用的JS反应策略。先get读取版本，set提交初始化源码：用on注册处理函数、watch配置观察，可调用已保存技能；动作放在处理函数中。所有DAG节点及后台动作自动使用此策略，局部on优先覆盖同名事件。策略闭包状态跨节点保留。更新先初始化新策略，成功后切换，当前动作和已进入的旧处理继续；失败保持旧策略。clear关闭未来反应，已发生的游戏效果保留。新指令任务及离开世界清除策略。",
             ["parameters"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject

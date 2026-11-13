@@ -11,7 +11,7 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -21,6 +21,31 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "travel_intent") return Template(name,
+            "行进战术意图实验。input含context、destination、instruction、baseline、last_request。后台判断continue/withdraw/cover，nav_intent让原导航在下一次选边读取当前意图；等待时继续原导航。返回request_id供调用者续接。",
+            """
+            const c=tool('combat_assess',{radius:25,terrain_radius:8});
+            const target=c.targets.find(n=>n.attackable&&n.contact_damage>0&&n.distance_tiles<12);
+            if(c.boss_present||!target){tool('nav_intent',{mode:'continue'});return {status:'no_threat',request_id:input.last_request};}
+            const state={instruction:input.instruction,destination:input.destination,target:{who:target.who,type:target.type},combat:c,
+              coordinates:'Positions and distances are tiles except player.pos/size_pixels and all velocities, which are pixels or pixels per tick.',
+              execution:'The existing navigation chooses a physically supported edge using the intent. Attacks continue. Withdrawal ends at 10 tiles separation. Cover tests terrain line of sight; enemy attacks may penetrate terrain.'};
+            const r=input.baseline?{status:'ready',request_id:c.tick,input_state:state,result:{answers:{response:{choice:
+              target.distance_tiles<6?'withdraw':'continue'}}}}:tool('jev_judge',{channel:'travel_intent',context:input.context,
+              interval_ms:1000,max_age_ms:2000,state,questions:{response:{type:'choice',instructions:
+                'Which navigation intent best supports state.instruction while handling the current nearby threat? Consider health, enemy movement, attack range and the terrain cells.',
+                criteria:{continue:'Keep following the destination while attacking.',
+                  withdraw:'Temporarily increase separation from the selected nearby enemy while attacking; then continue the journey.',
+                  cover:'Prefer a reachable edge with terrain across the selected enemy sight line, while continuing toward the destination.'}}}});
+            if(r.status==='pending'||r.request_id===input.last_request) return {status:r.status,request_id:input.last_request};
+            if(r.status==='failed'){print({decision:'travel_intent',error:r.result.error});return {request_id:r.request_id};}
+            const observed=r.input_state.target,choice=r.result.answers.response.choice;
+            if(!c.targets.some(n=>n.who===observed.who&&n.type===observed.type&&n.contact_damage>0)) return {request_id:r.request_id,status:'target_changed'};
+            const applied=tool('nav_intent',{mode:choice,target:observed.who,destination:input.destination});
+            print({decision:'travel_intent',request:r.request_id,choice,model_ms:r.result.elapsed_ms,
+              request_age_ms:r.request_age_ms,ready_wait_ms:r.ready_wait_ms,result:applied});
+            return {request_id:r.request_id,status:applied.error??'published'};
+            """);
         if (name == "travel_maneuver") return Template(name,
             "赶路移动短策略。input含context、destination、instruction、weapon_order，可传combat/terrain、baseline、last_request、intent、last_forecast。意图保留2秒，匹配最新带共同路线前缀的原生候选；接管时核验人物、地形及分岔期限。比较继续导航、加快穿越、拉开敌距、进入方块遮挡；比较均为相同帧段。pending时继续原动作。返回request_id、intent、last_forecast、applied供调用者续接。",
             """
@@ -134,6 +159,14 @@ public sealed class ScriptLibrary
               if(!destination) return {handled:true};
               const before=scene();
               if(before.combat.boss_present) return {handled:true};
+              if(input.intent_skill_revision!=null&&!before.obstacle){
+                const currentContext=context+':'+destination.x+':'+destination.y;
+                if(maneuver.context!==currentContext) maneuver={context:currentContext};
+                const r=skill('travel_intent',input.intent_skill_revision,{context:currentContext,destination,
+                  instruction:input.instruction,baseline:input.baseline,last_request:maneuver.request_id});
+                maneuver={...r,context:currentContext};
+                return {handled:true};
+              }
               if(input.maneuver_skill_revision!=null&&!before.obstacle){
                 const currentContext=context+':'+destination.x+':'+destination.y;
                 if(maneuver.context!==currentContext) maneuver={context:currentContext};

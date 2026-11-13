@@ -15,6 +15,7 @@ internal static class LegacyMovementLookahead
     static CancellationTokenSource cancellation;
     static JsonObject context;
     static long started;
+    static long intentRevision;
 
     internal static void Reset()
     {
@@ -48,6 +49,8 @@ internal static class LegacyMovementLookahead
         if (frames.Any(frame => !area.Contains((int)(frame.Px / 16), (int)(frame.Py / 16))
             || !area.Contains((int)((frame.Px + player.width) / 16), (int)((frame.Py + player.height) / 16)))) return;
         started = System.Diagnostics.Stopwatch.GetTimestamp();
+        intentRevision = AgentNavigationIntent.RevisionFor(goalX, goalY);
+        if (intentRevision != 0) return;
         context = VanillaFrame.Capture(player, area, true);
         var guidance = new List<int>();
         for (int x = area.Left; x < area.Right; x++)
@@ -68,6 +71,8 @@ internal static class LegacyMovementLookahead
         if (pending == null) return null;
         try
         {
+            if (intentRevision != AgentNavigationIntent.RevisionFor(goalX, goalY))
+            { DiagLog.Write("[recede-lookahead-miss] navigation_intent_changed"); return null; }
             if (!pending.IsCompleted)
             { DiagLog.Write($"[recede-lookahead-miss] not_ready elapsed_ms={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}"); return null; }
             var result = pending.GetAwaiter().GetResult();
