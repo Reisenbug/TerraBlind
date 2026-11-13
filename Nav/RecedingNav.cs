@@ -420,7 +420,7 @@ namespace TerraBlind
                 }
             }
 
-            if (VanillaNavBridge.Enabled || _mode == Mode.Stand)
+            if (VanillaNavBridge.Enabled)
             {
                 VanillaNavBridge.Tick(p, _goalWx, _goalWy, _mode == Mode.Stand);
                 return;

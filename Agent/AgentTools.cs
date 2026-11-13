@@ -2468,7 +2468,7 @@ public static partial class AgentTools
         {
             bool reserve = await NativeAgent.OnMain(() =>
             {
-                if (!VanillaNavBridge.Enabled && !Bool(request, "stand")) return false;
+                if (!VanillaNavBridge.Enabled) return false;
                 FightCoordinator.NavigationSnapshotPending = true;
                 return true;
             }, token);
