@@ -1194,6 +1194,8 @@ public static partial class AgentTools
         var global = taskPolicy?.Reactions;
         foreach (var reactions in new[] { local, global }.Where(r => r != null).Distinct())
         {
+            if (ReferenceEquals(reactions, global) && context?["tool"]?.ToString() == "fight"
+                && await NativeAgent.OnMain(() => ControlSession.Tool is not (null or "fight"), token)) continue;
             string[] kinds = reactions.Kinds.Except(ReferenceEquals(reactions, global) ? local?.Kinds ?? Array.Empty<string>() : Array.Empty<string>()).ToArray();
             await ServiceReaction(reactions, async () =>
             {
@@ -1244,6 +1246,7 @@ public static partial class AgentTools
                 }, token);
             }
             var record = new JsonObject { ["kind"] = notice["kind"]?.DeepClone(),
+                ["execution_tool"] = notice["execution"]?["tool"]?.DeepClone(),
                 ["elapsed_ms"] = Stopwatch.GetElapsedTime(started).TotalMilliseconds, ["took_control"] = paused,
                 ["handled"] = decision?["handled"]?.DeepClone(), ["retry"] = decision?["retry"]?.DeepClone(),
                 ["task_node"] = notice["task_node"]?.DeepClone() };

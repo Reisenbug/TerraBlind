@@ -31,13 +31,14 @@ static class ScriptTests
         await TestDecisionTravel();
         await TestJointDecision();
         await TestTacticalReactions();
+        await ConcurrentPolicyContext();
         GatherTests.DecisionMovement();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=11 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=12 model_calls=0");
     }
 
     static async Task TestDecisionChannels()
@@ -276,6 +277,39 @@ static class ScriptTests
         }
         await ReactiveHostIntegration(emptyWindow: true);
         Console.WriteLine("PASS: tactical skill continues while pending, bounds combat windows, revalidates targets and retries only after tile removal");
+    }
+
+    static async Task ConcurrentPolicyContext()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        async Task Pump(Task task)
+        {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            {
+                Check(timer.Elapsed.TotalSeconds < 5, "concurrent policy context deadlocked");
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+            await task;
+        }
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset();
+            await Pump(AgentTools.Execute("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
+                ["code"] = "on('tick',e=>{tool('say',{text:'concurrent:'+e.execution.tool});return {handled:true};});" }, default));
+            Check(AgentTools.ControlSession.Begin("nav_to", null, out _) == null,
+                "test could not acquire navigation");
+            await Pump(AgentTools.ReactAtBoundary(default, context: new JsonObject { ["tool"] = "fight" }));
+            Check(!AgentChat.Messages.Contains("concurrent:fight"), "concurrent fight consumed the primary navigation's policy tick");
+            await Pump(AgentTools.ReactAtBoundary(default, context: new JsonObject { ["tool"] = "nav_to",
+                ["args"] = new JsonObject { ["x"] = 20, ["y"] = 10 } }));
+            Check(AgentChat.Messages.Contains("concurrent:nav_to"), "primary navigation lost its policy observation");
+            Console.WriteLine("PASS: concurrent defense leaves task-policy ticks and route handoff with the primary navigation");
+        }
+        finally
+        {
+            AgentTools.ControlSession.Reset(); AgentTools.ClearTaskPolicy(true); AgentTools.Stop(); AgentTools.Plan.Reset(); AgentTools.Watches.Reset(); agent.Unload();
+        }
     }
 
     static async Task TestDecisionTravel()
@@ -584,6 +618,7 @@ static class ScriptTests
         await TestDecisionTravel();
         await TestJointDecision();
         await TestTacticalReactions();
+        await ConcurrentPolicyContext();
         string programDirectory = Path.Combine(Path.GetTempPath(), "terrablind-program-" + Guid.NewGuid().ToString("N"));
         try
         {
