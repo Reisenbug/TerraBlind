@@ -11,7 +11,7 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -21,6 +21,24 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "inventory_space") return Template(name,
+            "内置背包腾位技能，可直接调用revision=0。input含protected_types、trash_types和drop_types。保留收藏、工具和受保护物品，仅按当前策略回收或丢出，操作前核对物品快照，返回是否实际有空位。保存同名修订可替换实现，调用时取当前revision。",
+            """
+            const bag=tool('inventory_review');
+            if(bag.empty_slots.length) return true;
+            for(const item of bag.inventory){
+              if(item.favorited||item.pick||item.axe||item.hammer||(input.protected_types??[]).includes(item.type)) continue;
+              const expected={type:item.type,prefix:item.prefix,stack:item.stack};
+              let result;
+              if((input.trash_types??[]).includes(item.type)
+                &&(bag.trash.type===0||(input.trash_types??[]).includes(bag.trash.type)))
+                result=tool('inventory_trash',{slot:item.slot,expected,expected_trash:bag.trash});
+              else if((input.drop_types??[]).includes(item.type)) result=tool('inventory_drop',{slot:item.slot,expected});
+              else continue;
+              if(!result.error) return tool('inventory_review').empty_slots.length>0;
+            }
+            return false;
+            """);
         if (name == "recover_navigation") return Template(name,
             "内置局部恢复技能，可直接调用revision=0。input含error、tile或traps、allow_trigger_removal。核对近身非实心接触伤害物或获准拆除的压力板，使用实际镐子并验证方块变化；retry只在修复验证后返回true。保存同名修订可替换实现，调用时取当前revision。",
             """
@@ -347,29 +365,19 @@ public sealed class ScriptLibrary
             const count=type=>state(['inventory_counts']).inventory_counts[type]??0;
             const protectedTypes=new Set([...config.resources.map(r=>r.item_type),...config.weapon_order,...(config.protected_types??[])]);
             const makeSpace=()=>{
-              const bag=tool('inventory_review');
-              if(bag.empty_slots.length) return true;
-              for(const item of bag.inventory){
-                if(item.favorited||item.pick||item.axe||item.hammer||protectedTypes.has(item.type)) continue;
-                const expected={type:item.type,prefix:item.prefix,stack:item.stack};
-                let result;
-                if((config.trash_types??[]).includes(item.type)
-                    &&(bag.trash.type===0||(config.trash_types??[]).includes(bag.trash.type)))
-                  result=tool('inventory_trash',{slot:item.slot,expected,expected_trash:bag.trash});
-                else if((config.drop_types??[]).includes(item.type))
-                  result=tool('inventory_drop',{slot:item.slot,expected});
-                else continue;
-                if(!result.error) return tool('inventory_review').empty_slots.length>0;
-              }
-              return false;
+              const program=tool('script_program',{operation:'get',name:'inventory_space'});
+              return skill('inventory_space',program.revision,{protected_types:[...protectedTypes],
+                trash_types:config.trash_types,drop_types:config.drop_types});
             };
             const worthwhile=(point,event)=>{
               const destination=event.execution?.tool==='nav_to'?event.execution.args:config.destination;
               const a=tool('opportunity_assess',{x:point.x,y:point.y,...(destination?{destination}:{})});
               if(!a.ok||a.approach_direct_distance>config.max_detour_tiles
                   ||destination&&(a.route_relation?.extra_direct_distance??Infinity)>config.max_detour_tiles) return false;
-              return approvedOpportunity||!a.hazards.some(h=>h.on_direct_corridor&&['lava','falling_block','trap_tile'].includes(h.kind));
+              return !blockedDetour(a,point)&&(approvedOpportunity||!a.hazards.some(h=>h.on_direct_corridor&&['lava','falling_block','trap_tile'].includes(h.kind)));
             };
+            const blockedDetour=(assessment,point)=>assessment.hazards?.find(h=>h.kind==='trap_tile'
+              &&Math.max(Math.abs(h.x-point.x),Math.abs(h.y-point.y))<=4);
             const collect=(resource,point,drop,event)=>{
               const actual=count(resource.item_type);
               if(actual>=resource.count) return handled();
@@ -410,7 +418,8 @@ public sealed class ScriptLibrary
               if(!worthwhile(event.evidence,event)) return handled();
               if(!makeSpace()) return {handled:false,reason:'inventory_policy_needs_review'};
               const r=tool('collect_treasure',{x:event.evidence.x,y:event.evidence.y});
-              return {handled:r.new_chest_loot_verified===true};
+              print({opportunity:'chest',point:event.evidence,verified:r.new_chest_loot_verified===true,error:r.error,outcome:r.outcome});
+              return {handled:true,outcome:r.new_chest_loot_verified===true?'looted':'deferred',reason:r.error??r.outcome};
             });
             on('inventory_full',()=>({handled:makeSpace()}));
             on('action_failed',event=>{
@@ -538,6 +547,10 @@ public sealed class ScriptLibrary
                   ||!assessment.ok||opportunity.resource&&!opportunity.drop&&(!assessment.target.has_tile
                   ||assessment.target.tile_type!==opportunity.resource.tile_type))
                   opportunities.delete(id);
+                else if(blockedDetour(assessment,opportunity.point)){
+                  print({opportunity:id,outcome:'deferred',reason:'trap_at_target',hazard:blockedDetour(assessment,opportunity.point)});
+                  opportunities.delete(id);activeOpportunity=null;
+                }
                 else if(assessment.approach_direct_distance<=25){
                   activeOpportunity=id;
                   let take=opportunity.take;
@@ -848,7 +861,7 @@ public sealed class ScriptLibrary
     public JsonArray Callable()
     {
         lock (gate)
-            return new JsonArray(new[] { "recover_navigation" }.Concat(Directory.Exists(directory)
+            return new JsonArray(new[] { "recover_navigation", "inventory_space" }.Concat(Directory.Exists(directory)
                 ? Directory.EnumerateFiles(directory, "*.json").Select(Path.GetFileNameWithoutExtension)
                 : Enumerable.Empty<string>()).Distinct().OrderBy(name => name)
                 .Select(name => (JsonNode)Get(name, includeRuntime: false)).ToArray());

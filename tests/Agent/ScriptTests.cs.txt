@@ -41,13 +41,64 @@ static class ScriptTests
         await NavigationRecoverySkill();
         await ReactiveTravelExample();
         await ComposedReactions();
+        await DecisionPreconditions();
         GatherTests.DecisionMovement();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=21 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=22 model_calls=0");
+    }
+
+    static async Task DecisionPreconditions()
+    {
+        foreach (string scenario in new[] { "one_weapon", "blocked_weapons", "trapped_chest", "failed_chest" })
+        {
+            int weapons = 0, chests = 0;
+            var config = JsonNode.Parse("{\"resources\":[],\"weapon_order\":[11,65],\"max_detour_tiles\":10,\"health_reserve\":30}");
+            config["decisions"] = scenario == "trapped_chest" ? new JsonArray("opportunity")
+                : scenario == "failed_chest" ? new JsonArray() : new JsonArray("weapon");
+            var combat = JsonNode.Parse("""
+                {"tick":10,"player":{"hp":100,"pos":{"x":160,"y":320},"size_pixels":{"width":20,"height":42},
+                  "velocity":{"x":0,"y":0}},"targets":[{"who":0,"type":42,"attackable":true,"contact_damage":10,
+                  "distance_tiles":5,"weapons":[{"type":11,"has_ammo":true,"mana_available":true,"line_or_reach_passed":false},
+                  {"type":65,"has_ammo":true,"mana_available":true,"line_or_reach_passed":true}]}],"projectiles":[]}
+                """);
+            if (scenario == "blocked_weapons") combat["targets"][0]["weapons"][1]["line_or_reach_passed"] = false;
+            if (scenario.Contains("chest")) combat["targets"] = new JsonArray();
+            string code = "(function(){const input=" + config + ";" + ScriptLibrary.Example("decision_reactions")["code"] + "})();return tool('nav_to');";
+            var result = await AgentScript.Run(code, 5, (_, _) => { }, async (name, args, token) =>
+            {
+                if (name == "script_program") return ScriptLibrary.Example(args["name"].ToString()).ToJsonString();
+                if (name == "get_state") return "{\"agent\":{\"auto_attack\":true,\"combat_weapon_type\":0}}";
+                if (name == "watch") return "{}";
+                if (name == "combat_assess") return combat.ToJsonString();
+                if (name == "inspect_terrain") return "{\"near_body_tiles\":[]}";
+                if (name == "inventory_review") return "{\"empty_slots\":[10]}";
+                if (name == "set_combat") { weapons++; return "{}"; }
+                if (name == "collect_treasure") { chests++; return "{\"error\":\"cannot_loot\"}"; }
+                if (name == "opportunity_assess") return new JsonObject { ["ok"] = true, ["approach_direct_distance"] = 2,
+                    ["route_relation"] = new JsonObject { ["extra_direct_distance"] = 0 },
+                    ["hazards"] = scenario == "trapped_chest" ? JsonNode.Parse("[{\"kind\":\"trap_tile\",\"x\":12,\"y\":20}]") : new JsonArray() }.ToJsonString();
+                Check(name == "nav_to", "ineligible opportunity/weapon called a model or took control: " + name);
+                var handlers = AgentScript.CurrentReactions.Value;
+                for (int i = 0; i < 2; i++)
+                {
+                    if (scenario.Contains("chest"))
+                    {
+                        var reaction = await handlers.Dispatch(JsonNode.Parse("{\"kind\":\"nearby_chest\",\"evidence\":{\"x\":12,\"y\":20}}").AsObject(), token);
+                        Check(reaction["handled"].GetValue<bool>(), "optional chest failure surrendered the primary action");
+                    }
+                    await handlers.Dispatch(new JsonObject { ["kind"] = "tick" }, token);
+                }
+                return "{\"done\":true}";
+            }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("inventory_space")));
+            Check(result["ok"].GetValue<bool>() && result["value"]["done"].GetValue<bool>()
+                && chests == (scenario == "failed_chest" ? 2 : 0)
+                && (scenario != "one_weapon" || weapons == 1), "decision precondition broke continuous execution: " + scenario + " " + result);
+        }
+        Console.WriteLine("PASS: unusable weapon alternatives and trapped detours skip model calls; optional chest failures preserve the primary policy");
     }
 
     static async Task ComposedReactions()
@@ -105,7 +156,7 @@ static class ScriptTests
         try
         {
             var library = new ScriptLibrary(directory);
-            Check(library.Callable().Single()["name"].ToString() == "recover_navigation", "built-in recovery required a model save before use");
+            Check(library.Callable().Any(p => p["name"].ToString() == "recover_navigation"), "built-in recovery required a model save before use");
             library.Save("recover_navigation", "return {retry:false,reason:'custom_policy'};", 0);
             var custom = await AgentScript.Run("return skill('recover_navigation',1);", 5, (_, _) => { },
                 (_, _, _) => throw new Exception("custom recovery unexpectedly called a tool"), _ => Task.CompletedTask, default,
@@ -773,6 +824,7 @@ static class ScriptTests
             var result = await AgentScript.Run("return skill('decision_travel',0," + config.ToJsonString() + ");",
                 5, (_, _) => { }, async (name, args, token) =>
                 {
+                    if (name == "script_program") return ScriptLibrary.Example(args["name"].ToString()).ToJsonString();
                     if (name == "get_state") return new JsonObject
                     {
                         ["agent"] = new JsonObject { ["auto_attack"] = true, ["combat_weapon_type"] = 0 },
@@ -843,7 +895,7 @@ static class ScriptTests
                             await handlers.Dispatch(JsonNode.Parse("{\"kind\":\"nearby_tile\",\"evidence\":{\"tile_type\":61,\"x\":11,\"y\":20}}").AsObject(), token);
                     }
                     return "{\"done\":true}";
-                }, _ => Task.CompletedTask, default, new ScriptProgress(), programs: new JsonArray(program));
+                }, _ => Task.CompletedTask, default, new ScriptProgress(), programs: new JsonArray(program, ScriptLibrary.Example("inventory_space")));
             Check(result["ok"]?.GetValue<bool>() == true, "decision travel script failed: " + result);
             Check(movements == (enabled.Contains("movement") ? 1 : 0) && collected == 1,
                 "movement decision was ignored/replayed or opportunity was lost: " + string.Join(',', dimensions));
@@ -1944,7 +1996,7 @@ static class ScriptTests
         JsonObject Plate() => JsonNode.Parse("{\"x\":12,\"y\":12,\"type\":135,\"frame_x\":0,\"frame_y\":126,\"kind\":\"pressure_plate\"}").AsObject();
         async Task<string> Execute(string name, JsonObject args, CancellationToken token)
         {
-            if (name == "script_program") return ScriptLibrary.Example("recover_navigation").ToJsonString();
+            if (name == "script_program") return ScriptLibrary.Example(args["name"].ToString()).ToJsonString();
             if (name == "get_state") return new JsonObject { ["player"] = JsonNode.Parse("{\"hp\":260,\"pos\":{\"x\":160,\"y\":160}}"),
                 ["agent"] = JsonNode.Parse("{\"auto_attack\":true,\"combat_weapon_type\":0}"),
                 ["inventory_counts"] = new JsonObject(stock.Select(pair => new KeyValuePair<string, JsonNode>(pair.Key.ToString(), JsonValue.Create(pair.Value)))),
@@ -1996,7 +2048,7 @@ static class ScriptTests
         }
         string code = "const input=" + Config().ToJsonString() + ";\n" + ScriptLibrary.Example("reactive_travel")["code"];
         var result = await AgentScript.Run(code, 5, (_, _) => { }, Execute, _ => Task.CompletedTask, default, new ScriptProgress(),
-            programs: new JsonArray(ScriptLibrary.Example("recover_navigation")));
+            programs: new JsonArray(ScriptLibrary.Example("recover_navigation"), ScriptLibrary.Example("inventory_space")));
         Check(result["ok"].GetValue<bool>() && result["value"]["done"].GetValue<bool>(), "reactive travel example failed: " + result);
         Check(effects.SequenceEqual(new[] { "remove_plate", "inventory_trash", "collect:331", "collect:209", "chest", "inventory_drop", "weapon:65", "pass_thorn", "weapon:3507", "weapon:0" })
             && navStarts == 2 && stock[331] == 1 && stock[209] == 1,

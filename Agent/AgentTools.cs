@@ -1264,6 +1264,7 @@ public static partial class AgentTools
                 ["execution_tool"] = notice["execution"]?["tool"]?.DeepClone(),
                 ["elapsed_ms"] = Stopwatch.GetElapsedTime(started).TotalMilliseconds, ["took_control"] = paused,
                 ["handled"] = decision?["handled"]?.DeepClone(), ["retry"] = decision?["retry"]?.DeepClone(),
+                ["outcome"] = decision?["outcome"]?.DeepClone(), ["reason"] = decision?["reason"]?.DeepClone(),
                 ["task_node"] = notice["task_node"]?.DeepClone() };
             if (ReferenceEquals(taskPolicy?.Reactions, reactions)) taskPolicy.LastReaction = record;
             DiagLog.Write("[script-reaction] " + record);
