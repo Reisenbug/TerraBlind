@@ -21,6 +21,52 @@ public sealed class Engine : Mod { }
 
 public static class NavigationExecutionChecks
 {
+    public static void VerifyMiningReach()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var player = Main.LocalPlayer;
+        var position = player.position; var velocity = player.velocity;
+        var weapon = player.inventory[0]; var pick = player.inventory[1]; int selected = player.selectedItem;
+        bool solid = Main.tileSolid[TileID.Dirt], use = player.controlUseItem, left = player.controlLeft, right = player.controlRight;
+        int rangeX = Player.tileRangeX, rangeY = Player.tileRangeY, mouseX = Main.mouseX, mouseY = Main.mouseY;
+        bool smart = Main.SmartCursorWanted_Mouse;
+        var hooks = typeof(TileLoader).GetField("HookCanKillTile", hidden); var oldHooks = hooks.GetValue(null);
+        if (MineCoordinator.IsActive || Enumerable.Range(14, 3).Any(x => Main.tile[x, 12].HasTile))
+            throw new InvalidOperationException("mining reach contract requires an idle executor and empty fixture cells");
+        try
+        {
+            Main.tileSolid[TileID.Dirt] = true; Player.tileRangeX = 5; Player.tileRangeY = 4;
+            if (oldHooks == null) hooks.SetValue(null, Array.CreateInstance(hooks.FieldType.GetElementType(), 0));
+            player.position = new Vector2(160, 182); player.velocity = Vector2.Zero;
+            player.inventory[0] = new Item { type = ItemID.Starfury, stack = 1, tileBoost = 0 };
+            foreach (var fixture in new[] { (Target: 15, Boost: -1, Reachable: false), (Target: 16, Boost: 1, Reachable: true), (Target: 14, Boost: -1, Reachable: true) })
+            {
+                foreach (int x in Enumerable.Range(14, 3)) Main.tile[x, 12].ClearEverything();
+                Main.tile[fixture.Target, 12].ResetToType(TileID.Dirt);
+                player.inventory[1] = new Item { type = ItemID.CopperPickaxe, stack = 1, pick = 35, tileBoost = fixture.Boost };
+                player.selectedItem = 0; player.controlUseItem = player.controlLeft = player.controlRight = false;
+                MineCoordinator.Start(new MineRequest { Dir = MineDir.Right, StartWx = 10, StartWy = 13,
+                    TargetWx = fixture.Target, TargetWy = 13, MineTiles = new List<(int, int)> { (fixture.Target, 12) } });
+                MineCoordinator.ApplyControls();
+                Console.WriteLine($"MINING_REACH target_x={fixture.Target} pick_boost={fixture.Boost} use={player.controlUseItem} outcome={MineCoordinator.Outcome}");
+                if (player.controlUseItem != fixture.Reachable || MineCoordinator.IsActive != fixture.Reachable
+                    || !fixture.Reachable && (MineCoordinator.Outcome != "out_of_reach" || player.selectedItem != 0))
+                    throw new InvalidOperationException("mining reach used the held weapon instead of the chosen pick: " + fixture);
+                MineCoordinator.Stop();
+            }
+            Console.WriteLine("NAVIGATION_MINING_REACH_CONTRACTS_COMPLETE checks=3 actual_pick_reach=true model_calls=0");
+        }
+        finally
+        {
+            MineCoordinator.Stop();
+            foreach (int x in Enumerable.Range(14, 3)) Main.tile[x, 12].ClearEverything();
+            player.position = position; player.velocity = velocity; player.inventory[0] = weapon; player.inventory[1] = pick; player.selectedItem = selected;
+            player.controlUseItem = use; player.controlLeft = left; player.controlRight = right; Main.tileSolid[TileID.Dirt] = solid;
+            Player.tileRangeX = rangeX; Player.tileRangeY = rangeY; Main.mouseX = mouseX; Main.mouseY = mouseY; Main.SmartCursorWanted_Mouse = smart;
+            hooks.SetValue(null, oldHooks);
+        }
+    }
+
     public static void VerifyDigDownSupport()
     {
         const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;

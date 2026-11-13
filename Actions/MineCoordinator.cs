@@ -241,8 +241,11 @@ namespace TerraBlind
 			// 于是挥满 StallMax 帧一格没掉,上层重选又选中同一条边,再挥。死循环。
 			// 现场:人在(1118,829)对着(1117,831)挥了 600 帧,sentinel 判 H 平线放弃整段。
 			// 尺子用 Reach.CanMine(vanilla 挖掘那一份),别另编
+			int previousSlot = p.selectedItem;
+			p.selectedItem = slot;
 			if (!Reach.CanMine(p, tx, ty))
 			{
+				p.selectedItem = previousSlot;
 				DiagLog.Write($"[mine] 够不着 ({tx},{ty}) dir={req.Dir} 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → stop");
 				Finish("out_of_reach", $"够不着({tx},{ty}),人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
 				return;
