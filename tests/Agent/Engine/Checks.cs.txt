@@ -21,6 +21,76 @@ public sealed class Engine : Mod { }
 
 public static class NavigationExecutionChecks
 {
+    public static void VerifyEscapeTraps()
+    {
+        var player = Main.LocalPlayer; var position = player.position;
+        bool solid = Main.tileSolid[TileID.Dirt];
+        var cells = (from x in Enumerable.Range(4, 14) from y in Enumerable.Range(11, 6) select new Point(x, y)).ToArray();
+        if (cells.Any(point => Main.tile[point].HasTile || Main.tile[point].LiquidAmount != 0))
+            throw new InvalidOperationException("escape trap contract requires empty fixture cells");
+        var side = typeof(AgentContactEscape).GetMethod("SafeSide", BindingFlags.Static | BindingFlags.NonPublic);
+        try
+        {
+            player.position = new Vector2(160, 182); Main.tileSolid[TileID.Dirt] = true;
+            foreach (int x in Enumerable.Range(4, 14)) Main.tile[x, 14].ResetToType(TileID.Dirt);
+            foreach (string mode in new[] { "clear", "red", "blue", "green", "yellow", "weighted", "unwired", "actuated", "removed", "leaving" })
+            {
+                Main.tile[10, 13].ClearEverything(); Main.tile[13, 13].ClearEverything();
+                var plate = Main.tile[mode == "leaving" ? 10 : 13, 13];
+                if (mode != "clear") plate.ResetToType(mode == "weighted" ? TileID.WeightedPressurePlate : TileID.PressurePlates);
+                plate.RedWire = mode is "red" or "weighted" or "actuated" or "removed" or "leaving";
+                plate.BlueWire = mode == "blue"; plate.GreenWire = mode == "green"; plate.YellowWire = mode == "yellow";
+                plate.IsActuated = mode == "actuated";
+                if (mode == "removed") plate.HasTile = false;
+                bool safe = (bool)side.Invoke(null, new object[] { player, 1 });
+                bool expected = mode is "clear" or "unwired" or "actuated" or "removed" or "leaving";
+                Console.WriteLine($"ESCAPE_TRAP mode={mode} right_safe={safe} expected={expected}");
+                if (safe != expected || !(bool)side.Invoke(null, new object[] { player, -1 }))
+                    throw new InvalidOperationException("contact escape selected an armed pressure plate or rejected the clear side: " + mode);
+                if ((bool)typeof(AgentContactEscape).GetMethod("Harmful", BindingFlags.Static | BindingFlags.NonPublic)
+                    .Invoke(null, new object[] { player.position, player, false, false, false }))
+                    throw new InvalidOperationException("escape route screening changed the current contact damage check: " + mode);
+            }
+            Console.WriteLine("ESCAPE_TRAP_CONTRACTS_COMPLETE checks=10 native_collision=true model_calls=0");
+        }
+        finally
+        {
+            foreach (var point in cells) Main.tile[point].ClearEverything();
+            player.position = position; Main.tileSolid[TileID.Dirt] = solid;
+        }
+    }
+
+    public static void VerifyOpportunityContact()
+    {
+        var player = Main.LocalPlayer; var position = player.position;
+        int damage = TileID.Sets.TouchDamageImmediate[TileID.Spikes];
+        var cells = (from x in Enumerable.Range(39, 11) from y in Enumerable.Range(36, 9) select new Point(x, y)).ToArray();
+        if (cells.Any(point => Main.tile[point].HasTile || Main.tile[point].LiquidAmount != 0))
+            throw new InvalidOperationException("opportunity contact contract requires empty fixture cells");
+        try
+        {
+            player.position = new Vector2(640, 640); TileID.Sets.TouchDamageImmediate[TileID.Spikes] = 20;
+            foreach (string mode in new[] { "near_target", "at_target", "actuated" })
+            {
+                Main.tile[44, 40].ClearEverything(); Main.tile[45, 40].ClearEverything();
+                int x = mode == "near_target" ? 44 : 45;
+                var tile = Main.tile[x, 40]; tile.ResetToType(TileID.Spikes); tile.IsActuated = mode == "actuated";
+                var hazards = TerrainInspection.Opportunity(45, 40, null)["hazards"].AsArray()
+                    .Where(hazard => hazard["kind"].ToString() == "contact_damage").ToArray();
+                Console.WriteLine($"OPPORTUNITY_CONTACT mode={mode} reported={hazards.Length} tile=({x},40)");
+                if (hazards.Length != (mode == "actuated" ? 0 : 1)
+                    || hazards.Any(hazard => hazard["x"].GetValue<int>() != x || hazard["y"].GetValue<int>() != 40))
+                    throw new InvalidOperationException("opportunity contact hazards do not match the sampled cells: " + mode);
+            }
+            Console.WriteLine("OPPORTUNITY_CONTACT_CONTRACTS_COMPLETE checks=3 native_contact_rules=true model_calls=0");
+        }
+        finally
+        {
+            foreach (var point in cells) Main.tile[point].ClearEverything();
+            player.position = position; TileID.Sets.TouchDamageImmediate[TileID.Spikes] = damage;
+        }
+    }
+
     delegate void MiningHitProbe(Player player, Item item, out bool canHitWalls, int x, int y);
 
     public static void VerifyMiningAnimation()

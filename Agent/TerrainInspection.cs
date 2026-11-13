@@ -92,7 +92,7 @@ public static class TerrainInspection
                 solids.Add(Fact("solid"));
             if (active && TileID.Sets.Falling[tile.TileType]) hazards.Add(Fact("falling_block"));
             if (active && TileID.Sets.CrackedBricks[tile.TileType]) hazards.Add(Fact("breaks_on_contact"));
-            if (ContactDamage(player, x, y) > 0) hazards.Add(Fact("contact_damage"));
+            if (ContactDamage(player, ix, iy) > 0) hazards.Add(Fact("contact_damage"));
             if (tile.LiquidAmount > 0)
             {
                 var liquid = Fact(tile.LiquidType switch

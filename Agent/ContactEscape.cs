@@ -129,7 +129,8 @@ public class AgentContactEscape : ModSystem
         finally { Collision.up = up; Collision.down = down; }
     }
 
-    static bool Harmful(Vector2 position, Player player, bool ignoreCurrentContact = false, bool includeLava = true)
+    static bool Harmful(Vector2 position, Player player, bool ignoreCurrentContact = false, bool includeLava = true,
+        bool includeTriggers = false)
     {
         int left = (int)Math.Floor((position.X - 1) / 16), right = (int)Math.Floor((position.X + player.width) / 16);
         int top = (int)Math.Floor((position.Y - 1) / 16), bottom = (int)Math.Floor((position.Y + player.height) / 16);
@@ -141,7 +142,9 @@ public class AgentContactEscape : ModSystem
             bool previous = ignoreCurrentContact && x >= Math.Floor((player.position.X - 1) / 16)
                 && x <= Math.Floor((player.position.X + player.width) / 16)
                 && y >= Math.Floor((player.position.Y - 1) / 16) && y <= Math.Floor((player.position.Y + player.height) / 16);
-            if (!previous && TerrainInspection.ContactDamage(player, x, y) > 0
+            bool trigger = includeTriggers && tile.HasUnactuatedTile && tile.TileType is TileID.PressurePlates or TileID.WeightedPressurePlate
+                && (tile.RedWire || tile.BlueWire || tile.GreenWire || tile.YellowWire);
+            if (!previous && (TerrainInspection.ContactDamage(player, x, y) > 0 || trigger)
                 || includeLava && tile.LiquidAmount > 0 && tile.LiquidType == LiquidID.Lava) return true;
         }
         return false;
@@ -152,13 +155,14 @@ public class AgentContactEscape : ModSystem
         for (int distance = 8; distance <= 80; distance += 8)
         {
             var position = player.position + new Vector2(direction * distance, 0);
-            if (Collision.SolidCollision(position, player.width, player.height) || Harmful(position, player, ignoreCurrentContact: true)) return false;
+            if (Collision.SolidCollision(position, player.width, player.height)
+                || Harmful(position, player, ignoreCurrentContact: true, includeTriggers: true)) return false;
             if (distance < 48) continue;
             bool floor = false;
             for (int drop = 0; drop <= 48; drop += 2)
             {
                 var landing = position + new Vector2(0, drop);
-                if (Harmful(landing, player)) return false;
+                if (Harmful(landing, player, includeTriggers: true)) return false;
                 if (Collision.SolidCollision(landing, player.width, player.height)) { floor = true; break; }
             }
             if (!floor) return false;
