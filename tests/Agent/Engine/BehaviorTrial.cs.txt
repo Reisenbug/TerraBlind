@@ -630,7 +630,7 @@ public sealed class BehaviorTrial : ModSystem
                     : (bool)EscapeField.GetValue(null) ? "survival_recovery"
                     : (int)QueryField.GetValue(null) > 0 ? "tool_query"
                     : ((AgentControlSession)SessionField.GetValue(null)).PrimaryActive ? "action_wait"
-                    : NativeAgent.Processing ? "model_wait" : "idle";
+                    : (bool)ProcessingProperty.GetValue(null) ? "model_wait" : "idle";
                 var stalled = new JsonObject { ["elapsed_ms"] = now, ["started_ms"] = queenStationaryStart,
                     ["phase"] = phase, ["x"] = p.Center.X / 16, ["y"] = p.Center.Y / 16,
                     ["hp"] = p.statLife, ["held"] = p.HeldItem.type, ["animation"] = p.itemAnimation,
