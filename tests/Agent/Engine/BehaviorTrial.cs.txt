@@ -76,6 +76,9 @@ public sealed class BehaviorTrial : ModSystem
     double queenSampleMs, queenCoveredMs, queenUncoveredMs, queenRespawnMs, queenComputeMs;
     double queenGapStart = -1;
     bool queenGapWarned;
+    Vector2 queenPositionAnchor;
+    double queenStationaryStart;
+    bool queenPositionTracked, queenStationaryWarned;
     readonly JsonArray queenGaps = new();
     JsonObject jungleSpawn, firstJungleAction;
     string progressionStage;
@@ -348,7 +351,7 @@ public sealed class BehaviorTrial : ModSystem
     public override void OnWorldLoad()
     {
         if (!enabled || !ShortJungleTrial && !ProgressionTrial && Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") != "1") return;
-        if (FullQueenRun && Environment.GetEnvironmentVariable("TB_DECISION_COMPARE") == null)
+        if (FullQueenRun && !string.IsNullOrEmpty(QueenResumeRoot) && Environment.GetEnvironmentVariable("TB_DECISION_COMPARE") == null)
         {
             VanillaNavBridge.Enabled = false;
             jungleSpawn = new JsonObject { ["x"] = Main.spawnTileX, ["y"] = Main.spawnTileY,
@@ -361,6 +364,7 @@ public sealed class BehaviorTrial : ModSystem
             jungleSpawn = JsonNode.Parse(File.ReadAllText(Path.Combine(QueenResumeRoot, "progression-cobalt-start.json")))["spawn"].DeepClone().AsObject();
             return;
         }
+        if (FullQueenRun) VanillaNavBridge.Enabled = false;
         var spawn = BiomeSearch.Jungle(Main.spawnTileX);
         if (spawn["found"]?.GetValue<bool>() != true) throw new Exception("no pure natural jungle surface spawn found");
         Main.spawnTileX = spawn["x"].GetValue<int>(); Main.spawnTileY = spawn["y"].GetValue<int>() + 1;
@@ -609,6 +613,34 @@ public sealed class BehaviorTrial : ModSystem
             if (p.dead) queenRespawnMs += elapsed;
             else if (covered) queenCoveredMs += elapsed;
             else queenUncoveredMs += elapsed;
+            if (p.dead || !queenPositionTracked || Vector2.DistanceSquared(p.position, queenPositionAnchor) > 64)
+            {
+                if (queenPositionTracked && queenStationaryWarned)
+                    Console.WriteLine("QUEEN_STATIONARY_END " + new JsonObject {
+                        ["started_ms"] = queenStationaryStart, ["ended_ms"] = now, ["duration_ms"] = now - queenStationaryStart }.ToJsonString());
+                queenPositionAnchor = p.position; queenStationaryStart = now;
+                queenPositionTracked = !p.dead; queenStationaryWarned = false;
+            }
+            else if (!queenStationaryWarned && now - queenStationaryStart >= 2000)
+            {
+                queenStationaryWarned = true;
+                var phase = RecedingNav.Active && !(bool)FieldReadyProperty.GetValue(null) ? "navigation_compute"
+                    : p.itemAnimation > 0 || p.controlUseItem ? p.HeldItem.pick > 0 || p.HeldItem.axe > 0 ? "mining"
+                        : p.HeldItem.createTile >= 0 ? "placement" : "attack_animation"
+                    : (bool)EscapeField.GetValue(null) ? "survival_recovery"
+                    : (int)QueryField.GetValue(null) > 0 ? "tool_query"
+                    : ((AgentControlSession)SessionField.GetValue(null)).PrimaryActive ? "action_wait"
+                    : NativeAgent.Processing ? "model_wait" : "idle";
+                var stalled = new JsonObject { ["elapsed_ms"] = now, ["started_ms"] = queenStationaryStart,
+                    ["phase"] = phase, ["x"] = p.Center.X / 16, ["y"] = p.Center.Y / 16,
+                    ["hp"] = p.statLife, ["held"] = p.HeldItem.type, ["animation"] = p.itemAnimation,
+                    ["item_time"] = p.itemTime, ["navigation"] = RecedingNav.Active,
+                    ["mining"] = MineCoordinator.IsActive, ["placement"] = PlaceAnywhere.IsRunning,
+                    ["primary_tool"] = ((AgentControlSession)SessionField.GetValue(null)).Tool,
+                    ["agent_status"] = NativeAgent.Status };
+                Console.WriteLine("QUEEN_STATIONARY_WARNING " + stalled.ToJsonString());
+                File.AppendAllText(Path.Combine(Main.SavePath, "queen-stationary.jsonl"), stalled.ToJsonString() + Environment.NewLine);
+            }
             if (RecedingNav.Active && !(bool)FieldReadyProperty.GetValue(null)) queenComputeMs += elapsed;
             if (!p.dead && !covered)
             {
@@ -5093,9 +5125,11 @@ public sealed class BehaviorTrial : ModSystem
     {
         if (Environment.GetEnvironmentVariable("TB_DECISION_COMPARE") is string comparison)
         { await DecisionComparison(comparison); return; }
-        if (!FullQueenRun && string.IsNullOrEmpty(QueenResumeRoot)) await OnMain(() =>
+        if (string.IsNullOrEmpty(QueenResumeRoot)) await OnMain(() =>
         {
             var player = Main.LocalPlayer;
+            if (Main.GameMode != 0 || player.ConsumedLifeCrystals != 0 || player.statLifeMax != 100)
+                throw new Exception("queen trial requires classic mode and a fresh 100-health player");
             int x = (int)player.Center.X / 16, y = (int)(player.Bottom.Y + 1) / 16;
             if (!player.ZoneJungle || player.ZoneCrimson || player.ZoneCorrupt || !player.ZoneOverworldHeight
                 || !Main.tile[x, y].HasTile || Main.tile[x, y].TileType != TileID.JungleGrass)
@@ -5110,9 +5144,11 @@ public sealed class BehaviorTrial : ModSystem
         string prompt = "/goal 前往丛林地下，获得至少240点永久生命上限，制作荆棘旋刃，召唤并击败蜂王。生命水晶、毒刺、丛林孢子、箱子并行规划：240血前以水晶为主要目标，其他资源和箱子在去水晶的路上近便时获取；达到240血后推进荆棘旋刃与蜂王，路上仍择机收集近便水晶和箱子。生命水晶及时使用。先利用find_descent与descent_route的丛林主道出发，赶路时完成材料知识查询和后续路线准备。结合当前地形地图安排采集及蜂巢场地。背包有星怒和足量木头，本轮持续鱼鳃与光芒效果。低血量唤醒观察，当前动作继续执行。持续推进直到真实结果通过宿主验收。";
         prompt = prompt.Replace("240", targetHealth.ToString(System.Globalization.CultureInfo.InvariantCulture));
         prompt += FullQueenRun
-            ? "本轮从世界默认出生点出发，先确定丛林方向并赶路。持续执行完整任务，记录实际进度，材料与场地准备期间提前完成后继判断。"
+            ? "本轮从丛林地表出生点出发，沿丛林主道进入地下。持续执行完整任务，记录实际进度，材料与场地准备期间提前完成后继判断。"
             : "本轮要求25分钟内达到300点永久生命并击败蜂王。以持续执行和实际进度安排路线，材料与场地准备期间提前完成后继判断。";
-        prompt += "本轮验证途中反应：首段行动前用task_policy挂整趟反应，途中继续完善，让近便资源拾取、背包整理和压力板局部恢复直接在脚本内执行；可读取task_reactions模板并按现场修改。200血以上零死亡，关注动作交接和超过10秒的停顿。";
+        prompt += "本轮验证途中反应：先启用星怒防身并启动前往主道的首段行进；行进期间用task_policy挂整趟反应，途中继续完善，让近便资源拾取、背包整理和压力板局部恢复直接在脚本内执行；可读取task_reactions模板并按现场修改。关注受伤原因、动作交接和超过2秒的位置停留。";
+        if (Environment.GetEnvironmentVariable("TB_QUEEN_DECISIONS") == "1")
+            prompt += "本轮启用Decision途中反应：读取decision_reactions和travel_intent示例，组合为同一task_policy中的处理函数。weapon负责选武器，opportunity负责顺路采集取舍；travel_intent负责通过nav_intent更新当前导航的continue/withdraw/cover意图。后台判断期间原动作持续，执行后根据实际反馈继续调整策略。";
         if (!string.IsNullOrEmpty(QueenResumeRoot))
         {
             prompt += "这是同一人物和地图的存档续接。先按当前永久生命与背包验收已有进度，推进剩余步骤；地图保留此前采集与放置的改变。";
