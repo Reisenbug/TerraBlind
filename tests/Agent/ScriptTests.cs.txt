@@ -177,6 +177,23 @@ static class ScriptTests
             AgentTools.ControlSession.Begin("nav_to", null, out ticket);
             Check(AgentNavigationIntent.RevisionFor(50, 20) == 0, "intent leaked into the next navigation action");
             AgentTools.ControlSession.End(ticket);
+            foreach (string owner in new[] { "gather", "mine", "collect_treasure", "act", "use_item" })
+            {
+                AgentTools.ControlSession.Begin(owner, null, out ticket);
+                var delegated = AgentNavigationIntent.Update(args);
+                bool navigates = owner is "gather" or "mine" or "collect_treasure";
+                Check((delegated["error"] == null) == navigates, "navigation owner incorrectly accepted/rejected: " + owner);
+                if (navigates)
+                {
+                    Check(AgentNavigationIntent.Select(50, 20, edges, 0) == 1, "delegated navigation ignored tactical intent: " + owner);
+                    var restore = AgentTools.ControlSession.SuspendPrimary();
+                    Check(AgentNavigationIntent.RevisionFor(50, 20) == 0, "suspended owner retained movement intent");
+                    restore();
+                    Check(AgentNavigationIntent.RevisionFor(50, 20) != 0, "restored owner lost intent");
+                }
+                AgentTools.ControlSession.End(ticket);
+                Check(AgentNavigationIntent.RevisionFor(50, 20) == 0, "finished delegated navigation leaked intent");
+            }
             Check(AgentNavigationIntent.Cost("cover", 10, 8, false) < AgentNavigationIntent.Cost("cover", 10, 8, true),
                 "cover ignored blocked sight lines");
         }
@@ -201,6 +218,11 @@ static class ScriptTests
             }, _ => Task.CompletedTask, default);
             Check(result["ok"].GetValue<bool>() && updates == (pending ? 0 : 1), "pending decision stopped navigation or ready intent was lost: " + result);
         }
+        var noDestination = await AgentScript.Run("const input={context:'gather'};" + ScriptLibrary.Example("travel_intent")["code"],
+            5, (_, _) => { }, (_, _, _) => throw new Exception("missing navigation destination caused a decision/tool request"),
+            _ => Task.CompletedTask, default);
+        Check(noDestination["ok"].GetValue<bool>() && noDestination["value"]["status"].ToString() == "no_navigation_destination",
+            "gather observation without a current navigation destination did not defer intent: " + noDestination);
         Console.WriteLine("PASS: navigation intent selects separation, expires, respects ownership and permissions, and publishes without movement handoff");
     }
 

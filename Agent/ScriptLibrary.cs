@@ -24,6 +24,7 @@ public sealed class ScriptLibrary
         if (name == "travel_intent") return Template(name,
             "行进战术意图实验。input含context、destination、instruction、baseline、last_request。后台判断continue/withdraw/cover，nav_intent让原导航在下一次选边读取当前意图；等待时继续原导航。返回request_id供调用者续接。",
             """
+            if(!Number.isInteger(input.destination?.x)||!Number.isInteger(input.destination?.y)) return {status:'no_navigation_destination'};
             const c=tool('combat_assess',{radius:25,terrain_radius:8});
             const target=c.targets.find(n=>n.attackable&&n.contact_damage>0&&n.distance_tiles<12);
             if(c.boss_present||!target){tool('nav_intent',{mode:'continue'});return {status:'no_threat',request_id:input.last_request};}
@@ -44,7 +45,7 @@ public sealed class ScriptLibrary
             const applied=tool('nav_intent',{mode:choice,target:observed.who,destination:input.destination});
             print({decision:'travel_intent',request:r.request_id,choice,model_ms:r.result.elapsed_ms,
               request_age_ms:r.request_age_ms,ready_wait_ms:r.ready_wait_ms,result:applied});
-            return {request_id:r.request_id,status:applied.error??'published'};
+            return {request_id:r.request_id,status:applied.error??'published',result:applied};
             """);
         if (name == "travel_maneuver") return Template(name,
             "赶路移动短策略。input含context、destination、instruction、weapon_order，可传combat/terrain、baseline、last_request、intent、last_forecast。意图保留2秒，匹配最新带共同路线前缀的原生候选；接管时核验人物、地形及分岔期限。比较继续导航、加快穿越、拉开敌距、进入方块遮挡；比较均为相同帧段。pending时继续原动作。返回request_id、intent、last_forecast、applied供调用者续接。",

@@ -145,7 +145,7 @@ public static class AgentScript
         tools.Add(new JsonObject { ["type"] = "function", ["function"] = new JsonObject
         {
             ["name"] = "nav_intent",
-            ["description"] = "更新当前nav_to的短时战术意图，原导航持续运行。withdraw增加与target敌怪的间距；cover偏向地形遮挡。意图绑定当前导航动作，持续2秒，可更新；敌怪消失、到达10格间距(withdraw)或动作结束后恢复原评分。continue清除意图。现有候选和物理校验负责执行。",
+            ["description"] = "更新当前导航的短时战术意图，包括gather、mine、collect_treasure内部的导航，原动作持续运行。withdraw增加与target敌怪的间距；cover偏向地形遮挡。意图绑定当前动作，持续2秒，可更新；敌怪消失、到达10格间距(withdraw)或动作结束后恢复原评分。continue清除意图。现有候选和物理校验负责执行。",
             ["parameters"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject
             {
                 ["mode"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("continue", "withdraw", "cover") },

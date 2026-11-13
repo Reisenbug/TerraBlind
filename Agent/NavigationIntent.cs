@@ -34,7 +34,8 @@ internal static class AgentNavigationIntent
         var denied = AgentTools.ControlSession.Check(ControlBehavior.Navigation, ControlChannels.Movement, true)
             ?? AgentTools.ControlSession.Check(ControlBehavior.Dodge, ControlChannels.Movement, true);
         if (denied != null) return denied;
-        if (!RecedingNav.Active || AgentTools.ControlSession.Tool != "nav_to" || VanillaNavBridge.Enabled)
+        long execution = AgentTools.ControlSession.NavigationExecution;
+        if (!RecedingNav.Active || execution == 0 || VanillaNavBridge.Enabled)
             return new JsonObject { ["error"] = "navigation_intent_requires_active_local_navigation" };
         int who = args["target"]?.GetValue<int>() ?? -1;
         if (who < 0 || who >= Main.npc.Length || Main.npc[who] is not { active: true, life: > 0, damage: > 0, friendly: false, townNPC: false, boss: false } npc)
@@ -43,7 +44,6 @@ internal static class AgentNavigationIntent
             return new JsonObject { ["error"] = "navigation_intent_target_out_of_range" };
         int x = args["destination"]?["x"]?.GetValue<int>() ?? throw new ArgumentException("需要destination.x。");
         int y = args["destination"]?["y"]?.GetValue<int>() ?? throw new ArgumentException("需要destination.y。");
-        long execution = AgentTools.ControlSession.Snapshot()["execution"].GetValue<long>();
         long now = Stopwatch.GetTimestamp();
         bool same = current is { } old && old.Mode == mode && old.Target == who && old.TargetType == npc.type
             && old.GoalX == x && old.GoalY == y && old.Execution == execution
@@ -60,8 +60,8 @@ internal static class AgentNavigationIntent
     {
         var intent = current;
         if (intent == null || intent.GoalX != goalX || intent.GoalY != goalY
-            || !RecedingNav.Active || Main.LocalPlayer.dead || AgentTools.ControlSession.Tool != "nav_to"
-            || AgentTools.ControlSession.Snapshot()["execution"].GetValue<long>() != intent.Execution
+            || !RecedingNav.Active || Main.LocalPlayer.dead
+            || AgentTools.ControlSession.NavigationExecution != intent.Execution
             || Stopwatch.GetElapsedTime(intent.Updated).TotalSeconds >= 2
             || AgentTools.ControlSession.Check(ControlBehavior.Navigation, ControlChannels.Movement, true) != null
             || AgentTools.ControlSession.Check(ControlBehavior.Dodge, ControlChannels.Movement, true) != null) return 0;

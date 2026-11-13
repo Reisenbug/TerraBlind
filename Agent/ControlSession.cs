@@ -21,6 +21,7 @@ public sealed class AgentControlSession
 
     public AgentControlSession(AgentControlPolicy policy) { this.policy = policy; }
     public bool PrimaryActive => current != 0;
+    internal long NavigationExecution => delegates.Contains(ControlBehavior.Navigation) ? current : 0;
     internal bool Gathering(int itemType) => gatheredItems.Values.Any(items => items.Contains(itemType));
     internal void BindGatherTargets(GatherTarget[] targets)
     {
