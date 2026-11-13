@@ -33,7 +33,7 @@ public sealed class ScriptLibrary
             const r=input.baseline?{status:'ready',request_id:c.tick,input_state:state,result:{answers:{response:{choice:
               target.distance_tiles<6?'withdraw':'continue'}}}}:tool('jev_judge',{channel:'travel_intent',context:input.context,
               interval_ms:1000,max_age_ms:2000,state,questions:{response:{type:'choice',instructions:
-                'Which navigation intent best supports state.instruction while handling the current nearby threat? Consider health, enemy movement, attack range and the terrain cells.',
+                'Which navigation intent best supports state.instruction while handling the current nearby threat? Consider health, enemy movement, attack range and the terrain cells. combat.navigation_options reports the last inspected candidate set at its recorded tick for its target. changes_edge and score_gain describe whether each intent found a better edge; use this feedback when the target matches. Choose continue when the inspected alternatives offer no improvement.',
                 criteria:{continue:'Keep following the destination while attacking.',
                   withdraw:'Temporarily increase separation from the selected nearby enemy while attacking; then continue the journey.',
                   cover:'Prefer a reachable edge with terrain across the selected enemy sight line, while continuing toward the destination.'}}}});

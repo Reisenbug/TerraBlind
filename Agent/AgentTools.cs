@@ -2575,6 +2575,7 @@ public static partial class AgentTools
             && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) <= radius * 16)
             .OrderBy(n => Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center)).Take(8);
         return new JsonObject { ["tick"] = Main.GameUpdateCount, ["recent_damage"] = LastDamage?.DeepClone(),
+            ["navigation_options"] = AgentNavigationIntent.Options(),
             ["boss_present"] = Main.npc.Any(n => n != null && n.active && n.boss
                 && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) < 3200),
             ["player"] = new JsonObject { ["hp"] = p.statLife,

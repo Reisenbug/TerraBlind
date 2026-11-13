@@ -14,11 +14,16 @@ internal static class AgentNavigationIntent
         long Execution, long Revision, long Published, long Updated);
     static Intent current;
     static long sequence;
+    static JsonObject options;
+
+    internal static JsonObject Options()
+        => current != null && options?["revision"]?.GetValue<long>() == current.Revision
+            && RevisionFor(current.GoalX, current.GoalY) != 0 ? (JsonObject)options.DeepClone() : null;
 
     internal static void Reset()
     {
         if (current != null) DiagLog.Write($"[navigation_intent_end] revision={current.Revision}");
-        current = null;
+        current = null; options = null;
     }
 
     internal static JsonObject Update(JsonObject args)
@@ -76,22 +81,32 @@ internal static class AgentNavigationIntent
         var intent = current;
         var npc = Main.npc[intent.Target];
         var player = Main.LocalPlayer;
-        float Score(Candidate c)
+        float Score(Candidate c, string mode)
         {
             var enemy = npc.position + npc.velocity * Math.Min(30, c.Frames);
             var position = new Vector2(c.X, c.Y);
             float distance = Vector2.Distance(position + new Vector2(player.width, player.height) * 0.5f,
                 enemy + new Vector2(npc.width, npc.height) * 0.5f) / 16;
-            return Cost(intent.Mode, c.Cost, distance,
-                intent.Mode == "cover" && Collision.CanHitLine(enemy, npc.width, npc.height, position, player.width, player.height));
+            return Cost(mode, c.Cost, distance,
+                mode == "cover" && Collision.CanHitLine(enemy, npc.width, npc.height, position, player.width, player.height));
         }
         int chosen = baseline;
-        float best = Score(candidates[baseline]);
-        for (int i = 0; i < candidates.Count; i++)
+        float best = Score(candidates[baseline], intent.Mode);
+        options = new JsonObject { ["revision"] = intent.Revision, ["target"] = intent.Target,
+            ["tick"] = Main.GameUpdateCount, ["modes"] = new JsonObject() };
+        foreach (string mode in new[] { "withdraw", "cover" })
         {
-            if (candidates[i].Cost > candidates[baseline].Cost + 80) continue;
-            float score = Score(candidates[i]);
-            if (score < best) { best = score; chosen = i; }
+            int pick = baseline;
+            float original = Score(candidates[baseline], mode), score = original;
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                if (candidates[i].Cost > candidates[baseline].Cost + 80) continue;
+                float cost = Score(candidates[i], mode);
+                if (cost < score) { score = cost; pick = i; }
+            }
+            options["modes"][mode] = new JsonObject { ["changes_edge"] = pick != baseline,
+                ["score_gain"] = original - score, ["route_cost_change"] = candidates[pick].Cost - candidates[baseline].Cost };
+            if (mode == intent.Mode) { chosen = pick; best = score; }
         }
         DiagLog.Write("[navigation_intent_select] " + new JsonObject {
             ["revision"] = intent.Revision, ["mode"] = intent.Mode, ["target"] = intent.Target,
@@ -101,7 +116,7 @@ internal static class AgentNavigationIntent
             ["changed"] = chosen != baseline, ["age_ms"] = Stopwatch.GetElapsedTime(intent.Published).TotalMilliseconds,
             ["baseline"] = new JsonObject { ["x"] = candidates[baseline].X, ["y"] = candidates[baseline].Y, ["cost"] = candidates[baseline].Cost },
             ["selected"] = new JsonObject { ["x"] = candidates[chosen].X, ["y"] = candidates[chosen].Y, ["cost"] = candidates[chosen].Cost },
-            ["score"] = best }.ToJsonString());
+            ["score"] = best, ["options"] = options.DeepClone() }.ToJsonString());
         return chosen;
     }
 }

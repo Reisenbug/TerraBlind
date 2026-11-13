@@ -68,6 +68,8 @@ static class ScriptTests
             var edges = new[] { new AgentNavigationIntent.Candidate(32, 0, 16, 10), new AgentNavigationIntent.Candidate(-32, 0, 16, 20),
                 new AgentNavigationIntent.Candidate(-200, 0, 16, 100) };
             Check(AgentNavigationIntent.Select(50, 20, edges, 0) == 1, "intent failed to choose separation or exceeded route cost allowance");
+            Check(AgentNavigationIntent.Options()["modes"]["withdraw"]["changes_edge"].GetValue<bool>(),
+                "model observation lost measured candidate feedback");
             Check(AgentNavigationIntent.Update(args)["revision"].GetValue<long>() == revision, "renewal invalidated the same intent");
             string denial = AgentTools.Control.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null, "test");
             Check(AgentNavigationIntent.RevisionFor(50, 20) == 0, "intent ignored revoked dodge permission");
