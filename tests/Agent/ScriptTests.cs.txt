@@ -38,13 +38,58 @@ static class ScriptTests
         await TacticalSkillInput();
         await NavigationIntents();
         await GatherReactionConsumption();
+        await NavigationRecoverySkill();
+        await ReactiveTravelExample();
         GatherTests.DecisionMovement();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=18 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=20 model_calls=0");
+    }
+
+    static async Task NavigationRecoverySkill()
+    {
+        foreach (string scenario in new[] { "contact", "plate", "solid", "changed", "failed", "unverified", "forbidden", "explosive" })
+        {
+            bool contact = scenario is not ("plate" or "forbidden" or "explosive");
+            int uses = 0;
+            var target = JsonNode.Parse("{\"x\":10,\"y\":11,\"type\":69,\"frame_x\":0,\"frame_y\":0,\"kind\":\"pressure_plate\",\"touch_damage\":10}");
+            if (scenario == "solid") target["solid"] = true;
+            if (scenario == "explosive") target["kind"] = "explosive";
+            var input = new JsonObject { ["error"] = contact ? "navigation_contact_escape" : "navigation_near_trap",
+                ["tile"] = target.DeepClone(), ["traps"] = new JsonArray(target.DeepClone()), ["allow_trigger_removal"] = scenario != "forbidden" };
+            var result = await AgentScript.Run("const input=" + input + ";" + ScriptLibrary.Example("recover_navigation")["code"],
+                5, (_, _) => { }, (name, args, _) =>
+                {
+                    if (name == "inventory_review") return Task.FromResult("{\"inventory\":[{\"slot\":2,\"pick\":35}]}");
+                    if (name == "inspect_terrain") return Task.FromResult(new JsonObject {
+                        [contact ? "near_body_tiles" : "trap_tiles"] = scenario == "changed" ? new JsonArray() : new JsonArray(target.DeepClone()) }.ToJsonString());
+                    if (name == "opportunity_assess") return Task.FromResult(new JsonObject { ["ok"] = true,
+                        ["target"] = new JsonObject { ["has_tile"] = scenario == "unverified", ["tile_type"] = 69 } }.ToJsonString());
+                    Check(name == "use_item" && args["strict"].GetValue<bool>() && args["duration_ticks"].GetValue<int>() == 16,
+                        "recovery bypassed bounded item-use mechanics");
+                    uses++; return Task.FromResult(scenario == "failed" ? "{\"error\":\"out_of_reach\"}" : "{\"outcome\":\"removed\"}");
+                }, _ => Task.CompletedTask, default);
+            Check(result["ok"].GetValue<bool>() && result["value"]["retry"].GetValue<bool>() == (scenario is "contact" or "plate")
+                && uses == (scenario is "contact" or "plate" or "failed" or "unverified" ? 1 : 0),
+                "local navigation repair retried without verified clearance: " + scenario + " " + result);
+        }
+        string directory = Path.Combine(Path.GetTempPath(), "terrablind-recovery-skill-" + Guid.NewGuid());
+        try
+        {
+            var library = new ScriptLibrary(directory);
+            Check(library.Callable().Single()["name"].ToString() == "recover_navigation", "built-in recovery required a model save before use");
+            library.Save("recover_navigation", "return {retry:false,reason:'custom_policy'};", 0);
+            var custom = await AgentScript.Run("return skill('recover_navigation',1);", 5, (_, _) => { },
+                (_, _, _) => throw new Exception("custom recovery unexpectedly called a tool"), _ => Task.CompletedTask, default,
+                programs: library.Callable());
+            Check(custom["ok"].GetValue<bool>() && custom["value"]["reason"].ToString() == "custom_policy",
+                "saved recovery revision did not replace its built-in implementation: " + custom);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        Console.WriteLine("PASS: navigation recovery verifies actual removal, respects hazards and supports immediate use or saved replacement");
     }
 
     static async Task GatherReactionConsumption()
@@ -1872,6 +1917,7 @@ static class ScriptTests
         JsonObject Plate() => JsonNode.Parse("{\"x\":12,\"y\":12,\"type\":135,\"frame_x\":0,\"frame_y\":126,\"kind\":\"pressure_plate\"}").AsObject();
         async Task<string> Execute(string name, JsonObject args, CancellationToken token)
         {
+            if (name == "script_program") return ScriptLibrary.Example("recover_navigation").ToJsonString();
             if (name == "get_state") return new JsonObject { ["player"] = JsonNode.Parse("{\"hp\":260,\"pos\":{\"x\":160,\"y\":160}}"),
                 ["agent"] = JsonNode.Parse("{\"auto_attack\":true,\"combat_weapon_type\":0}"),
                 ["inventory_counts"] = new JsonObject(stock.Select(pair => new KeyValuePair<string, JsonNode>(pair.Key.ToString(), JsonValue.Create(pair.Value)))),
@@ -1888,6 +1934,7 @@ static class ScriptTests
                     ? JsonNode.Parse("[{\"x\":12,\"y\":10,\"type\":69,\"touch_damage\":10,\"in_body\":false}]") : new JsonArray() }.ToJsonString();
             if (name == "use_item") { plate = false; effects.Add("remove_plate"); return "{\"outcome\":\"removed\"}"; }
             if (name == "opportunity_assess") return new JsonObject { ["ok"] = true,
+                ["target"] = new JsonObject { ["has_tile"] = false },
                 ["approach_direct_distance"] = args["x"].GetValue<int>() == 90 ? 40 : 2,
                 ["route_relation"] = JsonNode.Parse("{\"extra_direct_distance\":2}"), ["hazards"] = new JsonArray() }.ToJsonString();
             if (name == "gather")
@@ -1921,7 +1968,8 @@ static class ScriptTests
             return "{\"done\":true}";
         }
         string code = "const input=" + Config().ToJsonString() + ";\n" + ScriptLibrary.Example("reactive_travel")["code"];
-        var result = await AgentScript.Run(code, 5, (_, _) => { }, Execute, _ => Task.CompletedTask, default, new ScriptProgress());
+        var result = await AgentScript.Run(code, 5, (_, _) => { }, Execute, _ => Task.CompletedTask, default, new ScriptProgress(),
+            programs: new JsonArray(ScriptLibrary.Example("recover_navigation")));
         Check(result["ok"].GetValue<bool>() && result["value"]["done"].GetValue<bool>(), "reactive travel example failed: " + result);
         Check(effects.SequenceEqual(new[] { "remove_plate", "inventory_trash", "collect:331", "collect:209", "chest", "inventory_drop", "weapon:65", "pass_thorn", "weapon:3507", "weapon:0" })
             && navStarts == 2 && stock[331] == 1 && stock[209] == 1,

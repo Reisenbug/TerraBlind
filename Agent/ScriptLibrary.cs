@@ -11,7 +11,7 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -21,6 +21,29 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "recover_navigation") return Template(name,
+            "内置局部恢复技能，可直接调用revision=0。input含error、tile或traps、allow_trigger_removal。核对近身非实心接触伤害物或获准拆除的压力板，使用实际镐子并验证方块变化；retry只在修复验证后返回true。保存同名修订可替换实现，调用时取当前revision。",
+            """
+            const contact=input.error==='navigation_contact_escape';
+            const targets=contact?(input.tile?[input.tile]:[]):input.traps??[];
+            if(!targets.length||!contact&&(input.error!=='navigation_near_trap'||!input.allow_trigger_removal
+              ||targets.some(t=>t.kind!=='pressure_plate'))) return {retry:false,reason:'uncovered_failure'};
+            const pick=tool('inventory_review').inventory.filter(i=>i.pick>0).sort((a,b)=>b.pick-a.pick)[0];
+            if(!pick) return {retry:false,reason:'no_pickaxe'};
+            const same=(a,b)=>['x','y','type',...(contact?[]:['frame_x','frame_y'])].every(k=>a[k]===b[k]);
+            for(const target of targets){
+              const scene=tool('inspect_terrain',{radius:8});
+              const observed=(contact?scene.near_body_tiles:scene.trap_tiles).find(t=>same(t,target));
+              if(!observed||contact&&(!observed.touch_damage||observed.solid||observed.falling))
+                return {retry:false,reason:'hazard_evidence_changed'};
+              const result=tool('use_item',{slot:pick.slot,x:target.x,y:target.y,strict:true,duration_ticks:16});
+              if(result.error) return {retry:false,reason:result.error};
+              const checked=tool('opportunity_assess',{x:target.x,y:target.y});
+              if(!checked.ok||checked.target.has_tile&&checked.target.tile_type===target.type)
+                return {retry:false,reason:'hazard_not_removed'};
+            }
+            return {retry:true,removed:targets.length};
+            """);
         if (name == "travel_intent") return Template(name,
             "行进战术意图实验。input含context、destination、instruction、baseline、last_request。后台判断continue/withdraw/cover，nav_intent让原导航在下一次选边读取当前意图；等待时继续原导航。返回request_id供调用者续接。",
             """
@@ -322,7 +345,6 @@ public sealed class ScriptLibrary
                 request_age_ms:r.request_age_ms,model_ms:r.result.elapsed_ms,action});
             };
             const count=type=>state(['inventory_counts']).inventory_counts[type]??0;
-            const same=(a,b)=>a.x===b.x&&a.y===b.y&&a.type===b.type&&a.frame_x===b.frame_x&&a.frame_y===b.frame_y;
             const protectedTypes=new Set([...config.resources.map(r=>r.item_type),...config.weapon_order,...(config.protected_types??[])]);
             const makeSpace=()=>{
               const bag=tool('inventory_review');
@@ -394,17 +416,10 @@ public sealed class ScriptLibrary
             on('action_failed',event=>{
               if(event.result.outcome==='inventory_full') return {retry:makeSpace()};
               const nav=event.result.last_result?.result?.navigation??event.result.navigation??event.result;
-              const traps=nav.trap_tiles;
-              if(nav.error!=='navigation_near_trap'||!config.allow_trigger_removal
-                  ||!traps?.length||traps.some(t=>t.kind!=='pressure_plate')) return {retry:false};
-              const pick=tool('inventory_review').inventory.filter(i=>i.pick>0).sort((a,b)=>b.pick-a.pick)[0];
-              if(!pick) return {retry:false};
-              for(const trap of traps){
-                if(!tool('inspect_terrain').trap_tiles.some(t=>same(t,trap))) return {retry:false};
-                const r=tool('use_item',{slot:pick.slot,x:trap.x,y:trap.y});
-                if(r.outcome!=='removed'||tool('inspect_terrain').trap_tiles.some(t=>same(t,trap))) return {retry:false};
-              }
-              return {retry:true};
+              if(!['navigation_contact_escape','navigation_near_trap'].includes(nav.error)) return {retry:false};
+              const program=tool('script_program',{operation:'get',name:'recover_navigation'});
+              return skill('recover_navigation',program.revision,{error:nav.error,tile:nav.contact_escape?.predicted_tile,
+                traps:nav.trap_tiles,allow_trigger_removal:config.allow_trigger_removal});
             });
             let combatChoice='',decisionWeapon=originalCombat.combat_weapon_type,jointChosen=false;
             on('tick',event=>{
@@ -825,10 +840,10 @@ public sealed class ScriptLibrary
     public JsonArray Callable()
     {
         lock (gate)
-            return new JsonArray((Directory.Exists(directory)
-                ? Directory.EnumerateFiles(directory, "*.json").OrderBy(path => path)
-                    .Select(path => (JsonNode)Get(Path.GetFileNameWithoutExtension(path), includeRuntime: false))
-                : Enumerable.Empty<JsonNode>()).ToArray());
+            return new JsonArray(new[] { "recover_navigation" }.Concat(Directory.Exists(directory)
+                ? Directory.EnumerateFiles(directory, "*.json").Select(Path.GetFileNameWithoutExtension)
+                : Enumerable.Empty<string>()).Distinct().OrderBy(name => name)
+                .Select(name => (JsonNode)Get(name, includeRuntime: false)).ToArray());
     }
 
     public void RecordCalls(JsonArray calls, string world)
