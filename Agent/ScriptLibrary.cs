@@ -43,6 +43,7 @@ public sealed class ScriptLibrary
               const before=scene();
               if(before.combat.boss_present||!before.obstacle&&!before.threats.length) return {handled:true};
               const state={instruction:input.instruction,destination,combat:before.combat,terrain:before.terrain,
+                coordinates:'player pos/size and all velocities: pixels or pixels per tick; destination, terrain and enemy/projectile x/y: tiles (16 pixels each)',
                 available:{none:true,nearby_enemy:before.grounded&&before.threats.length>0,contact_terrain:!!before.obstacle},
                 enemy:before.threats[0]??null,obstacle:before.obstacle??null,history};
               let r;
@@ -90,8 +91,22 @@ public sealed class ScriptLibrary
               return {handled:true,retry};
             };
             on('tick',run);
-            on('action_failed',event=>event.tool==='nav_to'&&event.result.error==='navigation_contact_escape'
-              ?run(event):{handled:false});
+            on('action_failed',event=>{
+              if(event.tool!=='nav_to') return {handled:false};
+              if(event.result.error==='navigation_contact_escape') return run(event);
+              const traps=event.result.trap_tiles;
+              if(event.result.error!=='navigation_near_trap'||!input.allow_trigger_removal
+                ||!traps?.length||traps.some(t=>t.kind!=='pressure_plate')) return {handled:false};
+              const same=(a,b)=>['x','y','type','frame_x','frame_y'].every(k=>a[k]===b[k]);
+              const pick=tool('inventory_review').inventory.filter(w=>w.pick>0).sort((a,b)=>b.pick-a.pick)[0];
+              if(!pick) return {handled:false};
+              for(const trap of traps){
+                if(!tool('inspect_terrain').trap_tiles.some(t=>same(t,trap))) return {handled:false};
+                const r=tool('use_item',{slot:pick.slot,x:trap.x,y:trap.y,strict:true});
+                if(r.outcome!=='removed'||tool('inspect_terrain').trap_tiles.some(t=>same(t,trap))) return {handled:false};
+              }
+              return {handled:true,retry:true};
+            });
             return {registered:true};
             """);
         if (name == "joint_combat") return Template(name,

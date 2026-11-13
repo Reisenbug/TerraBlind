@@ -197,7 +197,7 @@ static class ScriptTests
 
     static async Task TestTacticalReactions()
     {
-        foreach (string scenario in new[] { "pending", "continue", "enemy", "stale_enemy", "blocked", "clear", "trap", "failed_clear", "baseline" })
+        foreach (string scenario in new[] { "pending", "continue", "enemy", "stale_enemy", "blocked", "clear", "trap", "failed_clear", "baseline", "pressure", "pressure_denied" })
         {
             int acts = 0, clears = 0, polls = 0;
             JsonObject decision = null;
@@ -217,9 +217,13 @@ static class ScriptTests
                 terrain["near_body_tiles"].AsArray().Add(JsonNode.Parse("{\"x\":11,\"y\":12,\"type\":69,\"touch_damage\":10,\"solid\":false,\"falling\":false}"));
                 if (scenario == "trap") terrain["trap_tiles"].AsArray().Add(new JsonObject { ["x"] = 11, ["y"] = 12 });
             }
+            bool pressure = scenario is "pressure" or "pressure_denied";
+            if (pressure)
+                terrain["trap_tiles"].AsArray().Add(JsonNode.Parse("{\"x\":11,\"y\":12,\"type\":135,\"frame_x\":0,\"frame_y\":54,\"kind\":\"pressure_plate\"}"));
             var template = ScriptLibrary.Example("tactical_reactions");
             Check(template["code"].ToString().Length <= 16000, "tactical example exceeded saved skill limit");
-            string code = "skill('tactical_reactions',0,{instruction:'reach jungle',weapon_order:[279],baseline:"
+            string code = "skill('tactical_reactions',0,{instruction:'reach jungle',weapon_order:[279],allow_trigger_removal:"
+                + (scenario == "pressure" ? "true" : "false") + ",baseline:"
                 + (scenario == "baseline" ? "true" : "false") + "});return tool('nav_to',{x:50,y:20});";
             var result = await AgentScript.Run(code, 5, (_, _) => { }, async (name, args, token) =>
             {
@@ -239,6 +243,7 @@ static class ScriptTests
                     clears++;
                     Check(args["slot"].GetValue<int>() == 2 && args["x"].GetValue<int>() == 11 && args["strict"].GetValue<bool>(),
                         "tactics cleared an unobserved coordinate");
+                    if (pressure) terrain["trap_tiles"] = new JsonArray();
                     return scenario == "failed_clear" ? "{\"error\":\"cannot_reach\"}" : "{\"outcome\":\"removed\"}";
                 }
                 if (name == "jev_judge")
@@ -255,17 +260,18 @@ static class ScriptTests
                 }
                 Check(name == "nav_to", "unexpected tactical action: " + name);
                 var reactions = AgentScript.CurrentReactions.Value;
-                var notice = new JsonObject { ["kind"] = scenario is "clear" or "failed_clear" ? "action_failed" : "tick",
-                    ["tool"] = "nav_to", ["args"] = args.DeepClone(), ["result"] = new JsonObject { ["error"] = "navigation_contact_escape" },
+                var notice = new JsonObject { ["kind"] = pressure || scenario is "clear" or "failed_clear" ? "action_failed" : "tick",
+                    ["tool"] = "nav_to", ["args"] = args.DeepClone(), ["result"] = new JsonObject {
+                        ["error"] = pressure ? "navigation_near_trap" : "navigation_contact_escape", ["trap_tiles"] = terrain["trap_tiles"].DeepClone() },
                     ["execution"] = new JsonObject { ["tool"] = "nav_to", ["args"] = args.DeepClone() } };
                 decision = await reactions.Dispatch(notice, token);
-                if (scenario is not ("clear" or "failed_clear" or "baseline")) await reactions.Dispatch(notice, token);
+                if (!pressure && scenario is not ("clear" or "failed_clear" or "baseline")) await reactions.Dispatch(notice, token);
                 return "{\"done\":true}";
             }, _ => Task.CompletedTask, default, programs: new JsonArray(template));
             Check(result["ok"].GetValue<bool>() && acts == (scenario is "enemy" or "baseline" ? 3 : 0)
-                && clears == (scenario is "clear" or "failed_clear" ? 1 : 0), "tactical action replayed or lost revalidation: " + scenario + " " + result);
-            Check(polls == (scenario is "baseline" or "blocked" or "trap" ? 0 : 2 - (scenario is "clear" or "failed_clear" ? 1 : 0)), "unexpected tactical model polling: " + scenario);
-            if (scenario is "clear" or "failed_clear") Check(decision["retry"].GetValue<bool>() == (scenario == "clear"),
+                && clears == (scenario is "clear" or "failed_clear" or "pressure" ? 1 : 0), "tactical action replayed or lost revalidation: " + scenario + " " + result);
+            Check(polls == (pressure || scenario is "baseline" or "blocked" or "trap" ? 0 : 2 - (scenario is "clear" or "failed_clear" ? 1 : 0)), "unexpected tactical model polling: " + scenario);
+            if (scenario is "clear" or "failed_clear" or "pressure") Check(decision["retry"].GetValue<bool>() == (scenario != "failed_clear"),
                 "tactical retry lacked a verified terrain change");
         }
         await ReactiveHostIntegration(emptyWindow: true);
