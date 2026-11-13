@@ -78,7 +78,7 @@ for argument in sys.argv[1:]:
         if '[script_decision_request] ' in line:
             payload = json.loads(line.split('[script_decision_request] ', 1)[1])
             criteria = payload['questions'].get('response', {}).get('criteria', {})
-            dimension = 'combat' if any('_weapon_' in k for k in criteria) else 'tactics' if 'contact_terrain' in criteria else 'weapon' if any(k.startswith('weapon_') for k in criteria) else 'movement' if 'follow_route' in criteria else 'opportunity' if 'take' in criteria else 'probe'
+            dimension = 'combat' if any('_weapon_' in k for k in criteria) else 'maneuver' if 'withdraw' in criteria and 'cover' in criteria else 'tactics' if 'contact_terrain' in criteria else 'weapon' if any(k.startswith('weapon_') for k in criteria) else 'movement' if 'follow_route' in criteria else 'opportunity' if 'take' in criteria else 'probe'
             requests[dimension] += 1
             if dimension != 'probe':
                 valid_choices.update(criteria)

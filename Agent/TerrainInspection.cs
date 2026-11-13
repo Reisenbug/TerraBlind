@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Text.Json.Nodes;
+using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ID;
 
@@ -11,6 +12,33 @@ namespace TerraBlind;
 
 public static class TerrainInspection
 {
+    internal static JsonObject MovementExposure(JsonObject scene, JsonObject movement)
+    {
+        var player = scene["player"];
+        var end = movement["end"];
+        int frames = movement["observed_comparison_frames"].GetValue<int>();
+        int width = player["size_pixels"]["width"].GetValue<int>(), height = player["size_pixels"]["height"].GetValue<int>();
+        var start = new Vector2(player["pos"]["x"].GetValue<float>(), player["pos"]["y"].GetValue<float>());
+        var finish = end == null ? start : new Vector2(end["x"].GetValue<float>(), end["y"].GetValue<float>());
+        var center = new Vector2(width / 2f, height / 2f);
+        var targets = new JsonArray();
+        foreach (var enemy in scene["targets"].AsArray().Where(n => n["contact_damage"].GetValue<int>() > 0))
+        {
+            var position = new Vector2(enemy["x"].GetValue<float>() * 16, enemy["y"].GetValue<float>() * 16);
+            var predicted = position + new Vector2(enemy["vx_pixels_per_tick"].GetValue<float>(), enemy["vy_pixels_per_tick"].GetValue<float>()) * frames;
+            int ew = Math.Max(1, (int)(enemy["width_tiles"].GetValue<float>() * 16)),
+                eh = Math.Max(1, (int)(enemy["height_tiles"].GetValue<float>() * 16));
+            var halfEnemy = new Vector2(ew / 2f, eh / 2f);
+            targets.Add(new JsonObject { ["who"] = enemy["who"].DeepClone(),
+                ["start_distance_tiles"] = Vector2.Distance(start + center, position) / 16,
+                ["end_distance_tiles"] = Vector2.Distance(finish + center, predicted) / 16,
+                ["start_terrain_line_clear"] = Collision.CanHitLine(position - halfEnemy, ew, eh, start, width, height),
+                ["end_terrain_line_clear"] = Collision.CanHitLine(predicted - halfEnemy, ew, eh, finish, width, height) });
+        }
+        return new JsonObject { ["frames"] = frames, ["targets"] = targets,
+            ["assumption"] = "Current world terrain; enemy motion uses constant velocity. Distances use actor centers. A blocked terrain line is geometric occlusion; attack penetration and enemy navigation remain unknown." };
+    }
+
     internal static int ContactDamage(Player player, int x, int y)
     {
         var tile = Main.tile[x, y];

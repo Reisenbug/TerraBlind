@@ -306,6 +306,7 @@ public sealed class CombatForecast : ModSystem
         var plans = new JsonArray();
         foreach (var movement in movements)
         {
+            movement["exposure"] = TerrainInspection.MovementExposure(forecast.Scene, movement.AsObject());
             foreach (int type in weapons.Select(w => w.type).DefaultIfEmpty(0))
             {
                 var weapon = weapons.FirstOrDefault(w => w.type == type);

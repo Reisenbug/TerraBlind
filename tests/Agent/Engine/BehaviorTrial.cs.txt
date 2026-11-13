@@ -4862,9 +4862,10 @@ public sealed class BehaviorTrial : ModSystem
     async Task DecisionComparison(string variant)
     {
         if (Environment.GetEnvironmentVariable("TB_DECISION_FIGHT_TRIAL") == "1") { await FightDecisionComparison(variant); return; }
-        bool tactics = variant is "tactics" or "tactics_baseline";
-        string[] dimensions = variant is "baseline" or "tactics_baseline" ? Array.Empty<string>() : variant.Split(',');
-        if (dimensions.Any(d => d is not ("weapon" or "movement" or "opportunity" or "combat" or "tactics")))
+        bool maneuvers = variant is "maneuver" or "maneuver_baseline";
+        bool tactics = maneuvers || variant is "tactics" or "tactics_baseline";
+        string[] dimensions = variant is "baseline" or "tactics_baseline" or "maneuver_baseline" ? Array.Empty<string>() : variant.Split(',');
+        if (dimensions.Any(d => d is not ("weapon" or "movement" or "opportunity" or "combat" or "tactics" or "maneuver")))
             throw new ArgumentException("Unknown comparison dimension: " + variant);
         bool strongWeapon = Environment.GetEnvironmentVariable("TB_DECISION_STRONG_WEAPON") == "1";
         int startIndex = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_ROUTE_START") ?? "-1");
@@ -4914,7 +4915,7 @@ public sealed class BehaviorTrial : ModSystem
             if (index < line.Count) waypoints.Add(new JsonObject { ["x"] = line[index][0].DeepClone(), ["y"] = line[index][1].DeepClone() });
         var config = new JsonObject
         {
-            ["baseline"] = variant == "tactics_baseline",
+            ["baseline"] = variant is "tactics_baseline" or "maneuver_baseline",
             ["decisions"] = new JsonArray(dimensions.Select(d => (JsonNode)JsonValue.Create(d)).ToArray()),
             ["instruction"] = "Travel into the underground jungle efficiently. Handle enemies while keeping the journey moving. Collect useful nearby resources and chests when worth the detour. Use terrain and retreat when equipment is inadequate.",
             ["resources"] = JsonNode.Parse("[{\"item_type\":29,\"count\":10,\"tile_type\":12,\"tile_name\":\"Heart\"},{\"item_type\":331,\"count\":6,\"tile_type\":61,\"tile_name\":\"JunglePlants\",\"frame_x\":144},{\"item_type\":209,\"count\":9}]"),
@@ -4924,6 +4925,13 @@ public sealed class BehaviorTrial : ModSystem
             ["trash_types"] = new JsonArray(), ["drop_types"] = new JsonArray(),
             ["decision_interval_ms"] = 750, ["decision_max_age_ms"] = 2000
         };
+        if (maneuvers)
+        {
+            var helper = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "travel_maneuver",
+                ["expected_revision"] = 0, ["code"] = ScriptLibrary.Example("travel_maneuver")["code"].DeepClone() });
+            if (helper["error"] != null) throw new Exception("Maneuver skill rejected: " + helper);
+            config["maneuver_skill_revision"] = helper["revision"].DeepClone();
+        }
         if (dimensions.Contains("combat"))
         {
             var helper = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "joint_combat",

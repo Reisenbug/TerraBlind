@@ -33,13 +33,15 @@ static class ScriptTests
         await TestTacticalReactions();
         await ConcurrentPolicyContext();
         await BoundedCollectUse();
+        TestMovementExposure();
+        await TestTravelManeuver();
         GatherTests.DecisionMovement();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=13 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=15 model_calls=0");
     }
 
     static async Task TestDecisionChannels()
@@ -280,6 +282,84 @@ static class ScriptTests
         }
         await ReactiveHostIntegration(emptyWindow: true);
         Console.WriteLine("PASS: tactical skill continues while pending, bounds combat windows, revalidates targets and retries only after tile removal");
+    }
+
+    static void TestMovementExposure()
+    {
+        var lineTest = Terraria.Collision.LineTest;
+        var rays = new List<(Microsoft.Xna.Framework.Vector2 From, Microsoft.Xna.Framework.Vector2 To)>();
+        try
+        {
+            Terraria.Collision.LineTest = (a, b) => { rays.Add((a, b)); return b.X < 200; };
+            var scene = JsonNode.Parse("""
+                {"player":{"pos":{"x":160,"y":160},"size_pixels":{"width":20,"height":40}},"targets":[
+                 {"who":1,"contact_damage":20,"x":20,"y":11.25,"vx_pixels_per_tick":1,"vy_pixels_per_tick":-0.5,"width_tiles":1,"height_tiles":1},
+                 {"who":2,"contact_damage":0}]}
+                """).AsObject();
+            var movement = JsonNode.Parse("{\"observed_comparison_frames\":24,\"end\":{\"x\":208,\"y\":160}}").AsObject();
+            var result = TerrainInspection.MovementExposure(scene, movement);
+            var enemy = result["targets"][0];
+            Check(result["targets"].AsArray().Count == 1 && result["frames"].GetValue<int>() == 24
+                && Math.Abs(enemy["start_distance_tiles"].GetValue<float>() - 9.375) < 0.00001
+                && Math.Abs(enemy["end_distance_tiles"].GetValue<float>() - Math.Sqrt(126 * 126 + 12 * 12) / 16) < 0.00001,
+                "movement exposure mixed actor centers, coordinate units or the comparison horizon");
+            Check(enemy["start_terrain_line_clear"].GetValue<bool>() && !enemy["end_terrain_line_clear"].GetValue<bool>()
+                && rays[0].From.X == 312 && rays[0].From.Y == 172 && rays[1].From.X == 336 && rays[1].From.Y == 160,
+                "terrain ray checks did not use predicted enemy bounds and player positions");
+            Console.WriteLine("PASS: exposure uses actor centers, equal comparison frames and actual terrain rays with explicit motion assumptions");
+        }
+        finally { Terraria.Collision.LineTest = lineTest; }
+    }
+
+    static async Task TestTravelManeuver()
+    {
+        foreach (string scenario in new[] { "advance", "withdraw", "cover", "continue", "pending", "unsafe", "rejected", "unarmed", "baseline" })
+        {
+            int acted = 0, judged = 0;
+            var movements = new JsonArray(); var plans = new JsonArray();
+            foreach (var (name, progress, distance, clear) in new[] { ("follow_route", 1, 5, true), ("left", 0, 10, true), ("right", 3, 4, false) })
+            {
+                movements.Add(new JsonObject { ["id"] = name, ["safe_landing"] = scenario != "unsafe", ["comparison_complete"] = true,
+                    ["comparison_frames"] = 24, ["route_progress_tiles"] = progress,
+                    ["linear_threat_overlap"] = new JsonObject { ["npc_object_frames"] = 2, ["projectile_object_frames"] = 0 },
+                    ["exposure"] = new JsonObject { ["targets"] = new JsonArray(new JsonObject { ["who"] = 1,
+                        ["start_distance_tiles"] = 6, ["end_distance_tiles"] = distance, ["end_terrain_line_clear"] = clear }) } });
+                plans.Add(new JsonObject { ["id"] = name + "_weapon", ["movement"] = name, ["movement_available"] = scenario != "unsafe",
+                    ["weapon_type"] = scenario == "unarmed" ? 0 : 279, ["target_checks"] = new JsonArray(new JsonObject { ["line_or_reach_passed"] = true }) });
+            }
+            var combat = new JsonObject { ["targets"] = new JsonArray(new JsonObject { ["contact_damage"] = 20 }), ["projectiles"] = new JsonArray(),
+                ["forecast"] = new JsonObject { ["id"] = 12, ["status"] = scenario == "pending" ? "pending" : "ready",
+                    ["movements"] = movements, ["plans"] = plans, ["scope"] = "equal frame test" } };
+            var input = new JsonObject { ["context"] = "route", ["instruction"] = "reach jungle efficiently", ["baseline"] = scenario == "baseline",
+                ["destination"] = new JsonObject { ["x"] = 50, ["y"] = 20 }, ["weapon_order"] = new JsonArray(279) };
+            var result = await AgentScript.Run("const input=" + input.ToJsonString() + ";" + ScriptLibrary.Example("travel_maneuver")["code"],
+                5, (_, _) => { }, (name, args, _) =>
+                {
+                    if (name == "combat_assess") return Task.FromResult(combat.ToJsonString());
+                    if (name == "jev_judge")
+                    {
+                        judged++;
+                        Check(args["questions"]["response"]["criteria"].AsObject().Count == 4
+                            && args["state"]["options"]["advance"]["movement"].ToString() == "right"
+                            && args["state"]["options"]["withdraw"]["movement"].ToString() == "left"
+                            && args["state"]["options"]["cover"]["cover_gain"].GetValue<int>() == 1,
+                            "strategy options lost measured progress, separation or terrain occlusion");
+                        return Task.FromResult(new JsonObject { ["status"] = "ready", ["request_id"] = 1, ["input_state"] = args["state"].DeepClone(),
+                            ["result"] = new JsonObject { ["answers"] = new JsonObject { ["response"] = new JsonObject {
+                                ["choice"] = scenario is "unarmed" or "rejected" ? "withdraw" : scenario } } } }.ToJsonString());
+                    }
+                    Check(name == "act" && args["combat_candidate"]["forecast_id"].GetValue<int>() == 12,
+                        "maneuver bypassed the fresh native execution proof");
+                    string expected = scenario is "withdraw" or "unarmed" or "rejected" ? "left_weapon" : "right_weapon";
+                    Check(args["combat_candidate"]["plan_id"].ToString() == expected, "strategy selected the wrong native movement");
+                    acted++;
+                    return Task.FromResult(scenario == "rejected" ? "{\"error\":\"combat_candidate_changed\"}" : "{\"outcome\":\"done\"}");
+                }, _ => Task.CompletedTask, default);
+            Check(result["ok"].GetValue<bool>() && acted == (scenario is "continue" or "pending" or "unsafe" ? 0 : 1)
+                && judged == (scenario is "pending" or "unsafe" or "baseline" ? 0 : 1), "maneuver acted while pending or unsafe: " + scenario + " " + result);
+            if (scenario == "rejected") Check(!result["value"]["applied"].GetValue<bool>(), "rejected native proof became a successful strategy");
+        }
+        Console.WriteLine("PASS: travel strategies share native options, allow unarmed withdrawal, preserve pending navigation and honor native rejection");
     }
 
     static async Task BoundedCollectUse()
@@ -664,6 +744,8 @@ static class ScriptTests
         await TestTacticalReactions();
         await ConcurrentPolicyContext();
         await BoundedCollectUse();
+        TestMovementExposure();
+        await TestTravelManeuver();
         string programDirectory = Path.Combine(Path.GetTempPath(), "terrablind-program-" + Guid.NewGuid().ToString("N"));
         try
         {

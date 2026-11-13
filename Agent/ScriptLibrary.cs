@@ -11,7 +11,7 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -21,11 +21,76 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "travel_maneuver") return Template(name,
+            "赶路中的移动短策略。input含context、destination、instruction、weapon_order，可传combat/terrain、baseline、last_request。使用现有原生推演和执行前重新推演，比较继续导航、加快穿越、拉开敌距、进入方块遮挡。比较均为相同帧段；直线距离和视线只是现场证据。pending时继续原动作。返回request_id、applied供调用者去重。",
+            """
+            const observed=input.combat??tool('combat_assess',{radius:25});
+            if(observed.boss_present||!observed.targets.some(n=>n.contact_damage>0)&&!observed.projectiles.length)
+              return {status:'no_threat'};
+            const c=tool('combat_assess',{radius:25,forecast:true,context:input.context,destination:input.destination}),f=c.forecast;
+            if(f.status!=='ready') return {status:f.status,reason:f.reason};
+            const summarize=m=>{
+              const ts=m.exposure.targets;
+              const start=ts.length?Math.min(...ts.map(t=>t.start_distance_tiles)):null;
+              const end=ts.length?Math.min(...ts.map(t=>t.end_distance_tiles)):null;
+              const plans=f.plans.filter(p=>p.movement===m.id&&p.movement_available);
+              const usable=plans.some(p=>p.target_checks.some(t=>t.line_or_reach_passed))
+                ?plans.filter(p=>p.target_checks.some(t=>t.line_or_reach_passed)):plans;
+              const rank=p=>{const i=(input.weapon_order??[]).indexOf(p.weapon_type);return i<0?999:i;};
+              const plan=usable.sort((a,b)=>rank(a)-rank(b))[0];
+              return {movement:m.id,plan_id:plan?.id,weapon_type:plan?.weapon_type,safe_landing:m.safe_landing,
+                comparison_frames:m.comparison_frames,comparison_complete:m.comparison_complete,
+                route_progress_tiles:m.route_progress_tiles,nearest_enemy_start_tiles:start,nearest_enemy_end_tiles:end,
+                enemy_separation_delta_tiles:start==null?null:end-start,exposure:m.exposure,
+                linear_threat_overlap:m.linear_threat_overlap,path_samples_pixels:m.path_samples_pixels};
+            };
+            const baseline=summarize(f.movements.find(m=>m.id==='follow_route'));
+            const candidates=f.movements.filter(m=>m.id!=='follow_route'&&m.safe_landing&&m.comparison_complete)
+              .map(summarize).filter(m=>m.plan_id).map(m=>({...m,cover_gain:m.exposure.targets.reduce((n,t)=>{
+                const original=baseline.exposure.targets.find(b=>b.who===t.who);
+                return n+(original?.end_terrain_line_clear&&!t.end_terrain_line_clear?1:0)
+                  -(!original?.end_terrain_line_clear&&t.end_terrain_line_clear?1:0);
+              },0)}));
+            const best=(list,score)=>list.sort((a,b)=>score(b)-score(a))[0]??null;
+            const options={
+              advance:best(candidates.filter(m=>m.route_progress_tiles>baseline.route_progress_tiles+0.5),m=>m.route_progress_tiles),
+              withdraw:best(candidates.filter(m=>m.nearest_enemy_end_tiles!=null
+                &&m.nearest_enemy_end_tiles>baseline.nearest_enemy_end_tiles+0.5),m=>m.nearest_enemy_end_tiles),
+              cover:best(candidates.filter(m=>m.cover_gain>0),m=>m.cover_gain*100+m.route_progress_tiles)};
+            if(!Object.values(options).some(Boolean)) return {status:'no_better_maneuver',forecast_id:f.id};
+            const state={instruction:input.instruction,destination:input.destination,combat:c,terrain:input.terrain,
+              baseline,options,comparison_scope:f.scope,forecast_id:f.id,
+              coordinates:'Player positions/path samples are pixels; destination and distances are tiles. Velocities are pixels per tick.'};
+            delete state.combat.forecast;
+            let r;
+            if(input.baseline){
+              const imminent=baseline.linear_threat_overlap.npc_object_frames+baseline.linear_threat_overlap.projectile_object_frames>0;
+              const choice=imminent&&options.cover?'cover':imminent&&options.withdraw?'withdraw':options.advance?'advance':'continue';
+              r={status:'ready',request_id:f.id,input_state:state,result:{answers:{response:{choice}}}};
+            }else r=tool('jev_judge',{channel:'maneuver',context:input.context,interval_ms:2000,max_age_ms:2000,state,
+              questions:{response:{type:'choice',instructions:'Which available short strategy best fits this journey and the observed combat situation?',
+                criteria:{continue:'Keep the current navigation and defend while moving.',
+                  advance:'Take the available faster progress maneuver, then resume navigation.',
+                  withdraw:'Take the available maneuver that increases separation from enemies, then resume navigation.',
+                  cover:'Take the available maneuver that puts terrain across more enemy sight lines, then resume navigation. Attack penetration depends on enemy abilities.'}}}});
+            if(r.status==='pending'||r.request_id===input.last_request) return {status:r.status};
+            const choice=r.result?.answers?.response?.choice,plan=r.input_state?.options[choice],started=Date.now();
+            let result={outcome:'continue'};
+            if(r.status==='failed') result={error:r.result.error};
+            else if(choice!=='continue') result=plan?tool('act',{steps:[{keys:['right'],until:{frames:1}}],
+              combat_candidate:{context:input.context,forecast_id:r.input_state.forecast_id,plan_id:plan.plan_id}}):{error:'strategy_unavailable'};
+            print({decision:'maneuver',request:r.request_id,choice,movement:plan?.movement,weapon_type:plan?.weapon_type,
+              decision_forecast_id:r.input_state?.forecast_id,execution_forecast_id:result.execution_forecast_id,
+              model_ms:r.result?.elapsed_ms,request_age_ms:r.request_age_ms,ready_wait_ms:r.ready_wait_ms,
+              elapsed_ms:Date.now()-started,action:result.error??result.outcome,error:result.error,reason:result.reason,
+              forecast_abort:result.forecast_abort??null});
+            return {request_id:r.request_id,applied:!result.error&&choice!=='continue',error:result.error};
+            """);
         if (name == "tactical_reactions") return Template(name,
-            "赶路短策略实验。input含instruction、weapon_order及可选baseline；注册tick/action_failed。Jev后台判断当前阻力：继续赶路、最多48帧处理近处威胁、拆除近身非实心接触伤害物。复核当前目标后交接，保留原导航；print记录策略、耗时、血量和位移。baseline使用相同动作做规则对照。",
+            "赶路短策略实验。input含instruction、weapon_order及可选baseline；注册tick/action_failed。Jev后台判断当前阻力：继续赶路、最多48帧处理近处威胁、拆除近身非实心接触伤害物。提供maneuver_skill_revision时，移动交给保存的travel_maneuver技能。复核当前目标后交接，保留原导航；print记录策略、耗时、血量和位移。baseline使用相同动作做规则对照。",
             """
             const context='tactics:'+Date.now(),history=[];
-            let used=null,serial=0;
+            let used=null,serial=0,lastManeuver=null;
             const scene=()=>{
               const combat=tool('combat_assess',{radius:25}),terrain=tool('inspect_terrain',{radius:8});
               const obstacle=terrain.near_body_tiles.find(t=>t.touch_damage>0&&!t.solid&&!t.falling
@@ -41,7 +106,15 @@ public sealed class ScriptLibrary
               const destination=event.execution?.tool==='nav_to'?event.execution.args:event.tool==='nav_to'?event.args:null;
               if(!destination) return {handled:true};
               const before=scene();
-              if(before.combat.boss_present||!before.obstacle&&!before.threats.length) return {handled:true};
+              if(before.combat.boss_present) return {handled:true};
+              if(input.maneuver_skill_revision!=null&&!before.obstacle){
+                const r=skill('travel_maneuver',input.maneuver_skill_revision,{context:context+':'+destination.x+':'+destination.y,
+                  destination,instruction:input.instruction,weapon_order:input.weapon_order,baseline:input.baseline,
+                  combat:before.combat,terrain:before.terrain,last_request:lastManeuver});
+                if(r.request_id!=null) lastManeuver=r.request_id;
+                return {handled:true};
+              }
+              if(!before.obstacle&&!before.threats.length) return {handled:true};
               const state={instruction:input.instruction,destination,combat:before.combat,terrain:before.terrain,
                 coordinates:'player pos/size and all velocities: pixels or pixels per tick; destination, terrain and enemy/projectile x/y: tiles (16 pixels each)',
                 available:{none:true,nearby_enemy:before.grounded&&before.threats.length>0,contact_terrain:!!before.obstacle},
