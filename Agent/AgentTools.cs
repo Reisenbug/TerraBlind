@@ -2549,7 +2549,7 @@ public static partial class AgentTools
             {
                 var escape = LastContactEscape;
                 if (Main.LocalPlayer.dead || Main.LocalPlayer.suffocating || Text(escape, "status") != "controls_released"
-                    || !Bool(escape, "contact_clear") || Int(escape, "cleared_tiles") <= 0
+                    || !Bool(escape, "contact_clear")
                     || TerrainInspection.NavigationHazard(acceptedTraps) != null) return null;
                 var hazards = (escape["hazard_tiles"] as JsonArray)?.OfType<JsonObject>().ToList() ?? new List<JsonObject>();
                 if (escape["predicted_tile"] is JsonObject predicted && !hazards.Any(tile =>
