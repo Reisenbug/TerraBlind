@@ -17,6 +17,10 @@ internal static class LegacyNativePrediction
     static long requestedAt;
     static bool searchingPlacement;
     static int fieldGoalX, fieldGoalY;
+    static StateSpacePlanner.SSResult deferred;
+    static Vector2 deferredPosition;
+    static long deferredTick;
+    static bool deferredItemCooldown;
     internal static bool Rejected { get; private set; }
 
     internal static void Reset()
@@ -27,7 +31,16 @@ internal static class LegacyNativePrediction
             _ = pending.ContinueWith(task => { _ = task.Exception; source?.Dispose(); }, TaskScheduler.Default);
         else source?.Dispose();
         pending = null; cancellation = null; plan = null; snapshot = anchor = null;
-        searchingPlacement = false;
+        searchingPlacement = false; deferred = null;
+    }
+
+    static bool DeferCapture(Player player, StateSpacePlanner.SSResult candidate, int goalX, int goalY, bool allowItemCooldown)
+    {
+        if (deferred != null || player.fallStart == (int)(player.position.Y / 16f)) return false;
+        deferred = candidate; deferredPosition = player.position; deferredTick = Main.GameUpdateCount;
+        deferredItemCooldown = allowItemCooldown; fieldGoalX = goalX; fieldGoalY = goalY;
+        DiagLog.Write($"[legacy-native-defer] reason=landing_refresh fall_start={player.fallStart} y={player.position.Y:0.###} tick={deferredTick}");
+        return true;
     }
 
     internal static bool Start(Player player, StateSpacePlanner.SSResult candidate, int goalX, int goalY, bool allowItemCooldown = false)
@@ -43,10 +56,10 @@ internal static class LegacyNativePrediction
         var step = candidate.Steps[0];
         if (player.AnyExtraJumpUsable() && candidate.GoalWy < ActExecutor.OriginCy(player)
             && step.Frames?.Exists(frame => frame.Jump) == true)
-            return StartPillar(player, candidate, goalX, goalY);
+            return StartPillar(player, candidate, goalX, goalY, allowItemCooldown);
         if (step.Pillar && step.MineTiles?.Count is not > 0
             && step.TargetCy < ActExecutor.OriginCy(player))
-            return StartPillar(player, candidate, goalX, goalY);
+            return StartPillar(player, candidate, goalX, goalY, allowItemCooldown);
         var frames = step.Frames;
         if (step.Dig || step.Pillar || step.Bridge || frames == null || frames.Count is < 1 or > 240) return false;
         var placements = frames.Where(frame => frame.Place).Select(frame => new Point(frame.PlaceCx, frame.PlaceCy)).Distinct().ToArray();
@@ -54,6 +67,7 @@ internal static class LegacyNativePrediction
         if (placements.Length == 1 && frames[0].Place) return false;
         int placeSlot = placements.Length == 0 ? -1 : NavCoordinator.FindPlatformSlot(player);
         if (placements.Length > 0 && placeSlot < 0) return false;
+        if (DeferCapture(player, candidate, goalX, goalY, allowItemCooldown)) return true;
         try
         {
             requestedAt = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -93,10 +107,11 @@ internal static class LegacyNativePrediction
         }
     }
 
-    static bool StartPillar(Player player, StateSpacePlanner.SSResult candidate, int goalX, int goalY)
+    static bool StartPillar(Player player, StateSpacePlanner.SSResult candidate, int goalX, int goalY, bool allowItemCooldown)
     {
         int slot = NavCoordinator.FindPlatformSlot(player);
         if (slot < 0 && !player.AnyExtraJumpUsable() || !VanillaTerrainPlan.HasSupport(player)) return false;
+        if (DeferCapture(player, candidate, goalX, goalY, allowItemCooldown)) return true;
         try
         {
             requestedAt = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -214,6 +229,20 @@ internal static class LegacyNativePrediction
     {
         ready = null;
         Rejected = false;
+        if (deferred != null)
+        {
+            if (deferredTick == Main.GameUpdateCount) return true;
+            try
+            {
+                if (player.position != deferredPosition)
+                {
+                    DiagLog.Write($"[legacy-native-defer-cancel] reason=position_changed from={deferredPosition} actual={player.position}");
+                    return false;
+                }
+                return Start(player, deferred, fieldGoalX, fieldGoalY, deferredItemCooldown);
+            }
+            finally { deferred = null; }
+        }
         if (pending == null) return false;
         if (!pending.IsCompleted && !cancellation.IsCancellationRequested) return true;
         try

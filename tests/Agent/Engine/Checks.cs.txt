@@ -21,6 +21,121 @@ public sealed class Engine : Mod { }
 
 public static class NavigationExecutionChecks
 {
+    public static void VerifyNativeCaptureTiming()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var type = typeof(RecedingNav).Assembly.GetType("TerraBlind.LegacyNativePrediction");
+        var start = type.GetMethod("Start", hidden); var poll = type.GetMethod("Poll", hidden); var reset = type.GetMethod("Reset", hidden);
+        var clock = typeof(Main).GetField("_gameUpdateCount", hidden); var oldClock = clock.GetValue(null);
+        var oldPlayer = Main.LocalPlayer; int netMode = Main.netMode;
+        var scene = Main.SceneMetrics;
+        bool solid = Main.tileSolid[TileID.Dirt];
+        var jumps = typeof(ExtraJumpLoader).GetField("orderedJumps", hidden); var oldJumps = jumps.GetValue(null);
+        var backend = new VanillaNavigationDemo();
+        var requests = new List<JsonObject>();
+        var replies = new List<TaskCompletionSource<JsonObject>>();
+        Task<JsonObject> Observe(VanillaNavigationDemo _, JsonObject request, CancellationToken token)
+        {
+            requests.Add(request.DeepClone().AsObject());
+            var reply = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+            replies.Add(reply); return reply.Task;
+        }
+        using var instanceHook = new MonoMod.RuntimeDetour.Hook(typeof(VanillaNavigationDemo).GetProperty("Instance").GetMethod,
+            (Func<VanillaNavigationDemo>)(() => backend));
+        using var readyHook = new MonoMod.RuntimeDetour.Hook(typeof(VanillaNavigationDemo).GetProperty("WorkerReady", BindingFlags.Instance | BindingFlags.NonPublic).GetMethod,
+            (Func<VanillaNavigationDemo, bool>)(_ => true));
+        using var requestHook = new MonoMod.RuntimeDetour.Hook(typeof(VanillaNavigationDemo).GetMethod("Observe", BindingFlags.Instance | BindingFlags.NonPublic),
+            (Func<VanillaNavigationDemo, JsonObject, CancellationToken, Task<JsonObject>>)Observe);
+        bool Poll(Player player, out StateSpacePlanner.SSResult result)
+        {
+            object[] args = { player, null }; bool waiting = (bool)poll.Invoke(null, args);
+            result = (StateSpacePlanner.SSResult)args[1]; return waiting;
+        }
+        void AdvanceTick() => clock.SetValue(null, Convert.ChangeType(Convert.ToUInt64(clock.GetValue(null)) + 1, clock.FieldType));
+        if (Main.tile[20, 20].HasTile || Main.tile[21, 20].HasTile)
+            throw new InvalidOperationException("native capture contract requires empty fixture cells");
+        try
+        {
+            if (oldJumps == null) typeof(ExtraJumpLoader).GetMethod("ResizeArrays", hidden).Invoke(null, null);
+            Main.SceneMetrics ??= new SceneMetrics();
+            Main.netMode = 0; Main.tileSolid[TileID.Dirt] = true;
+            Main.tile[20, 20].ResetToType(TileID.Dirt); Main.tile[21, 20].ResetToType(TileID.Dirt);
+            foreach (string mode in new[] { "stable", "landing", "reset", "displaced", "knocked_back", "unrefreshed", "changed_after_capture", "damaged_result", "cooldown", "pillar", "unsupported" })
+            {
+                reset.Invoke(null, null); requests.Clear();
+                var player = new Player { active = true, width = 20, height = 42, position = new Vector2(320, 278),
+                    releaseJump = true, statLife = 100, fallStart = mode == "stable" ? 17 : 16 };
+                Main.player[Main.myPlayer] = player;
+                var frames = new List<PhysicsSimulator.ControlInput> { new() { Right = true, Px = 320, Py = 278 } };
+                var candidate = new StateSpacePlanner.SSResult { Found = true, StartPx = 320, StartPy = 278,
+                    GoalWx = 20, GoalWy = 19, ExecFrames = frames };
+                candidate.Steps.Add(new StateSpacePlanner.ExecStep { TargetCx = 20, TargetCy = 19, Frames = frames });
+                if (mode == "cooldown")
+                {
+                    player.inventory[0] = new Item { type = ItemID.CopperPickaxe, stack = 1, pick = 35 };
+                    player.itemAnimation = player.itemTime = 3;
+                }
+                if (mode == "pillar")
+                {
+                    player.inventory[0] = new Item { type = ItemID.WoodPlatform, stack = 99, createTile = TileID.Platforms };
+                    candidate.GoalWy = candidate.Steps[0].TargetCy = 17; candidate.Steps[0].Pillar = true;
+                }
+                candidate.Steps[0].Dig = mode == "unsupported";
+                bool started = (bool)start.Invoke(null, new object[] { player, candidate, 25, 19, mode == "cooldown" });
+                int expectedRequests = mode == "stable" ? 1 : 0;
+                Console.WriteLine($"NATIVE_CAPTURE mode={mode} initial_requests={requests.Count} expected={expectedRequests} fall_start={player.fallStart}");
+                if (started == (mode == "unsupported") || requests.Count != expectedRequests)
+                    throw new InvalidOperationException("native request captured the pre-refresh landing state: " + mode);
+                if (mode == "unsupported")
+                {
+                    if (Poll(player, out _)) throw new InvalidOperationException("unsupported mining entered deferred prediction");
+                    continue;
+                }
+                if (mode == "stable") continue;
+                if (!Poll(player, out var sameTick) || sameTick != null || requests.Count != 0)
+                    throw new InvalidOperationException("deferred capture ran in the same control frame");
+                if (mode == "reset") reset.Invoke(null, null);
+                if (mode == "displaced") player.position.X += 32;
+                if (mode == "knocked_back") player.velocity.X = 2;
+                if (mode != "unrefreshed") player.fallStart = 17;
+                AdvanceTick();
+                bool running = Poll(player, out var ready);
+                bool abandoned = mode is "reset" or "displaced" or "knocked_back";
+                if (running == abandoned || ready != null || requests.Count != (abandoned ? 0 : 1))
+                    throw new InvalidOperationException("deferred request lost its one-frame bound or used a displaced start: " + mode);
+                if (abandoned) continue;
+                int captured = requests[0]["snapshot"]["player"]["Terraria.Player:fallStart"].GetValue<int>();
+                if (captured != player.fallStart) throw new InvalidOperationException("snapshot did not use the refreshed actual fall start");
+                Console.WriteLine($"NATIVE_CAPTURE_RESUME mode={mode} requests={requests.Count} captured_fall_start={captured} deferred_ticks=1");
+                if (mode is "cooldown" or "pillar") continue;
+                if (mode == "changed_after_capture") player.fallStart++;
+                var sample = VanillaPrediction.Observe(player, false);
+                bool damaged = mode == "damaged_result";
+                if (damaged) sample["hp"] = 99;
+                replies[^1].SetResult(new JsonObject { ["outcome"] = damaged ? "damaged" : "complete", ["frames"] = new JsonArray(sample) });
+                if (mode is "landing" or "unrefreshed")
+                {
+                    if (!Poll(player, out ready) || ready != candidate || !ready.NativeVerified)
+                        throw new InvalidOperationException("fresh snapshot did not hand off its verified candidate: " + mode);
+                    continue;
+                }
+                if (!Poll(player, out ready) || ready != null
+                    || mode == "damaged_result" && !(bool)type.GetProperty("Rejected", hidden).GetValue(null))
+                    throw new InvalidOperationException("deferred capture bypassed a state or damage rejection: " + mode);
+            }
+            Console.WriteLine("NATIVE_CAPTURE_CONTRACTS_COMPLETE checks=11 worker_transport=stubbed native_snapshot=true state_damage_gates=true model_calls=0");
+        }
+        finally
+        {
+            reset.Invoke(null, null);
+            foreach (var reply in replies) reply.TrySetCanceled();
+            Main.player[Main.myPlayer] = oldPlayer; Main.netMode = netMode; clock.SetValue(null, oldClock);
+            Main.SceneMetrics = scene;
+            jumps.SetValue(null, oldJumps);
+            Main.tile[20, 20].ClearEverything(); Main.tile[21, 20].ClearEverything(); Main.tileSolid[TileID.Dirt] = solid;
+        }
+    }
+
     public static void VerifyEscapeTraps()
     {
         var player = Main.LocalPlayer; var position = player.position;
