@@ -21,6 +21,64 @@ public sealed class Engine : Mod { }
 
 public static class NavigationExecutionChecks
 {
+    delegate void MiningHitProbe(Player player, Item item, out bool canHitWalls, int x, int y);
+
+    public static void VerifyMiningAnimation()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var oldPlayer = Main.LocalPlayer;
+        var fields = typeof(FightCoordinator).GetFields(hidden).Where(field => !field.IsLiteral && !field.IsInitOnly)
+            .ToDictionary(field => field, field => field.GetValue(null));
+        int targetX = Player.tileTargetX, targetY = Player.tileTargetY;
+        int mouseX = Main.mouseX, mouseY = Main.mouseY;
+        bool manual = Manual.On, smart = Main.SmartCursorWanted_Mouse;
+        if (Main.tile[12, 12].HasTile)
+            throw new InvalidOperationException("mining animation contract requires an empty fixture cell");
+        var tick = typeof(FightCoordinator).GetMethod("Tick", hidden);
+        var mining = typeof(Player).GetMethod("ItemCheck_UseMiningTools", BindingFlags.Instance | BindingFlags.NonPublic);
+        var hit = typeof(Player).GetMethod("ItemCheck_UseMiningTools_ActuallyUseMiningTool", BindingFlags.Instance | BindingFlags.NonPublic);
+        int hits = 0;
+        MiningHitProbe probe = (Player player, Item item, out bool walls, int x, int y) => { walls = false; hits++; };
+        using var hook = new MonoMod.RuntimeDetour.Hook(hit, probe);
+        try
+        {
+            var player = new Player { active = true, width = 20, height = 42, position = new Vector2(160, 182) };
+            Main.player[Main.myPlayer] = player;
+            Manual.On = false;
+            Main.tile[12, 12].ResetToType(TileID.Dirt);
+            player.inventory[0] = new Item { type = ItemID.Starfury, stack = 1 };
+            player.inventory[1] = new Item { type = ItemID.CopperPickaxe, stack = 1, pick = 35, tileBoost = -1 };
+            foreach (string mode in new[] { "continuing", "canceled", "different_slot", "attack" })
+            {
+                FightCoordinator.Stop();
+                typeof(FightCoordinator).GetField("_animationSlot", hidden).SetValue(null, mode == "attack" ? 0 : 1);
+                typeof(FightCoordinator).GetField("_animationAttack", hidden).SetValue(null, mode == "attack");
+                typeof(FightCoordinator).GetField("_animationAim", hidden).SetValue(null, new Vector2(200, 200));
+                player.selectedItem = mode == "different_slot" ? 0 : 1;
+                player.itemAnimation = 3; player.itemTime = player.toolTime = 0;
+                player.controlUseItem = mode != "canceled";
+                tick.Invoke(null, new object[] { player, false, mode != "canceled" });
+                Player.tileTargetX = Player.tileTargetY = 12;
+                hits = 0;
+                mining.Invoke(player, new object[] { player.HeldItem });
+                bool continuing = mode == "continuing";
+                Console.WriteLine($"MINING_ANIMATION mode={mode} use={player.controlUseItem} native_hits={hits} slot={player.selectedItem}");
+                if (player.controlUseItem != continuing || hits != (continuing ? 1 : 0)
+                    || player.itemAnimation != 3 || player.selectedItem != (mode == "attack" ? 0 : 1))
+                    throw new InvalidOperationException("animation lock violated native mining input requirements: " + mode);
+            }
+            Console.WriteLine("NAVIGATION_MINING_ANIMATION_CONTRACTS_COMPLETE checks=4 native_mining_gate=true model_calls=0");
+        }
+        finally
+        {
+            Main.player[Main.myPlayer] = oldPlayer;
+            foreach (var pair in fields) pair.Key.SetValue(null, pair.Value);
+            Manual.On = manual; Main.tile[12, 12].ClearEverything();
+            Player.tileTargetX = targetX; Player.tileTargetY = targetY;
+            Main.mouseX = mouseX; Main.mouseY = mouseY; Main.SmartCursorWanted_Mouse = smart;
+        }
+    }
+
     public static void VerifyMiningReach()
     {
         const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;

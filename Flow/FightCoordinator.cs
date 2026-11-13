@@ -226,12 +226,13 @@ namespace TerraBlind
             if (_animationSlot >= 0 && p.itemAnimation > 0 && !p.dead && !Manual.On)
             {
                 _animationSeen = true;
+                bool continuingPrimary = !_animationAttack && primaryItemUse && p.selectedItem == _animationSlot;
                 p.selectedItem = _animationSlot;
                 bool attack = _animationAttack && (_animationTarget == null || TempleTargetAllowed(p, _animationTarget));
                 if (attack && _animationTarget is { active: true, friendly: false })
                     _animationAim = Combat.Aim(p, _animationTarget, p.HeldItem);
                 Cursor.AimPx(_animationAim.X, _animationAim.Y);
-                p.controlUseItem = false;
+                p.controlUseItem = continuingPrimary;
                 _usingItem = attack;
                 if (attack) AimTarget = _animationAim;
                 return;

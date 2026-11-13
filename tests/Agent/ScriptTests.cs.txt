@@ -44,12 +44,13 @@ static class ScriptTests
         await DecisionPreconditions();
         ResolvedExecutionNotices();
         GatherTests.DecisionMovement();
+        GatherTests.MiningAttackTurns();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=23 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=24 model_calls=0");
     }
 
     static void ResolvedExecutionNotices()

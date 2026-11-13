@@ -475,7 +475,7 @@ static class GatherTests
         Console.WriteLine("PASS: per-item capacity gates pickup, preserves fitting targets/progress and rearms inventory warnings after cleanup (native capacity stubbed)");
     }
 
-    static void MiningAttackTurns()
+    public static void MiningAttackTurns()
     {
         var p = Main.LocalPlayer;
         var oldInventory = p.inventory;
@@ -509,9 +509,16 @@ static class GatherTests
             Cursor.AimPx(20, 30);
             FightCoordinator.Tick(p, true, true);
             Check(p.selectedItem == 0, "attack stole the first mining animation");
+            p.itemAnimation = 3; p.selectedItem = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, true);
+            Check(p.selectedItem == 0 && p.controlUseItem && Cursor.X == 20 && Cursor.Y == 30,
+                "locked mining animation released the continuing tool input");
+            p.controlUseItem = false;
+            FightCoordinator.Tick(p, true, false);
+            Check(!p.controlUseItem, "canceled primary action continued using its tool");
             p.itemAnimation = 3; p.selectedItem = 1; Cursor.AimPx(90, 90);
             FightCoordinator.Tick(p, true, true);
-            Check(p.selectedItem == 0 && Cursor.X == 20 && Cursor.Y == 30,
+            Check(p.selectedItem == 0 && !p.controlUseItem && Cursor.X == 20 && Cursor.Y == 30,
                 $"mining animation lost its item or aim: slot={p.selectedItem} cursor={Cursor.X},{Cursor.Y} anim={p.itemAnimation} dead={p.dead} manual={Manual.On}");
             p.itemAnimation = p.itemTime = 0; p.selectedItem = 0; p.controlUseItem = true;
             FightCoordinator.Tick(p, true, true);
