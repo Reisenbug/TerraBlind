@@ -3715,7 +3715,7 @@ static class RuntimeTests
                 if (path == "/nav_recede")
                 {
                     starts++;
-                    Check(Game.LocalPlayer.itemAnimation == 0 && Game.LocalPlayer.itemTime == 0,
+                    Check(!VanillaNavBridge.Enabled || Game.LocalPlayer.itemAnimation == 0 && Game.LocalPlayer.itemTime == 0,
                         "native navigation captured an unfinished weapon animation");
                 }
                 return (200, path == "/nav_recede_done" ? "{\"done\":true,\"status\":\"done\"}" : "{}");
@@ -3741,12 +3741,10 @@ static class RuntimeTests
             VanillaNavBridge.Enabled = false;
             Game.LocalPlayer.itemAnimation = 3; Game.LocalPlayer.itemTime = 8;
             var stand = AgentTools.Navigate(new JsonObject { ["x"] = 12, ["y"] = 34, ["mode"] = "stand" }, default);
-            await PumpUntil(() => FightCoordinator.NavigationSnapshotPending);
-            Check(starts == 1 && Game.LocalPlayer.itemAnimation == 3 && Game.LocalPlayer.itemTime == 8,
-                "legacy stand approach captured an unfinished weapon animation");
-            Game.LocalPlayer.itemAnimation = Game.LocalPlayer.itemTime = 0;
             Check((await Execute(stand))["done"]?.GetValue<bool>() == true && starts == 2
-                && !FightCoordinator.NavigationSnapshotPending, "stand snapshot reservation was not released");
+                && Game.LocalPlayer.itemAnimation == 3 && Game.LocalPlayer.itemTime == 8
+                && !FightCoordinator.NavigationSnapshotPending, "legacy stand approach waited for an unused native snapshot or interrupted the animation");
+            Game.LocalPlayer.itemAnimation = Game.LocalPlayer.itemTime = 0;
             foreach (string outcome in new[] { "failed", "stopped_short", "done" })
             {
                 AgentTools.Watches.Reset(); AgentTools.Recovery.Reset(); AgentTools.Workflows.Remove(workflow);
