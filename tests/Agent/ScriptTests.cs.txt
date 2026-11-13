@@ -35,13 +35,14 @@ static class ScriptTests
         await BoundedCollectUse();
         TestMovementExposure();
         await TestTravelManeuver();
+        await TacticalSkillInput();
         GatherTests.DecisionMovement();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=15 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=16 model_calls=0");
     }
 
     static async Task TestDecisionChannels()
@@ -343,6 +344,7 @@ static class ScriptTests
                 5, (_, _) => { }, (name, args, _) =>
                 {
                     if (name == "combat_assess") return Task.FromResult(combat.ToJsonString());
+                    if (name == "inspect_terrain") return Task.FromResult("{}");
                     if (name == "jev_judge")
                     {
                         judged++;
@@ -370,6 +372,33 @@ static class ScriptTests
             if (scenario == "rejected") Check(!result["value"]["applied"].GetValue<bool>(), "rejected native proof became a successful strategy");
         }
         Console.WriteLine("PASS: travel strategies share native options, allow unarmed withdrawal, preserve pending navigation and honor native rejection");
+    }
+
+    static async Task TacticalSkillInput()
+    {
+        var combat = JsonNode.Parse("""
+            {"player":{"hp":100,"velocity":{"x":0,"y":0}},"targets":[{"contact_damage":20,"attackable":false}],
+             "projectiles":[],"forecast":{"status":"pending"}}
+            """).AsObject();
+        combat["targets"][0]["weapon_details"] = new string('x', 9000);
+        var result = await AgentScript.Run("""
+            skill('tactical_reactions',0,{instruction:'travel',weapon_order:[279],maneuver_skill_revision:0});
+            return tool('nav_to',{x:50,y:20});
+            """, 5, (_, _) => { }, async (name, args, token) =>
+        {
+            if (name == "combat_assess") return combat.ToJsonString();
+            if (name == "inspect_terrain") return "{\"near_body_tiles\":[],\"trap_tiles\":[],\"player_bounds\":{\"bottom\":12}}";
+            Check(name == "nav_to", "unexpected skill input fixture action: " + name);
+            await AgentScript.CurrentReactions.Value.Dispatch(JsonNode.Parse("{\"kind\":\"tick\",\"execution\":{\"tool\":\"nav_to\",\"args\":{\"x\":50,\"y\":20}}}").AsObject(), token);
+            return "{\"done\":true}";
+        }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("tactical_reactions"), ScriptLibrary.Example("travel_maneuver")));
+        Check(result["ok"].GetValue<bool>() && result["skill_calls"].AsArray().Any(s => s["name"].ToString() == "travel_maneuver"),
+            "large observed scenes overflowed the nested skill argument budget: " + result);
+        var oversized = await AgentScript.Run("return skill('travel_maneuver',0,'x'.repeat(8001));", 5, (_, _) => { },
+            (_, _, _) => Task.FromResult("{}"), _ => Task.CompletedTask, default,
+            programs: new JsonArray(ScriptLibrary.Example("travel_maneuver")));
+        Check(!oversized["ok"].GetValue<bool>() && oversized["detail"].ToString().Contains("8003"), "skill input rejection lost the measured size");
+        Console.WriteLine("PASS: large combat observations stay outside nested skill arguments; oversize errors report actual characters");
     }
 
     static async Task BoundedCollectUse()
@@ -764,6 +793,7 @@ static class ScriptTests
         await BoundedCollectUse();
         TestMovementExposure();
         await TestTravelManeuver();
+        await TacticalSkillInput();
         string programDirectory = Path.Combine(Path.GetTempPath(), "terrablind-program-" + Guid.NewGuid().ToString("N"));
         try
         {

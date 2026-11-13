@@ -60,7 +60,7 @@ public sealed class ScriptLibrary
                 &&m.nearest_enemy_end_tiles>baseline.nearest_enemy_end_tiles+0.5),m=>m.nearest_enemy_end_tiles),
               cover:best(candidates.filter(m=>m.cover_gain>0),m=>m.cover_gain*100+m.route_progress_tiles)};
             if(!Object.values(options).some(Boolean)) return {status:'no_better_maneuver',forecast_id:f.id};
-            const state={instruction:input.instruction,destination:input.destination,combat:c,terrain:input.terrain,
+            const state={instruction:input.instruction,destination:input.destination,combat:c,terrain:tool('inspect_terrain',{radius:8}),
               sample_tick:f.sample_tick,current_tick:c.tick,forecast_age_frames:f.age_frames,
               sample_player_pixels:f.sample_player,sample_targets:f.sample_targets,sample_projectiles:f.sample_projectiles,
               baseline,options,comparison_scope:f.scope,forecast_id:f.id,handoff_frames:f.handoff_frames,
@@ -132,7 +132,8 @@ public sealed class ScriptLibrary
                 if(maneuver.context!==currentContext) maneuver={context:currentContext};
                 const r=skill('travel_maneuver',input.maneuver_skill_revision,{context:currentContext,
                   destination,instruction:input.instruction,weapon_order:input.weapon_order,baseline:input.baseline,
-                  combat:before.combat,terrain:before.terrain,last_request:maneuver.request_id,
+                  combat:{boss_present:before.combat.boss_present,targets:before.combat.targets.map(n=>({contact_damage:n.contact_damage})),
+                    projectiles:before.combat.projectiles.map(p=>({damage:p.damage}))},last_request:maneuver.request_id,
                   intent:maneuver.intent,last_forecast:maneuver.last_forecast});
                 if(r.request_id!=null) maneuver={...r,context:currentContext};
                 return {handled:true};

@@ -504,8 +504,9 @@ public static class AgentScript
                 engine.SetValue("__skillEnter", new Func<string, string, string, int>((name, input, key) =>
                 {
                     budget.Token.ThrowIfCancellationRequested();
-                    if ((reactions.Handling ? handlerSkillCalls++ : mainSkillCalls++) >= 64 || input.Length > 8000)
-                        throw hostFailure = new InvalidOperationException("技能调用最多64次，单次input最多8000字符。");
+                    int count = reactions.Handling ? ++handlerSkillCalls : ++mainSkillCalls;
+                    if (count > 64) throw hostFailure = new InvalidOperationException($"单次脚本或事件的技能调用为{count}次，上限64次。");
+                    if (input.Length > 8000) throw hostFailure = new InvalidOperationException($"技能input为{input.Length}字符，上限8000字符。");
                     if (skillCalls.Count >= 64 && skillCalls.All(call => call["status"]?.ToString() != "running")) skillCalls.Clear();
                     var saved = skills[name];
                     skillCalls.Add(new JsonObject { ["name"] = name, ["revision"] = saved["revision"].DeepClone(),
