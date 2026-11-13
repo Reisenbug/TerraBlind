@@ -460,14 +460,18 @@ public sealed class ScriptLibrary
               if(dimensions.has('weapon')&&encounter){
                 const weapons=new Map();
                 for(const target of combat.targets) for(const weapon of target.weapons)
-                  if(weapon.has_ammo&&weapon.mana_available) weapons.set(weapon.type,weapon);
-                if(weapons.size>1){
+                  if(target.attackable&&weapon.has_ammo&&weapon.mana_available&&weapon.line_or_reach_passed) weapons.set(weapon.type,weapon);
+                if(weapons.size===1){
+                  const type=weapons.keys().next().value;
+                  if(type!==decisionWeapon&&!tool('set_combat',{weapon_type:type}).error) decisionWeapon=type;
+                }else if(weapons.size>1){
                   const criteria=Object.fromEntries([...weapons].map(([type,{line_or_reach_passed,...weapon}])=>['weapon_'+type,weapon]));
                   const r=judge('weapon',decisionContext,scene,
                     'Which available weapon best handles these enemies while the player continues the journey?',criteria);
                   if(r){
                     const type=Number(r.result.answers.response.choice.slice(7));
-                    if(type!==decisionWeapon){
+                    if(!weapons.has(type)) accept('weapon',r,'discarded_weapon_unavailable');
+                    else if(type!==decisionWeapon){
                       const applied=tool('set_combat',{weapon_type:type});
                       if(!applied.error) decisionWeapon=type;
                       accept('weapon',r,applied.error??'weapon_type:'+type);
@@ -530,23 +534,27 @@ public sealed class ScriptLibrary
                   Math.hypot(a[1].point.x-px,a[1].point.y-py)-Math.hypot(b[1].point.x-px,b[1].point.y-py))[0];
                 const assessment=tool('opportunity_assess',{x:opportunity.point.x,y:opportunity.point.y,
                   ...(destination?{destination}:{})});
-                if(!assessment.ok||opportunity.resource&&!opportunity.drop&&(!assessment.target.has_tile
+                if(opportunity.resource&&count(opportunity.resource.item_type)>=opportunity.resource.count
+                  ||!assessment.ok||opportunity.resource&&!opportunity.drop&&(!assessment.target.has_tile
                   ||assessment.target.tile_type!==opportunity.resource.tile_type))
                   opportunities.delete(id);
                 else if(assessment.approach_direct_distance<=25){
                   activeOpportunity=id;
-                  let take;
+                  let take=opportunity.take;
                   if(dimensions.has('opportunity')){
+                    if(take==null){
                     const r=judge('opportunity',decisionContext+':'+id,{...scene,opportunity,assessment,resources:config.resources,
                       collection_budget:{approach_tiles:config.max_detour_tiles,extra_distance_tiles:config.max_detour_tiles},
                       inventory:state(['inventory_counts']).inventory_counts},
                       'Is this opportunity worth collecting when passing nearby on this journey, given the resource goals, route, threats and inventory? Collection starts within collection_budget.',
                       {take:'Collect this opportunity when within the approach budget, then resume the journey.',pass:'Continue the journey and leave this opportunity.'});
-                    if(r&&assessment.approach_direct_distance<=config.max_detour_tiles){
+                    if(r){
                       accept('opportunity',r,r.result.answers.response.choice);
-                      take=r.result.answers.response.choice==='take';
+                      take=opportunity.take=r.result.answers.response.choice==='take';
+                    }
                     }
                   } else if(assessment.approach_direct_distance<=config.max_detour_tiles) take=worthwhile(opportunity.point,event);
+                  if(take&&assessment.approach_direct_distance>config.max_detour_tiles) take=null;
                   if(take!=null){opportunities.delete(id);activeOpportunity=null;}
                   if(take){
                     approvedOpportunity=true;

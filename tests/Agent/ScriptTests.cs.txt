@@ -783,7 +783,7 @@ static class ScriptTests
                     if (name == "inspect_terrain") return "{\"near_body_tiles\":[],\"player_bounds\":{\"left\":10,\"right\":11}}";
                     if (name == "opportunity_assess") return new JsonObject { ["ok"] = true,
                         ["target"] = new JsonObject { ["has_tile"] = true, ["tile_type"] = 61 },
-                        ["approach_direct_distance"] = enabled.Contains("opportunity") && ++assessments <= 2 ? 20 : 2,
+                        ["approach_direct_distance"] = enabled.Contains("opportunity") && ++assessments <= 4 ? 20 : 2,
                         ["route_relation"] = new JsonObject { ["extra_direct_distance"] = 0 }, ["hazards"] = new JsonArray() }.ToJsonString();
                     if (name == "inventory_review") return "{\"empty_slots\":[10],\"inventory\":[]}";
                     if (name == "set_combat") { selectedWeapons.Add(args["weapon_type"].GetValue<int>()); return "{}"; }
@@ -850,6 +850,8 @@ static class ScriptTests
             Check(selectedWeapons.Contains(enabled.Contains("weapon") ? 12 : 11)
                 && polls.Keys.ToHashSet().SetEquals(enabled), "decision ablation changed the wrong dimensions");
             Check(!enabled.Contains("opportunity") || opportunityPrefetched, "opportunity judgment waited until reaching collection range");
+            Check(!enabled.Contains("opportunity") || polls["opportunity"] == 2,
+                "settled opportunity was repeatedly judged while approaching the same target");
         }
         Console.WriteLine("PASS: production JS independently applies weapon, movement and opportunity decisions while preserving baseline and deduplicating effects");
     }
