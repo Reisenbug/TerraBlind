@@ -40,13 +40,38 @@ static class ScriptTests
         await GatherReactionConsumption();
         await NavigationRecoverySkill();
         await ReactiveTravelExample();
+        await ComposedReactions();
         GatherTests.DecisionMovement();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=20 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=21 model_calls=0");
+    }
+
+    static async Task ComposedReactions()
+    {
+        foreach (string scenario in new[] { "append", "replace", "review", "retry" })
+        {
+            var effects = new List<string>();
+            string first = scenario == "review" ? "{handled:false,reason:'review'}" : scenario == "retry" ? "{retry:true}" : "{handled:true}";
+            var baseProgram = new JsonObject { ["name"] = "base_policy", ["revision"] = 1,
+                ["code"] = "on('tick',()=>{tool('base');return " + first + ";});return {registered:true};" };
+            string code = "skill('base_policy',1);on('tick',()=>{tool('extra');return {handled:true};},{append:"
+                + (scenario == "replace" ? "false" : "true") + "});return tool('nav_to');";
+            var result = await AgentScript.Run(code, 5, (_, _) => { }, async (name, _, token) =>
+            {
+                if (name == "nav_to") return (await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject { ["kind"] = "tick" }, token)).ToJsonString();
+                effects.Add(name); return "{}";
+            }, _ => Task.CompletedTask, default, programs: new JsonArray(baseProgram));
+            Check(result["ok"].GetValue<bool>() && effects.SequenceEqual(scenario == "replace" ? new[] { "extra" }
+                : scenario == "append" ? new[] { "base", "extra" } : new[] { "base" }),
+                "saved policy composition replaced a handler or ignored review/retry: " + scenario + " " + result);
+        }
+        foreach (string name in new[] { "task_reactions", "decision_reactions", "joint_reactions" })
+            Check(ScriptLibrary.Example(name)["code"].ToString().Length <= 16000, "saved policy exceeds program limit: " + name);
+        Console.WriteLine("PASS: saved event policies compose in registration order, preserve default replacement and stop at review/retry");
     }
 
     static async Task NavigationRecoverySkill()
