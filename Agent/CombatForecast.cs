@@ -24,6 +24,8 @@ public sealed class CombatForecast : ModSystem
     static JsonObject executionAbort;
     static string context;
     static long sequence, lastAttempt;
+    static long completionVersion;
+    internal static long CompletionVersion => Interlocked.Read(ref completionVersion);
     static int refreshing;
     static JsonObject unavailable;
     static JsonObject deferredArgs;
@@ -91,7 +93,9 @@ public sealed class CombatForecast : ModSystem
             }
             catch (Exception error)
             {
-                unavailable = new JsonObject { ["status"] = "unavailable", ["reason"] = error.GetBaseException().Message };
+                bool expired = error is OperationCanceledException && pending.HandoffFrames > 0 && !lifetime.IsCancellationRequested;
+                unavailable = new JsonObject { ["status"] = "unavailable", ["reason"] = expired ? "handoff_deadline_elapsed" : error.GetBaseException().Message };
+                if (expired) lastAttempt = 0;
                 DiagLog.Write("[combat_forecast] " + unavailable.ToJsonString());
             }
             pending = null;
@@ -128,6 +132,11 @@ public sealed class CombatForecast : ModSystem
                         Generate(id, tick, snapshot, frozen, prefix, goal, walk,
                             Stopwatch.GetElapsedTime(started).TotalMilliseconds, lifetime.Token, handoffFrames: handoff),
                         VanillaPrediction.Observe(player, false), handoff);
+                    var submitted = pending;
+                    _ = submitted.Work.ContinueWith(_ =>
+                    {
+                        if (ReferenceEquals(Volatile.Read(ref pending), submitted)) Interlocked.Increment(ref completionVersion);
+                    }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                     deferredArgs = null;
                 }
                 catch (NotSupportedException error)
@@ -176,6 +185,8 @@ public sealed class CombatForecast : ModSystem
         int[] lead = execution ? prefix : prefix.Take(handoffFrames).ToArray();
         var inputs = definitions.ToDictionary(d => d.Item1, d => d.Item2 < 0 ? prefix.Take(horizon).ToArray()
             : lead.Concat(Enumerable.Repeat(d.Item2, 24)).Concat(Enumerable.Repeat(0, 48)).ToArray());
+        using var deadline = handoffFrames > 0 ? CancellationTokenSource.CreateLinkedTokenSource(token) : null;
+        if (deadline != null) { deadline.CancelAfter(TimeSpan.FromSeconds(handoffFrames / 60d)); token = deadline.Token; }
         var batch = await VanillaNavigationDemo.Instance.Observe(new JsonObject { ["command"] = "combat_replays",
             ["snapshot"] = snapshot.DeepClone(), ["trace_damage"] = true,
             ["branches"] = new JsonArray(inputs.Select(pair => (JsonNode)new JsonObject {
