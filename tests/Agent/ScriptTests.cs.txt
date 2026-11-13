@@ -30,13 +30,14 @@ static class ScriptTests
         await TestDecisionChannels();
         await TestDecisionTravel();
         await TestJointDecision();
+        await TestTacticalReactions();
         GatherTests.DecisionMovement();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=9 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=11 model_calls=0");
     }
 
     static async Task TestDecisionChannels()
@@ -192,6 +193,83 @@ static class ScriptTests
                 "host rejection was reported as an applied movement");
         }
         Console.WriteLine("PASS: joint combat skill shares movement/weapon candidates, continues while pending, deduplicates and preserves host rejection");
+    }
+
+    static async Task TestTacticalReactions()
+    {
+        foreach (string scenario in new[] { "pending", "continue", "enemy", "stale_enemy", "blocked", "clear", "trap", "failed_clear", "baseline" })
+        {
+            int acts = 0, clears = 0, polls = 0;
+            JsonObject decision = null;
+            var combat = JsonNode.Parse("""
+                {"player":{"hp":100,"pos":{"x":160,"y":160},"velocity":{"x":0,"y":0}},"targets":[
+                  {"who":1,"attackable":true,"contact_damage":20,"distance_tiles":4,"weapons":[
+                    {"type":279,"has_ammo":true,"mana_available":true,"line_or_reach_passed":true}]}]}
+                """).AsObject();
+            var terrain = JsonNode.Parse("""
+                {"player_bounds":{"left":10,"right":11,"bottom":12},"trap_tiles":[],
+                 "near_body_tiles":[{"x":10,"y":13,"type":1,"solid":true}]}
+                """).AsObject();
+            if (scenario == "blocked") combat["targets"][0]["weapons"][0]["line_or_reach_passed"] = false;
+            if (scenario is "clear" or "trap" or "failed_clear")
+            {
+                combat["targets"] = new JsonArray();
+                terrain["near_body_tiles"].AsArray().Add(JsonNode.Parse("{\"x\":11,\"y\":12,\"type\":69,\"touch_damage\":10,\"solid\":false,\"falling\":false}"));
+                if (scenario == "trap") terrain["trap_tiles"].AsArray().Add(new JsonObject { ["x"] = 11, ["y"] = 12 });
+            }
+            var template = ScriptLibrary.Example("tactical_reactions");
+            Check(template["code"].ToString().Length <= 16000, "tactical example exceeded saved skill limit");
+            string code = "skill('tactical_reactions',0,{instruction:'reach jungle',weapon_order:[279],baseline:"
+                + (scenario == "baseline" ? "true" : "false") + "});return tool('nav_to',{x:50,y:20});";
+            var result = await AgentScript.Run(code, 5, (_, _) => { }, async (name, args, token) =>
+            {
+                if (name == "combat_assess") return combat.ToJsonString();
+                if (name == "inspect_terrain") return terrain.ToJsonString();
+                if (name == "inventory_review") return "{\"inventory\":[{\"slot\":2,\"pick\":35}]}";
+                if (name == "set_combat") { Check(args["weapon_type"].GetValue<int>() == 279, "tactics lost usable weapon"); return "{}"; }
+                if (name == "act")
+                {
+                    acts++;
+                    Check(args["steps"][0]["keys"].AsArray().Count == 0 && args["steps"][0]["until"]["frames"].GetValue<int>() == 16,
+                        "tactical threat window stole movement or became unbounded");
+                    return "{\"outcome\":\"done\"}";
+                }
+                if (name == "use_item")
+                {
+                    clears++;
+                    Check(args["slot"].GetValue<int>() == 2 && args["x"].GetValue<int>() == 11 && args["strict"].GetValue<bool>(),
+                        "tactics cleared an unobserved coordinate");
+                    return scenario == "failed_clear" ? "{\"error\":\"cannot_reach\"}" : "{\"outcome\":\"removed\"}";
+                }
+                if (name == "jev_judge")
+                {
+                    polls++;
+                    Check(args["state"]["instruction"].ToString() == "reach jungle"
+                        && args["questions"]["response"]["criteria"].AsObject().Count == 3, "tactics lost intent or options");
+                    if (scenario == "pending") return "{\"status\":\"pending\"}";
+                    var answer = new JsonObject { ["status"] = "ready", ["request_id"] = 1, ["input_state"] = args["state"].DeepClone(),
+                        ["result"] = new JsonObject { ["answers"] = new JsonObject { ["response"] = new JsonObject {
+                            ["choice"] = scenario is "clear" or "failed_clear" ? "contact_terrain" : scenario == "continue" ? "none" : "nearby_enemy" } } } };
+                    if (scenario == "stale_enemy") combat["targets"][0]["who"] = 2;
+                    return answer.ToJsonString();
+                }
+                Check(name == "nav_to", "unexpected tactical action: " + name);
+                var reactions = AgentScript.CurrentReactions.Value;
+                var notice = new JsonObject { ["kind"] = scenario is "clear" or "failed_clear" ? "action_failed" : "tick",
+                    ["tool"] = "nav_to", ["args"] = args.DeepClone(), ["result"] = new JsonObject { ["error"] = "navigation_contact_escape" },
+                    ["execution"] = new JsonObject { ["tool"] = "nav_to", ["args"] = args.DeepClone() } };
+                decision = await reactions.Dispatch(notice, token);
+                if (scenario is not ("clear" or "failed_clear" or "baseline")) await reactions.Dispatch(notice, token);
+                return "{\"done\":true}";
+            }, _ => Task.CompletedTask, default, programs: new JsonArray(template));
+            Check(result["ok"].GetValue<bool>() && acts == (scenario is "enemy" or "baseline" ? 3 : 0)
+                && clears == (scenario is "clear" or "failed_clear" ? 1 : 0), "tactical action replayed or lost revalidation: " + scenario + " " + result);
+            Check(polls == (scenario is "baseline" or "blocked" or "trap" ? 0 : 2 - (scenario is "clear" or "failed_clear" ? 1 : 0)), "unexpected tactical model polling: " + scenario);
+            if (scenario is "clear" or "failed_clear") Check(decision["retry"].GetValue<bool>() == (scenario == "clear"),
+                "tactical retry lacked a verified terrain change");
+        }
+        await ReactiveHostIntegration(emptyWindow: true);
+        Console.WriteLine("PASS: tactical skill continues while pending, bounds combat windows, revalidates targets and retries only after tile removal");
     }
 
     static async Task TestDecisionTravel()
@@ -499,6 +577,7 @@ static class ScriptTests
         await TestDecisionChannels();
         await TestDecisionTravel();
         await TestJointDecision();
+        await TestTacticalReactions();
         string programDirectory = Path.Combine(Path.GetTempPath(), "terrablind-program-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -1789,7 +1868,7 @@ static class ScriptTests
         }
     }
 
-    static async Task ReactiveHostIntegration(bool itemUse = false, string candidateMode = null)
+    static async Task ReactiveHostIntegration(bool itemUse = false, string candidateMode = null, bool emptyWindow = false)
     {
         var agent = new NativeAgent(); agent.Load();
         var http = HttpServerSystem.Handler;
@@ -1833,6 +1912,7 @@ static class ScriptTests
                 if (path == "/act")
                 {
                     actingAfterStop = !RecedingNav.Active && stops == 1;
+                    if (emptyWindow) Check(!AgentTools.ControlSession.OwnsDirectMovement, "defense window blocked concurrent evasion");
                     actedDuringAnimation.Add(player.itemAnimation > 0);
                 }
                 if (path == "/nav_recede_done")
@@ -1866,7 +1946,7 @@ static class ScriptTests
                     on('nearby_chest',event=>{
                       if(event.evidence.x===1) tool('inventory_review');
                       else {
-                        const move={steps:[{keys:['right'],until:{frames:1}}]};
+                        const move={steps:[{keys:{{{(emptyWindow ? "[]" : "['right']")}}},until:{frames:1}}]};
                         if({{{(candidateMode != null ? "true" : "false")}}}) move.combat_candidate={context:'fixture',forecast_id:1,plan_id:'right_weapon_279'};
                         tool('act',move);
                         if({{{(itemUse ? "true" : "false")}}}) tool('act',{steps:[{use:true,until:{frames:1}}]});

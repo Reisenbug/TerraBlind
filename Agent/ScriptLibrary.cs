@@ -11,7 +11,7 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -21,6 +21,79 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "tactical_reactions") return Template(name,
+            "赶路短策略实验。input含instruction、weapon_order及可选baseline；注册tick/action_failed。Jev后台判断当前阻力：继续赶路、最多48帧处理近处威胁、拆除近身非实心接触伤害物。复核当前目标后交接，保留原导航；print记录策略、耗时、血量和位移。baseline使用相同动作做规则对照。",
+            """
+            const context='tactics:'+Date.now(),history=[];
+            let used=null,serial=0;
+            const scene=()=>{
+              const combat=tool('combat_assess',{radius:25}),terrain=tool('inspect_terrain',{radius:8});
+              const obstacle=terrain.near_body_tiles.find(t=>t.touch_damage>0&&!t.solid&&!t.falling
+                &&!terrain.trap_tiles.some(h=>h.x===t.x&&h.y===t.y));
+              const bounds=terrain.player_bounds;
+              const grounded=combat.player.velocity.y===0&&terrain.near_body_tiles.some(t=>t.solid
+                &&t.y===bounds.bottom+1&&t.x>=bounds.left&&t.x<=bounds.right);
+              const threats=combat.targets.filter(n=>n.attackable&&n.contact_damage>0&&n.distance_tiles<=8
+                &&n.weapons.some(w=>w.has_ammo&&w.mana_available&&w.line_or_reach_passed));
+              return {combat,terrain,obstacle,grounded,threats};
+            };
+            const run=event=>{
+              const destination=event.execution?.tool==='nav_to'?event.execution.args:event.tool==='nav_to'?event.args:null;
+              if(!destination) return {handled:true};
+              const before=scene();
+              if(before.combat.boss_present||!before.obstacle&&!before.threats.length) return {handled:true};
+              const state={instruction:input.instruction,destination,combat:before.combat,terrain:before.terrain,
+                available:{none:true,nearby_enemy:before.grounded&&before.threats.length>0,contact_terrain:!!before.obstacle},
+                enemy:before.threats[0]??null,obstacle:before.obstacle??null,history};
+              let r;
+              if(input.baseline) r={status:'ready',request_id:++serial,input_state:state,result:{answers:{response:{choice:
+                state.available.contact_terrain?'contact_terrain':state.available.nearby_enemy?'nearby_enemy':'none'}}}};
+              else r=tool('jev_judge',{channel:'tactics',context:context+':'+destination.x+':'+destination.y,
+                interval_ms:2000,max_age_ms:2000,state,questions:{response:{type:'choice',instructions:
+                  'Which available nearby constraint most interferes with carrying out state.instruction and reaching the destination? Consider the cost of interrupting travel and the recent outcomes. Attacks continue during travel. An enemy intervention lasts at most 48 ticks, then travel resumes.',
+                  criteria:{none:'Continue travelling while defending.',nearby_enemy:'Briefly address the observed nearby reachable enemy from supported ground, with existing attack and evasion controls.',
+                    contact_terrain:'Remove the observed nearby non-solid contact-damage obstacle, then continue travelling.'}}}});
+              if(r.status==='pending'||r.request_id===used) return {handled:true};
+              used=r.request_id;
+              const started=Date.now(),choice=r.result?.answers?.response?.choice;
+              const record={decision:'tactics',request:r.request_id,choice,request_age_ms:r.request_age_ms,
+                model_ms:r.result?.elapsed_ms,ready_wait_ms:r.ready_wait_ms,hp_before:before.combat.player.hp};
+              let result={outcome:'continue'},retry=false;
+              if(r.status==='failed') result={error:r.result.error};
+              else if(choice==='contact_terrain'){
+                const observed=r.input_state.obstacle,current=scene().obstacle;
+                if(!observed||!current||['x','y','type'].some(k=>observed[k]!==current[k])) result={error:'obstacle_changed'};
+                else {
+                  const pick=tool('inventory_review').inventory.filter(w=>w.pick>0).sort((a,b)=>b.pick-a.pick)[0];
+                  result=pick?tool('use_item',{slot:pick.slot,x:current.x,y:current.y,strict:true}):{error:'no_pickaxe'};
+                  retry=result.outcome==='removed'&&!result.error;
+                }
+              }else if(choice==='nearby_enemy'){
+                const current=scene(),enemy=current.threats.find(n=>n.who===r.input_state.enemy?.who);
+                if(!current.grounded||!enemy) result={error:'enemy_or_support_changed'};
+                else {
+                  const weapons=enemy.weapons.filter(w=>w.has_ammo&&w.mana_available&&w.line_or_reach_passed);
+                  const weapon=(input.weapon_order??[]).map(type=>weapons.find(w=>w.type===type)).find(Boolean)??weapons[0];
+                  result=tool('set_combat',{weapon_type:weapon.type});
+                  for(let i=0;i<3&&!result.error;i++){
+                    const now=scene();
+                    if(!now.grounded||!now.threats.some(n=>n.who===enemy.who)) break;
+                    result=tool('act',{steps:[{keys:[],until:{frames:16}}]});
+                  }
+                }
+              }
+              const after=tool('combat_assess',{radius:25});
+              Object.assign(record,{elapsed_ms:Date.now()-started,outcome:result.outcome,error:result.error,
+                hp_after:after.player.hp,dx_pixels:after.player.pos.x-before.combat.player.pos.x,
+                dy_pixels:after.player.pos.y-before.combat.player.pos.y,retry});
+              print(record);history.push(record);if(history.length>4) history.shift();
+              return {handled:true,retry};
+            };
+            on('tick',run);
+            on('action_failed',event=>event.tool==='nav_to'&&event.result.error==='navigation_contact_escape'
+              ?run(event):{handled:false});
+            return {registered:true};
+            """);
         if (name == "joint_combat") return Template(name,
             "单次tick的共享战斗决策。先将本示例保存为同名skill；joint_reactions传combat_skill_revision。input含context、destination、instruction、last_request及interval_ms/max_age_ms。候选后台计算，pending期间原动作继续。返回request_id和applied供调用者去重；宿主执行前核对轨迹，执行期间检测偏离。",
             """
