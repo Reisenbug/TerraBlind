@@ -22,13 +22,15 @@ public sealed class ScriptLibrary
     public static JsonObject Example(string name)
     {
         if (name == "travel_maneuver") return Template(name,
-            "赶路中的移动短策略。input含context、destination、instruction、weapon_order，可传combat/terrain、baseline、last_request。使用现有原生推演和执行前重新推演，比较继续导航、加快穿越、拉开敌距、进入方块遮挡。比较均为相同帧段；直线距离和视线只是现场证据。pending时继续原动作。返回request_id、applied供调用者去重。",
+            "赶路移动短策略。input含context、destination、instruction、weapon_order，可传combat/terrain、baseline、last_request、intent、last_forecast。意图保留2秒，匹配最新带共同路线前缀的原生候选；接管时核验人物、地形及分岔期限。比较继续导航、加快穿越、拉开敌距、进入方块遮挡；比较均为相同帧段。pending时继续原动作。返回request_id、intent、last_forecast、applied供调用者续接。",
             """
             const observed=input.combat??tool('combat_assess',{radius:25});
             if(observed.boss_present||!observed.targets.some(n=>n.contact_damage>0)&&!observed.projectiles.length)
               return {status:'no_threat'};
-            const c=tool('combat_assess',{radius:25,forecast:true,context:input.context,destination:input.destination}),f=c.forecast;
+            const memo={request_id:input.last_request,intent:input.intent,last_forecast:input.last_forecast,applied:false};
+            const c=tool('combat_assess',{radius:25,forecast:true,route_handoff:true,context:input.context,destination:input.destination}),f=c.forecast;
             if(f.status!=='ready') return {status:f.status,reason:f.reason};
+            if(f.prefix_source==='idle_inputs') return {...memo,status:'awaiting_route_inputs'};
             const summarize=m=>{
               const ts=m.exposure.targets;
               const start=ts.length?Math.min(...ts.map(t=>t.start_distance_tiles)):null;
@@ -61,7 +63,7 @@ public sealed class ScriptLibrary
             const state={instruction:input.instruction,destination:input.destination,combat:c,terrain:input.terrain,
               sample_tick:f.sample_tick,current_tick:c.tick,forecast_age_frames:f.age_frames,
               sample_player_pixels:f.sample_player,sample_targets:f.sample_targets,sample_projectiles:f.sample_projectiles,
-              baseline,options,comparison_scope:f.scope,forecast_id:f.id,
+              baseline,options,comparison_scope:f.scope,forecast_id:f.id,handoff_frames:f.handoff_frames,
               coordinates:'Player positions/path samples are pixels; destination and distances are tiles. Velocities are pixels per tick.'};
             delete state.combat.forecast;
             let r;
@@ -75,24 +77,40 @@ public sealed class ScriptLibrary
                   advance:'Take the available faster progress maneuver, then resume navigation.',
                   withdraw:'Take the available maneuver that increases separation from enemies, then resume navigation.',
                   cover:'Take the available maneuver that puts terrain across more enemy sight lines, then resume navigation. Attack penetration depends on enemy abilities.'}}}});
-            if(r.status==='pending'||r.request_id===input.last_request) return {status:r.status};
-            const choice=r.result?.answers?.response?.choice,plan=r.input_state?.options[choice],started=Date.now();
+            if(r.status==='failed'&&r.request_id!==input.last_request){
+              print({decision:'maneuver',request:r.request_id,error:r.result.error});
+              return {...memo,request_id:r.request_id};
+            }
+            const fresh=r.status==='ready'&&r.request_id!==input.last_request;
+            if(fresh){
+              memo.request_id=r.request_id;
+              memo.intent={choice:r.result.answers.response.choice,request:r.request_id,expires:Date.now()+2000,
+                decision_forecast_id:r.input_state.forecast_id,model_ms:r.result.elapsed_ms,
+                request_age_ms:r.request_age_ms,ready_wait_ms:r.ready_wait_ms};
+            }
+            if(!memo.intent||Date.now()>memo.intent.expires) return {...memo,intent:null,status:r.status};
+            const intent=memo.intent,choice=intent.choice,plan=options[choice],started=Date.now();
+            if(choice!=='continue'&&(!plan||memo.last_forecast===f.id)) return {...memo,status:'awaiting_current_maneuver'};
             let result={outcome:'continue'};
-            if(r.status==='failed') result={error:r.result.error};
-            else if(choice!=='continue') result=plan?tool('act',{steps:[{keys:['right'],until:{frames:1}}],
-              combat_candidate:{context:input.context,forecast_id:r.input_state.forecast_id,plan_id:plan.plan_id}}):{error:'strategy_unavailable'};
-            print({decision:'maneuver',request:r.request_id,choice,movement:plan?.movement,weapon_type:plan?.weapon_type,
-              decision_forecast_id:r.input_state?.forecast_id,execution_forecast_id:result.execution_forecast_id,
-              model_ms:r.result?.elapsed_ms,request_age_ms:r.request_age_ms,ready_wait_ms:r.ready_wait_ms,
+            if(choice!=='continue'){
+              memo.last_forecast=f.id;
+              result=tool('act',{steps:[{keys:['right'],until:{frames:1}}],
+                combat_candidate:{context:input.context,forecast_id:f.id,plan_id:plan.plan_id}});
+            }
+            print({decision:'maneuver',request:intent.request,choice,movement:plan?.movement,weapon_type:plan?.weapon_type,
+              decision_forecast_id:intent.decision_forecast_id,current_forecast_id:f.id,execution_forecast_id:result.execution_forecast_id,
+              model_ms:intent.model_ms,request_age_ms:intent.request_age_ms,ready_wait_ms:intent.ready_wait_ms,
               elapsed_ms:Date.now()-started,action:result.error??result.outcome,error:result.error,reason:result.reason,
               observed:result.observed,expected:result.expected,forecast_abort:result.forecast_abort??null});
-            return {request_id:r.request_id,applied:!result.error&&choice!=='continue',error:result.error};
+            memo.applied=!result.error&&choice!=='continue';
+            if(!result.error) memo.intent=null;
+            return {...memo,error:result.error};
             """);
         if (name == "tactical_reactions") return Template(name,
             "赶路短策略实验。input含instruction、weapon_order及可选baseline；注册tick/action_failed。Jev后台判断当前阻力：继续赶路、最多48帧处理近处威胁、拆除近身非实心接触伤害物。提供maneuver_skill_revision时，移动交给保存的travel_maneuver技能。复核当前目标后交接，保留原导航；print记录策略、耗时、血量和位移。baseline使用相同动作做规则对照。",
             """
             const context='tactics:'+Date.now(),history=[];
-            let used=null,serial=0,lastManeuver=null;
+            let used=null,serial=0,maneuver={};
             const scene=()=>{
               const combat=tool('combat_assess',{radius:25}),terrain=tool('inspect_terrain',{radius:8});
               const obstacle=terrain.near_body_tiles.find(t=>t.touch_damage>0&&!t.solid&&!t.falling
@@ -110,10 +128,13 @@ public sealed class ScriptLibrary
               const before=scene();
               if(before.combat.boss_present) return {handled:true};
               if(input.maneuver_skill_revision!=null&&!before.obstacle){
-                const r=skill('travel_maneuver',input.maneuver_skill_revision,{context:context+':'+destination.x+':'+destination.y,
+                const currentContext=context+':'+destination.x+':'+destination.y;
+                if(maneuver.context!==currentContext) maneuver={context:currentContext};
+                const r=skill('travel_maneuver',input.maneuver_skill_revision,{context:currentContext,
                   destination,instruction:input.instruction,weapon_order:input.weapon_order,baseline:input.baseline,
-                  combat:before.combat,terrain:before.terrain,last_request:lastManeuver});
-                if(r.request_id!=null) lastManeuver=r.request_id;
+                  combat:before.combat,terrain:before.terrain,last_request:maneuver.request_id,
+                  intent:maneuver.intent,last_forecast:maneuver.last_forecast});
+                if(r.request_id!=null) maneuver={...r,context:currentContext};
                 return {handled:true};
               }
               if(!before.obstacle&&!before.threats.length) return {handled:true};

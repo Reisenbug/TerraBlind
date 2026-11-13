@@ -99,6 +99,7 @@ for argument in sys.argv[1:]:
     answers = [a for a in answers if a['answers']['response'].get('choice') in valid_choices]
     choices = collections.Counter(a['answers']['response']['choice'] for a in answers)
     window_checks = 0
+    handoff_checks = 0
     for forecast in forecasts:
         if forecast.get('mode') != 'comparison':
             continue
@@ -112,6 +113,15 @@ for argument in sys.argv[1:]:
             assert movement['comparison_frames'] == horizon and movement['observed_comparison_frames'] == observed, ('unequal windows', forecast['id'], movement['id'])
             assert movement['comparison_complete'] == (observed == horizon), ('hidden incomplete window', forecast['id'], movement['id'])
             assert movement['linear_threat_overlap']['evaluated_frames'] == observed, ('unequal threat window', forecast['id'], movement['id'])
+            if 'exposure' in movement:
+                assert movement['exposure']['frames'] == observed, ('unequal exposure window', forecast['id'], movement['id'])
+            shared = min(forecast.get('handoff_frames', 0), observed, observed_baseline)
+            if shared:
+                assert movement['controls'][:shared] == baseline['controls'][:shared], ('handoff input diverged early', forecast['id'], movement['id'])
+                for frame in range(shared):
+                    assert all(movement['trajectory'][frame][key] == baseline['trajectory'][frame][key]
+                        for key in ('x', 'y', 'vx', 'vy', 'hp', 'dead')), ('handoff state diverged early', forecast['id'], movement['id'], frame)
+                    handoff_checks += 1
             if observed:
                 assert movement['path_samples_pixels'][-1][0] == observed, ('path samples extend past comparison', forecast['id'], movement['id'])
                 expected = movement['trajectory'][observed - 1]
@@ -172,7 +182,7 @@ for argument in sys.argv[1:]:
             'decay_with_predicted_hp_loss': sum(a['predicted_end_hp'] < a['start_hp'] for a in decay_applications),
             'landing_rejections': dict(landing_rejections),
             'refresh_completed': len(refreshes), 'refresh_rejections': dict(refresh_rejections),
-            'equal_window_checks': window_checks,
+            'equal_window_checks': window_checks, 'shared_handoff_frame_checks': handoff_checks,
             'incomplete_comparisons': sum(not m['comparison_complete'] for f in forecasts for m in f['movements']),
             'unavailable': dict(unavailable),
             'median_compute_ms': round(statistics.median(f['compute_ms'] for f in forecasts), 1) if forecasts else None,

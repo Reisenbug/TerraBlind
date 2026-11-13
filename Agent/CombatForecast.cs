@@ -14,7 +14,7 @@ namespace TerraBlind;
 public sealed class CombatForecast : ModSystem
 {
     sealed record Forecast(long Id, long Tick, JsonObject Snapshot, JsonObject Scene, int[] Prefix,
-        JsonObject Destination, Task<JsonObject> Work, JsonObject Anchor = null);
+        JsonObject Destination, Task<JsonObject> Work, JsonObject Anchor = null, int HandoffFrames = 0);
     static readonly Dictionary<long, Forecast> retained = new();
     static CancellationTokenSource lifetime = new();
     static Forecast pending, ready;
@@ -122,10 +122,12 @@ public sealed class CombatForecast : ModSystem
                     long id = ++sequence, tick = (long)Main.GameUpdateCount;
                     var frozen = scene.DeepClone().AsObject();
                     var goal = destination.DeepClone().AsObject();
+                    int handoff = args["route_handoff"]?.GetValue<bool>() == true ? Math.Min(12, prefix.Length) : 0;
                     unavailable = null;
                     pending = new Forecast(id, tick, snapshot, frozen, prefix, goal,
                         Generate(id, tick, snapshot, frozen, prefix, goal, walk,
-                            Stopwatch.GetElapsedTime(started).TotalMilliseconds, lifetime.Token));
+                            Stopwatch.GetElapsedTime(started).TotalMilliseconds, lifetime.Token, handoffFrames: handoff),
+                        VanillaPrediction.Observe(player, false), handoff);
                     deferredArgs = null;
                 }
                 catch (NotSupportedException error)
@@ -163,7 +165,7 @@ public sealed class CombatForecast : ModSystem
 
     static async Task<JsonObject> Generate(long id, long tick, JsonObject snapshot, JsonObject scene, int[] prefix,
         JsonObject destination, (int Direction, float TargetX, float ArrivalPixels)? walk, double captureMs, CancellationToken token,
-        string executionName = null)
+        string executionName = null, int handoffFrames = 0)
     {
         var clock = Stopwatch.StartNew();
         var movements = new JsonArray();
@@ -171,8 +173,9 @@ public sealed class CombatForecast : ModSystem
         int horizon = execution ? prefix.Length + 24 : Math.Min(24, prefix.Length);
         var definitions = new[] { ("follow_route", -1), ("left", 1), ("right", 2), ("jump_left", 5), ("jump_right", 6) }
             .Where(d => !execution || d.Item1 == executionName).ToArray();
+        int[] lead = execution ? prefix : prefix.Take(handoffFrames).ToArray();
         var inputs = definitions.ToDictionary(d => d.Item1, d => d.Item2 < 0 ? prefix.Take(horizon).ToArray()
-            : (execution ? prefix : Array.Empty<int>()).Concat(Enumerable.Repeat(d.Item2, 24)).Concat(Enumerable.Repeat(0, 48)).ToArray());
+            : lead.Concat(Enumerable.Repeat(d.Item2, 24)).Concat(Enumerable.Repeat(0, 48)).ToArray());
         var batch = await VanillaNavigationDemo.Instance.Observe(new JsonObject { ["command"] = "combat_replays",
             ["snapshot"] = snapshot.DeepClone(), ["trace_damage"] = true,
             ["branches"] = new JsonArray(inputs.Select(pair => (JsonNode)new JsonObject {
@@ -193,7 +196,7 @@ public sealed class CombatForecast : ModSystem
             int[] controls = inputs[name];
             var response = batch["branches"].AsArray().First(branch => branch["id"].ToString() == name);
             var trace = response["frames"].AsArray();
-            int minimum = execution ? prefix.Length + 24 : 24;
+            int minimum = lead.Length + 24;
             var landingCheck = keys < 0 ? (Frame: 0, Reason: (string)null)
                 : EvaluateLanding(response.AsObject(), scene["player"]["hp"].GetValue<int>(), minimum);
             int landing = landingCheck.Frame;
@@ -231,6 +234,7 @@ public sealed class CombatForecast : ModSystem
             ["walk_intent"] = walk == null ? null : new JsonObject { ["direction"] = walk.Value.Direction,
                 ["target_x_pixels"] = walk.Value.TargetX, ["arrival_pixels"] = walk.Value.ArrivalPixels },
             ["known_route_frames"] = prefix.Length, ["capture_ms"] = captureMs, ["compute_ms"] = clock.Elapsed.TotalMilliseconds,
+            ["handoff_frames"] = handoffFrames,
             ["known_route_controls"] = new JsonArray(prefix.Select(k => (JsonNode)JsonValue.Create(k)).ToArray()),
             ["destination"] = destination.DeepClone(), ["progress_metric"] = "straight_line_distance_to_goal",
             ["comparison_frames"] = horizon, ["mode"] = execution ? "execution" : "comparison",
@@ -238,7 +242,7 @@ public sealed class CombatForecast : ModSystem
             ["batch_roundtrip_ms"] = batch["roundtrip_ms"]?.DeepClone(), ["batch_queue_ms"] = batch["queue_ms"]?.DeepClone(),
             ["movements"] = movements,
             ["scope"] = execution ? "Fresh execution proof: observed movement prefix, then selected input for 24 frames, then release until landing."
-                : "All comparison metrics cover the same comparison_frames starting now, up to 24. Baseline replays queued keys or the current walk intent until its arrival threshold; later navigation is unknown. Alternatives apply their input immediately for 24 frames; safe_landing separately checks the longer landing continuation. damage includes ongoing health decay; hurt_events records new native hurts. Entity motion is a constant-velocity hypothesis." };
+                : "All comparison metrics cover the same comparison_frames starting now, up to 24. Baseline replays queued keys or the current walk intent until its arrival threshold; later navigation is unknown. Alternatives first replay handoff_frames route inputs, then their input for 24 frames; safe_landing checks the longer landing continuation. damage includes ongoing health decay; hurt_events records new native hurts. Entity motion is a constant-velocity hypothesis." };
     }
 
     internal static (int Frame, string Reason) EvaluateLanding(JsonObject branch, int initialHp, int minimum)
@@ -341,12 +345,36 @@ public sealed class CombatForecast : ModSystem
         Interlocked.Increment(ref refreshing);
         try
         {
+            var reused = await NativeAgent.OnMain(() => PrepareHandoff(args), token);
+            if (reused != null) return reused;
             var queued = await NativeAgent.OnMain(() =>
                 prepared?.Id == args["combat_candidate"]?["forecast_id"]?.GetValue<long>() ? null : pending?.Work, token);
             if (queued != null && !queued.IsCompleted) await Task.WhenAny(queued).WaitAsync(token);
             return await RefreshReady(args, observe, token);
         }
         finally { Interlocked.Decrement(ref refreshing); }
+    }
+
+    static JsonObject PrepareHandoff(JsonObject args)
+    {
+        var reference = args["combat_candidate"].AsObject();
+        if (reference["context"]?.ToString() != context || !retained.TryGetValue(reference["forecast_id"].GetValue<long>(), out var forecast)
+            || forecast.HandoffFrames == 0) return null;
+        if (prepared?.Id == forecast.Id) return args;
+        int age = checked((int)((long)Main.GameUpdateCount - forecast.Tick));
+        if (age < 0 || age >= forecast.HandoffFrames)
+            return new JsonObject { ["error"] = "combat_handoff_window_closed", ["age_frames"] = age, ["handoff_frames"] = forecast.HandoffFrames };
+        var result = forecast.Work.Result;
+        var plan = result["plans"].AsArray().FirstOrDefault(p => p["id"].ToString() == reference["plan_id"]?.ToString());
+        if (plan == null || plan["movement"].ToString() == "follow_route") return new JsonObject { ["error"] = "combat_candidate_missing" };
+        var movement = result["movements"].AsArray().First(m => m["id"].ToString() == plan["movement"].ToString()).AsObject();
+        if (movement["safe_landing"]?.GetValue<bool>() != true) return new JsonObject { ["error"] = "combat_candidate_landing_unresolved" };
+        var invalid = CheckState(forecast, movement, out _);
+        if (invalid != null) return invalid;
+        prepared = forecast;
+        DiagLog.Write("[combat_candidate_reuse] " + new JsonObject { ["forecast_id"] = forecast.Id, ["age_frames"] = age,
+            ["handoff_frames"] = forecast.HandoffFrames, ["plan_id"] = reference["plan_id"].DeepClone() });
+        return args;
     }
 
     static async Task<JsonObject> RefreshReady(JsonObject args, Func<JsonObject> observe, CancellationToken token)
@@ -504,6 +532,8 @@ public sealed class CombatForecast : ModSystem
         if (!movement["safe_landing"].GetValue<bool>()) return new JsonObject { ["error"] = "combat_candidate_landing_unresolved" };
         var invalid = CheckState(forecast, movement.AsObject(), out int offset);
         if (invalid != null) return invalid;
+        if (forecast.HandoffFrames > 0 && offset >= forecast.HandoffFrames)
+            return new JsonObject { ["error"] = "combat_handoff_window_closed", ["age_frames"] = offset, ["handoff_frames"] = forecast.HandoffFrames };
         var trajectory = movement["trajectory"].AsArray();
         var player = Main.LocalPlayer;
         int type = plan["weapon_type"].GetValue<int>();

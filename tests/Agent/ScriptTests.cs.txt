@@ -313,7 +313,7 @@ static class ScriptTests
 
     static async Task TestTravelManeuver()
     {
-        foreach (string scenario in new[] { "advance", "withdraw", "cover", "continue", "pending", "unsafe", "rejected", "unarmed", "baseline" })
+        foreach (string scenario in new[] { "advance", "withdraw", "cover", "continue", "pending", "unsafe", "rejected", "unarmed", "baseline", "held", "replayed", "idle", "superseded" })
         {
             int acted = 0, judged = 0;
             var movements = new JsonArray(); var plans = new JsonArray();
@@ -329,9 +329,16 @@ static class ScriptTests
             }
             var combat = new JsonObject { ["targets"] = new JsonArray(new JsonObject { ["contact_damage"] = 20 }), ["projectiles"] = new JsonArray(),
                 ["forecast"] = new JsonObject { ["id"] = 12, ["status"] = scenario == "pending" ? "pending" : "ready",
-                    ["movements"] = movements, ["plans"] = plans, ["scope"] = "equal frame test" } };
+                    ["movements"] = movements, ["plans"] = plans, ["scope"] = "equal frame test",
+                    ["prefix_source"] = scenario == "idle" ? "idle_inputs" : "queued_controls" } };
             var input = new JsonObject { ["context"] = "route", ["instruction"] = "reach jungle efficiently", ["baseline"] = scenario == "baseline",
                 ["destination"] = new JsonObject { ["x"] = 50, ["y"] = 20 }, ["weapon_order"] = new JsonArray(279) };
+            if (scenario is "held" or "replayed")
+            {
+                input["last_request"] = 99; input["last_forecast"] = scenario == "held" ? 5 : 12;
+                input["intent"] = new JsonObject { ["choice"] = "withdraw", ["request"] = 99, ["decision_forecast_id"] = 5,
+                    ["expires"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 10000 };
+            }
             var result = await AgentScript.Run("const input=" + input.ToJsonString() + ";" + ScriptLibrary.Example("travel_maneuver")["code"],
                 5, (_, _) => { }, (name, args, _) =>
                 {
@@ -339,24 +346,27 @@ static class ScriptTests
                     if (name == "jev_judge")
                     {
                         judged++;
+                        if (scenario is "held" or "replayed") return Task.FromResult("{\"status\":\"pending\"}");
                         Check(args["questions"]["response"]["criteria"].AsObject().Count == 4
                             && args["state"]["options"]["advance"]["movement"].ToString() == "right"
                             && args["state"]["options"]["withdraw"]["movement"].ToString() == "left"
                             && args["state"]["options"]["cover"]["cover_gain"].GetValue<int>() == 1,
                             "strategy options lost measured progress, separation or terrain occlusion");
-                        return Task.FromResult(new JsonObject { ["status"] = "ready", ["request_id"] = 1, ["input_state"] = args["state"].DeepClone(),
+                        var oldState = args["state"].DeepClone();
+                        if (scenario == "superseded") oldState["options"]["withdraw"]["plan_id"] = "right_weapon";
+                        return Task.FromResult(new JsonObject { ["status"] = "ready", ["request_id"] = 1, ["input_state"] = oldState,
                             ["result"] = new JsonObject { ["answers"] = new JsonObject { ["response"] = new JsonObject {
-                                ["choice"] = scenario is "unarmed" or "rejected" ? "withdraw" : scenario } } } }.ToJsonString());
+                                ["choice"] = scenario is "unarmed" or "rejected" or "superseded" ? "withdraw" : scenario } } } }.ToJsonString());
                     }
                     Check(name == "act" && args["combat_candidate"]["forecast_id"].GetValue<int>() == 12,
                         "maneuver bypassed the fresh native execution proof");
-                    string expected = scenario is "withdraw" or "unarmed" or "rejected" ? "left_weapon" : "right_weapon";
+                    string expected = scenario is "withdraw" or "unarmed" or "rejected" or "held" or "superseded" ? "left_weapon" : "right_weapon";
                     Check(args["combat_candidate"]["plan_id"].ToString() == expected, "strategy selected the wrong native movement");
                     acted++;
                     return Task.FromResult(scenario == "rejected" ? "{\"error\":\"combat_candidate_changed\"}" : "{\"outcome\":\"done\"}");
                 }, _ => Task.CompletedTask, default);
-            Check(result["ok"].GetValue<bool>() && acted == (scenario is "continue" or "pending" or "unsafe" ? 0 : 1)
-                && judged == (scenario is "pending" or "unsafe" or "baseline" ? 0 : 1), "maneuver acted while pending or unsafe: " + scenario + " " + result);
+            Check(result["ok"].GetValue<bool>() && acted == (scenario is "continue" or "pending" or "unsafe" or "replayed" or "idle" ? 0 : 1)
+                && judged == (scenario is "pending" or "unsafe" or "baseline" or "idle" ? 0 : 1), "maneuver acted while pending or unsafe: " + scenario + " " + result);
             if (scenario == "rejected") Check(!result["value"]["applied"].GetValue<bool>(), "rejected native proof became a successful strategy");
         }
         Console.WriteLine("PASS: travel strategies share native options, allow unarmed withdrawal, preserve pending navigation and honor native rejection");
