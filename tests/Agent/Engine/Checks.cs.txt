@@ -19,6 +19,49 @@ namespace Engine;
 
 public sealed class Engine : Mod { }
 
+public static class NavigationExecutionChecks
+{
+    public static void VerifyMining()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var type = typeof(StateSpacePlanner);
+        string[] names = { "_ssSteps", "_ssStepIdx", "_ssDispatched", "_ssPrevStep", "_stepTimeoutTicks",
+            "_stepHardTicks", "_stepStartTick", "_stepLastPx", "_stepLastPy", "_execDone", "_execFailCode", "_rolling" };
+        var saved = names.ToDictionary(name => name, name => type.GetField(name, hidden).GetValue(null));
+        var player = Main.LocalPlayer;
+        var velocity = player.velocity;
+        string previousOutcome = MineCoordinator.Outcome;
+        void Set(string name, object value) => type.GetField(name, hidden).SetValue(null, value);
+        try
+        {
+            if (StateSpacePlanner.ExecRunning || MineCoordinator.IsActive || SkillExecutor.IsActive || BridgeBuilder.IsRunning)
+                throw new InvalidOperationException("navigation contract requires idle executors");
+            Set("_rolling", false);
+            foreach (string outcome in new[] { "out_of_box", "out_of_reach", "stalled", "unbreakable", "no_tiles", "done" })
+            {
+                var dig = new StateSpacePlanner.ExecStep { Dig = true, TargetCx = 20, TargetCy = 20 };
+                Set("_ssSteps", new List<StateSpacePlanner.ExecStep> { dig });
+                Set("_ssStepIdx", 0); Set("_ssDispatched", true); Set("_ssPrevStep", dig);
+                Set("_stepTimeoutTicks", long.MaxValue); Set("_stepHardTicks", long.MaxValue);
+                Set("_execDone", false); Set("_execFailCode", null);
+                player.velocity = new Vector2(0, outcome == "done" ? 0 : -3);
+                MineCoordinator.Outcome = outcome;
+                type.GetMethod("TickSteps", hidden).Invoke(null, null);
+                Console.WriteLine($"MINING_CONTRACT outcome={outcome} steps_active={StateSpacePlanner.StepsActive} done={StateSpacePlanner.ExecDone} fail={StateSpacePlanner.ExecFailCode}");
+                if (StateSpacePlanner.StepsActive || (outcome == "done") != StateSpacePlanner.ExecDone
+                    || outcome != "done" && StateSpacePlanner.ExecFailCode != "mining_" + outcome)
+                    throw new InvalidOperationException("failed mining retained or advanced its stale plan: " + outcome);
+            }
+            Console.WriteLine("NAVIGATION_MINING_CONTRACTS_COMPLETE checks=6 gameplay_loop=false model_calls=0");
+        }
+        finally
+        {
+            foreach (var entry in saved) Set(entry.Key, entry.Value);
+            player.velocity = velocity; MineCoordinator.Outcome = previousOutcome;
+        }
+    }
+}
+
 public sealed class FallExecutionProbe : ModSystem
 {
     const BindingFlags Hidden = BindingFlags.Static | BindingFlags.NonPublic;

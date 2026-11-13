@@ -2327,12 +2327,16 @@ namespace TerraBlind
             if (_ssDispatched)
             {
                 if (busy) return;
-                if (_ssPrevStep?.Dig == true && MineCoordinator.Outcome == "lava_risk")
+                if (_ssPrevStep?.Dig == true && MineCoordinator.Outcome != "done")
                 {
-                    var from = StandCell(p.position.X, p.position.Y);
-                    PenalizeEdges(new[] { (from.cx, from.cy, _ssPrevStep.TargetCx, _ssPrevStep.TargetCy) }, ResimMissPenalty);
-                    _execFailCode = "lava_risk";
-                    DiagLog.Write("[ss-steps] mining refused lava release; reselect route");
+                    string outcome = MineCoordinator.Outcome;
+                    if (outcome == "lava_risk")
+                    {
+                        var from = StandCell(p.position.X, p.position.Y);
+                        PenalizeEdges(new[] { (from.cx, from.cy, _ssPrevStep.TargetCx, _ssPrevStep.TargetCy) }, ResimMissPenalty);
+                    }
+                    _execFailCode = outcome == "lava_risk" ? outcome : "mining_" + outcome;
+                    DiagLog.Write($"[ss-steps] mining failed outcome={outcome} reason={MineCoordinator.Reason} position={p.position} velocity={p.velocity}; reselect route");
                     StopSteps(); DiagLog.EndRun();
                     return;
                 }
