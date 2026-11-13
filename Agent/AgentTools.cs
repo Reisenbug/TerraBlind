@@ -2566,6 +2566,7 @@ public static partial class AgentTools
                 && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) < 3200),
             ["player"] = new JsonObject { ["hp"] = p.statLife,
                 ["max_hp"] = p.statLifeMax2,
+                ["life_regen_raw"] = p.lifeRegen, ["suffocating"] = p.suffocating,
                 ["pos"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y },
                 ["velocity"] = new JsonObject { ["x"] = p.velocity.X, ["y"] = p.velocity.Y },
                 ["size_pixels"] = new JsonObject { ["width"] = p.width, ["height"] = p.height },

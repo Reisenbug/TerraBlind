@@ -4638,7 +4638,7 @@ public sealed class BehaviorTrial : ModSystem
                 { p.position = anchor; p.velocity = Vector2.Zero; p.immune = true; p.immuneTime = 60; p.controlUseItem = false; };
                 return true;
             });
-            foreach (string scenario in new[] { "healthy", "poison", "spikes", "fall", "drowning", "suffocation", "gills" })
+            foreach (string scenario in new[] { "healthy", "poison", "spikes", "fall", "drowning", "suffocation", "gills", "poison_drowning", "poison_gills" })
             {
                 var snapshot = await OnMain(() =>
                 {
@@ -4655,8 +4655,9 @@ public sealed class BehaviorTrial : ModSystem
                     p.fallStart = p.fallStart2 = scenario == "fall" ? floor - 31 : (int)p.position.Y / 16;
                     Array.Clear(p.buffType); Array.Clear(p.buffTime); p.lifeRegen = p.lifeRegenCount = 0;
                     p.breath = p.breathMax; p.breathCD = 0;
-                    if (scenario == "poison") { p.AddBuff(BuffID.Poisoned, 600); p.lifeRegenCount = -119; }
-                    if (scenario is "drowning" or "gills" or "suffocation")
+                    if (scenario is "poison" or "poison_drowning" or "poison_gills")
+                    { p.AddBuff(BuffID.Poisoned, 600); p.lifeRegenCount = -119; }
+                    if (scenario is "drowning" or "gills" or "suffocation" or "poison_drowning" or "poison_gills")
                     {
                         for (int x = cx - 1; x <= cx + 1; x++)
                             for (int y = floor - 4; y < floor; y++)
@@ -4666,7 +4667,7 @@ public sealed class BehaviorTrial : ModSystem
                                 else { tile.LiquidAmount = 255; tile.LiquidType = LiquidID.Water; }
                             }
                         if (scenario == "suffocation") { p.AddBuff(BuffID.Suffocation, 600); p.lifeRegenCount = -119; }
-                        else { p.breath = 0; if (scenario == "gills") p.AddBuff(BuffID.Gills, 600); }
+                        else { p.breath = 0; if (scenario is "gills" or "poison_gills") p.AddBuff(BuffID.Gills, 600); }
                     }
                     int centerY = (int)p.Center.Y / 16;
                     return VanillaFrame.Capture(p, new Rectangle(cx - 32, centerY - 16, 64, 96), true);
@@ -4695,8 +4696,18 @@ public sealed class BehaviorTrial : ModSystem
                     if (health.Count != full["frames"].AsArray().Count || health.Where((h, i) =>
                         h["frame"].GetValue<int>() != i + 1 || h["hp"].GetValue<int>() != full["frames"][i]["hp"].GetValue<int>()).Any())
                         throw new Exception("PostUpdate health does not match final native frame: " + scenario);
+                    var classifier = typeof(CombatForecast).GetMethod("EvaluateLanding", HiddenStatic)
+                        ?? throw new Exception("Native landing classifier is missing");
+                    foreach (int minimum in new[] { 24, 36 })
+                    {
+                        var landing = ((int Frame, string Reason))classifier.Invoke(null, new object[] { batch["branches"][0].AsObject(), 200, minimum });
+                        bool safe = scenario is "healthy" or "poison" or "gills" or "poison_gills";
+                        if (landing.Frame != (safe ? minimum : 0))
+                            throw new Exception("Native landing classification incorrect: " + scenario + " " + landing);
+                        row["landing_" + minimum] = new JsonObject { ["frame"] = landing.Frame, ["reason"] = landing.Reason };
+                    }
                 }
-                if (scenario is "healthy" or "poison" or "gills")
+                if (scenario is "healthy" or "poison" or "gills" or "poison_gills")
                 {
                     if (full["outcome"].ToString() != "complete" || full["frames"].AsArray().Count != 72
                         || full["frames"][71]["grounded"]?.GetValue<bool>() != true)
@@ -4704,7 +4715,7 @@ public sealed class BehaviorTrial : ModSystem
                     if (traceDamage && batch["branches"][0]["hurt_events"].AsArray().Count != 0)
                         throw new Exception("Native hurt event occurred in passive case: " + scenario);
                 }
-                else if (stopped["outcome"].ToString() != "damaged" || scenario is "spikes" or "fall"
+                else if (stopped["outcome"].ToString() != "damaged" || (scenario is "spikes" or "fall")
                     && traceDamage && batch["branches"][0]["hurt_events"].AsArray().Count == 0)
                     throw new Exception("Native damage was not detected: " + scenario);
                 if (scenario == "poison" && (stopped["frames"].AsArray().Count >= 24 || full["frames"][71]["hp"].GetValue<int>() >= 200))
@@ -4712,6 +4723,7 @@ public sealed class BehaviorTrial : ModSystem
                 Console.WriteLine("COMBAT_DAMAGE_CASE " + new JsonObject { ["scenario"] = scenario,
                     ["stopped_frames"] = stopped["frames"].AsArray().Count, ["full_frames"] = full["frames"].AsArray().Count,
                     ["end_hp"] = full["frames"].AsArray()[^1]["hp"].DeepClone(),
+                    ["landing"] = row["landing_24"]?.DeepClone(),
                     ["hurt_events"] = batch?["branches"]?[0]?["hurt_events"]?.DeepClone() }.ToJsonString());
             }
         }

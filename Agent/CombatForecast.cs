@@ -173,7 +173,8 @@ public sealed class CombatForecast : ModSystem
         var inputs = definitions.ToDictionary(d => d.Item1, d => d.Item2 < 0 ? prefix.Take(horizon).ToArray()
             : (execution ? prefix : Array.Empty<int>()).Concat(Enumerable.Repeat(d.Item2, 24)).Concat(Enumerable.Repeat(0, 48)).ToArray());
         var batch = await VanillaNavigationDemo.Instance.Observe(new JsonObject { ["command"] = "combat_replays",
-            ["snapshot"] = snapshot.DeepClone(), ["branches"] = new JsonArray(inputs.Select(pair => (JsonNode)new JsonObject {
+            ["snapshot"] = snapshot.DeepClone(), ["trace_damage"] = true,
+            ["branches"] = new JsonArray(inputs.Select(pair => (JsonNode)new JsonObject {
                 ["id"] = pair.Key, ["controls"] = new JsonArray(pair.Value.Select(k => (JsonNode)JsonValue.Create(k)).ToArray()) }).ToArray()) }, token);
         if (!execution && walk != null)
         {
@@ -192,22 +193,24 @@ public sealed class CombatForecast : ModSystem
             var response = batch["branches"].AsArray().First(branch => branch["id"].ToString() == name);
             var trace = response["frames"].AsArray();
             int minimum = execution ? prefix.Length + 24 : 24;
-            int landing = keys < 0 ? 0 : trace.Select((frame, index) => (frame, index))
-                .Where(e => e.index + 1 >= minimum && e.frame["grounded"]?.GetValue<bool>() == true
-                    && e.frame["dead"]?.GetValue<bool>() == false && e.frame["hp"].GetValue<int>() >= scene["player"]["hp"].GetValue<int>())
-                .Select(e => e.index + 1).FirstOrDefault();
+            var landingCheck = keys < 0 ? (Frame: 0, Reason: (string)null)
+                : EvaluateLanding(response.AsObject(), scene["player"]["hp"].GetValue<int>(), minimum);
+            int landing = landingCheck.Frame;
             int count = landing > 0 ? landing : trace.Count;
             int compared = Math.Min(horizon, trace.Count);
             var end = compared > 0 ? trace[compared - 1] : null;
             var player = scene["player"];
             double startDistance = Distance(Number(player["pos"]["x"]) / 16, Number(player["pos"]["y"]) / 16, destination);
             var movement = new JsonObject { ["id"] = name, ["safe_landing"] = keys < 0 ? (bool?)null : landing > 0,
+                ["landing_reason"] = landingCheck.Reason,
                 ["outcome"] = response["outcome"]?.DeepClone(), ["landing_frame"] = landing > 0 ? landing : null,
                 ["execution_frames"] = keys < 0 ? (int?)null : count, ["end"] = end?.DeepClone(),
                 ["comparison_frames"] = horizon, ["observed_comparison_frames"] = compared, ["comparison_complete"] = compared == horizon,
                 ["target_sample_frame"] = Math.Min(12, compared),
                 ["route_progress_tiles"] = end == null ? null : startDistance - Distance(Number(end["x"]) / 16, Number(end["y"]) / 16, destination),
                 ["damage"] = compared == 0 ? null : scene["player"]["hp"].GetValue<int>() - trace.Take(compared).Min(f => f["hp"].GetValue<int>()),
+                ["hurt_events"] = new JsonArray(response["hurt_events"].AsArray()
+                    .Where(e => e["frame"].GetValue<int>() <= compared).Select(e => e.DeepClone()).ToArray()),
                 ["engine_ms"] = response["elapsed_ms"]?.DeepClone(),
                 ["controls"] = new JsonArray(controls.Take(count).Select(k => (JsonNode)JsonValue.Create(k)).ToArray()),
                 ["trajectory"] = new JsonArray(trace.Take(count).Select(f => f.DeepClone()).ToArray()) };
@@ -234,7 +237,34 @@ public sealed class CombatForecast : ModSystem
             ["batch_roundtrip_ms"] = batch["roundtrip_ms"]?.DeepClone(), ["batch_queue_ms"] = batch["queue_ms"]?.DeepClone(),
             ["movements"] = movements,
             ["scope"] = execution ? "Fresh execution proof: observed movement prefix, then selected input for 24 frames, then release until landing."
-                : "All comparison metrics cover the same comparison_frames starting now, up to 24. Baseline replays queued keys or the current walk intent until its arrival threshold; later navigation is unknown. Alternatives apply their input immediately for 24 frames; safe_landing separately checks the longer landing continuation. Entity motion is a constant-velocity hypothesis." };
+                : "All comparison metrics cover the same comparison_frames starting now, up to 24. Baseline replays queued keys or the current walk intent until its arrival threshold; later navigation is unknown. Alternatives apply their input immediately for 24 frames; safe_landing separately checks the longer landing continuation. damage includes ongoing health decay; hurt_events records new native hurts. Entity motion is a constant-velocity hypothesis." };
+    }
+
+    internal static (int Frame, string Reason) EvaluateLanding(JsonObject branch, int initialHp, int minimum)
+    {
+        var trace = branch["frames"].AsArray();
+        var health = branch["health_frames"]?.AsArray() ?? throw new InvalidOperationException("combat_health_trace_missing");
+        var hurts = branch["hurt_events"]?.AsArray() ?? throw new InvalidOperationException("combat_hurt_trace_missing");
+        int firstHurt = hurts.Where(e => e["damage"].GetValue<int>() > 0).Select(e => e["frame"].GetValue<int>())
+            .DefaultIfEmpty(int.MaxValue).Min();
+        int previousHp = initialHp;
+        for (int i = 0; i < trace.Count; i++)
+        {
+            int hp = trace[i]["hp"].GetValue<int>();
+            if (trace[i]["dead"].GetValue<bool>() || hp <= 0) return (0, "predicted_death");
+            if (i + 1 >= firstHurt) return (0, "new_hurt");
+            if (i >= health.Count || health[i]["frame"].GetValue<int>() != i + 1 || health[i]["hp"].GetValue<int>() != hp)
+                throw new InvalidOperationException("combat_health_trace_mismatch: frame=" + (i + 1));
+            if (hp < previousHp)
+            {
+                if (health[i]["suffocating"].GetValue<bool>()) return (0, "suffocation");
+                if (health[i]["breath"].GetValue<int>() <= 0) return (0, "drowning");
+                if (health[i]["life_regen"].GetValue<int>() >= 0) return (0, "unattributed_health_loss");
+            }
+            previousHp = hp;
+            if (i + 1 >= minimum && trace[i]["grounded"].GetValue<bool>()) return (i + 1, null);
+        }
+        return (0, "no_ground_contact_in_horizon");
     }
 
     static double Number(JsonNode value) => double.Parse(value.ToString(), System.Globalization.CultureInfo.InvariantCulture);
@@ -400,9 +430,7 @@ public sealed class CombatForecast : ModSystem
                     var trace = movement["trajectory"].AsArray();
                     int grounded = trace.Skip(request.Job.Prefix.Length + 23).Count(f => f["grounded"]?.GetValue<bool>() == true);
                     var rejection = new JsonObject { ["error"] = "combat_candidate_landing_unresolved",
-                        ["reason"] = movement["outcome"]?.ToString() == "complete"
-                            ? grounded == 0 ? "no_ground_contact_in_horizon" : "health_dropped_before_landing"
-                            : movement["outcome"]?.ToString(),
+                        ["reason"] = movement["landing_reason"]?.DeepClone(),
                         ["execution_forecast_id"] = request.Job.Id, ["observed_frames"] = trace.Count,
                         ["requested_frames"] = request.Job.Prefix.Length + 72, ["grounded_frames_after_input"] = grounded,
                         ["start_hp"] = request.Job.Scene["player"]["hp"].DeepClone(),
@@ -493,7 +521,10 @@ public sealed class CombatForecast : ModSystem
         prepared = null;
         var payload = args.DeepClone().AsObject(); payload["steps"] = steps;
         DiagLog.Write("[combat_candidate_apply] " + new JsonObject { ["forecast_id"] = forecast.Id,
-            ["plan_id"] = plan["id"].DeepClone(), ["age_frames"] = offset, ["remaining_frames"] = trajectory.Count - offset });
+            ["plan_id"] = plan["id"].DeepClone(), ["age_frames"] = offset, ["remaining_frames"] = trajectory.Count - offset,
+            ["start_hp"] = forecast.Scene["player"]["hp"].DeepClone(),
+            ["life_regen_raw"] = forecast.Scene["player"]["life_regen_raw"]?.DeepClone(),
+            ["predicted_end_hp"] = trajectory[^1]["hp"].DeepClone() });
         return payload;
     }
 
