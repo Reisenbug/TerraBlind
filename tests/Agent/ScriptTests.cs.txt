@@ -232,7 +232,12 @@ static class ScriptTests
                 + (scenario == "baseline" ? "true" : "false") + "});return tool('nav_to',{x:50,y:20});";
             var result = await AgentScript.Run(code, 5, (_, _) => { }, async (name, args, token) =>
             {
-                if (name == "combat_assess") return combat.ToJsonString();
+                if (name == "combat_assess")
+                {
+                    var observed = combat.DeepClone().AsObject();
+                    if (args["terrain_radius"] != null) observed["terrain"] = terrain.DeepClone();
+                    return observed.ToJsonString();
+                }
                 if (name == "inspect_terrain") return terrain.ToJsonString();
                 if (name == "inventory_review") return "{\"inventory\":[{\"slot\":2,\"pick\":35}]}";
                 if (name == "opportunity_assess") return "{\"ok\":true,\"target\":{\"has_tile\":false}}";
@@ -368,7 +373,7 @@ static class ScriptTests
                     return Task.FromResult(scenario == "rejected" ? "{\"error\":\"combat_candidate_changed\"}" : "{\"outcome\":\"done\"}");
                 }, _ => Task.CompletedTask, default);
             Check(result["ok"].GetValue<bool>() && acted == (scenario is "continue" or "pending" or "unsafe" or "replayed" or "idle" ? 0 : 1)
-                && judged == (scenario is "pending" or "unsafe" or "baseline" or "idle" ? 0 : 1), "maneuver acted while pending or unsafe: " + scenario + " " + result);
+                && judged == (scenario is "pending" or "unsafe" or "baseline" or "idle" or "held" ? 0 : 1), "maneuver acted while pending or unsafe: " + scenario + " " + result);
             if (scenario == "rejected") Check(!result["value"]["applied"].GetValue<bool>(), "rejected native proof became a successful strategy");
         }
         Console.WriteLine("PASS: travel strategies share native options, allow unarmed withdrawal, preserve pending navigation and honor native rejection");
@@ -386,7 +391,12 @@ static class ScriptTests
             return tool('nav_to',{x:50,y:20});
             """, 5, (_, _) => { }, async (name, args, token) =>
         {
-            if (name == "combat_assess") return combat.ToJsonString();
+            if (name == "combat_assess")
+            {
+                var observed = combat.DeepClone().AsObject();
+                if (args["terrain_radius"] != null) observed["terrain"] = JsonNode.Parse("{\"near_body_tiles\":[],\"trap_tiles\":[],\"player_bounds\":{\"bottom\":12}}");
+                return observed.ToJsonString();
+            }
             if (name == "inspect_terrain") return "{\"near_body_tiles\":[],\"trap_tiles\":[],\"player_bounds\":{\"bottom\":12}}";
             Check(name == "nav_to", "unexpected skill input fixture action: " + name);
             await AgentScript.CurrentReactions.Value.Dispatch(JsonNode.Parse("{\"kind\":\"tick\",\"execution\":{\"tool\":\"nav_to\",\"args\":{\"x\":50,\"y\":20}}}").AsObject(), token);

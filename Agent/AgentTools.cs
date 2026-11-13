@@ -1298,6 +1298,7 @@ public static partial class AgentTools
                 return (await NativeAgent.OnMain(() =>
                 {
                     var scene = CombatAssessment(Int(args, "radius", 25));
+                    if (args["terrain_radius"] != null) scene["terrain"] = TerrainInspection.Read(Int(args, "terrain_radius"));
                     if (Bool(args, "forecast")) scene["forecast"] = CombatForecast.Poll(args, scene);
                     return scene;
                 }, token)).ToJsonString();

@@ -60,6 +60,27 @@ public sealed class ScriptLibrary
                 &&m.nearest_enemy_end_tiles>baseline.nearest_enemy_end_tiles+0.5),m=>m.nearest_enemy_end_tiles),
               cover:best(candidates.filter(m=>m.cover_gain>0),m=>m.cover_gain*100+m.route_progress_tiles)};
             if(!Object.values(options).some(Boolean)) return {status:'no_better_maneuver',forecast_id:f.id};
+            const applyIntent=()=>{
+              const intent=memo.intent,choice=intent.choice,plan=options[choice],started=Date.now();
+              if(choice!=='continue'&&(!plan||memo.last_forecast===f.id)) return {...memo,status:'awaiting_current_maneuver'};
+              let result={outcome:'continue'};
+              if(choice!=='continue'){
+                memo.last_forecast=f.id;
+                result=tool('act',{steps:[{keys:['right'],until:{frames:1}}],
+                  combat_candidate:{context:input.context,forecast_id:f.id,plan_id:plan.plan_id}});
+              }
+              print({decision:'maneuver',request:intent.request,choice,movement:plan?.movement,weapon_type:plan?.weapon_type,
+                decision_forecast_id:intent.decision_forecast_id,current_forecast_id:f.id,execution_forecast_id:result.execution_forecast_id,
+                model_ms:intent.model_ms,request_age_ms:intent.request_age_ms,ready_wait_ms:intent.ready_wait_ms,
+                elapsed_ms:Date.now()-started,action:result.error??result.outcome,error:result.error,reason:result.reason,
+                age_frames:result.age_frames,handoff_frames:result.handoff_frames,
+                observed:result.observed,expected:result.expected,forecast_abort:result.forecast_abort??null});
+              memo.applied=!result.error&&choice!=='continue';
+              if(!result.error) memo.intent=null;
+              return {...memo,error:result.error};
+            };
+            if(memo.intent&&Date.now()<=memo.intent.expires&&options[memo.intent.choice]&&memo.last_forecast!==f.id)
+              return applyIntent();
             const state={instruction:input.instruction,destination:input.destination,combat:c,terrain:tool('inspect_terrain',{radius:8}),
               sample_tick:f.sample_tick,current_tick:c.tick,forecast_age_frames:f.age_frames,
               sample_player_pixels:f.sample_player,sample_targets:f.sample_targets,sample_projectiles:f.sample_projectiles,
@@ -89,22 +110,7 @@ public sealed class ScriptLibrary
                 request_age_ms:r.request_age_ms,ready_wait_ms:r.ready_wait_ms};
             }
             if(!memo.intent||Date.now()>memo.intent.expires) return {...memo,intent:null,status:r.status};
-            const intent=memo.intent,choice=intent.choice,plan=options[choice],started=Date.now();
-            if(choice!=='continue'&&(!plan||memo.last_forecast===f.id)) return {...memo,status:'awaiting_current_maneuver'};
-            let result={outcome:'continue'};
-            if(choice!=='continue'){
-              memo.last_forecast=f.id;
-              result=tool('act',{steps:[{keys:['right'],until:{frames:1}}],
-                combat_candidate:{context:input.context,forecast_id:f.id,plan_id:plan.plan_id}});
-            }
-            print({decision:'maneuver',request:intent.request,choice,movement:plan?.movement,weapon_type:plan?.weapon_type,
-              decision_forecast_id:intent.decision_forecast_id,current_forecast_id:f.id,execution_forecast_id:result.execution_forecast_id,
-              model_ms:intent.model_ms,request_age_ms:intent.request_age_ms,ready_wait_ms:intent.ready_wait_ms,
-              elapsed_ms:Date.now()-started,action:result.error??result.outcome,error:result.error,reason:result.reason,
-              observed:result.observed,expected:result.expected,forecast_abort:result.forecast_abort??null});
-            memo.applied=!result.error&&choice!=='continue';
-            if(!result.error) memo.intent=null;
-            return {...memo,error:result.error};
+            return applyIntent();
             """);
         if (name == "tactical_reactions") return Template(name,
             "赶路短策略实验。input含instruction、weapon_order及可选baseline；注册tick/action_failed。Jev后台判断当前阻力：继续赶路、最多48帧处理近处威胁、拆除近身非实心接触伤害物。提供maneuver_skill_revision时，移动交给保存的travel_maneuver技能。复核当前目标后交接，保留原导航；print记录策略、耗时、血量和位移。baseline使用相同动作做规则对照。",
@@ -112,7 +118,8 @@ public sealed class ScriptLibrary
             const context='tactics:'+Date.now(),history=[];
             let used=null,serial=0,maneuver={};
             const scene=()=>{
-              const combat=tool('combat_assess',{radius:25}),terrain=tool('inspect_terrain',{radius:8});
+              const combat=tool('combat_assess',{radius:25,terrain_radius:8}),terrain=combat.terrain;
+              delete combat.terrain;
               const obstacle=terrain.near_body_tiles.find(t=>t.touch_damage>0&&!t.solid&&!t.falling
                 &&!terrain.trap_tiles.some(h=>h.x===t.x&&h.y===t.y));
               const bounds=terrain.player_bounds;

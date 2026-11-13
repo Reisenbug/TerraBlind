@@ -104,7 +104,7 @@ for argument in sys.argv[1:]:
         if forecast.get('mode') != 'comparison':
             continue
         horizon = forecast['comparison_frames']
-        assert 0 < horizon <= 24, ('invalid comparison window', forecast['id'], horizon)
+        assert 0 < horizon <= forecast.get('handoff_frames', 0) + 24, ('invalid comparison window', forecast['id'], horizon)
         baseline = next(m for m in forecast['movements'] if m['id'] == 'follow_route')
         observed_baseline = baseline['observed_comparison_frames']
         assert baseline['controls'][:observed_baseline] == forecast['known_route_controls'][:observed_baseline], ('baseline changed queued inputs', forecast['id'])

@@ -104,10 +104,11 @@ public sealed class CombatForecast : ModSystem
         {
             lastAttempt = Stopwatch.GetTimestamp();
             var player = Main.LocalPlayer;
-            int[] prefix = StateSpacePlanner.PeekMovementControls(24);
+            int requestedPrefix = args["route_handoff"]?.GetValue<bool>() == true ? 48 : 24;
+            int[] prefix = StateSpacePlanner.PeekMovementControls(requestedPrefix);
             var walk = StateSpacePlanner.PeekWalkIntent();
             if (prefix.Length < 6 && walk != null)
-                prefix = Enumerable.Repeat(walk.Value.Direction > 0 ? 2 : 1, 24).ToArray();
+                prefix = Enumerable.Repeat(walk.Value.Direction > 0 ? 2 : 1, requestedPrefix).ToArray();
             if (prefix.Length == 0 && !RecedingNav.Active && !ActExecutor.IsActive && !AgentPermissions.Dodge)
                 prefix = new int[24];
             if (!VanillaNavigationDemo.Instance.WorkerReady)
@@ -126,7 +127,7 @@ public sealed class CombatForecast : ModSystem
                     long id = ++sequence, tick = (long)Main.GameUpdateCount;
                     var frozen = scene.DeepClone().AsObject();
                     var goal = destination.DeepClone().AsObject();
-                    int handoff = args["route_handoff"]?.GetValue<bool>() == true ? Math.Min(12, prefix.Length) : 0;
+                    int handoff = args["route_handoff"]?.GetValue<bool>() == true ? Math.Min(16, prefix.Length) : 0;
                     unavailable = null;
                     pending = new Forecast(id, tick, snapshot, frozen, prefix, goal,
                         Generate(id, tick, snapshot, frozen, prefix, goal, walk,
@@ -179,7 +180,7 @@ public sealed class CombatForecast : ModSystem
         var clock = Stopwatch.StartNew();
         var movements = new JsonArray();
         bool execution = executionName != null;
-        int horizon = execution ? prefix.Length + 24 : Math.Min(24, prefix.Length);
+        int horizon = execution ? prefix.Length + 24 : Math.Min(handoffFrames + 24, prefix.Length);
         var definitions = new[] { ("follow_route", -1), ("left", 1), ("right", 2), ("jump_left", 5), ("jump_right", 6) }
             .Where(d => !execution || d.Item1 == executionName).ToArray();
         int[] lead = execution ? prefix : prefix.Take(handoffFrames).ToArray();
@@ -253,7 +254,7 @@ public sealed class CombatForecast : ModSystem
             ["batch_roundtrip_ms"] = batch["roundtrip_ms"]?.DeepClone(), ["batch_queue_ms"] = batch["queue_ms"]?.DeepClone(),
             ["movements"] = movements,
             ["scope"] = execution ? "Fresh execution proof: observed movement prefix, then selected input for 24 frames, then release until landing."
-                : "All comparison metrics cover the same comparison_frames starting now, up to 24. Baseline replays queued keys or the current walk intent until its arrival threshold; later navigation is unknown. Alternatives first replay handoff_frames route inputs, then their input for 24 frames; safe_landing checks the longer landing continuation. damage includes ongoing health decay; hurt_events records new native hurts. Entity motion is a constant-velocity hypothesis." };
+                : "All comparison metrics cover the same comparison_frames starting now, bounded by known route inputs and handoff_frames+24. Baseline replays queued keys or the current walk intent until its arrival threshold; later navigation is unknown. Alternatives first replay handoff_frames route inputs, then their input for 24 frames; safe_landing checks the longer landing continuation. damage includes ongoing health decay; hurt_events records new native hurts. Entity motion is a constant-velocity hypothesis." };
     }
 
     internal static (int Frame, string Reason) EvaluateLanding(JsonObject branch, int initialHp, int minimum)
