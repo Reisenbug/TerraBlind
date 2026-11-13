@@ -298,11 +298,17 @@ namespace TerraBlind
 
         internal static void InterruptForSurvival()
         {
+            InterruptForRecovery();
+            StuckSentinel.Reset();
+        }
+
+        internal static void InterruptForRecovery()
+        {
             LegacyNativePrediction.Reset();
             LegacyMovementLookahead.Reset();
             StateSpacePlanner.StopNav();
             SkillExecutor.Stop(); MineCoordinator.Stop(); BridgeBuilder.Stop(); ItemUseCoordinator.Stop();
-            TrapEscape.Reset(); StuckSentinel.Reset();
+            TrapEscape.Reset();
             _haveLast = false; _failureRecoveryPending = false;
             _noProgressSteps = 0; _failureRecoveryTried = false;
         }

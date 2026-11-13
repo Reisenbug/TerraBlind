@@ -74,7 +74,7 @@ namespace TerraBlind
 
 			// SAFE STEP: abort whatever the executor was doing and take one manual sideways hop; alternate the
 			// direction each try so two nudges probe both sides. Never a ban, never a backtrack rule, one step.
-			StateSpacePlanner.StopNav();
+            RecedingNav.InterruptForRecovery();
 			_nudgeDir = _nudgeDir == 0 ? OpenDir(p, cx, cy) : -_nudgeDir;
 			_nudgeLeft = NudgeTicks;
 			Chatter.Say($"[TerraBlind] sentinel: flat {FlatWindow} ticks — safe step {(_nudgeDir > 0 ? "right" : "left")} ({_anomalies}/{GiveUpAnomalies})");

@@ -21,6 +21,57 @@ public sealed class Engine : Mod { }
 
 public static class NavigationExecutionChecks
 {
+    public static void VerifyNudgeHandoff()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var nav = typeof(RecedingNav); var sentinel = typeof(StuckSentinel);
+        string[] fields = { "_goalWx", "_goalWy", "_haveLast", "_failureRecoveryPending", "_noProgressSteps", "_failureRecoveryTried" };
+        var saved = fields.ToDictionary(name => name, name => nav.GetField(name, hidden).GetValue(null));
+        var savedSentinel = sentinel.GetFields(hidden).Where(field => !field.IsLiteral).ToDictionary(field => field, field => field.GetValue(null));
+        var player = Main.LocalPlayer;
+        bool left = player.controlLeft, right = player.controlRight, jump = player.controlJump;
+        int animation = player.itemAnimation, itemTime = player.itemTime;
+        string mineOutcome = MineCoordinator.Outcome, itemOutcome = ItemUseCoordinator.Outcome;
+        try
+        {
+            if (RecedingNav.Active || StateSpacePlanner.ExecRunning || MineCoordinator.IsActive || SkillExecutor.IsActive || ItemUseCoordinator.IsActive)
+                throw new InvalidOperationException("nudge contract requires idle navigation");
+            RecedingNav.Active = true;
+            nav.GetField("_goalWx", hidden).SetValue(null, 234); nav.GetField("_goalWy", hidden).SetValue(null, 567);
+            nav.GetField("_haveLast", hidden).SetValue(null, true);
+            sentinel.GetField("_anomalies", hidden).SetValue(null, 2);
+            sentinel.GetField("_nudgeLeft", hidden).SetValue(null, 18);
+            sentinel.GetField("_nudgeDir", hidden).SetValue(null, 1);
+            MineCoordinator.Start(new MineRequest()); SkillExecutor.StartDigRight();
+            ItemUseCoordinator.Start(new ItemUseRequest { DurationTicks = 30 });
+            player.itemAnimation = 3; player.itemTime = 8;
+            nav.GetMethod("InterruptForRecovery", hidden).Invoke(null, null);
+            if (MineCoordinator.IsActive || SkillExecutor.IsActive || ItemUseCoordinator.IsActive || StateSpacePlanner.ExecRunning)
+                throw new InvalidOperationException("local recovery retained a competing old executor");
+            if (!RecedingNav.Active || (int)nav.GetField("_goalWx", hidden).GetValue(null) != 234
+                || (int)nav.GetField("_goalWy", hidden).GetValue(null) != 567 || (bool)nav.GetField("_haveLast", hidden).GetValue(null)
+                || (int)sentinel.GetField("_anomalies", hidden).GetValue(null) != 2)
+                throw new InvalidOperationException("local recovery lost its goal, retained a stale landing or erased its recovery episode");
+            player.controlJump = false;
+            StuckSentinel.Tick(player, 234, 567);
+            if (!player.controlJump || !player.controlRight || MineCoordinator.IsActive)
+                throw new InvalidOperationException("nudge failed to take movement after the old mining action released it");
+            if (player.itemAnimation != 3 || player.itemTime != 8)
+                throw new InvalidOperationException("recovery cut an unfinished item animation");
+            Console.WriteLine("NAVIGATION_NUDGE_CONTRACTS_COMPLETE checks=4 old_mining=false goal_retained=true episode_retained=true animation_preserved=true model_calls=0");
+        }
+        finally
+        {
+            MineCoordinator.Stop(); SkillExecutor.Stop(); ItemUseCoordinator.Stop();
+            MineCoordinator.Outcome = mineOutcome; ItemUseCoordinator.Outcome = itemOutcome;
+            RecedingNav.Active = false;
+            foreach (var entry in saved) nav.GetField(entry.Key, hidden).SetValue(null, entry.Value);
+            foreach (var entry in savedSentinel) entry.Key.SetValue(null, entry.Value);
+            player.controlLeft = left; player.controlRight = right; player.controlJump = jump;
+            player.itemAnimation = animation; player.itemTime = itemTime;
+        }
+    }
+
     public static void VerifySearchReset()
     {
         const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
