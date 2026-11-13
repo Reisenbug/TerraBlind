@@ -4957,7 +4957,7 @@ public sealed class BehaviorTrial : ModSystem
               const destination=event.execution?.args;
               if(attempts>=5||!destination) return {handled:true};
               const context='candidate-smoke:'+destination.x+':'+destination.y;
-              const c=tool('combat_assess',{forecast:true,context,destination,radius:25}),f=c.forecast;
+              const c=tool('combat_assess',{forecast:true,route_handoff:true,context,destination,radius:25}),f=c.forecast;
               if(f.status!=='ready'||used.has(f.id)) return {handled:true};
               if(!f.movements.every(m=>m.comparison_frames===f.comparison_frames&&m.observed_comparison_frames<=f.comparison_frames
                   &&m.linear_threat_overlap.evaluated_frames===m.observed_comparison_frames)) throw new Error('comparison_window_mismatch');
