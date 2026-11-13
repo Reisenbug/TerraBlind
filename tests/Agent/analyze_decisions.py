@@ -30,7 +30,7 @@ for argument in sys.argv[1:]:
     unique_lines = set()
     markers = ('script_decision_request', 'script_decision_result', 'script_decision_channel', 'script_log',
         'combat_forecast', 'combat_forecast_unavailable', 'combat_candidate_apply', 'combat_candidate_abort',
-        'combat_candidate_refresh', 'combat_candidate_refresh_rejected')
+        'combat_candidate_refresh', 'combat_candidate_refresh_rejected', 'combat_candidate_landing_rejected')
     pattern = re.compile(r'\[(' + '|'.join(markers) + r')\] ')
     decoder = json.JSONDecoder()
     for path in (root / 'TerraBlindLogs').glob('*/**/*.log'):
@@ -51,6 +51,8 @@ for argument in sys.argv[1:]:
     forecasts = []
     unavailable = collections.Counter()
     candidate_events = collections.Counter()
+    applications = []
+    landing_rejections = collections.Counter()
     refreshes = []
     refresh_rejections = collections.Counter()
     for line in unique_lines:
@@ -63,6 +65,11 @@ for argument in sys.argv[1:]:
         for marker in ('apply', 'abort'):
             if '[combat_candidate_' + marker + '] ' in line:
                 candidate_events[marker] += 1
+        if '[combat_candidate_apply] ' in line:
+            applications.append(json.loads(line.split('[combat_candidate_apply] ', 1)[1]))
+        if '[combat_candidate_landing_rejected] ' in line:
+            rejected = json.loads(line.split('[combat_candidate_landing_rejected] ', 1)[1])
+            landing_rejections[rejected['reason']] += 1
         if '[combat_candidate_refresh] ' in line:
             refreshes.append(json.loads(line.split('[combat_candidate_refresh] ', 1)[1]))
         if '[combat_candidate_refresh_rejected] ' in line:
@@ -115,6 +122,8 @@ for argument in sys.argv[1:]:
                 assert abs(movement['route_progress_tiles'] - progress) < 1e-6, ('wrong progress window', forecast['id'], movement['id'])
             window_checks += 1
     latencies = [a['elapsed_ms'] for a in answers]
+    completed_ids = {a.get('execution_forecast_id') for a in applied['combat'] if a.get('action') == 'done'}
+    decay_applications = [a for a in applications if (a.get('life_regen_raw') or 0) < 0]
     workflow = report['after'].get('script_workflows', {}).get('decision-comparison', {})
     inventory = report['after']['inventory_slots']
     observed_resources = collections.defaultdict(list)
@@ -158,6 +167,10 @@ for argument in sys.argv[1:]:
         'moving_weapon_use_samples': sum(math.hypot(s['vx'], s['vy']) > 0.1 for s in weapon_uses),
         'requests': dict(requests), 'choices': dict(choices),
         'forecasts': {'completed': len(forecasts), 'candidate_events': dict(candidate_events),
+            'decay_applications': len(decay_applications),
+            'completed_during_decay': sum(a['forecast_id'] in completed_ids for a in decay_applications),
+            'decay_with_predicted_hp_loss': sum(a['predicted_end_hp'] < a['start_hp'] for a in decay_applications),
+            'landing_rejections': dict(landing_rejections),
             'refresh_completed': len(refreshes), 'refresh_rejections': dict(refresh_rejections),
             'equal_window_checks': window_checks,
             'incomplete_comparisons': sum(not m['comparison_complete'] for f in forecasts for m in f['movements']),

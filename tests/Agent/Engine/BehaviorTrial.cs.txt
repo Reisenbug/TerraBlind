@@ -4767,6 +4767,7 @@ public sealed class BehaviorTrial : ModSystem
             p.inventory[4].SetDefaults(ItemID.ThrowingKnife); p.inventory[4].stack = 250; p.selectedItem = 4;
             p.ConsumedLifeCrystals = (health - 100) / 20;
             p.statLife = p.statLifeMax = p.statLifeMax2 = health;
+            if (Environment.GetEnvironmentVariable("TB_DECISION_START_POISON") == "1") p.AddBuff(BuffID.Poisoned, 3600);
             return p.Center;
         });
         await Call("set_combat", new JsonObject { ["auto_attack"] = true, ["auto_dodge"] = codeDodge, ["weapon_type"] = ItemID.ThrowingKnife });
@@ -4845,6 +4846,7 @@ public sealed class BehaviorTrial : ModSystem
             await Call("task_policy", new JsonObject { ["operation"] = "clear", ["expected_revision"] = policy["revision"].DeepClone() });
             File.WriteAllText(Path.Combine(Main.SavePath, "decision-comparison.json"), new JsonObject {
                 ["variant"] = variant, ["fight_trial"] = true, ["code_dodge"] = codeDodge, ["terrain_edits"] = 0, ["unarmed"] = false,
+                ["initial_poison"] = Environment.GetEnvironmentVariable("TB_DECISION_START_POISON") == "1",
                 ["policy_config"] = new JsonObject { ["weapon_order"] = new JsonArray((int)ItemID.ThrowingKnife) },
                 ["seed"] = Main.ActiveWorldFileData.SeedText, ["start_health"] = health, ["spawns"] = spawns,
                 ["worker_warmup_ms"] = warmup.ElapsedMilliseconds,
