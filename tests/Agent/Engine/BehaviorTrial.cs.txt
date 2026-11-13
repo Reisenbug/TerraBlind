@@ -4986,6 +4986,8 @@ public sealed class BehaviorTrial : ModSystem
         var travel = await Call("action_start", new JsonObject { ["tool"] = "run_script", ["args"] = new JsonObject
             { ["workflow"] = "decision-comparison", ["code"] = script } });
         var samples = new JsonArray(); var clock = Stopwatch.StartNew();
+        bool encounters = Environment.GetEnvironmentVariable("TB_DECISION_JOURNEY_ENCOUNTERS") == "1";
+        var spawns = new JsonArray(); var spawned = new List<int>();
         using var authorLifetime = new CancellationTokenSource();
         var authorTask = authored ? AuthorDecisionPolicy(config, before, waypoints, authorLifetime.Token) : null;
         JsonObject authoredProgram = null;
@@ -5003,6 +5005,19 @@ public sealed class BehaviorTrial : ModSystem
                 var measured = await OnMain(() =>
                 {
                     var p = Main.LocalPlayer;
+                    if (encounters && spawns.Count < 3 && clock.ElapsedMilliseconds >= 3000 + spawns.Count * 12000
+                        && !spawned.Any(i => Main.npc[i].active && Main.npc[i].type == NPCID.Hornet))
+                        foreach (int dx in new[] { spawns.Count % 2 == 0 ? 160 : -160, 200, -200 })
+                        {
+                            var point = p.Center + new Vector2(dx, -64);
+                            if (Collision.SolidCollision(point - new Vector2(20), 40, 40)
+                                || !Collision.CanHitLine(p.Center, 4, 4, point, 4, 4)) continue;
+                            int who = NPC.NewNPC(new EntitySource_Misc("JourneyDecisionTrial"), (int)point.X, (int)point.Y, NPCID.Hornet);
+                            spawned.Add(who);
+                            spawns.Add(new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["who"] = who,
+                                ["x"] = Main.npc[who].position.X, ["y"] = Main.npc[who].position.Y, ["hp"] = Main.npc[who].life });
+                            break;
+                        }
                     return new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["tick"] = Main.GameUpdateCount,
                         ["hp"] = p.statLife, ["dead"] = p.dead, ["x"] = p.position.X, ["y"] = p.position.Y,
                         ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["attack"] = p.controlUseItem,
@@ -5058,6 +5073,7 @@ public sealed class BehaviorTrial : ModSystem
                 ["author_replay_source"] = Environment.GetEnvironmentVariable("TB_DECISION_AUTHOR_REPLAY"),
                 ["unarmed"] = Environment.GetEnvironmentVariable("TB_DECISION_UNARMED") == "1",
                 ["elapsed_ms"] = clock.ElapsedMilliseconds, ["waypoints"] = waypoints,
+                ["journey_encounters"] = encounters, ["spawns"] = spawns,
                 ["before"] = before, ["nearby_natural_sources"] = opportunities, ["after"] = after, ["samples"] = samples, ["action"] = action
             }.ToJsonString());
         }
