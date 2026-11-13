@@ -66,7 +66,8 @@ public sealed class CombatForecast : ModSystem
             return;
         }
         executionAbort = new JsonObject { ["forecast_id"] = executing.Id,
-            ["frame"] = index, ["reason"] = reason, ["difference"] = mismatch };
+            ["frame"] = index, ["reason"] = reason, ["difference"] = mismatch,
+            ["observed"] = VanillaPrediction.Observe(Main.LocalPlayer, false), ["expected"] = trace[index].DeepClone() };
         DiagLog.Write("[combat_candidate_abort] " + executionAbort.ToJsonString());
         ActExecutor.Stop(); executing = null; executingMovement = null;
     }
@@ -387,7 +388,8 @@ public sealed class CombatForecast : ModSystem
                 if (prefix.Length < 6 && walk != null) prefix = Enumerable.Repeat(walk.Value.Direction > 0 ? 2 : 1, 12).ToArray();
                 if (prefix.Length == 0 && !RecedingNav.Active) prefix = new int[12];
                 if (prefix.Length == 0) return (Job: (Forecast)null,
-                    Error: new JsonObject { ["error"] = "combat_candidate_no_handoff_prefix" });
+                    Error: new JsonObject { ["error"] = "combat_candidate_no_handoff_prefix",
+                        ["observed"] = VanillaPrediction.Observe(player, false) });
                 try
                 {
                     long captureStarted = Stopwatch.GetTimestamp();
@@ -482,7 +484,8 @@ public sealed class CombatForecast : ModSystem
         string reason = null, mismatch = null;
         if (expected == null || !VanillaAsyncMovement.StateMatches(player, expected, true, out reason, out mismatch))
             return new JsonObject { ["error"] = "combat_candidate_changed", ["reason"] = expected == null ? "missing_anchor" : reason,
-                ["difference"] = expected == null ? null : mismatch };
+                ["difference"] = expected == null ? null : mismatch,
+                ["observed"] = VanillaPrediction.Observe(player, false), ["expected"] = expected?.DeepClone() };
         if (!VanillaFrame.ContextMatches(forecast.Snapshot, player, out reason, trajectory, firstFrame: offset))
             return new JsonObject { ["error"] = "combat_candidate_changed", ["reason"] = reason };
         return null;

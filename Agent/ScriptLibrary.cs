@@ -59,6 +59,8 @@ public sealed class ScriptLibrary
               cover:best(candidates.filter(m=>m.cover_gain>0),m=>m.cover_gain*100+m.route_progress_tiles)};
             if(!Object.values(options).some(Boolean)) return {status:'no_better_maneuver',forecast_id:f.id};
             const state={instruction:input.instruction,destination:input.destination,combat:c,terrain:input.terrain,
+              sample_tick:f.sample_tick,current_tick:c.tick,forecast_age_frames:f.age_frames,
+              sample_player_pixels:f.sample_player,sample_targets:f.sample_targets,sample_projectiles:f.sample_projectiles,
               baseline,options,comparison_scope:f.scope,forecast_id:f.id,
               coordinates:'Player positions/path samples are pixels; destination and distances are tiles. Velocities are pixels per tick.'};
             delete state.combat.forecast;
@@ -83,7 +85,7 @@ public sealed class ScriptLibrary
               decision_forecast_id:r.input_state?.forecast_id,execution_forecast_id:result.execution_forecast_id,
               model_ms:r.result?.elapsed_ms,request_age_ms:r.request_age_ms,ready_wait_ms:r.ready_wait_ms,
               elapsed_ms:Date.now()-started,action:result.error??result.outcome,error:result.error,reason:result.reason,
-              forecast_abort:result.forecast_abort??null});
+              observed:result.observed,expected:result.expected,forecast_abort:result.forecast_abort??null});
             return {request_id:r.request_id,applied:!result.error&&choice!=='continue',error:result.error};
             """);
         if (name == "tactical_reactions") return Template(name,
