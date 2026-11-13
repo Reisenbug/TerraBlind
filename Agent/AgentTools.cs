@@ -2003,10 +2003,12 @@ public static partial class AgentTools
                     if (slot < 0 || slot >= player.inventory.Length) return null;
                     var item = player.inventory[slot];
                     return new JsonObject { ["type"] = item.type, ["consumable"] = item.consumable, ["heal_life"] = item.healLife,
+                        ["started_tick"] = (ulong)Main.GameUpdateCount,
                         ["collect_tool"] = item.pick > 0 || item.axe > 0 || item.hammer > 0,
                         ["count"] = player.inventory.Where(i => i.type == item.type).Sum(i => i.stack) };
                 }, token);
-                if (usedItem?["collect_tool"]?.GetValue<bool>() == true)
+                bool boundedCollect = usedItem?["collect_tool"]?.GetValue<bool>() == true && Int(args, "duration_ticks") > 0;
+                if (usedItem?["collect_tool"]?.GetValue<bool>() == true && !boundedCollect)
                 {
                     var collection = await CollectTarget(Int(args, "x"), Int(args, "y"), token, requestedSlot: Int(args, "slot", -1));
                     if (collection != null) { result = collection; break; }
@@ -2017,6 +2019,9 @@ public static partial class AgentTools
                     ["duration_ticks"] = Int(args, "duration_ticks", 30), ["strict"] = Bool(args, "strict")
                 }, token);
                 if (!Rejected(result)) result = await Wait("/item_use_status", "active", "/item_use_stop", 60, token,
+                    navigationProgress: boundedCollect ? _ => NativeAgent.OnMain(() =>
+                        Main.GameUpdateCount - usedItem["started_tick"].GetValue<ulong>() >= (ulong)Int(args, "duration_ticks")
+                            ? new JsonObject { ["outcome"] = "time_elapsed", ["duration_ticks"] = Int(args, "duration_ticks") } : null, token) : null,
                     reactionContext: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() },
                     onCompleted: async receipt =>
                     {

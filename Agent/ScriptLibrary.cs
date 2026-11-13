@@ -66,7 +66,12 @@ public sealed class ScriptLibrary
                 if(!observed||!current||['x','y','type'].some(k=>observed[k]!==current[k])) result={error:'obstacle_changed'};
                 else {
                   const pick=tool('inventory_review').inventory.filter(w=>w.pick>0).sort((a,b)=>b.pick-a.pick)[0];
-                  result=pick?tool('use_item',{slot:pick.slot,x:current.x,y:current.y,strict:true}):{error:'no_pickaxe'};
+                  result=pick?tool('use_item',{slot:pick.slot,x:current.x,y:current.y,strict:true,duration_ticks:16}):{error:'no_pickaxe'};
+                  if(pick&&!result.error){
+                    const checked=tool('opportunity_assess',{x:current.x,y:current.y});
+                    result=checked.ok&&(!checked.target.has_tile||checked.target.tile_type!==current.type)
+                      ?{...result,outcome:'removed'}:{...result,error:'contact_not_removed'};
+                  }
                   retry=result.outcome==='removed'&&!result.error;
                 }
               }else if(choice==='nearby_enemy'){

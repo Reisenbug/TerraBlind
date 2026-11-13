@@ -32,13 +32,14 @@ static class ScriptTests
         await TestJointDecision();
         await TestTacticalReactions();
         await ConcurrentPolicyContext();
+        await BoundedCollectUse();
         GatherTests.DecisionMovement();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=12 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=13 model_calls=0");
     }
 
     static async Task TestDecisionChannels()
@@ -231,6 +232,7 @@ static class ScriptTests
                 if (name == "combat_assess") return combat.ToJsonString();
                 if (name == "inspect_terrain") return terrain.ToJsonString();
                 if (name == "inventory_review") return "{\"inventory\":[{\"slot\":2,\"pick\":35}]}";
+                if (name == "opportunity_assess") return "{\"ok\":true,\"target\":{\"has_tile\":false}}";
                 if (name == "set_combat") { Check(args["weapon_type"].GetValue<int>() == 279, "tactics lost usable weapon"); return "{}"; }
                 if (name == "act")
                 {
@@ -244,6 +246,7 @@ static class ScriptTests
                     clears++;
                     Check(args["slot"].GetValue<int>() == 2 && args["x"].GetValue<int>() == 11 && args["strict"].GetValue<bool>(),
                         "tactics cleared an unobserved coordinate");
+                    if (!pressure) Check(args["duration_ticks"].GetValue<int>() == 16, "contact clearance lost its execution bound");
                     if (pressure) terrain["trap_tiles"] = new JsonArray();
                     return scenario == "failed_clear" ? "{\"error\":\"cannot_reach\"}" : "{\"outcome\":\"removed\"}";
                 }
@@ -277,6 +280,47 @@ static class ScriptTests
         }
         await ReactiveHostIntegration(emptyWindow: true);
         Console.WriteLine("PASS: tactical skill continues while pending, bounds combat windows, revalidates targets and retries only after tile removal");
+    }
+
+    static async Task BoundedCollectUse()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var handler = HttpServerSystem.Handler;
+        var player = Terraria.Main.LocalPlayer;
+        var item = player.inventory[49];
+        var tick = Terraria.Main.GameUpdateCount;
+        int polls = 0, stops = 0, starts = 0;
+        try
+        {
+            AgentTools.NewTask();
+            player.inventory[49] = new Terraria.Item { type = 3509, pick = 35, stack = 1 };
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                Check(!path.StartsWith("/nav"), "bounded item use secretly started navigation");
+                if (path == "/item_use") starts++;
+                if (path == "/item_use_stop") stops++;
+                if (path == "/item_use_status")
+                { polls++; Terraria.Main.GameUpdateCount += 4; return (200, "{\"active\":true}"); }
+                return (200, "{}");
+            };
+            var task = AgentTools.Execute("use_item", new JsonObject { ["slot"] = 49, ["x"] = 1000, ["y"] = 1000,
+                ["strict"] = true, ["duration_ticks"] = 12 }, default);
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            {
+                Check(timer.Elapsed.TotalSeconds < 5, "bounded item use failed to stop");
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+            var result = JsonNode.Parse(await task);
+            Check(result["outcome"].ToString() == "time_elapsed" && polls == 3 && starts == 1 && stops == 1,
+                "bounded pick use ignored its frame limit: " + result);
+            Console.WriteLine("PASS: explicit-duration pick use stays local and stops at the frame budget");
+        }
+        finally
+        {
+            player.inventory[49] = item; Terraria.Main.GameUpdateCount = tick;
+            AgentTools.Stop(); HttpServerSystem.Handler = handler; agent.Unload();
+        }
     }
 
     static async Task ConcurrentPolicyContext()
@@ -619,6 +663,7 @@ static class ScriptTests
         await TestJointDecision();
         await TestTacticalReactions();
         await ConcurrentPolicyContext();
+        await BoundedCollectUse();
         string programDirectory = Path.Combine(Path.GetTempPath(), "terrablind-program-" + Guid.NewGuid().ToString("N"));
         try
         {
