@@ -17,6 +17,22 @@ namespace Forecast;
 
 public sealed class Forecast : Mod { }
 
+public sealed class CombatDamageTrace : ModPlayer
+{
+    internal static JsonArray Events, Health;
+    internal static int Frame;
+    public override void OnHurt(Player.HurtInfo info)
+    {
+        Events?.Add(new JsonObject { ["frame"] = Frame, ["damage"] = info.Damage,
+            ["other_source"] = info.DamageSource.SourceOtherIndex,
+            ["npc_index"] = info.DamageSource.SourceNPCIndex,
+            ["projectile_type"] = info.DamageSource.SourceProjectileType });
+    }
+    public override void PostUpdate()
+        => Health?.Add(new JsonObject { ["frame"] = Frame, ["hp"] = Player.statLife,
+            ["life_regen"] = Player.lifeRegen, ["breath"] = Player.breath, ["suffocating"] = Player.suffocating });
+}
+
 public sealed class Engine : ModSystem
 {
     const int X = 500, Y = 400;
@@ -2085,16 +2101,27 @@ public sealed class Engine : ModSystem
         {
             var branches = request["branches"].AsArray();
             if (branches.Count is < 1 or > 8) throw new ArgumentException("combat_replays_requires_1_to_8_branches");
+            bool traceDamage = request["trace_damage"]?.GetValue<bool>() == true;
             var timer = System.Diagnostics.Stopwatch.StartNew();
             var predictor = new VanillaPrediction(request["snapshot"].AsObject());
             double prepareMs = timer.Elapsed.TotalMilliseconds;
             var results = new JsonArray();
             foreach (var branch in branches)
             {
-                var result = predictor.Predict(branch["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray(),
-                    detailed: false, stopOnDamage: true);
-                result["id"] = branch["id"].DeepClone();
-                results.Add(result);
+                var branchControls = branch["controls"].AsArray().Select(key => key.GetValue<int>()).ToArray();
+                var events = traceDamage ? new JsonArray() : null;
+                var health = traceDamage ? new JsonArray() : null;
+                CombatDamageTrace.Events = events; CombatDamageTrace.Health = health;
+                try
+                {
+                    var result = predictor.Predict(branchControls, detailed: false, stopOnDamage: !traceDamage,
+                        controlPolicy: traceDamage ? (player, frame) =>
+                        { CombatDamageTrace.Frame = frame + 1; return branchControls[frame]; } : null);
+                    result["id"] = branch["id"].DeepClone();
+                    if (traceDamage) { result["hurt_events"] = events; result["health_frames"] = health; }
+                    results.Add(result);
+                }
+                finally { CombatDamageTrace.Events = CombatDamageTrace.Health = null; }
             }
             return new JsonObject { ["branches"] = results, ["prepare_ms"] = prepareMs,
                 ["total_ms"] = timer.Elapsed.TotalMilliseconds };

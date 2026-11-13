@@ -4636,15 +4636,15 @@ public sealed class BehaviorTrial : ModSystem
             {
                 BoundaryInputPlayer.Drive = p =>
                 { p.position = anchor; p.velocity = Vector2.Zero; p.immune = true; p.immuneTime = 60; p.controlUseItem = false; };
-                for (int x = cx - 2; x <= cx + 2; x++)
-                    for (int y = floor - 18; y <= floor; y++) Main.tile[x, y].ClearEverything();
                 return true;
             });
-            foreach (string scenario in new[] { "healthy", "poison", "spikes", "fall" })
+            foreach (string scenario in new[] { "healthy", "poison", "spikes", "fall", "drowning", "suffocation", "gills" })
             {
                 var snapshot = await OnMain(() =>
                 {
                     var p = Main.LocalPlayer;
+                    for (int x = cx - 2; x <= cx + 2; x++)
+                        for (int y = floor - 18; y <= floor; y++) Main.tile[x, y].ClearEverything();
                     for (int x = cx - 2; x <= cx + 2; x++)
                     { var tile = Main.tile[x, floor]; tile.HasTile = true; tile.TileType = scenario == "spikes" ? TileID.Spikes : TileID.Dirt; }
                     p.position = new Vector2(cx * 16 + 8 - p.width / 2f, floor * 16 - p.height - (scenario == "fall" ? 12 * 16 : 0));
@@ -4654,9 +4654,22 @@ public sealed class BehaviorTrial : ModSystem
                     p.itemAnimation = p.itemTime = 0; p.controlUseItem = false;
                     p.fallStart = p.fallStart2 = scenario == "fall" ? floor - 31 : (int)p.position.Y / 16;
                     Array.Clear(p.buffType); Array.Clear(p.buffTime); p.lifeRegen = p.lifeRegenCount = 0;
+                    p.breath = p.breathMax; p.breathCD = 0;
                     if (scenario == "poison") { p.AddBuff(BuffID.Poisoned, 600); p.lifeRegenCount = -119; }
-                    int y = (int)p.Center.Y / 16;
-                    return VanillaFrame.Capture(p, new Rectangle(cx - 32, y - 16, 64, 96), true);
+                    if (scenario is "drowning" or "gills" or "suffocation")
+                    {
+                        for (int x = cx - 1; x <= cx + 1; x++)
+                            for (int y = floor - 4; y < floor; y++)
+                            {
+                                var tile = Main.tile[x, y];
+                                if (scenario == "suffocation") { tile.HasTile = true; tile.TileType = TileID.Sand; }
+                                else { tile.LiquidAmount = 255; tile.LiquidType = LiquidID.Water; }
+                            }
+                        if (scenario == "suffocation") { p.AddBuff(BuffID.Suffocation, 600); p.lifeRegenCount = -119; }
+                        else { p.breath = 0; if (scenario == "gills") p.AddBuff(BuffID.Gills, 600); }
+                    }
+                    int centerY = (int)p.Center.Y / 16;
+                    return VanillaFrame.Capture(p, new Rectangle(cx - 32, centerY - 16, 64, 96), true);
                 });
                 var controls = new JsonArray(Enumerable.Repeat(0, 72).Select(k => (JsonNode)JsonValue.Create(k)).ToArray());
                 var stopped = await Observe(new JsonObject { ["command"] = "replay", ["snapshot"] = snapshot.DeepClone(),
@@ -4664,6 +4677,10 @@ public sealed class BehaviorTrial : ModSystem
                 var full = await Observe(new JsonObject { ["command"] = "replay", ["snapshot"] = snapshot.DeepClone(),
                     ["controls"] = controls.DeepClone(), ["detailed"] = false, ["stop_on_damage"] = false });
                 JsonObject batch = null;
+                var legacy = await Observe(new JsonObject { ["command"] = "combat_replays", ["snapshot"] = snapshot.DeepClone(),
+                    ["branches"] = new JsonArray(new JsonObject { ["id"] = scenario, ["controls"] = controls.DeepClone() }) });
+                if (!JsonNode.DeepEquals(stopped["frames"], legacy["branches"][0]["frames"]))
+                    throw new Exception("Default batch behavior changed: " + scenario);
                 if (traceDamage)
                     batch = await Observe(new JsonObject { ["command"] = "combat_replays", ["snapshot"] = snapshot.DeepClone(), ["trace_damage"] = true,
                         ["branches"] = new JsonArray(new JsonObject { ["id"] = scenario, ["controls"] = controls.DeepClone() }) });
@@ -4672,7 +4689,14 @@ public sealed class BehaviorTrial : ModSystem
                 cases.Add(row);
                 if (traceDamage && !JsonNode.DeepEquals(full["frames"], batch["branches"][0]["frames"]))
                     throw new Exception("Damage tracing changed native trajectory: " + scenario);
-                if (scenario is "healthy" or "poison")
+                if (traceDamage)
+                {
+                    var health = batch["branches"][0]["health_frames"].AsArray();
+                    if (health.Count != full["frames"].AsArray().Count || health.Where((h, i) =>
+                        h["frame"].GetValue<int>() != i + 1 || h["hp"].GetValue<int>() != full["frames"][i]["hp"].GetValue<int>()).Any())
+                        throw new Exception("PostUpdate health does not match final native frame: " + scenario);
+                }
+                if (scenario is "healthy" or "poison" or "gills")
                 {
                     if (full["outcome"].ToString() != "complete" || full["frames"].AsArray().Count != 72
                         || full["frames"][71]["grounded"]?.GetValue<bool>() != true)
@@ -4680,7 +4704,8 @@ public sealed class BehaviorTrial : ModSystem
                     if (traceDamage && batch["branches"][0]["hurt_events"].AsArray().Count != 0)
                         throw new Exception("Native hurt event occurred in passive case: " + scenario);
                 }
-                else if (stopped["outcome"].ToString() != "damaged" || traceDamage && batch["branches"][0]["hurt_events"].AsArray().Count == 0)
+                else if (stopped["outcome"].ToString() != "damaged" || scenario is "spikes" or "fall"
+                    && traceDamage && batch["branches"][0]["hurt_events"].AsArray().Count == 0)
                     throw new Exception("Native damage was not detected: " + scenario);
                 if (scenario == "poison" && (stopped["frames"].AsArray().Count >= 24 || full["frames"][71]["hp"].GetValue<int>() >= 200))
                     throw new Exception("Poison probe did not reproduce premature interruption");
