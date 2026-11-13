@@ -249,8 +249,9 @@ namespace TerraBlind
 
         // goalWx/Wy 是 A* 搜的格,fieldGoal 是缓存罗盘场的键(最终目标) -- 分开才不会每段重建百万格场。
         // fCutoffMul:f=g+h 单调不减,取出的 f > f0*倍数就是连最乐观的路都贵到不可能
-        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue, float fCutoffMul = 0f, bool coarseStates = false)
+        public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue, float fCutoffMul = 0f, bool coarseStates = false, System.Threading.CancellationToken cancellation = default)
         {
+            cancellation.ThrowIfCancellationRequested();
             var ctx = new PlanCtx { Coarse = coarseStates };
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var res = new SSResult();
@@ -361,6 +362,7 @@ namespace TerraBlind
             var closedCoarse = new Dictionary<CellKey, float>();
             while (open.Count > 0 && expansions < maxExp)
             {
+                cancellation.ThrowIfCancellationRequested();
                 if (!open.TryDequeue(out var cur, out float curF)) break;
                 // 最乐观的候选都超过阈值了 = 没路。死胡同在这里几十次展开就停,不用烧满预算
                 if (curF > fCut)

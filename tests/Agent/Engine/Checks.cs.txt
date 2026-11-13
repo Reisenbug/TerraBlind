@@ -21,6 +21,40 @@ public sealed class Engine : Mod { }
 
 public static class NavigationExecutionChecks
 {
+    public static void VerifySearchReset()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var type = typeof(TrapEscape);
+        if (TrapEscape.Busy) throw new InvalidOperationException("search reset contract requires idle navigation");
+        string[] names = { "_search", "_searchCancellation", "_generation", "_searchGeneration", "_fails", "_lastH" };
+        var saved = names.ToDictionary(name => name, name => type.GetField(name, hidden).GetValue(null));
+        var pending = new TaskCompletionSource<StateSpacePlanner.SSResult>();
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            type.GetField("_search", hidden).SetValue(null, pending.Task);
+            type.GetField("_searchCancellation", hidden).SetValue(null, cancellation);
+            TrapEscape.Reset();
+            if (TrapEscape.Busy || !cancellation.IsCancellationRequested)
+                throw new InvalidOperationException("reset retained its stale search or failed to cancel it");
+            pending.SetResult(new StateSpacePlanner.SSResult { Found = true });
+            if (TrapEscape.Poll()) throw new InvalidOperationException("stale search dispatched after reset");
+            using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+            try
+            {
+                StateSpacePlanner.Plan(20, 20, cancellation: cancelled.Token);
+                throw new InvalidOperationException("cancelled planning still entered the world search");
+            }
+            catch (OperationCanceledException) { }
+            Console.WriteLine("NAVIGATION_RESET_CONTRACTS_COMPLETE checks=3 busy=false stale_dispatch=false cancellation_observed=true model_calls=0");
+        }
+        finally
+        {
+            pending.TrySetResult(new StateSpacePlanner.SSResult());
+            foreach (var entry in saved) type.GetField(entry.Key, hidden).SetValue(null, entry.Value);
+        }
+    }
+
     public static void VerifyMining()
     {
         const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;

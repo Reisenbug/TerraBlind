@@ -24,6 +24,7 @@ namespace TerraBlind
         static int _lastH = int.MinValue;   // 上次脱困时的 H,用来判断"是不是真出去了"
 
         static System.Threading.Tasks.Task<StateSpacePlanner.SSResult> _search;
+        static System.Threading.CancellationTokenSource _searchCancellation;
         static int _generation, _searchGeneration;
         static float _startVx;
         static (int x, int y) _reqAt, _reqTo;
@@ -33,6 +34,13 @@ namespace TerraBlind
 
         public static void Reset()
         {
+            var search = _search;
+            var source = _searchCancellation;
+            _search = null; _searchCancellation = null;
+            source?.Cancel();
+            if (search != null)
+                _ = search.ContinueWith(task => { _ = task.Exception; source?.Dispose(); }, System.Threading.Tasks.TaskScheduler.Default);
+            else source?.Dispose();
             _fails = 0; _lastH = int.MinValue;
             _generation++;
         }
@@ -43,6 +51,7 @@ namespace TerraBlind
             if (_search == null || !_search.IsCompleted) return false;
             var search = _search;
             _search = null;
+            _searchCancellation?.Dispose(); _searchCancellation = null;
             if (_searchGeneration != _generation)
             {
                 DiagLog.Write("[escape] discard reset search");
@@ -98,11 +107,14 @@ namespace TerraBlind
             var start = (p.position.X, p.position.Y, p.velocity.X);
             _startVx = p.velocity.X;
             _searchGeneration = _generation;
+            _searchCancellation = new System.Threading.CancellationTokenSource();
+            var cancellation = _searchCancellation.Token;
             _search = System.Threading.Tasks.Task.Run(() =>
             {
-                try { return StateSpacePlanner.Plan(tx, ty, start, maxExp: Budget, goalSnapCap: 0, coarseStates: true); }
+                try { return StateSpacePlanner.Plan(tx, ty, start, maxExp: Budget, goalSnapCap: 0, coarseStates: true, cancellation: cancellation); }
+                catch (System.OperationCanceledException) { throw; }
                 catch (System.Exception e) { DiagLog.Write($"[escape] A* EXC {e.Message}"); return new StateSpacePlanner.SSResult(); }
-            });
+            }, cancellation);
             DiagLog.Write($"[escape] A* 后台开搜 ({curCx},{curCy})→({tx},{ty})");
             return false;   // 这一帧没有路可派;调用方走 Commitment 兜底
         }
