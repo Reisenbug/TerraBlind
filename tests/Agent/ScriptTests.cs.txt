@@ -42,13 +42,29 @@ static class ScriptTests
         await ReactiveTravelExample();
         await ComposedReactions();
         await DecisionPreconditions();
+        ResolvedExecutionNotices();
         GatherTests.DecisionMovement();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=22 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=23 model_calls=0");
+    }
+
+    static void ResolvedExecutionNotices()
+    {
+        var watch = new AgentWatch();
+        watch.EnsureDefaults();
+        watch.ExecutionFault(new JsonObject { ["task_node"] = "resources", ["reason"] = "no_action" });
+        Check(watch.HasInterrupting, "new execution fault was not visible");
+        watch.ResolveExecutionGap("execution_resumed");
+        var retained = watch.Pending()["events"].AsArray().Single();
+        Check(!watch.HasInterrupting && retained["deferred_reason"].ToString() == "execution_resumed"
+            && retained["reported_evidence"]["reason"].ToString() == "no_action", "resumed execution retained a live fault or lost evidence");
+        watch.ExecutionFault(new JsonObject { ["reason"] = "new_gap" });
+        Check(watch.HasInterrupting && watch.Pending()["events"].AsArray().Count == 2, "resolved notice suppressed a later execution fault");
+        Console.WriteLine("PASS: resumed execution archives the old gap while retaining evidence and reporting a new gap");
     }
 
     static async Task DecisionPreconditions()

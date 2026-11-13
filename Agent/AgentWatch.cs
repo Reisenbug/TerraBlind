@@ -475,6 +475,16 @@ public sealed class AgentWatch
         history.Add((JsonObject)value.DeepClone());
     }
 
+    internal void ResolveExecutionGap(string reason)
+    {
+        foreach (var notice in pending)
+            if (notice["kind"]?.ToString() == "execution_gap" && notice["wake_deferred"]?.GetValue<bool>() != true)
+            {
+                notice["wake_deferred"] = true;
+                notice["deferred_reason"] = reason;
+            }
+    }
+
     public JsonObject Summary() => new()
     {
         ["loot_chests_in_reach"] = LootChestsInReach,

@@ -323,6 +323,16 @@ public static partial class AgentTools
         bool scriptOwnsInput = Actions.HasPrimaryControl && last["tool"]?.ToString() == "run_script";
         if (ControlSession.PrimaryActive || Actions.HasPrimaryControl && !scriptOwnsInput || !Plan.Incomplete || Main.LocalPlayer.dead)
         {
+            if (!Main.LocalPlayer.dead && (gapStarted != null || LastContinuation?["status"]?.ToString() == "execution_gap"))
+            {
+                string resolved = Plan.Incomplete ? "execution_resumed" : "task_completed";
+                Watches.ResolveExecutionGap(resolved);
+                if (LastContinuation?["status"]?.ToString() == "execution_gap")
+                {
+                    LastContinuation["status"] = resolved;
+                    LastContinuation["resolved_tick"] = Main.GameUpdateCount;
+                }
+            }
             if (gapStarted != null)
                 DiagLog.Write($"[execution_gap_end] frames={Main.GameUpdateCount - gapStarted.Value} handle={Actions.ActiveHandle}");
             gapStarted = null;
