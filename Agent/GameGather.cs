@@ -112,6 +112,11 @@ public sealed class GameGather : IGatherWorld
         int x = candidate["x"].GetValue<int>(), y = candidate["y"].GetValue<int>();
         if (kind == "tile")
         {
+            var requested = _targets.First(t => t.ItemType == candidate["item_type"].GetValue<int>());
+            JsonObject Satisfied() => Main.LocalPlayer.inventory.Where(i => i.type == requested.ItemType).Sum(i => i.stack) >= requested.Count
+                ? new JsonObject { ["outcome"] = "target_satisfied" } : null;
+            var completed = await NativeAgent.OnMain(Satisfied, token);
+            if (completed != null) return completed;
             bool unchanged = await NativeAgent.OnMain(() =>
             {
                 var tile = Main.tile[x, y];
@@ -120,7 +125,7 @@ public sealed class GameGather : IGatherWorld
                     && (candidate["frame_y"] == null || tile.TileFrameY == candidate["frame_y"].GetValue<int>());
             }, token);
             if (!unchanged) return new JsonObject { ["error"] = "target_changed" };
-            return await AgentTools.CollectTarget(x, y, token, false) ?? new JsonObject { ["error"] = "target_changed" };
+            return await AgentTools.CollectTarget(x, y, token, false, completion: Satisfied) ?? new JsonObject { ["error"] = "target_changed" };
         }
         int who = candidate["who"].GetValue<int>();
         if (kind == "drop")

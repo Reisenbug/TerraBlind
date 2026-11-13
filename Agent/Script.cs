@@ -139,6 +139,9 @@ public static class AgentScript
 
     public static void DescribePrograms(JsonArray tools)
     {
+        var useItem = tools.First(t => t["function"]?["name"]?.ToString() == "use_item")["function"];
+        useItem["description"] = useItem["description"].ToString()
+            + "途中反应消费当前gather目标时返回deferred_consumption，先让采集验收库存，采集结束后再使用；其它物品照常可用。";
         tools.Add(new JsonObject { ["type"] = "function", ["function"] = new JsonObject
         {
             ["name"] = "nav_intent",

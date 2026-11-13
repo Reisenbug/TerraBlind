@@ -37,13 +37,103 @@ static class ScriptTests
         await TestTravelManeuver();
         await TacticalSkillInput();
         await NavigationIntents();
+        await GatherReactionConsumption();
         GatherTests.DecisionMovement();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=17 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=18 model_calls=0");
+    }
+
+    static async Task GatherReactionConsumption()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var handler = HttpServerSystem.Handler;
+        var player = Terraria.Main.LocalPlayer;
+        var previousItem = player.inventory[49];
+        var previousPotion = player.inventory[48];
+        var previousPick = player.inventory[47];
+        var previousTile = Terraria.Main.tile[400, 400];
+        var previousReach = Reach.MineTest;
+        bool previousNav = RecedingNav.Active;
+        uint tick = Terraria.Main.GameUpdateCount;
+        int uses = 0, heals = 0, navStarts = 0, navStops = 0;
+        async Task<string> Pump(Task<string> task)
+        {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            {
+                Check(timer.Elapsed.TotalSeconds < 8, "gather reaction consumption deadlocked");
+                Terraria.Main.GameUpdateCount++;
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+            return await task;
+        }
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset();
+            player.inventory[49] = new Terraria.Item { type = 29, stack = 1, consumable = true };
+            player.inventory[48] = new Terraria.Item { type = 28, stack = 1, consumable = true };
+            player.inventory[47] = new Terraria.Item { type = 3509, stack = 1, pick = 35 };
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/item_use")
+                {
+                    int slot = JsonNode.Parse(payload)["slot"].GetValue<int>();
+                    if (slot == 49) uses++; else if (slot == 48) heals++;
+                    player.inventory[slot] = new Terraria.Item { type = 0, stack = 0 };
+                }
+                if (path == "/item_use_status") return (200, "{\"active\":false,\"outcome\":\"consumed\"}");
+                if (path == "/nav_recede")
+                {
+                    navStarts++; RecedingNav.Active = true;
+                    player.inventory[49] = new Terraria.Item { type = 29, stack = 1, consumable = true };
+                }
+                if (path == "/nav_recede_stop") { navStops++; RecedingNav.Active = false; }
+                if (path == "/nav_recede_done") return (200, "{\"done\":false}");
+                return (200, "{}");
+            };
+            var output = JsonNode.Parse(await Pump(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["workflow"] = "gather-reaction-consumption", ["code"] = """
+                    on('tick',()=>{
+                      const gathered=tool('gather',{targets:[{item_type:29,count:1}]});
+                      const used=tool('use_item',{slot:49,x:10,y:10,duration_ticks:1});
+                      tool('use_item',{slot:48,x:10,y:10,duration_ticks:1});
+                      print({gathered:gathered.outcome,used:used.outcome});
+                      return {handled:true};
+                    });
+                    return tool('gather',{targets:[{item_type:29,count:1}]});
+                    """
+            }, default)));
+            Check(output["ok"].GetValue<bool>() && output["value"]["outcome"].ToString() == "enough"
+                && output["logs"].ToJsonString().Contains("deferred_consumption")
+                && player.inventory[49].stack == 1 && uses == 0 && heals == 1,
+                "reaction consumed the parent's collection before inventory verification: " + output);
+            var usedAfter = JsonNode.Parse(await Pump(AgentTools.Execute("use_item", new JsonObject
+                { ["slot"] = 49, ["x"] = 10, ["y"] = 10, ["duration_ticks"] = 1 }, default)));
+            Check(usedAfter["outcome"].ToString() == "consumed" && uses == 1,
+                "completed gather kept blocking later item consumption");
+            Terraria.Main.tile[400, 400] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 12 };
+            Reach.MineTest = (_, _, _) => false;
+            var world = new GameGather(new[] { new GatherTarget(29, 1, Array.Empty<string>(), Array.Empty<int>()) });
+            async Task<string> Approach() => (await world.Act(new JsonObject { ["item_type"] = 29,
+                ["kind"] = "tile", ["id"] = "old-crystal", ["x"] = 400, ["y"] = 400, ["tile_type"] = 12 }, default)).ToJsonString();
+            var adopted = JsonNode.Parse(await Pump(Approach()));
+            Check(adopted["outcome"]?.ToString() == "target_satisfied" && navStarts == 1 && navStops == 1 && uses == 1,
+                "nearby pickup did not stop the original distant collection: " + adopted);
+            Console.WriteLine("PASS: nested collection preserves parent inventory verification and releases consumption after completion");
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.ControlSession.Reset();
+            player.inventory[49] = previousItem; Terraria.Main.GameUpdateCount = tick;
+            player.inventory[48] = previousPotion; player.inventory[47] = previousPick;
+            Terraria.Main.tile[400, 400] = previousTile; Reach.MineTest = previousReach; RecedingNav.Active = previousNav;
+            HttpServerSystem.Handler = handler; agent.Unload();
+        }
     }
 
     static async Task NavigationIntents()
@@ -873,6 +963,7 @@ static class ScriptTests
         TestMovementExposure();
         await TestTravelManeuver();
         await TacticalSkillInput();
+        await GatherReactionConsumption();
         string programDirectory = Path.Combine(Path.GetTempPath(), "terrablind-program-" + Guid.NewGuid().ToString("N"));
         try
         {

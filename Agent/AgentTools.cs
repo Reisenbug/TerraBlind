@@ -1114,6 +1114,19 @@ public static partial class AgentTools
     static async Task<string> ExecuteScriptTool(string name, JsonObject args, CancellationToken root, CancellationToken token, bool scriptEvents = false)
     {
         var reactions = AgentScript.CurrentReactions.Value;
+        if (reactions?.Handling == true && name == "use_item")
+        {
+            var deferred = await NativeAgent.OnMain(() =>
+            {
+                int slot = Int(args, "slot", -1);
+                if (slot < 0 || slot >= Main.LocalPlayer.inventory.Length) return null;
+                var item = Main.LocalPlayer.inventory[slot];
+                return item.stack > 0 && item.consumable && ControlSession.Gathering(item.type)
+                    ? new JsonObject { ["outcome"] = "deferred_consumption", ["item_type"] = item.type,
+                        ["detail"] = "当前采集先验收实际库存；采集结束后可使用目标物品。" } : null;
+            }, token);
+            if (deferred != null) return deferred.ToJsonString();
+        }
         if (reactions?.Handling == true && name is "action_control" or "action_start" or "action_queue" or "control" or "task_policy")
             return new JsonObject { ["error"] = "reaction_action_lifecycle",
                 ["detail"] = "事件中直接调用nav_to/gather/use_item等，宿主交接并恢复原动作。任务句柄控制交回Agent执行。" }.ToJsonString();
@@ -1167,7 +1180,7 @@ public static partial class AgentTools
 
     static async Task<string> ExecuteWithTaskPolicy(string name, JsonObject args, CancellationToken token)
     {
-        if (AgentControlSession.ActionTool(name) && AgentScript.CurrentReactions.Value?.Handling != true)
+        if (AgentControlSession.ActionTool(name) && name != "gather" && AgentScript.CurrentReactions.Value?.Handling != true)
             await ReactAtBoundary(token, context: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
         string output = await Execute(name, args, token);
         var local = AgentScript.CurrentReactions.Value;
@@ -1701,7 +1714,11 @@ public static partial class AgentTools
                             .Where(sourceArea.Contains).Select(c => c.DeepClone()).ToArray());
                     result["source_area"] = sourceArea?.Snapshot();
                 }
-                else result = await Gather.Run(targets, Int(args, "seconds", 120), gatherWorld, token, sourceArea);
+                else
+                {
+                    await NativeAgent.OnMain(() => { ControlSession.BindGatherTargets(targets); return true; }, token);
+                    result = await Gather.Run(targets, Int(args, "seconds", 120), gatherWorld, token, sourceArea);
+                }
                 break;
             case "npc_find":
                 result = await Call("/npc_find", args, token);
@@ -2300,7 +2317,8 @@ public static partial class AgentTools
         }, token);
     }
 
-    internal static async Task<JsonObject> CollectTarget(int x, int y, CancellationToken token, bool nonSolidOnly = true, int requestedSlot = -1)
+    internal static async Task<JsonObject> CollectTarget(int x, int y, CancellationToken token, bool nonSolidOnly = true, int requestedSlot = -1,
+        Func<JsonObject> completion = null)
     {
         var target = await NativeAgent.OnMain(() =>
         {
@@ -2330,7 +2348,9 @@ public static partial class AgentTools
         {
             JsonObject Approach(string mode) => new() { ["x"] = x, ["y"] = y, ["mode"] = mode,
                 ["accepted_traps"] = target["accepted_traps"]?.DeepClone() };
-            var approach = await Navigate(Approach(Bool(target, "solid") ? "mine" : "interact"), token);
+            var approach = await Navigate(Approach(Bool(target, "solid") ? "mine" : "interact"), token, interruption: completion);
+            var completed = completion == null ? null : await NativeAgent.OnMain(completion, token);
+            if (completed != null) return completed;
             if (approach["done"]?.GetValue<bool>() != true)
                 return new JsonObject { ["error"] = "cannot_reach_collect_target", ["navigation"] = approach };
             if (await NativeAgent.OnMain(() => !Main.tile[x, y].HasUnactuatedTile, token))
@@ -2348,7 +2368,9 @@ public static partial class AgentTools
             bool reachable = await NativeAgent.OnMain(InMiningRange, token);
             if (!reachable && !Bool(target, "solid"))
             {
-                approach = await Navigate(Approach("stand"), token);
+                approach = await Navigate(Approach("stand"), token, interruption: completion);
+                completed = completion == null ? null : await NativeAgent.OnMain(completion, token);
+                if (completed != null) return completed;
                 if (approach["done"]?.GetValue<bool>() != true)
                     return new JsonObject { ["error"] = "cannot_reach_collect_target", ["navigation"] = approach };
                 reachable = await NativeAgent.OnMain(InMiningRange, token);
@@ -2359,6 +2381,7 @@ public static partial class AgentTools
         var result = await Call("/item_use", new JsonObject { ["target_wx"] = x, ["target_wy"] = y,
             ["slot"] = target["slot"].DeepClone(), ["strict"] = true }, token);
         if (!Rejected(result)) result = await Wait("/item_use_status", "active", "/item_use_stop", 15, token,
+            navigationProgress: completion == null ? null : _ => NativeAgent.OnMain(completion, token),
             reactionContext: new JsonObject { ["tool"] = "use_item", ["args"] = new JsonObject {
                 ["slot"] = target["slot"].DeepClone(), ["x"] = x, ["y"] = y, ["strict"] = true } });
         if (Text(result, "outcome") == "removed") await Task.Delay(400, token);
