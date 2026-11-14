@@ -186,6 +186,8 @@ public static class Gather
         }
         scene = await world.Observe(token);
         bool enough = targets.All(t => Count(t) >= t.Count);
+        var combatCandidate = last?["candidate"]?["kind"]?.ToString() == "npc" ? last["candidate"] : scene?["candidates"]?.AsArray()
+            .FirstOrDefault(candidate => candidate["kind"]?.ToString() == "npc");
         if (!enough && outcome == "source_unavailable" && area != null
             && targets.Any(t => Count(t) > inventoryBefore[t.ItemType])) outcome = "source_area_exhausted";
         return new JsonObject { ["ok"] = enough, ["outcome"] = enough ? "enough" : outcome,
@@ -198,7 +200,11 @@ public static class Gather
             ["actions"] = actions, ["elapsed_ms"] = timer.ElapsedMilliseconds, ["last_result"] = last,
             ["source_error"] = sourceError,
             ["recovery_skill"] = outcome is "source_unavailable" or "source_area_exhausted"
-                ? new JsonObject { ["tool"] = "script_program", ["operation"] = "example", ["name"] = "gather_route" } : null,
+                ? new JsonObject { ["tool"] = "script_program", ["operation"] = "example", ["name"] = "gather_route" }
+                : outcome is "combat_obstructed" or "combat_out_of_range"
+                    ? new JsonObject { ["tool"] = "script_program", ["operation"] = "get", ["name"] = "combat_approach",
+                        ["input"] = new JsonObject { ["npc"] = combatCandidate?["who"]?.DeepClone(),
+                            ["npc_type"] = combatCandidate?["npc_type"]?.DeepClone() } } : null,
             ["blocked_sources"] = blockedSources,
             ["targets"] = new JsonArray(targets.Select(t => (JsonNode)new JsonObject
                 { ["item_type"] = t.ItemType, ["wanted"] = t.Count, ["actual"] = Count(t),

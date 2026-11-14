@@ -1935,10 +1935,25 @@ public static partial class AgentTools
                                 cell["x"].GetValue<int>(), cell["y"].GetValue<int>()));
                     }
                     var terrain = PvpTerrain.Observe(player, npc.Center);
+                    var weapons = player.inventory.Take(10).Where(item => CombatLoadout.Usable(item)
+                        && (CombatLoadout.PreferredType == 0 || item.type == CombatLoadout.PreferredType)
+                        && (item.useAmmo == 0 || player.HasAmmo(item)) && item.mana * player.manaCost <= player.statMana).ToArray();
+                    JsonArray HittingWeapons(Microsoft.Xna.Framework.Vector2 source) => new(weapons
+                        .Where(item => FightCoordinator.CanHitTargetFrom(player, item, source, npc.Center, npc.width / 2f))
+                        .Select(item => (JsonNode)JsonValue.Create(item.type)).DistinctBy(item => item.ToString()).ToArray());
+                    foreach (var stance in terrain["stance_probes"].AsArray().Concat(requestedStances).OfType<JsonObject>())
+                    {
+                        if (stance["x"] == null) continue;
+                        var center = new Microsoft.Xna.Framework.Vector2(stance["x"].GetValue<float>(), stance["y"].GetValue<float>());
+                        stance["target_distance_tiles"] = Microsoft.Xna.Framework.Vector2.Distance(center, npc.Center) / 16;
+                        stance["player_distance_tiles"] = Microsoft.Xna.Framework.Vector2.Distance(center, player.Center) / 16;
+                        stance["weapon_types"] = stance["body_fits"]?.GetValue<bool>() == true ? HittingWeapons(center) : new JsonArray();
+                    }
                     return new JsonObject { ["npc"] = who, ["npc_type"] = npc.type, ["hp"] = npc.life,
                         ["attackable"] = npc.CanBeChasedBy(player), ["contact_damage"] = npc.damage,
                         ["dont_take_damage"] = npc.dontTakeDamage, ["immortal"] = npc.immortal,
                         ["clear_line"] = terrain["direct_line"]["clear"].DeepClone(),
+                        ["current_weapon_types"] = HittingWeapons(player.Center),
                         ["requested_stances"] = requestedStances,
                         ["target_pos"] = new JsonObject { ["x"] = npc.Center.X, ["y"] = npc.Center.Y },
                         ["terrain"] = terrain,

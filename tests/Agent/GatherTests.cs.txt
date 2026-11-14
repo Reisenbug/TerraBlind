@@ -63,7 +63,9 @@ static class GatherTests
         Check(world.Actions.SequenceEqual(new[] { "tile" }) && result["outcome"]?.ToString() == "combat_out_of_range"
             && result["targets"][0]["actual"]?.GetValue<int>() == 1
             && result["blocked_sources"][0]["candidate"]["kind"]?.ToString() == "npc"
-            && result["blocked_sources"][0]["attempts"]?.GetValue<int>() == 0,
+            && result["blocked_sources"][0]["attempts"]?.GetValue<int>() == 0
+            && result["recovery_skill"]["name"].ToString() == "combat_approach"
+            && result["recovery_skill"]["input"]["npc_type"].ToString() == result["blocked_sources"][0]["candidate"]["npc_type"].ToString(),
             "out-of-range enemy stopped executable collection or lost its observed blocker");
         world.FarEnemy = false;
         result = await Gather.Run(Targets, 5, world, default);
@@ -996,6 +998,7 @@ static class GatherTests
         {
             token.ThrowIfCancellationRequested();
             JsonObject Candidate(int type, string kind) => new() { ["id"] = type.ToString(), ["item_type"] = type, ["kind"] = kind, ["distance"] = 2f,
+                ["who"] = kind == "npc" ? 7 : null, ["npc_type"] = kind == "npc" ? 42 : null,
                 ["x"] = type, ["y"] = 0, ["can_pickup"] = Drop && type == 10 ? JsonValue.Create(!PickupBlocked) : null,
                 ["blocked_reason"] = kind == "npc" && FarEnemy && !(EnemyApproaches && Actions.Contains("tile"))
                     ? "combat_out_of_range" : null };

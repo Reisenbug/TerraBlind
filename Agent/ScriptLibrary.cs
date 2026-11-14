@@ -11,7 +11,7 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -21,6 +21,29 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "combat_approach") return Template(name,
+            "选择有射界的交战站位。input含npc、npc_type、可选min_distance_tiles（默认4格）。复用npc_combat_observe的原版射程、当前武器许可及支撑测量，检查落脚危险，导航到站位后刷新目标及射界。一次最多移动到一个站位；返回ready才可继续攻击或恢复原采集。可修改并保存同名技能。",
+            """
+            const query={npc:input.npc,npc_type:input.npc_type};
+            const scene=tool('npc_combat_observe',query);
+            if(scene.error) return {status:'needs_review',reason:scene.error};
+            if(scene.current_weapon_types?.length) return {status:'ready',weapon_types:scene.current_weapon_types};
+            const positions=scene.terrain.stance_probes.filter(p=>p.body_fits&&p.weapon_types?.length
+              &&p.target_distance_tiles>=(input.min_distance_tiles??4))
+              .sort((a,b)=>a.player_distance_tiles-b.player_distance_tiles);
+            for(const p of positions){
+              const x=p.support_x,y=p.support_y-1;
+              const safety=tool('opportunity_assess',{x,y});
+              if(!safety.ok||safety.hazards.some(h=>Math.abs(h.x-x)<=2&&Math.abs(h.y-y)<=3)) continue;
+              const moved=tool('nav_to',{x,y,mode:'stand'});
+              if(!moved.done) return {status:'needs_review',reason:'stance_unreached',x,y,movement:moved};
+              const current=tool('npc_combat_observe',query);
+              return {status:current.current_weapon_types?.length?'ready':'needs_review',
+                reason:current.error??(current.current_weapon_types?.length?null:'target_or_shot_changed'),
+                npc:input.npc,npc_type:input.npc_type,x,y,weapon_types:current.current_weapon_types??[]};
+            }
+            return {status:'needs_review',reason:'no_observed_firing_position',npc:input.npc,npc_type:input.npc_type};
+            """);
         if (name == "safety_reactions") return Template(name,
             "默认任务反应：复核并拆除可达压力板与近身接触伤害物，验证后续接。近期受击且血量下降时，Jev结合当前任务、冷却、敌人与地形判断是否用已有回城道具脱险。遵守权限；可修改此JS并用task_policy替换。",
             """

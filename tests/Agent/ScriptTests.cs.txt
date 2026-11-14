@@ -42,6 +42,7 @@ static class ScriptTests
         await SurvivalDecisionPolicy();
         await IdleTaskPolicy();
         await BackgroundRecovery();
+        await CombatApproach();
         await ReactiveTravelExample();
         await ComposedReactions();
         await DecisionPreconditions();
@@ -54,7 +55,47 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=28 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=29 model_calls=0");
+    }
+
+    static async Task CombatApproach()
+    {
+        foreach (string scenario in new[] { "current", "move", "changed", "blocked", "no_position" })
+        {
+            int moves = 0, observations = 0;
+            var result = await AgentScript.Run(ScriptLibrary.Example("combat_approach")["code"].ToString()
+                .Replace("const query=", "const input={npc:7,npc_type:42};const query="), 5, (_, _) => { },
+                (name, args, _) =>
+                {
+                    if (name == "npc_combat_observe")
+                    {
+                        observations++;
+                        Check(args["npc"].GetValue<int>() == 7 && args["npc_type"].GetValue<int>() == 42,
+                            "combat approach lost observed target identity");
+                        if (observations > 1 && scenario == "changed") return Task.FromResult("{\"error\":\"target_changed\"}");
+                        return Task.FromResult(new JsonObject {
+                            ["current_weapon_types"] = scenario == "current" || observations > 1 ? new JsonArray(39) : new JsonArray(),
+                            ["terrain"] = new JsonObject { ["stance_probes"] = JsonNode.Parse("""
+                                [{"body_fits":true,"weapon_types":[39],"target_distance_tiles":1,"player_distance_tiles":1,"support_x":1,"support_y":20},
+                                 {"body_fits":false,"weapon_types":[39],"target_distance_tiles":8,"player_distance_tiles":2,"support_x":2,"support_y":20},
+                                 {"body_fits":true,"weapon_types":[],"target_distance_tiles":8,"player_distance_tiles":3,"support_x":3,"support_y":20},
+                                 {"body_fits":true,"weapon_types":[39],"target_distance_tiles":8,"player_distance_tiles":4,"support_x":4,"support_y":20},
+                                 {"body_fits":true,"weapon_types":[39],"target_distance_tiles":8,"player_distance_tiles":5,"support_x":5,"support_y":20}]
+                                """) } }.ToJsonString());
+                    }
+                    if (name == "opportunity_assess") return Task.FromResult(new JsonObject { ["ok"] = true,
+                        ["hazards"] = args["x"].GetValue<int>() == 4 || scenario == "no_position"
+                            ? new JsonArray(new JsonObject { ["x"] = args["x"].DeepClone(), ["y"] = 20, ["kind"] = "lava" }) : new JsonArray() }.ToJsonString());
+                    Check(name == "nav_to" && args["x"].GetValue<int>() == 5 && args["y"].GetValue<int>() == 19
+                        && args["mode"].ToString() == "stand", "combat approach navigated into the enemy or an unsafe stance");
+                    moves++;
+                    return Task.FromResult(scenario == "blocked" ? "{\"done\":false,\"error\":\"navigation_incomplete\"}" : "{\"done\":true}");
+                }, _ => Task.CompletedTask, default);
+            Check(result["ok"].GetValue<bool>() && result["value"]["status"].ToString()
+                == (scenario is "current" or "move" ? "ready" : "needs_review")
+                && moves == (scenario is "current" or "no_position" ? 0 : 1), "combat approach retried stale positions or misreported readiness: " + result);
+        }
+        Console.WriteLine("PASS: combat approach checks current weapons, separation, terrain and native navigation; refreshes the target after one move");
     }
 
     static async Task BackgroundRecovery()
@@ -1187,6 +1228,7 @@ static class ScriptTests
         await IdleTaskPolicy();
         await SurvivalDecisionPolicy();
         await BackgroundRecovery();
+        await CombatApproach();
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
@@ -1778,7 +1820,7 @@ static class ScriptTests
         chestScene["chests"] = new JsonArray(new JsonObject { ["x"] = 10, ["y"] = 20 });
         ownChest.Observe(chestScene);
         Check(ownChest.HasInterrupting, "default own-target policy overrode explicit Agent observation policy");
-        Check(entries.Count == 6 && entries.All(t => t["function"]["name"].ToString() is "run_script" or "get_state" or "say" or "ask" or "game_api" or "terrain_map")
+        Check(entries.Count == 8 && entries.All(t => t["function"]["name"].ToString() is "run_script" or "get_state" or "say" or "ask" or "game_api" or "terrain_map" or "action_query" or "script_program")
             && definitions.Any(t => t["function"]["name"].ToString() == "gather"), "script entry selection mutated or leaked game tools");
         string instructions = AgentScript.Instructions("original-system", definitions);
         Check(instructions.Contains("original-system") && instructions.Contains("\ngather: ")

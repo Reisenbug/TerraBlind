@@ -323,7 +323,7 @@ public static class AgentScript
         + "interrupted保留handle/events，按事件恢复；失败恢复保留已完成效果。get_state.script_workflows.last_execution及script_progress.last_segment保留上段工具次数、耗时和failure。"
         + "\n资源：game_catalog matches[].type按kind区分编号，places_tile仅证明可放置关系，exact:false须查证；frame和实际掉落核验来源。NPC材料可查npc_drop_sources，npc_find只列当前已生成NPC。"
         + "get_state.depth是原生高度层，与player.biome共同判环境。gather source_error.observations记录移除无增量证据，combat_obstructed/out_of_range的last_result.result给距离、射界、目标和伤害。"
-        + "npc_combat_observe用candidate.who/npc_type，stance_cells可测其他落脚格；supported/body_fits/shot_line是局部测量，抵达后刷新身份和射界。clear_line不预测弹道。"
+        + "npc_combat_observe用candidate.who/npc_type，stance_cells可测其他落脚格；stance_probes的weapon_types按当前快捷栏武器许可、弹药/魔力、射程及射界测量，距离单位为格。combat_approach技能可选站位并导航，抵达后刷新身份和射界；路线安全由导航另行验证。clear_line不预测弹道。"
         + "\n整理与生存：查询和选择在行进中完成；需要交接时同段JS暂停、使用新鲜type/prefix/stack操作、核验、finally恢复。healing_items列直接治疗物，实际可用看potion_delay_ticks；last_automatic_heal是历史。"
         + "低血量仅唤醒观察，当前动作继续。health_dynamics的regen_direction说明引擎当下趋势，raw不是每秒伤害；last_damage.tick区分新伤。hp_at_hook不保证扣血后血量，查当前player.hp。"
         + "contact_escape_active仅在auto_dodge许可下启用；survival_escape_reobserve表示原动作未执行且位置已变。navigation_contact_escape需结合contact_escape实际起终、落脚和危险修复局部路线，再续接原目标。"
