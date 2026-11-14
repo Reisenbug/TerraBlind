@@ -3096,7 +3096,8 @@ namespace TerraBlind
             else if (dig != null)
             {
                 MineDir d = tcy > fcy ? MineDir.Down : tcx > fcx ? MineDir.Right : MineDir.Left;
-                steps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = tcx, TargetCy = tcy, MineTiles = dig });
+                steps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = tcx, TargetCy = tcy, MineTiles = dig,
+                    DigStandCx = d == MineDir.Down && tcx != fcx ? tcx : -1 });
             }
             else if (frames != null)
                 steps.Add(new ExecStep { Pillar = false, TargetCx = tcx, TargetCy = tcy, Frames = TrimFrozenTail(frames), LandPx = to.Px, LandPy = to.Py });
