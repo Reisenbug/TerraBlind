@@ -26,7 +26,15 @@ static class TaskPlanTests
              {"id":"already_met","description":"verify only","depends_on":["travel"],"script":"return {};","conditions":[{"kind":"permanent_health","count":100}]},
              {"id":"later","description":"later research","depends_on":["collect"],"script":"return {};","conditions":[{"kind":"permanent_health","count":300}]}]}
             """);
+        request["steps"][1].AsObject().Remove("script");
+        var missingRoot = request.DeepClone().AsObject();
+        missingRoot["steps"][0].AsObject().Remove("script");
+        try { new AgentTaskPlan().Create(missingRoot, _ => 100); throw new Exception("DAG accepted a root without executable code"); }
+        catch (InvalidOperationException) { }
         plan.Create(request, _ => 100);
+        Check(plan.Snapshot()["ready_steps"].ToJsonString() == "[\"travel\"]"
+            && !plan.VerifyFinal(_ => 100)["verified"].GetValue<bool>(),
+            "deferred successor blocked the root or fabricated task completion");
         Check(plan.PreparationNodes("travel", _ => 100).ToJsonString() == "[\"collect\"]",
             "preparation request included completed conditions or distant dependent work");
         plan.Revise(new JsonObject { ["expected_revision"] = plan.Snapshot()["revision"].DeepClone(),

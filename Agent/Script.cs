@@ -221,6 +221,7 @@ public static class AgentScript
             + "action_finished、target_acquired和inventory_full始终为状态通知，当前动作继续执行；失败和显式订阅的库存增长唤醒并行观察。普通沿途机会每15秒合并交付一批后台观察，JS可即时读取完整事件；危险和失败独立交付。JS处理工具结果后继续，切换控制用action_control或decision_point。";
         var plan = tools.First(t => t["function"]?["name"]?.ToString() == "task_plan")["function"];
         plan["description"] = plan["description"].ToString()
+            + "DAG根节点提供可执行script；有前置依赖的后继节点可暂省script，宿主标为待准备并在前置行进时请求补齐，完成仍按真实conditions验收。"
             + "节点可提供on_failure（JS函数体），在赶路时提前准备失败恢复；task_plan_patch nodes仅修改on_failure时保持当前动作运行，空串移除。动作失败后宿主直接执行一次已保存恢复，使用独立一次性上下文，不占持久workflow名额；failure是原动作的完整action_query结果（含handle/tool/args/attempt/result），原script与step进度保留。核验修复结果后在同段JS恢复failure.handle；未覆盖的失败返回{status:'needs_review',handle:failure.handle,reason:'具体原因'}交回模型。模型直接调用action_query读取完整失败。死亡、窒息和其他主动决策事件独立处理。"
             + "DAG后台动作成功结束后，宿主按真实条件验收所属节点，并自动运行current_step中下一个就绪节点的已保存script，无需模型再次run_script。"
             + "动作成功但节点条件尚未满足时，宿主自动续跑该节点原workflow；用step保存句柄，查询已完成动作后执行下一项，不重复启动。"

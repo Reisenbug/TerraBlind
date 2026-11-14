@@ -66,14 +66,21 @@ public sealed class AgentTaskPlan
                 throw new InvalidOperationException("步骤需要唯一 id、description 和非空 conditions。");
             var copy = new JsonObject { ["id"] = id, ["description"] = step["description"].DeepClone(),
                 ["status"] = "pending", ["conditions"] = new JsonArray(), ["best_actual"] = new JsonArray() };
-            if (dag && (step["depends_on"] is not JsonArray || string.IsNullOrWhiteSpace(step["script"]?.GetValue<string>())))
-                throw new InvalidOperationException("DAG节点需要depends_on数组和可执行script；根节点使用空依赖数组。");
+            if (dag && step["depends_on"] is not JsonArray)
+                throw new InvalidOperationException($"DAG节点{id}需要depends_on数组；根节点使用空数组。");
+            string script = step["script"]?.GetValue<string>();
+            if (dag && string.IsNullOrWhiteSpace(script))
+            {
+                if (step["depends_on"].AsArray().Count == 0)
+                    throw new InvalidOperationException($"DAG根节点{id}需要可执行script。");
+                script = "return {status:'yield',next:'prepare_node_script'};";
+            }
             copy["depends_on"] = dag ? step["depends_on"].DeepClone()
                 : new JsonArray(parsed.Count == 0 ? Array.Empty<JsonNode>() : new[] { JsonValue.Create(parsed[^1]["id"].ToString()) });
             if (dag)
             {
-                copy["script"] = step["script"].DeepClone();
-                copy["preparation_only"] = AgentScript.PreparationOnly(step["script"].ToString());
+                copy["script"] = script;
+                copy["preparation_only"] = AgentScript.PreparationOnly(script);
                 if (step["on_failure"] != null) copy["on_failure"] = step["on_failure"].GetValue<string>();
                 copy["workflow"] = "dag-" + Guid.NewGuid().ToString("N");
             }
