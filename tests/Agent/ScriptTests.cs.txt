@@ -467,7 +467,7 @@ static class ScriptTests
         Check(answered["status"].ToString() == "ready" && answered["input_state"]["x"].GetValue<int>() == 10
             && answered["ready_wait_ms"].GetValue<double>() >= 0
             && answered["result"]["answers"]["choice"]["choice"].ToString() == "retreat",
-            "background decision lost its sampled scene or typed answer");
+            "background decision lost its sampled scene or typed answer: " + answered);
         answered["input_state"]["x"] = -100;
         Check(channels.Poll(first, Judge)["input_state"]["x"].GetValue<int>() == 10,
             "script mutated retained decision evidence");
