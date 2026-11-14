@@ -5146,15 +5146,10 @@ public sealed partial class BehaviorTrial : ModSystem
         });
         var before = await Call("get_state", new JsonObject());
         if (await OnMain(() => NPC.downedQueenBee)) throw new Exception("queen trial requires fresh world progression");
-        int targetHealth = int.Parse(Environment.GetEnvironmentVariable("TB_QUEEN_TARGET_HEALTH") ?? "240");
-        string prompt = "/goal 前往丛林地下，获得至少240点永久生命上限，制作荆棘旋刃，召唤并击败蜂王。生命水晶、毒刺、丛林孢子、箱子并行规划：240血前以水晶为主要目标，其他资源和箱子在去水晶的路上近便时获取；达到240血后推进荆棘旋刃与蜂王，路上仍择机收集近便水晶和箱子。生命水晶及时使用。先利用find_descent与descent_route的丛林主道出发，赶路时完成材料知识查询和后续路线准备。结合当前地形地图安排采集及蜂巢场地。背包有星怒和足量木头，本轮持续鱼鳃与光芒效果。低血量唤醒观察，当前动作继续执行。持续推进直到真实结果通过宿主验收。";
-        prompt = prompt.Replace("240", targetHealth.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        prompt += FullQueenRun
-            ? "本轮从丛林地表出生点出发，沿丛林主道进入地下。持续执行完整任务，记录实际进度，材料与场地准备期间提前完成后继判断。"
-            : "本轮要求25分钟内达到300点永久生命并击败蜂王。以持续执行和实际进度安排路线，材料与场地准备期间提前完成后继判断。";
-        prompt += "本轮验证途中反应：先启用星怒防身并启动前往主道的首段行进；行进期间用task_policy挂整趟反应，途中继续完善，让近便资源拾取、背包整理和压力板局部恢复直接在脚本内执行；可读取task_reactions模板并按现场修改。关注受伤原因、动作交接和超过2秒的位置停留。";
-        if (Environment.GetEnvironmentVariable("TB_QUEEN_DECISIONS") == "1")
-            prompt += "本轮启用Decision途中反应：读取decision_reactions和travel_intent示例，组合为同一task_policy中的处理函数。weapon负责选武器，opportunity负责顺路采集取舍；travel_intent负责通过nav_intent更新当前导航的continue/withdraw/cover意图。后台判断期间原动作持续，执行后根据实际反馈继续调整策略。";
+        int targetHealth = 100;
+        string prompt = "/goal 25分钟内制作荆棘旋刃，召唤并击败蜂王，最多死亡一次。生命和盔甲按需要准备。";
+        if (before["inventory_slots"].AsArray().Any(item => item["type"]?.GetValue<int>() == ItemID.Starfury))
+            throw new Exception("queen trial must start without Starfury");
         if (!string.IsNullOrEmpty(QueenResumeRoot))
         {
             prompt += "这是同一人物和地图的存档续接。先按当前永久生命与背包验收已有进度，推进剩余步骤；地图保留此前采集与放置的改变。";
@@ -5261,15 +5256,16 @@ public sealed partial class BehaviorTrial : ModSystem
                     && state["task_plan"]?["status"]?.ToString() == "completed";
                 long elapsed = clock.ElapsedMilliseconds;
                 File.WriteAllText(Path.Combine(Main.SavePath, "queen-progress.json"), new JsonObject
-                { ["ok"] = completed && (FullQueenRun || elapsed <= 25 * 60 * 1000), ["elapsed_ms"] = elapsed, ["target_health"] = targetHealth, ["health_target_ms"] = healthMs,
+                { ["ok"] = completed && elapsed <= 25 * 60 * 1000 && deaths.Count <= 1, ["elapsed_ms"] = elapsed, ["target_health"] = targetHealth, ["health_target_ms"] = healthMs,
                     ["chakram_ms"] = chakramMs, ["queen_spawn_ms"] = queenSpawnMs, ["deaths"] = deaths.DeepClone(),
                     ["boss"] = boss.DeepClone(), ["coverage"] = await OnMain(QueenCoverage), ["after"] = state.DeepClone() }.ToJsonString());
+                if (deaths.Count > 1) throw new Exception("queen goal exceeded the one death limit; checkpoint retained");
                 if (completed)
                 {
-                    if (!FullQueenRun && elapsed > 25 * 60 * 1000) throw new Exception("queen goal completed after the 25 minute limit");
+                    if (elapsed > 25 * 60 * 1000) throw new Exception("queen goal completed after the 25 minute limit");
                     Console.WriteLine($"QUEEN_GOAL_PASS elapsed_ms={clock.ElapsedMilliseconds} target_health={targetHealth} health_target_ms={healthMs} chakram_ms={chakramMs} queen_spawn_ms={queenSpawnMs} deaths={deaths.Count}"); return;
                 }
-                if (!FullQueenRun && clock.Elapsed.TotalMinutes >= 25) throw new Exception("queen goal exceeded the 25 minute limit; checkpoint retained");
+                if (clock.Elapsed.TotalMinutes >= 25) throw new Exception("queen goal exceeded the 25 minute limit; checkpoint retained");
                 if (NativeAgent.Status == "waiting for answer") throw new Exception("autonomous queen goal requires operator input; checkpoint retained");
                 if (NativeAgent.Status is "failed" or "idle") throw new Exception("queen goal stopped before verification: " + NativeAgent.Status);
             }
@@ -5317,10 +5313,10 @@ public sealed partial class BehaviorTrial : ModSystem
                 p.inventory[1].SetDefaults(ItemID.CopperPickaxe);
                 p.inventory[2].SetDefaults(ItemID.CopperAxe);
                 p.inventory[3].SetDefaults(ItemID.Wood); p.inventory[3].stack = 9999;
-                p.inventory[4].SetDefaults(ItemID.Starfury);
+                if (Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") != "1") p.inventory[4].SetDefaults(ItemID.Starfury);
                 p.ConsumedLifeCrystals = 0; p.statLife = p.statLifeMax = p.statLifeMax2 = 100;
                 originX = (int)p.Center.X / 16; floor = (int)p.Bottom.Y / 16;
-                Console.WriteLine($"FULL_CRAFT_START x={originX} y={floor} spawn={Main.spawnTileX},{Main.spawnTileY} starter_tools=true wood=9999 starfury=true concessions=false");
+                Console.WriteLine($"FULL_CRAFT_START x={originX} y={floor} spawn={Main.spawnTileX},{Main.spawnTileY} starter_tools=true wood=9999 starfury={p.inventory.Any(item => item.type == ItemID.Starfury)} concessions=false");
                 return true;
             }
             (int X, int Y)? Stand(int cx, int cy)
