@@ -1155,7 +1155,14 @@ namespace TerraBlind
                     if (!r.HasValue) continue;
                     // 走过去那几格的帧数要算进价里,不然"挪 6 格再挖"会白白便宜过"就地挖"
                     var seg = SimulateSegment(cur, sdir, 0, ph: PhysicsSimulator.Params.FromPlayer(Main.LocalPlayer));
-                    float walkCost = seg.HasValue ? seg.Value.frames.Count : off * 8f;
+                    if (!seg.HasValue) continue;
+                    int reached = RawCell(seg.Value.node.Px, seg.Value.node.Py).cx;
+                    if (sdir > 0 ? reached < scx : reached > scx)
+                    {
+                        if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: shift ({ccx},{ccy})->{scx} walk_stops={reached}");
+                        continue;
+                    }
+                    float walkCost = seg.Value.frames.Count;
                     if (SegDiag) DiagLog.Write($"[ss-digdown] 原地挖不动,挪到({scx},{ccy})可以挖 走{walkCost:0}帧");
                     return (r.Value.node, r.Value.tiles, r.Value.cost + walkCost);
                 }
