@@ -858,6 +858,7 @@ public sealed partial class BehaviorTrial : ModSystem
     {
         if (Environment.GetEnvironmentVariable("TB_SKILL_LEARNING") == "1") { await SkillLearningRun(); return; }
         if (Environment.GetEnvironmentVariable("TB_QUEEN_MINING_REPLAY") == "1") { await QueenMiningReplay(); return; }
+        if (Environment.GetEnvironmentVariable("TB_WORKSTATION_REPLAY") == "1") { await WorkstationReplay(); return; }
         if (Environment.GetEnvironmentVariable("TB_MINING_SPEED_TRIAL") == "1") { await MiningSpeedTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_ATOMIC_POLICY_TRIAL") == "1") { await AtomicPolicyTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_OPEN_ITEM_PROBE") == "1")

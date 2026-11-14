@@ -24,6 +24,33 @@ public sealed partial class BehaviorTrial
     int[] learningTargets = Array.Empty<int>();
     readonly Vector2 learningOrigin = new(3200, 3158);
 
+    async Task WorkstationReplay()
+    {
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false;
+            VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+            AgentTools.NewTask(); AgentPermissions.Reset();
+            Combat.Enabled = Dodge.Enabled = false;
+            var p = Main.LocalPlayer;
+            p.Teleport(new Vector2(19502, 3558)); p.velocity = Vector2.Zero;
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            p.inventory[1].SetDefaults(ItemID.Wood); p.inventory[1].stack = 9999;
+            p.inventory[2].SetDefaults(ItemID.WorkBench);
+            return true;
+        });
+        var before = await Call("inspect_terrain", new JsonObject { ["radius"] = 8 });
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var placed = await Call("place_at", new JsonObject { ["item"] = "36" });
+        var crafted = await Call("craft", new JsonObject { ["name"] = "WoodenSword" });
+        File.WriteAllText(Path.Combine(Main.SavePath, "workstation-replay.json"), new JsonObject {
+            ["elapsed_ms"] = clock.ElapsedMilliseconds, ["before"] = before, ["placed"] = placed, ["crafted"] = crafted }.ToJsonString());
+        if (placed["outcome"]?.ToString() != "done" || crafted["ok"]?.GetValue<bool>() != true)
+            throw new Exception("native workstation replay failed: " + placed);
+        Console.WriteLine("WORKSTATION_REPLAY_PASS elapsed_ms=" + clock.ElapsedMilliseconds);
+    }
+
     async Task QueenMiningReplay()
     {
         await OnMain(() =>
