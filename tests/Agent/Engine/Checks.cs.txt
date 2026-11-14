@@ -510,7 +510,7 @@ public static class NavigationExecutionChecks
             Main.tile[12, 12].ResetToType(TileID.Dirt);
             player.inventory[0] = new Item { type = ItemID.Starfury, stack = 1 };
             player.inventory[1] = new Item { type = ItemID.CopperPickaxe, stack = 1, pick = 35, tileBoost = -1 };
-            foreach (string mode in new[] { "continuing", "canceled", "different_slot", "attack" })
+            foreach (string mode in new[] { "continuing", "retarget", "canceled", "different_slot", "attack" })
             {
                 FightCoordinator.Stop();
                 typeof(FightCoordinator).GetField("_animationSlot", hidden).SetValue(null, mode == "attack" ? 0 : 1);
@@ -519,17 +519,20 @@ public static class NavigationExecutionChecks
                 player.selectedItem = mode == "different_slot" ? 0 : 1;
                 player.itemAnimation = 3; player.itemTime = player.toolTime = 0;
                 player.controlUseItem = mode != "canceled";
+                if (mode == "retarget") Cursor.AimTile(13, 12);
                 tick.Invoke(null, new object[] { player, false, mode != "canceled" });
+                if (mode == "retarget" && Main.mouseX + Main.screenPosition.X != 13 * 16 + 8)
+                    throw new InvalidOperationException("continuous primary animation restored the removed tile aim");
                 Player.tileTargetX = Player.tileTargetY = 12;
                 hits = 0;
                 mining.Invoke(player, new object[] { player.HeldItem });
-                bool continuing = mode == "continuing";
+                bool continuing = mode is "continuing" or "retarget";
                 Console.WriteLine($"MINING_ANIMATION mode={mode} use={player.controlUseItem} native_hits={hits} slot={player.selectedItem}");
                 if (player.controlUseItem != continuing || hits != (continuing ? 1 : 0)
                     || player.itemAnimation != 3 || player.selectedItem != (mode == "attack" ? 0 : 1))
                     throw new InvalidOperationException("animation lock violated native mining input requirements: " + mode);
             }
-            Console.WriteLine("NAVIGATION_MINING_ANIMATION_CONTRACTS_COMPLETE checks=4 native_mining_gate=true model_calls=0");
+            Console.WriteLine("NAVIGATION_MINING_ANIMATION_CONTRACTS_COMPLETE checks=5 native_mining_gate=true model_calls=0");
         }
         finally
         {

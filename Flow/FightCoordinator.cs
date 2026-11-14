@@ -227,6 +227,8 @@ namespace TerraBlind
             {
                 _animationSeen = true;
                 bool continuingPrimary = !_animationAttack && primaryItemUse && p.selectedItem == _animationSlot;
+                if (continuingPrimary)
+                    _animationAim = new Vector2(Main.mouseX + Main.screenPosition.X, Main.mouseY + Main.screenPosition.Y);
                 p.selectedItem = _animationSlot;
                 bool attack = _animationAttack && (_animationTarget == null || TempleTargetAllowed(p, _animationTarget));
                 if (attack && _animationTarget is { active: true, friendly: false })
