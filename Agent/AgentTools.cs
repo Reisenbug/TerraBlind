@@ -2633,23 +2633,30 @@ public static partial class AgentTools
             var clearance = await NativeAgent.OnMain(() =>
             {
                 var escape = LastContactEscape;
-                if (Main.LocalPlayer.dead || Main.LocalPlayer.suffocating || Text(escape, "status") != "controls_released"
-                    || !Bool(escape, "contact_clear")) return null;
+                var player = Main.LocalPlayer;
+                if (player.dead || player.suffocating || Text(escape, "status") != "controls_released"
+                    || !Bool(escape, "contact_clear") || Collision.HurtTiles(player.position, player.width, player.height, player).type >= 0) return null;
                 remainingHazard = TerrainInspection.NavigationHazard(acceptedTraps);
                 if (remainingHazard != null) return null;
                 var hazards = (escape["hazard_tiles"] as JsonArray)?.OfType<JsonObject>().ToList() ?? new List<JsonObject>();
                 if (escape["predicted_tile"] is JsonObject predicted && !hazards.Any(tile =>
                     Int(tile, "x") == Int(predicted, "x") && Int(tile, "y") == Int(predicted, "y") && Int(tile, "type") == Int(predicted, "type")))
                     hazards.Add(predicted);
-                if (!hazards.Any(tile =>
+                bool removed = hazards.Any(tile =>
                 {
                     int x = Int(tile, "x"), y = Int(tile, "y");
                     return WorldGen.InWorld(x, y) && (!Main.tile[x, y].HasTile || Main.tile[x, y].TileType != Int(tile, "type"));
-                })) return null;
+                });
+                bool relocated = escape["start_pos"] is JsonObject origin
+                    && Math.Pow(player.position.X - origin["x"].GetValue<double>(), 2)
+                        + Math.Pow(player.position.Y - origin["y"].GetValue<double>(), 2) >= Math.Pow(Math.Max(player.width, player.height), 2);
+                if (!removed && !relocated) return null;
                 string site = string.Join(";", hazards.Select(tile => tile["x"] + "," + tile["y"] + ":" + tile["type"]));
                 if (!clearedSites.Add(site)) return null;
                 escapeBefore = escape;
-                return (JsonObject)escape.DeepClone();
+                var verified = (JsonObject)escape.DeepClone();
+                verified["resume_reason"] = removed ? "hazard_removed" : "relocated_clear";
+                return verified;
             }, token);
             if (clearance == null || seconds > 0 && clock.Elapsed.TotalSeconds >= seconds)
             {

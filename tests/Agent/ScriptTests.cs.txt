@@ -2646,14 +2646,16 @@ static class ScriptTests
         var position = player.position;
         var savedTile = Terraria.Main.tile[30, 30];
         var savedTrap = Terraria.Main.tile[12, 11];
+        var hurtTest = Terraria.Collision.HurtTest;
         bool dead = player.dead, suffocating = player.suffocating;
         try
         {
-            foreach (string scenario in new[] { "cleared", "naturally_cleared", "predicted_cleared", "unverified", "predicted_unverified", "repeated", "different_failure", "remaining_trap" })
+            foreach (string scenario in new[] { "cleared", "naturally_cleared", "predicted_cleared", "relocated", "relocated_touching", "relocated_repeated", "unverified", "predicted_unverified", "repeated", "different_failure", "remaining_trap" })
             {
                 AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
                 AgentTools.LastContactEscape = null; AgentTools.ContactEscapeActive = false;
                 player.dead = player.suffocating = false; player.position = new System.Numerics.Vector2(160, 160);
+                Terraria.Collision.HurtTest = (_, _, _, _) => scenario == "relocated_touching";
                 Terraria.Main.tile[30, 30].HasUnactuatedTile = false;
                 Terraria.Main.tile[12, 11].HasUnactuatedTile = false;
                 int starts = 0;
@@ -2662,13 +2664,19 @@ static class ScriptTests
                     if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
                     if (path == "/nav_recede_done")
                     {
-                        if (starts == 1 || scenario == "repeated")
+                        if (starts == 1 || scenario is "repeated" or "relocated_repeated")
                         {
-                            Terraria.Main.tile[30, 30].HasUnactuatedTile = scenario is "unverified" or "predicted_unverified";
+                            Terraria.Main.tile[30, 30].HasUnactuatedTile = scenario is "unverified" or "predicted_unverified" || scenario.StartsWith("relocated");
                             Terraria.Main.tile[30, 30].TileType = 69;
                             AgentTools.LastContactEscape = new JsonObject { ["status"] = "controls_released", ["contact_clear"] = true,
                                 ["cleared_tiles"] = scenario == "naturally_cleared" ? 0 : 1,
                                 ["hazard_tiles"] = new JsonArray(new JsonObject { ["x"] = 30, ["y"] = 30, ["type"] = (ushort)69 }) };
+                            if (scenario.StartsWith("relocated"))
+                            {
+                                AgentTools.LastContactEscape["start_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y };
+                                AgentTools.LastContactEscape["cleared_tiles"] = 0;
+                                player.position += new System.Numerics.Vector2(64, 0);
+                            }
                             if (scenario.StartsWith("predicted_", StringComparison.Ordinal))
                             {
                                 AgentTools.LastContactEscape["predicted_tile"] = AgentTools.LastContactEscape["hazard_tiles"][0].DeepClone();
@@ -2699,9 +2707,9 @@ static class ScriptTests
                 Check(scenario != "remaining_trap" || result["error"]?.ToString() == "navigation_near_trap"
                     && result["trap_tiles"]?[0]?["x"]?.GetValue<int>() == 12 && result["contact_escape"] != null,
                     "cleared contact masked the still-present trap and prevented the correct repair: " + result);
-                Check(starts == (scenario is "cleared" or "naturally_cleared" or "predicted_cleared" or "repeated" ? 2 : 1)
-                    && (result["done"]?.GetValue<bool>() == true) == (scenario is "cleared" or "naturally_cleared" or "predicted_cleared")
-                    && (result["verified_clearances"]?.AsArray().Count ?? 0) == (scenario is "cleared" or "naturally_cleared" or "predicted_cleared" or "repeated" ? 1 : 0),
+                Check(starts == (scenario is "cleared" or "naturally_cleared" or "predicted_cleared" or "relocated" or "relocated_repeated" or "repeated" ? 2 : 1)
+                    && (result["done"]?.GetValue<bool>() == true) == (scenario is "cleared" or "naturally_cleared" or "predicted_cleared" or "relocated")
+                    && (result["verified_clearances"]?.AsArray().Count ?? 0) == (scenario is "cleared" or "naturally_cleared" or "predicted_cleared" or "relocated" or "relocated_repeated" or "repeated" ? 1 : 0),
                     "clearance continuation hid failure, replayed an unchanged site or discarded verified progress: " + scenario + " " + result);
             }
             Console.WriteLine("PASS: native controller clearance resumes the same navigation intent after verified world change; unresolved, repeated and unrelated failures retain evidence");
@@ -2712,6 +2720,7 @@ static class ScriptTests
             AgentTools.LastContactEscape = null; AgentTools.ContactEscapeActive = false;
             Terraria.Main.tile[30, 30] = savedTile; player.position = position; player.dead = dead; player.suffocating = suffocating;
             Terraria.Main.tile[12, 11] = savedTrap;
+            Terraria.Collision.HurtTest = hurtTest;
             HttpServerSystem.Handler = originalHttp; agent.Unload();
         }
     }
