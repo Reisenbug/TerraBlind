@@ -66,7 +66,7 @@ static class ScriptTests
                 ["player"] = player.DeepClone(), ["recent_damage"] = new JsonObject { ["tick"] = 80 } };
             if (scenario == "healthy") combat["player"]["hp"] = 100;
             if (scenario == "healed") player["hp"] = 100;
-            var state = new JsonObject { ["player"] = player, ["codex_goal"] = null,
+            var state = new JsonObject { ["player"] = player, ["codex_goal"] = null, ["healing_items"] = new JsonArray(),
                 ["inventory_slots"] = scenario == "no_item" ? new JsonArray()
                 : new JsonArray(new JsonObject { ["slot"] = 4, ["type"] = 2350, ["stack"] = 2 }) };
             var result = await AgentScript.Run("(function(){" + ScriptLibrary.Example("safety_reactions")["code"]
