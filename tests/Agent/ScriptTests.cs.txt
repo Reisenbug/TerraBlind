@@ -506,9 +506,9 @@ static class ScriptTests
 
     static async Task NavigationRecoverySkill()
     {
-        foreach (string scenario in new[] { "contact", "plate", "solid", "changed", "failed", "unverified", "forbidden", "explosive", "policy_contact", "policy_plate" })
+        foreach (string scenario in new[] { "contact", "plate", "solid", "changed", "absent_removed", "absent_replaced", "absent_unknown", "plate_removed", "failed", "unverified", "forbidden", "explosive", "policy_contact", "policy_plate" })
         {
-            bool contact = scenario is not ("plate" or "forbidden" or "explosive" or "policy_plate");
+            bool contact = scenario is not ("plate" or "plate_removed" or "forbidden" or "explosive" or "policy_plate");
             bool policy = scenario.StartsWith("policy_");
             int uses = 0;
             var target = JsonNode.Parse("{\"x\":10,\"y\":11,\"type\":69,\"frame_x\":0,\"frame_y\":0,\"kind\":\"pressure_plate\",\"touch_damage\":10}");
@@ -529,14 +529,16 @@ static class ScriptTests
                     if (name == "script_program") return ScriptLibrary.Example("recover_navigation").ToJsonString();
                     if (name == "inventory_review") return "{\"inventory\":[{\"slot\":2,\"pick\":35}]}";
                     if (name == "inspect_terrain") return new JsonObject {
-                        [contact ? "near_body_tiles" : "trap_tiles"] = scenario == "changed" ? new JsonArray() : new JsonArray(target.DeepClone()) }.ToJsonString();
-                    if (name == "opportunity_assess") return new JsonObject { ["ok"] = true,
-                        ["target"] = new JsonObject { ["has_tile"] = scenario == "unverified", ["tile_type"] = 69 } }.ToJsonString();
+                        [contact ? "near_body_tiles" : "trap_tiles"] = scenario == "changed" || scenario.StartsWith("absent_") || scenario == "plate_removed"
+                            ? new JsonArray() : new JsonArray(target.DeepClone()) }.ToJsonString();
+                    if (name == "opportunity_assess") return new JsonObject { ["ok"] = scenario != "absent_unknown",
+                        ["target"] = new JsonObject { ["has_tile"] = scenario is "unverified" or "changed" or "absent_replaced",
+                            ["tile_type"] = scenario == "absent_replaced" ? 1 : 69 } }.ToJsonString();
                     Check(name == "use_item" && args["strict"].GetValue<bool>() && args["duration_ticks"].GetValue<int>() == 16,
                         "recovery bypassed bounded item-use mechanics");
                     uses++; return scenario == "failed" ? "{\"error\":\"out_of_reach\"}" : "{\"outcome\":\"removed\"}";
                 }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("recover_navigation")));
-            Check(result["ok"].GetValue<bool>() && result["value"]["retry"].GetValue<bool>() == (scenario is "contact" or "plate" || policy)
+            Check(result["ok"].GetValue<bool>() && result["value"]["retry"].GetValue<bool>() == (scenario is "contact" or "plate" or "absent_removed" or "absent_replaced" or "plate_removed" || policy)
                 && uses == (scenario is "contact" or "plate" or "failed" or "unverified" || policy ? 1 : 0),
                 "local navigation repair retried without verified clearance: " + scenario + " " + result);
         }

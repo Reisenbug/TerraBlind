@@ -116,7 +116,12 @@ public sealed class ScriptLibrary
             for(const target of targets){
               const scene=tool('inspect_terrain',{radius:8});
               const observed=(contact?scene.near_body_tiles:scene.trap_tiles).find(t=>same(t,target));
-              if(!observed||contact&&(!observed.touch_damage||observed.solid||observed.falling))
+              if(!observed){
+                const checked=tool('opportunity_assess',{x:target.x,y:target.y});
+                if(checked.ok&&(!checked.target.has_tile||checked.target.tile_type!==target.type)) continue;
+                return {retry:false,reason:'hazard_evidence_changed'};
+              }
+              if(contact&&(!observed.touch_damage||observed.solid||observed.falling))
                 return {retry:false,reason:'hazard_evidence_changed'};
               const result=tool('use_item',{slot:pick.slot,x:target.x,y:target.y,strict:true,duration_ticks:16});
               if(result.error) return {retry:false,reason:result.error};
