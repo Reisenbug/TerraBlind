@@ -1387,7 +1387,8 @@ public static partial class AgentTools
                 return (await NativeAgent.OnMain(() => TerrainInspection.Opportunity(Int(args, "x", -1), Int(args, "y", -1),
                     args["destination"] as JsonObject), token)).ToJsonString();
             case "run_script":
-                if (Text(args, "task_node") == "" && args["code"] != null && Text(args, "workflow") != "")
+                if (Text(args, "task_node") == "" && args["code"] != null
+                    && (Text(args, "workflow") != "" || AgentScript.ContainsInput(Text(args, "code"))))
                 {
                     string owner = await NativeAgent.OnMain(() =>
                     {
@@ -1399,6 +1400,7 @@ public static partial class AgentTools
                     {
                         args = (JsonObject)args.DeepClone();
                         args["task_node"] = owner;
+                        if (Text(args, "workflow") == "") args["workflow"] = "temporary-" + Guid.NewGuid().ToString("N");
                     }
                 }
                 if (!Actions.RunningScript && !preparedDispatch.Value
@@ -1452,6 +1454,7 @@ public static partial class AgentTools
                             scriptArgs.Remove("background");
                             var started = Actions.Start("run_script", scriptArgs, token);
                             started["default_background"] = goalBackground;
+                            if (scriptArgs["workflow"] != null) started["workflow_id"] = scriptArgs["workflow"].DeepClone();
                             return started;
                         }
                         finally { ActionTasks.NodeContext.Value = previous; }
@@ -1590,6 +1593,7 @@ public static partial class AgentTools
                         if (retained && !workflow.Running && workflow.Snapshot()["steps"].AsArray().Count == 0)
                         { Workflows.Remove(id); retained = false; }
                         result["workflow_retained"] = retained;
+                        result["workflow_id"] = id;
                         return true;
                     }, token);
                 if (program != null)

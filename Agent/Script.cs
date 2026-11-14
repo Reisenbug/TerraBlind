@@ -106,6 +106,22 @@ public static class AgentScript
         }
     }
 
+    internal static bool ContainsInput(string source)
+    {
+        try
+        {
+            var ast = new Acornima.Parser().ParseScript("(function(){\n" + source + "\n});");
+            bool Visit(Acornima.Ast.Node node) => node is Acornima.Ast.CallExpression call
+                && call.Callee is Acornima.Ast.Identifier name
+                && (name.Name == "skill" || name.Name == "tool" && call.Arguments.Count > 0
+                    && call.Arguments[0] is Acornima.Ast.StringLiteral tool
+                    && (AgentControlSession.ActionTool(tool.Value) || tool.Value == "action_start"))
+                || node.ChildNodes.Any(Visit);
+            return Visit(ast);
+        }
+        catch { return false; }
+    }
+
     internal static bool PreparationOnly(string source)
     {
         try
@@ -197,7 +213,7 @@ public static class AgentScript
             + "临时恢复可传task_node、code及独立workflow，动作仍归属该节点，step检查点单独保存，原节点script和workflow保留；无检查点的临时代码执行后释放workflow槽位，返回workflow_retained=false，结果保留在本次返回中。临时脚本支持后台执行，Agent可同时观察、暂停或修订后继。task_node也可与tool/args组合执行所属节点下的单工具，原script和workflow保留。";
         run["description"] = run["description"].ToString()
             + "普通动作失败直接返回失败结果，JS可在同轮按现场执行已准备的恢复分支；step仍会拒绝把失败记录为完成。"
-            + "只有一个就绪DAG节点时，带code和独立workflow的临时恢复自动归属该节点，返回task_node；多个就绪节点时显式指定。";
+            + "只有一个就绪DAG节点时，临时动作代码自动归属该节点，缺少workflow时分配独立名称并返回；原节点源码保留。多个就绪节点时显式指定。";
         var inventoryWatch = tools.First(t => t["function"]?["name"]?.ToString() == "watch")["function"];
         inventoryWatch["description"] = inventoryWatch["description"].ToString()
             + "action_finished、target_acquired和inventory_full始终为状态通知，当前动作继续执行；失败和显式订阅的库存增长唤醒并行观察。普通沿途机会每15秒合并交付一批后台观察，JS可即时读取完整事件；危险和失败独立交付。JS处理工具结果后继续，切换控制用action_control或decision_point。";

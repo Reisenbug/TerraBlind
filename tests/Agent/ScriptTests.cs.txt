@@ -42,6 +42,7 @@ static class ScriptTests
         await SurvivalDecisionPolicy();
         await IdleTaskPolicy();
         await BackgroundRecovery();
+        await BackgroundRecovery(inferOwner: true);
         await CombatApproach();
         await ReactiveTravelExample();
         await ComposedReactions();
@@ -55,7 +56,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=29 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=30 model_calls=0");
     }
 
     static async Task CombatApproach()
@@ -98,7 +99,7 @@ static class ScriptTests
         Console.WriteLine("PASS: combat approach checks current weapons, separation, terrain and native navigation; refreshes the target after one move");
     }
 
-    static async Task BackgroundRecovery()
+    static async Task BackgroundRecovery(bool inferOwner = false)
     {
         var agent = new NativeAgent(); agent.Load();
         var http = HttpServerSystem.Handler;
@@ -128,9 +129,15 @@ static class ScriptTests
                 if (path == "/act") effects++;
                 return (200, path == "/act_status" ? "{\"active\":" + (!release).ToString().ToLowerInvariant() + "}" : "{}");
             };
-            var started = await Call("run_script", new JsonObject { ["task_node"] = "travel", ["background"] = true,
-                ["workflow"] = "temporary", ["code"] = "return step('input',()=>tool('act',{steps:[{keys:['right'],until:{frames:60}}]}));" });
+            var request = new JsonObject { ["background"] = true,
+                ["code"] = "return step('input',()=>tool('act',{steps:[{keys:['right'],until:{frames:60}}]}));" };
+            if (!inferOwner) { request["task_node"] = "travel"; request["workflow"] = "temporary"; }
+            var started = await Call("run_script", request);
             Check(started["handle"] != null, "temporary script was rejected or waited for completion: " + started);
+            Check(!inferOwner || started["workflow_id"]?.ToString().StartsWith("temporary-") == true,
+                "inferred input script omitted its independent checkpoint identity");
+            Check(!AgentScript.ContainsInput("tool('task_plan_patch',{});return tool('action_query',{handle:'x'});")
+                && AgentScript.ContainsInput("return tool('equip_item',{});"), "preparation was misclassified as physical input");
             string handle = started["handle"].ToString();
             var running = await Pump(AgentTools.Actions.Query(handle, 250, default));
             await Call("get_state", new JsonObject { ["fields"] = new JsonArray("player") });
@@ -1228,6 +1235,7 @@ static class ScriptTests
         await IdleTaskPolicy();
         await SurvivalDecisionPolicy();
         await BackgroundRecovery();
+        await BackgroundRecovery(inferOwner: true);
         await CombatApproach();
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
