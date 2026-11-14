@@ -5130,7 +5130,7 @@ public sealed partial class BehaviorTrial : ModSystem
             int x = (int)player.Center.X / 16, y = (int)(player.Bottom.Y + 1) / 16;
             if (!player.ZoneJungle || player.ZoneCrimson || player.ZoneCorrupt || !player.ZoneOverworldHeight
                 || !Main.tile[x, y].HasTile || Main.tile[x, y].TileType != TileID.JungleGrass)
-                throw new Exception("queen trial requires native jungle surface flags and jungle grass underfoot");
+                throw new Exception($"queen trial requires native jungle surface flags and jungle grass underfoot; x={x} y={y} bottom={player.Bottom.Y} jungle={player.ZoneJungle} crimson={player.ZoneCrimson} corrupt={player.ZoneCorrupt} overworld={player.ZoneOverworldHeight} ground={(Main.tile[x, y].HasTile ? Main.tile[x, y].TileType : -1)}");
             jungleSpawn["zone_jungle"] = player.ZoneJungle; jungleSpawn["zone_crimson"] = player.ZoneCrimson;
             jungleSpawn["zone_corrupt"] = player.ZoneCorrupt; jungleSpawn["ground_tile_type"] = (int)Main.tile[x, y].TileType;
             return true;
@@ -5310,7 +5310,7 @@ public sealed partial class BehaviorTrial : ModSystem
                 if (FullQueenRun)
                 {
                     jungleSpawn["native_spawn_position"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y };
-                    var position = new Vector2(Main.spawnTileX * 16 + 8 - p.width / 2f, (Main.spawnTileY - 1) * 16 - p.height);
+                    var position = new Vector2(Main.spawnTileX * 16 + 8 - p.width / 2f, Main.spawnTileY * 16 - p.height);
                     if (Collision.SolidCollision(position, p.width, p.height)) throw new Exception("jungle surface placement is blocked");
                     p.Teleport(position); p.velocity = Vector2.Zero;
                     p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
