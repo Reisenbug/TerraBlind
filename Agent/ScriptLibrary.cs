@@ -47,8 +47,8 @@ public sealed class ScriptLibrary
             if(current.slot>=10){
               const inventory=tool('get_state',{fields:['inventory_slots']}).inventory_slots;
               const hotbar=now.targets.flatMap(n=>n.weapons).filter(w=>w.slot<10);
-              const destination=hotbar.find(w=>w.type===now.preferred_weapon_type)??hotbar[0]
-                ??inventory.find(i=>i.slot<10&&i.type===0);
+              const destination=inventory.find(i=>i.slot<10&&i.type===0)
+                ??hotbar.find(w=>w.type===now.preferred_weapon_type)??hotbar[0];
               if(!destination) return {request_id:r.request_id,status:'needs_review',reason:'no_hotbar_weapon_or_empty_slot'};
               const from=inventory.find(i=>i.slot===current.slot),to=inventory.find(i=>i.slot===destination.slot);
               const identity=i=>({type:i.type,prefix:i.prefix,stack:i.stack});

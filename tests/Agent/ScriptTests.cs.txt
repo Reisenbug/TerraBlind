@@ -297,9 +297,11 @@ static class ScriptTests
         {
             player.dead = ItemUseCoordinator.IsActive = PlaceAnywhere.IsRunning = false;
             player.itemAnimation = player.itemTime = 0;
-            foreach (string scenario in new[] { "swap", "keep", "ammo_lost", "source_changed", "destination_changed", "no_slot" })
+            foreach (string scenario in new[] { "swap", "empty_slot", "keep", "ammo_lost", "source_changed", "destination_changed", "no_slot" })
             {
                 player.inventory = Enumerable.Range(0, 58).Select(_ => new Terraria.Item()).ToArray();
+                if (scenario != "empty_slot")
+                    for (int i = 0; i < 10; i++) player.inventory[i] = new Terraria.Item { type = 9, stack = 1 };
                 player.inventory[7] = new Terraria.Item { type = 24, stack = 1, damage = 7 };
                 player.inventory[29] = new Terraria.Item { type = 5011, prefix = 41, stack = 1, damage = 18 };
                 JsonObject Weapon(int slot) => new() { ["slot"] = slot, ["type"] = player.inventory[slot].type,
@@ -331,21 +333,23 @@ static class ScriptTests
                     }
                     else if (name == "inventory_swap")
                     {
-                        Check(args["src"].GetValue<int>() == 29 && args["dst"].GetValue<int>() == 7, "loadout displaced a non-weapon slot");
+                        Check(args["src"].GetValue<int>() == 29 && args["dst"].GetValue<int>() == (scenario == "empty_slot" ? 0 : 7), "loadout displaced an occupied slot while an empty slot was available");
                         swaps++; response = PvpInventory.Swap(args);
                     }
                     else
                     {
-                        Check(name == "set_combat" && player.inventory[7].type == 5011, "loadout selected a weapon before its verified swap");
+                        Check(name == "set_combat" && player.inventory[scenario == "empty_slot" ? 0 : 7].type == 5011, "loadout selected a weapon before its verified swap");
                         selected++; response = new JsonObject();
                     }
                     return Task.FromResult(response.ToJsonString());
                 }, _ => Task.CompletedTask, default,
                     programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-loadout-" + Guid.NewGuid())).Callable());
-                Check(result["ok"].GetValue<bool>() && swaps == (scenario == "swap" ? 1 : 0) && selected == swaps,
+                Check(result["ok"].GetValue<bool>() && swaps == (scenario is "swap" or "empty_slot" ? 1 : 0) && selected == swaps,
                     "backpack loadout lost inventory validation or repeated a decision: " + scenario + " " + result);
                 if (scenario == "swap") Check(player.inventory[29].type == 24 && player.inventory[7].type == 5011,
                     "loadout discarded the displaced weapon");
+                if (scenario == "empty_slot") Check(player.inventory[29].type == 0 && player.inventory[7].type == 24,
+                    "loadout removed an existing hotbar weapon despite available space");
             }
         }
         finally
