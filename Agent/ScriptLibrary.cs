@@ -92,7 +92,7 @@ public sealed class ScriptLibrary
             "默认任务反应：近敌时用原生推演候选联合选择短程走位与武器，覆盖导航和等待模型期间。复核并拆除可达压力板与近身接触伤害物，验证后续接。近期受击且血量下降时，Jev结合当前任务、冷却、敌人与地形判断是否用已有回城道具脱险。遵守权限；可修改此JS并用task_policy替换。",
             """
             let survivalRequest=null,movementRequest=null,movementProgram=null,idleDestination=null,loadoutRequest=null,loadoutProgram=null;
-            let progressRequest=null,progressPollAt=0;
+            let progressRequest=null,progressPollAt=0,lastProgressReview=null;
             const movementContext='survival-combat:'+Date.now();
             on('tick',event=>{
               const c=tool('combat_assess',{radius:15}),p=c.player;
@@ -121,22 +121,24 @@ public sealed class ScriptLibrary
                 progressPollAt=Date.now();
                 const s=tool('get_state',{fields:['task_plan','inventory_slots','equipment_slots']}),plan=s.task_plan;
                 if(plan?.status==='active'){
-                  const facts={objective:event.goal.objective,elapsed_seconds:event.goal.elapsed_seconds,
+                  const facts={objective:event.goal.objective,elapsed_seconds:event.goal.elapsed_seconds,previous_review_request:lastProgressReview,
                     plan_revision:plan.revision,current_step:plan.current_step,player:p,execution:event.execution,
                     steps:plan.steps.map(({id,description,status,conditions,best_actual})=>({id,description,status,conditions,best_actual})),
                     inventory:s.inventory_slots.filter(i=>i.type>0).map(({type,name,stack})=>({type,name,stack})),
                     equipment:s.equipment_slots.filter(i=>i.slot<10&&i.type>0).map(({type,name,slot})=>({type,name,slot}))};
                   const r=tool('jev_judge',{channel:'task_progress',context:'task-progress',interval_ms:10000,max_age_ms:30000,
                     state:facts,questions:{response:{type:'choice',instructions:
-                      'Is the current preparation or recovery still worth its cost for the original objective at the shown elapsed time and observed progress? Consider usable equipment and remaining requirements. Review asks the Agent to revise its plan while the current action continues.',
-                      criteria:{continue:'Continue the current plan.',review:'Ask the Agent to reassess preparation and advance the original objective more efficiently.'}}}});
+                      'Does fresh evidence justify changing the current plan now? Weigh observed progress, usable equipment, remaining requirements and elapsed time. A review consumes another slow Agent reasoning step. Current execution and any previously requested review keep running; account for the time and plan changes since that request.',
+                      criteria:{continue:'Current execution or the existing review is adequate; let it proceed.',review:'Fresh evidence warrants another Agent planning step to change costly preparation or recovery.'}}}});
                   if(r.status==='ready'&&r.request_id!==progressRequest){
                     progressRequest=r.request_id;
                     const choice=r.result.answers.response.choice;
                     print({decision:'task_progress',request:r.request_id,choice,elapsed_seconds:r.input_state.elapsed_seconds,model_ms:r.result.elapsed_ms});
-                    if(choice==='review'&&r.input_state.plan_revision===plan.revision&&r.input_state.current_step===plan.current_step)
+                    if(choice==='review'&&r.input_state.plan_revision===plan.revision&&r.input_state.current_step===plan.current_step){
+                      lastProgressReview={elapsed_seconds:event.goal.elapsed_seconds,current_step:plan.current_step,plan_revision:plan.revision};
                       agentReview={key:'task-progress:'+plan.current_step+':'+plan.revision,
                         reason:'Reassess current preparation against the original objective and elapsed time',evidence:r.input_state};
+                    }
                   }
                 }
               }

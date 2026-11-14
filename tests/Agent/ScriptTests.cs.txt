@@ -170,7 +170,7 @@ static class ScriptTests
             if (scenario == "unchaseable_enemy") combat["targets"][0]["attackable"] = false;
             if (scenario is "projectile_only" or "quiet" || progress) combat["targets"] = new JsonArray();
             if (scenario == "projectile_only") combat["projectiles"] = new JsonArray(new JsonObject { ["damage"] = 20 });
-            var result = await AgentScript.Run("Date.now=()=>100000;(function(){" + ScriptLibrary.Example("safety_reactions")["code"]
+            var result = await AgentScript.Run("let clock=100000;Date.now=()=>clock+=" + (progress ? "2000" : "0") + ";(function(){" + ScriptLibrary.Example("safety_reactions")["code"]
                 + "})();return tool('nav_to');", 5, (_, _) => { }, async (name, args, token) =>
                 {
                     if (name == "nav_to")
@@ -206,6 +206,10 @@ static class ScriptTests
                                 && args["state"]["elapsed_seconds"].GetValue<int>() == 900
                                 && args["state"]["current_step"].ToString() == "prepare",
                                 "progress review lost the live clock or current plan");
+                            if (scenario == "progress_review" && decisions > 1)
+                                Check(args["state"]["previous_review_request"]?.AsObject().Count == 3
+                                    && args["state"]["previous_review_request"]["elapsed_seconds"].GetValue<int>() == 900,
+                                    "progress review forgot its prior request or recursively retained old input");
                             var input = args["state"].DeepClone();
                             if (scenario == "progress_stale") input["plan_revision"] = 1;
                             return new JsonObject { ["status"] = "ready", ["request_id"] = 9, ["input_state"] = input,
@@ -224,7 +228,7 @@ static class ScriptTests
                 }, _ => Task.CompletedTask, default,
                 programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-empty-skills-" + Guid.NewGuid())).Callable());
             bool inactive = boss || scenario == "quiet";
-            Check(result["ok"].GetValue<bool>() && decisions == (progress ? 1 : inactive ? 0 : 3) && updates == (inactive || progress ? 0 : 1)
+            Check(result["ok"].GetValue<bool>() && decisions == (progress ? 3 : inactive ? 0 : 3) && updates == (inactive || progress ? 0 : 1)
                 && reviews == (scenario is "equipment_review" or "ranged_review" or "progress_review" ? 1 : 0),
                 "default combat policy blocked pending navigation, repeated a response or touched boss movement: " + result);
         }
