@@ -1166,7 +1166,7 @@ public static partial class AgentTools
         while (true)
         {
             var current = await Actions.Query(handle, 250, token);
-            bool pending = await NativeAgent.OnMain(() => Watches.HasInterrupting, token);
+            bool pending = await NativeAgent.OnMain(() => scriptEvents ? Watches.HasInterrupting : Watches.HasModelInterrupting, token);
             if (current["status"]?.ToString() == "running" && pending)
             {
                 current = await Actions.Control(handle, "pause", null, root);
