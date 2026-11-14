@@ -122,6 +122,7 @@ public sealed class AgentWatch
         && e["kind"]?.ToString() != "low_health"
         && e["kind"]?.ToString() != "honey_slowdown"
         && e["kind"]?.ToString() != "inventory_full"
+        && e["kind"]?.ToString() != "tactical_review"
         && e["kind"]?.ToString() is not ("action_finished" or "target_acquired")
         && !(e["kind"]?.ToString() == "nearby_chest" && e["key"]?.ToString() == currentChestTarget)
         && !passive.Contains(e["kind"]?.ToString());
@@ -419,6 +420,7 @@ public sealed class AgentWatch
     {
         if (HandledByScript(item)) return false;
         string kind = item["kind"]?.ToString();
+        if (kind == "tactical_review" && item["wake_deferred"]?.GetValue<bool>() == true) return false;
         if (kind is "nearby_chest" or "nearby_tile" or "nearby_drop"
             && (clock() < nextOpportunityReview || item["wake_deferred"]?.GetValue<bool>() == true)) return false;
         if (kind is "nearby_chest" or "nearby_tile" or "nearby_drop"
@@ -431,7 +433,7 @@ public sealed class AgentWatch
             if (dx * dx + dy * dy > Radius * Radius) return false;
         }
         return !advised.Contains(item["id"].GetValue<int>())
-            && (kind is "nearby_chest" or "nearby_tile" or "nearby_drop" or "honey_slowdown" or "inventory_full"
+            && (kind is "nearby_chest" or "nearby_tile" or "nearby_drop" or "honey_slowdown" or "inventory_full" or "tactical_review"
                 || item["wake_deferred"]?.GetValue<bool>() != true
                     && (kind == "target_acquired" && (!passive.Contains(kind) || background.Contains(kind))
                         || kind == "action_finished" && item["evidence"]?["status"]?.ToString() == "failed"));
@@ -464,6 +466,37 @@ public sealed class AgentWatch
         if (evidence != null) value["reported_evidence"] = evidence.DeepClone();
         pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
         return (JsonObject)value.DeepClone();
+    }
+
+    internal JsonObject RequestTacticalReview(string key, string reason, JsonObject evidence)
+    {
+        if (string.IsNullOrWhiteSpace(key) || key.Length > 500 || string.IsNullOrWhiteSpace(reason)
+            || reason.Length > 500 || evidence?.ToJsonString(AgentTools.ModelJson).Length > 8000)
+            throw new ArgumentException("战术审阅需要稳定key、原因及简短现场证据。");
+        if (!seen.Add("tactical_review:" + key)) return new JsonObject { ["status"] = "already_requested" };
+        bool deferred = wakeCount >= 6;
+        if (!deferred) wakeCount++;
+        var value = new JsonObject { ["id"] = ++issued, ["kind"] = "tactical_review", ["key"] = key,
+            ["evidence"] = new JsonObject { ["reason"] = reason, ["observed"] = evidence?.DeepClone() },
+            ["wake_deferred"] = deferred };
+        pending.Enqueue(value); history.Add((JsonObject)value.DeepClone());
+        return new JsonObject { ["status"] = deferred ? "deferred" : "queued", ["event_id"] = issued };
+    }
+
+    internal JsonArray TacticalAdvisories(bool acknowledge = true)
+    {
+        var result = new JsonArray();
+        foreach (var value in pending.Where(e => e["kind"]?.ToString() == "tactical_review" && IsAdvisory(e)))
+        {
+            if (acknowledge) advised.Add(value["id"].GetValue<int>());
+            result.Add(value.DeepClone());
+        }
+        return result;
+    }
+
+    internal void AcknowledgeTacticalAdvisories(JsonArray values)
+    {
+        foreach (var value in values) advised.Add(value["id"].GetValue<int>());
     }
 
     internal void ExecutionFault(JsonObject evidence)

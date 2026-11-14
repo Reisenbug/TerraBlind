@@ -95,6 +95,8 @@ public sealed class ScriptLibrary
             const movementContext='survival-combat:'+Date.now();
             on('tick',event=>{
               const c=tool('combat_assess',{radius:15}),p=c.player;
+              let agentReview=null;
+              const handled=()=>({handled:true,agent_review:agentReview});
               if(!c.boss_present&&c.targets?.some(n=>n.attackable&&n.contact_damage>0
                   &&n.weapons?.some(w=>w.slot>=10&&w.has_ammo&&w.mana_available))){
                 loadoutProgram??=tool('script_program',{operation:'get',name:'combat_loadout'});
@@ -112,23 +114,24 @@ public sealed class ScriptLibrary
                 const intent=skill('joint_combat',movementProgram.revision,{context:movementContext+':'+(idle?'idle:':'route:')+destination.x+':'+destination.y,
                   destination,instruction:goal?.native?.objective??'Continue the current task while staying alive.',last_request:movementRequest});
                 movementRequest=intent.request_id??movementRequest;
+                agentReview=intent.agent_review??null;
               }
-              if(c.boss_present||p.hp>p.max_hp*.75||!c.recent_damage||c.tick-c.recent_damage.tick>120) return {handled:true};
+              if(c.boss_present||p.hp>p.max_hp*.75||!c.recent_damage||c.tick-c.recent_damage.tick>120) return handled();
               const s=tool('get_state',{fields:['player','inventory_slots','healing_items','codex_goal']});
               const recall=s.inventory_slots.find(i=>[50,2350,3199].includes(i.type)&&i.stack>0);
-              if(!recall||s.player.hp>s.player.max_hp*.75) return {handled:true};
+              if(!recall||s.player.hp>s.player.max_hp*.75) return handled();
               const r=tool('jev_judge',{channel:'survival',context:'task-survival',interval_ms:500,max_age_ms:1000,
                 state:{objective:s.codex_goal?.native?.objective,elapsed_seconds:s.codex_goal?.host_wall_elapsed_seconds,
                   combat:c,player:s.player,healing_items:s.healing_items,terrain:tool('inspect_terrain',{radius:8}),recall,
                   coordinates:'Player positions are world pixels; enemy x/y and terrain cells are world tiles (16 pixels). Terrain rows start at terrain.origin; x right, y down.'},questions:{response:{type:'choice',
                   instructions:'Should this player continue the current task or recall to survive the immediate threats? Respect the objective and death constraints. Recall uses the shown item and returns to spawn; the task resumes from there. Consider health, potion cooldown, incoming damage, terrain and escape options.',
                   criteria:{continue:'Continue the task with current defense and movement.',recall:'Use the available recall item now to escape.'}}}});
-              if(r.status!=='ready'||r.request_id===survivalRequest) return {handled:true};
+              if(r.status!=='ready'||r.request_id===survivalRequest) return handled();
               survivalRequest=r.request_id;
               print({decision:'survival',request:r.request_id,choice:r.result.answers.response.choice,model_ms:r.result.elapsed_ms});
               if(r.result.answers.response.choice==='recall') tool('use_item',{slot:recall.slot,
                 x:Math.floor(s.player.pos.x/16),y:Math.floor(s.player.pos.y/16),duration_ticks:120});
-              return {handled:true};
+              return handled();
             });
             on('action_failed',event=>{
               const nav=event.result.last_result?.result?.navigation??event.result.navigation??event.result;
@@ -436,13 +439,26 @@ public sealed class ScriptLibrary
                 scope:f.scope,known_route_frames:f.known_route_frames,prefix_source:f.prefix_source,walk_intent:f.walk_intent,
                 movements,plans:f.plans},
               questions:{response:{type:'choice',instructions:
-                'Which available movement and weapon combination best avoids incoming damage while carrying out state.instruction?',criteria}}});
+                'Which available movement and weapon combination best avoids incoming damage while carrying out state.instruction?',criteria},
+                attention:{type:'choice',instructions:
+                  'Do the available controls suffice to make useful progress, or should the Agent revise equipment or terrain preparation? Current actions continue during review. Consider the task, incoming damage, weapon reach, ammo and the measured candidate outcomes.',
+                  criteria:{continue:'Continue with current preparation and control.',equipment:'Ask the Agent to prepare a more suitable weapon, ammunition, armor or supplies.',
+                    terrain:'Ask the Agent to change local terrain or the approach plan to make progress.'}}}});
             if(r.status==='pending'||r.request_id===input.last_request) return {status:r.status};
             const record={decision:'combat',request:r.request_id,request_age_ms:r.request_age_ms,ready_wait_ms:r.ready_wait_ms,model_ms:r.result.elapsed_ms};
             if(r.status==='failed'){
               print({...record,error:r.result.error});return {request_id:r.request_id,error:r.result.error};
             }
             const plan=r.input_state.plans.find(p=>p.id===r.result.answers.response.choice);
+            const attention=r.result.answers.attention?.choice;
+            const agentReview=attention&&attention!=='continue'?{
+              key:attention+':'+(attention==='equipment'?weapons.map(w=>w.type+':'+w.has_ammo).sort().join(',')
+                :input.context+':'+c.targets.map(n=>n.who+':'+n.type).join(',')),
+              reason:'Decision model requests '+attention+' preparation',
+              evidence:{choice:attention,request_id:r.request_id,instruction:input.instruction,tick:c.tick,player:c.player,
+                weapons:weapons.map(({type,name,damage,has_ammo,mana_available})=>({type,name,damage,has_ammo,mana_available})),
+                targets:c.targets.map(({who,type,hp,contact_damage,distance_tiles})=>({who,type,hp,contact_damage,distance_tiles})),
+                selected_plan:plan,model_ms:r.result.elapsed_ms}}:null;
             let applied;
             if(!plan?.movement_available) applied={error:'landing_unresolved'};
             else if(plan.movement==='follow_route') applied=plan.weapon_type>0?tool('set_combat',{weapon_type:plan.weapon_type}):{};
@@ -450,7 +466,7 @@ public sealed class ScriptLibrary
               context:input.context,forecast_id:r.input_state.forecast_id,plan_id:plan.id}});
             print({...record,choice:r.result.answers.response.choice,action:applied.error??applied.outcome??'follow_route',
               reason:applied.reason,decision_forecast_id:applied.decision_forecast_id,execution_forecast_id:applied.execution_forecast_id});
-            return {request_id:r.request_id,applied:!applied.error,weapon_type:plan?.weapon_type,error:applied.error??null};
+            return {request_id:r.request_id,applied:!applied.error,weapon_type:plan?.weapon_type,error:applied.error??null,agent_review:agentReview};
             """);
         if (name is "reactive_travel" or "task_reactions" or "decision_travel" or "decision_reactions" or "joint_reactions") return Template(name,
             "task_reactions和decision_reactions注册整趟任务策略，目的地从event.execution的实际导航读取；travel版本另需destination并执行单段导航。input包含resources（item_type/count/tile_type/tile_name及可选frame_x/frame_y）、weapon_order、trash_types/drop_types、max_detour_tiles、health_reserve、contact_pass_types、allow_trigger_removal。decision版本默认启用weapon/movement/opportunity三维后台判断，decisions数组可单独启停作对照；instruction给当前意图，decision_interval_ms、decision_max_age_ms和decision_max_displacement_tiles调整更新及应用条件。判断期间原动作继续，只有执行具体干预才暂停并恢复。print记录每次采用的request_id、选择、耗时和动作结果。资源来源提前查证，策略源码可随现场修改。",

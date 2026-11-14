@@ -269,7 +269,18 @@ public static partial class AgentTools
 
     internal static Task NotifyExecution(CodexAgent codex, CancellationToken token)
     {
-        if (!codex.HasActiveTurn || token.IsCancellationRequested || !Plan.Incomplete) return Task.CompletedTask;
+        if (!codex.HasActiveTurn || token.IsCancellationRequested) return Task.CompletedTask;
+        var tactical = Watches.LocalDelivery ? new JsonArray() : Watches.TacticalAdvisories(acknowledge: false);
+        if (tactical.Count > 0)
+            return SendTactical();
+        async Task SendTactical()
+        {
+            bool accepted = await codex.Steer("实时决策模型请求调整方案。当前动作继续，原目标与进度保留。根据现场证据核对装备或地形，准备具体修改，再按需要交接。现场："
+                + tactical.ToJsonString(ModelJson), token);
+            if (accepted) await NativeAgent.OnMain(() => { Watches.AcknowledgeTacticalAdvisories(tactical); return true; }, token);
+            DiagLog.Write("[agent_tactical_review] accepted=" + accepted + " events=" + tactical.Count);
+        }
+        if (!Plan.Incomplete) return Task.CompletedTask;
         var action = Actions.HasPrimaryControl ? Actions.Summary().FirstOrDefault(item => item["tool"]?.ToString() != "fight"
             && item["status"]?.ToString() == "running") : null;
         string kind = action != null ? "prepare_successor" : "execution_gap";
@@ -1307,6 +1318,10 @@ public static partial class AgentTools
             if (notice == null) return null;
             long started = Stopwatch.GetTimestamp();
             var decision = await reactions.Dispatch(notice, token);
+            JsonObject review = null;
+            if (decision?["agent_review"] is JsonObject request)
+                review = await NativeAgent.OnMain(() => Watches.RequestTacticalReview(Text(request, "key"),
+                    Text(request, "reason"), request["evidence"] as JsonObject), token);
             if (notice["kind"]?.ToString() != "action_failed" && decision?["handled"]?.GetValue<bool>() != true)
             {
                 reactions.Remove(notice["kind"].ToString());
@@ -1323,6 +1338,7 @@ public static partial class AgentTools
                 ["handled"] = decision?["handled"]?.DeepClone(), ["retry"] = decision?["retry"]?.DeepClone(),
                 ["outcome"] = decision?["outcome"]?.DeepClone(), ["reason"] = decision?["reason"]?.DeepClone(),
                 ["task_node"] = notice["task_node"]?.DeepClone() };
+            if (review != null) record["agent_review"] = review;
             if (ReferenceEquals(taskPolicy?.Reactions, reactions)) taskPolicy.LastReaction = record;
             DiagLog.Write("[script-reaction] " + record);
             return decision;

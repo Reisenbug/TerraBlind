@@ -42,6 +42,7 @@ static class ScriptTests
         await SurvivalDecisionPolicy();
         await SurvivalCombatPolicy();
         await BackpackLoadout();
+        await TacticalReviews();
         await TaskPolicyPatch();
         await EquipmentAnimationHandoff();
         await IdleTaskPolicy();
@@ -63,7 +64,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=37 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=38 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -151,10 +152,10 @@ static class ScriptTests
 
     static async Task SurvivalCombatPolicy()
     {
-        foreach (string scenario in new[] { "navigation", "idle", "fight", "boss", "unchaseable_enemy", "projectile_only", "quiet" })
+        foreach (string scenario in new[] { "navigation", "idle", "fight", "boss", "unchaseable_enemy", "projectile_only", "quiet", "equipment_review" })
         {
             bool boss = scenario == "boss", idle = scenario is "idle" or "fight";
-            int decisions = 0, updates = 0;
+            int decisions = 0, updates = 0, reviews = 0;
             var combat = JsonNode.Parse("""
                 {"tick":100,"boss_present":false,"player":{"hp":100,"max_hp":100,"pos":{"x":160,"y":320}},"projectiles":[],
                  "targets":[{"who":7,"type":42,"attackable":true,"contact_damage":20,"distance_tiles":6,"weapons":[]}],
@@ -171,9 +172,13 @@ static class ScriptTests
                 {
                     if (name == "nav_to")
                     {
-                        for (int i = 0; i < 3; i++) await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject {
+                        for (int i = 0; i < 3; i++)
+                        {
+                            var reaction = await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject {
                             ["kind"] = "tick", ["execution"] = new JsonObject { ["tool"] = scenario == "fight" ? "fight" : idle ? "idle" : "nav_to",
                                 ["args"] = new JsonObject { ["x"] = 50, ["y"] = 20 } } }, token);
+                            if (reaction?["agent_review"] != null) reviews++;
+                        }
                         return "{}";
                     }
                     if (name == "combat_assess")
@@ -190,17 +195,65 @@ static class ScriptTests
                         Check(args["state"]["instruction"].ToString() == "reach the cave", "travel policy lost the current objective");
                         return decisions == 1 ? "{\"status\":\"pending\"}" : new JsonObject {
                             ["status"] = "ready", ["request_id"] = 9, ["input_state"] = args["state"].DeepClone(),
-                            ["result"] = JsonNode.Parse("{\"elapsed_ms\":20,\"answers\":{\"response\":{\"choice\":\"avoid\"}}}") }.ToJsonString();
+                            ["result"] = JsonNode.Parse("{\"elapsed_ms\":20,\"answers\":{\"response\":{\"choice\":\"avoid\"},\"attention\":{\"choice\":\""
+                                + (scenario == "equipment_review" ? "equipment" : "continue") + "\"}}}") }.ToJsonString();
                     }
                     Check(name == "act" && args["combat_candidate"]?["plan_id"]?.ToString() == "avoid", "combat policy lost native candidate validation");
                     updates++; return "{}";
                 }, _ => Task.CompletedTask, default,
                 programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-empty-skills-" + Guid.NewGuid())).Callable());
             bool inactive = boss || scenario == "quiet";
-            Check(result["ok"].GetValue<bool>() && decisions == (inactive ? 0 : 3) && updates == (inactive ? 0 : 1),
+            Check(result["ok"].GetValue<bool>() && decisions == (inactive ? 0 : 3) && updates == (inactive ? 0 : 1)
+                && reviews == (scenario == "equipment_review" ? 1 : 0),
                 "default combat policy blocked pending navigation, repeated a response or touched boss movement: " + result);
         }
         Console.WriteLine("PASS: default survival uses shared combat candidates during navigation and idle, deduplicates execution and preserves boss control");
+    }
+
+    static async Task TacticalReviews()
+    {
+        var watch = new AgentWatch(); watch.EnsureDefaults();
+        Check(watch.RequestTacticalReview("equipment", "need a ranged weapon", new JsonObject())["status"].ToString() == "queued",
+            "tactical review was not queued");
+        Check(watch.RequestTacticalReview("equipment", "same incident", new JsonObject())["status"].ToString() == "already_requested"
+            && watch.PendingCount == 1 && !watch.HasModelInterrupting && watch.HasAdvisories,
+            "tactical review interrupted movement or duplicated the same incident");
+        var unsent = watch.TacticalAdvisories(acknowledge: false);
+        Check(watch.HasAdvisories, "unaccepted steering lost the tactical review");
+        watch.AcknowledgeTacticalAdvisories(unsent);
+        Check(!watch.HasAdvisories, "accepted tactical review was delivered twice");
+        for (int i = 0; i < 5; i++) watch.RequestTacticalReview("incident-" + i, "new incident", new JsonObject());
+        Check(watch.RequestTacticalReview("excess", "new incident", new JsonObject())["status"].ToString() == "deferred"
+            && watch.Summary()["wake_count"].GetValue<int>() == 6, "tactical reviews bypassed the existing wake budget");
+
+        var agent = new NativeAgent(); agent.Load();
+        bool active = RecedingNav.Active;
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.ControlSession.Reset();
+            async Task Pump(Task pending)
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (!pending.IsCompleted)
+                { Check(clock.Elapsed.TotalSeconds < 5, "tactical review publication stalled"); agent.PostUpdateEverything(); await Task.Delay(1); }
+                await pending;
+            }
+            await Pump(AgentTools.Execute("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
+                ["code"] = "on('tick',e=>({handled:true,agent_review:{key:'equipment',reason:'prepare a weapon',evidence:{hp:100}}}));" }, default));
+            Check(AgentTools.ControlSession.Begin("nav_to", null, out _) == null, "navigation failed to acquire control");
+            RecedingNav.Active = true;
+            int pauses = 0;
+            await Pump(AgentTools.ReactAtBoundary(default, _ => { pauses++; return Task.CompletedTask; },
+                context: new JsonObject { ["tool"] = "nav_to", ["args"] = new JsonObject { ["x"] = 20, ["y"] = 30 } }));
+            Check(pauses == 0 && RecedingNav.Active && AgentTools.ControlSession.Tool == "nav_to"
+                && !AgentTools.Watches.HasModelInterrupting && AgentTools.Watches.TacticalAdvisories(false).Count == 1,
+                "script tactical review stopped its primary action or failed to publish");
+        }
+        finally
+        {
+            AgentTools.NewTask(); AgentTools.ControlSession.Reset(); RecedingNav.Active = active; agent.Unload();
+        }
+        Console.WriteLine("PASS: tactical reviews retain active navigation, deduplicate incidents and preserve unaccepted delivery within the wake budget");
     }
 
     static async Task BackpackLoadout()
@@ -1585,6 +1638,7 @@ static class ScriptTests
         await SurvivalDecisionPolicy();
         await SurvivalCombatPolicy();
         await BackpackLoadout();
+        await TacticalReviews();
         await TaskPolicyPatch();
         await EquipmentAnimationHandoff();
         await BackgroundRecovery();
