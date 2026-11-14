@@ -297,7 +297,7 @@ static class ScriptTests
         {
             player.dead = ItemUseCoordinator.IsActive = PlaceAnywhere.IsRunning = false;
             player.itemAnimation = player.itemTime = 0;
-            foreach (string scenario in new[] { "swap", "empty_slot", "keep", "ammo_lost", "source_changed", "destination_changed", "no_slot" })
+            foreach (string scenario in new[] { "swap", "observe", "empty_slot", "keep", "ammo_lost", "source_changed", "destination_changed", "no_slot" })
             {
                 player.inventory = Enumerable.Range(0, 58).Select(_ => new Terraria.Item()).ToArray();
                 if (scenario != "empty_slot")
@@ -310,7 +310,8 @@ static class ScriptTests
                 var combat = new JsonObject { ["preferred_weapon_type"] = 24,
                     ["targets"] = new JsonArray(new JsonObject { ["weapons"] = new JsonArray(Weapon(7), Weapon(29)) }) };
                 int swaps = 0, selected = 0;
-                var code = "const config=" + new JsonObject { ["combat"] = combat.DeepClone(), ["instruction"] = "gather materials while defending" }.ToJsonString()
+                if (scenario == "observe") combat["observed_notes"] = new string('x', 9000);
+                var code = "const config=" + new JsonObject { ["combat"] = scenario == "observe" ? null : combat.DeepClone(), ["instruction"] = "gather materials while defending" }.ToJsonString()
                     + ";const first=skill('combat_loadout',0,config);skill('combat_loadout',0,{...config,last_request:first.request_id});return first;";
                 var result = await AgentScript.Run(code, 5, (_, _) => { }, (name, args, _) =>
                 {
@@ -344,7 +345,7 @@ static class ScriptTests
                     return Task.FromResult(response.ToJsonString());
                 }, _ => Task.CompletedTask, default,
                     programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-loadout-" + Guid.NewGuid())).Callable());
-                Check(result["ok"].GetValue<bool>() && swaps == (scenario is "swap" or "empty_slot" ? 1 : 0) && selected == swaps,
+                Check(result["ok"].GetValue<bool>() && swaps == (scenario is "swap" or "observe" or "empty_slot" ? 1 : 0) && selected == swaps,
                     "backpack loadout lost inventory validation or repeated a decision: " + scenario + " " + result);
                 if (scenario == "swap") Check(player.inventory[29].type == 24 && player.inventory[7].type == 5011,
                     "loadout discarded the displaced weapon");

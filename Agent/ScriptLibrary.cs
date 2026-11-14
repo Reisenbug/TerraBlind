@@ -26,7 +26,7 @@ public sealed class ScriptLibrary
         if (name == "combat_loadout") return Template(name,
             "内置随身武器判断，可直接调用revision=0。input含combat_assess返回的combat、instruction及last_request；Jev从含弹药与射界事实的武器中选择。背包武器换入已有武器槽或空快捷栏槽，交换前刷新type/prefix/stack，保留原物品；无合适槽位返回needs_review。原动作在判断期间继续。",
             """
-            const c=input.combat;
+            const c=input.combat??tool('combat_assess',{radius:15});
             const weapons=[...new Map((c.targets??[]).flatMap(n=>n.weapons??[]).map(w=>[w.slot,w])).values()];
             const usable=weapons.filter(w=>w.has_ammo&&w.mana_available);
             if(!usable.some(w=>w.slot>=10)) return {status:'no_backpack_weapon'};
@@ -101,7 +101,7 @@ public sealed class ScriptLibrary
                   &&n.weapons?.some(w=>w.slot>=10&&w.has_ammo&&w.mana_available))){
                 loadoutProgram??=tool('script_program',{operation:'get',name:'combat_loadout'});
                 const objective=tool('get_state',{fields:['codex_goal']}).codex_goal?.native?.objective;
-                const loadout=skill('combat_loadout',loadoutProgram.revision,{combat:c,instruction:objective,last_request:loadoutRequest});
+                const loadout=skill('combat_loadout',loadoutProgram.revision,{instruction:objective,last_request:loadoutRequest});
                 loadoutRequest=loadout.request_id??loadoutRequest;
               }
               let destination=event.execution?.tool==='nav_to'?event.execution.args:null;
