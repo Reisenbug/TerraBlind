@@ -27,7 +27,8 @@ public sealed class CombatForecast : ModSystem
     static long completionVersion;
     internal static long CompletionVersion => Interlocked.Read(ref completionVersion);
     static int refreshing;
-    internal static bool ReservesRoutePrefix => Volatile.Read(ref refreshing) > 0
+    static long reservedUntilTick;
+    internal static bool ReservesRoutePrefix => (long)Main.GameUpdateCount < reservedUntilTick
         || prepared != null && (long)Main.GameUpdateCount - prepared.Tick
             < (prepared.HandoffFrames > 0 ? prepared.HandoffFrames : prepared.Prefix.Length);
     static JsonObject unavailable;
@@ -46,6 +47,7 @@ public sealed class CombatForecast : ModSystem
     {
         lifetime.Cancel(); lifetime.Dispose(); lifetime = new();
         pending = ready = prepared = null; retained.Clear(); context = null; unavailable = deferredArgs = null; lastAttempt = 0;
+        reservedUntilTick = 0;
     }
 
     public override void PostUpdateEverything()
@@ -446,6 +448,7 @@ public sealed class CombatForecast : ModSystem
                     var job = new Forecast(freshId, tick, snapshot, scene, prefix, original.Destination,
                         Generate(freshId, tick, snapshot, scene, prefix, original.Destination, walk,
                             Stopwatch.GetElapsedTime(captureStarted).TotalMilliseconds, refreshLifetime.Token, plan["movement"].ToString()), anchor);
+                    reservedUntilTick = tick + prefix.Length;
                     return (Job: job, Error: (JsonObject)null);
                 }
                 catch (NotSupportedException error)
@@ -513,7 +516,7 @@ public sealed class CombatForecast : ModSystem
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { return new JsonObject { ["error"] = "combat_forecast_replaced" }; }
-        finally { refreshLifetime?.Dispose(); }
+        finally { reservedUntilTick = 0; refreshLifetime?.Dispose(); }
     }
 
     static JsonObject CheckState(Forecast forecast, JsonObject movement, out int offset)
