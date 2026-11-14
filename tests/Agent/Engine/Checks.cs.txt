@@ -55,6 +55,7 @@ public sealed partial class BehaviorTrial
 
     async Task QueenMiningReplay()
     {
+        if (Environment.GetEnvironmentVariable("TB_QUEEN_CONTACT_REPLAY") == "1") { await QueenContactReplay(); return; }
         bool tunnel = Environment.GetEnvironmentVariable("TB_QUEEN_TUNNEL_REPLAY") == "1";
         await OnMain(() =>
         {
@@ -108,6 +109,38 @@ public sealed partial class BehaviorTrial
             ["measurement"] = miningMeasurement.DeepClone() }.ToJsonString());
         if (result["outcome"]?.ToString() != "done") throw new Exception("native mining replay failed: " + result);
         Console.WriteLine("MINING_REPLAY_PASS elapsed_ms=" + clock.ElapsedMilliseconds);
+    }
+
+    async Task QueenContactReplay()
+    {
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false;
+            VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+            AgentTools.NewTask(); AgentPermissions.Reset(); VanillaNavBridge.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false;
+            var player = Main.LocalPlayer;
+            player.Teleport(new Vector2(49439.37f, 11174.107f)); player.velocity = new Vector2(0, 9.6f);
+            player.fallStart = player.fallStart2 = (int)(player.position.Y / 16);
+            foreach (var item in player.inventory) item.TurnToAir();
+            player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+            player.inventory[3].SetDefaults(ItemID.Wood); player.inventory[3].stack = 9999;
+            player.inventory[5].SetDefaults(ItemID.IronBow); player.selectedItem = 5;
+            player.statLife = 93; player.statLifeMax = player.statLifeMax2 = 160;
+            return true;
+        });
+        var before = await Call("inspect_terrain", new JsonObject { ["radius"] = 8 });
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await Call("watch", new JsonObject { ["events"] = new JsonArray("action_failed"), ["radius"] = 8 });
+        var result = await (Task<JsonObject>)typeof(AgentTools).GetMethod("Navigate", BindingFlags.Static | BindingFlags.NonPublic)
+            .Invoke(null, new object[] { new JsonObject { ["x"] = 3092, ["y"] = 741 }, default(CancellationToken), 20, null });
+        var after = await Call("get_state", new JsonObject());
+        File.WriteAllText(Path.Combine(Main.SavePath, "contact-replay.json"), new JsonObject {
+            ["elapsed_ms"] = clock.ElapsedMilliseconds, ["before"] = before, ["result"] = result, ["after"] = after }.ToJsonString());
+        if (result["verified_clearances"] is not JsonArray clearances
+            || !clearances.Any(c => c["resume_reason"]?.ToString() == "relocated_clear"))
+            throw new Exception("native replay did not verify relocated contact continuation: " + result);
+        Console.WriteLine("CONTACT_REPLAY_PASS elapsed_ms=" + clock.ElapsedMilliseconds);
     }
 
     async Task LearningScene(bool transfer = false)
