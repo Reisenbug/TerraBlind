@@ -55,6 +55,7 @@ public sealed partial class BehaviorTrial
 
     async Task QueenMiningReplay()
     {
+        bool tunnel = Environment.GetEnvironmentVariable("TB_QUEEN_TUNNEL_REPLAY") == "1";
         await OnMain(() =>
         {
             NativeAgent.Stop(); Halt.All(); Manual.On = false;
@@ -62,14 +63,16 @@ public sealed partial class BehaviorTrial
             AgentTools.NewTask(); AgentPermissions.Reset();
             Combat.Enabled = Dodge.Enabled = false;
             var player = Main.LocalPlayer;
-            player.Teleport(new Vector2(24198.145f, 5094)); player.velocity = Vector2.Zero;
+            player.Teleport(tunnel ? new Vector2(21662.479f, 8326) : new Vector2(24198.145f, 5094)); player.velocity = Vector2.Zero;
+            player.fallStart = player.fallStart2 = (int)(player.position.Y / 16);
+            if (tunnel) VanillaNavBridge.Enabled = false;
             foreach (var item in player.inventory) item.TurnToAir();
             player.inventory[0].SetDefaults(ItemID.CopperShortsword);
             player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
             player.inventory[2].SetDefaults(ItemID.CopperAxe);
             player.inventory[3].SetDefaults(ItemID.Wood); player.inventory[3].stack = 9999;
             player.selectedItem = 1;
-            for (int x = 1512; x <= 1513; x++)
+            for (int x = 1512; !tunnel && x <= 1513; x++)
             for (int y = 318; y <= 320; y++)
                 if (Main.tile[x, y].TileType != TileID.SmallPiles) Main.tile[x, y].ClearTile();
             miningMeasurement = new JsonObject { ["x"] = 1512, ["y"] = 321 };
@@ -77,11 +80,23 @@ public sealed partial class BehaviorTrial
         });
         var before = await Call("inspect_terrain", new JsonObject { ["radius"] = 8 });
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        var result = await Call("mine", new JsonObject { ["dir"] = "down", ["target_x"] = 1513, ["target_y"] = 340 });
+        var pending = Call("mine", new JsonObject { ["dir"] = tunnel ? "left" : "down",
+            ["target_x"] = tunnel ? 1290 : 1513, ["target_y"] = tunnel ? 521 : 340 });
+        var samples = new JsonArray();
+        while (!pending.IsCompleted)
+        {
+            samples.Add(await OnMain(() => new JsonObject { ["tick"] = Main.GameUpdateCount,
+                ["x"] = Main.LocalPlayer.position.X, ["y"] = Main.LocalPlayer.position.Y,
+                ["vx"] = Main.LocalPlayer.velocity.X, ["vy"] = Main.LocalPlayer.velocity.Y,
+                ["mine"] = JsonNode.Parse(MineCoordinator.StatusJson()), ["nav"] = RecedingNav.Active }));
+            await Task.Delay(100);
+        }
+        var result = await pending;
         var after = await Call("get_state", new JsonObject());
         File.WriteAllText(Path.Combine(Main.SavePath, "mining-replay.json"), new JsonObject {
             ["elapsed_ms"] = clock.ElapsedMilliseconds, ["before"] = before,
-            ["result"] = result, ["after"] = after, ["measurement"] = miningMeasurement.DeepClone() }.ToJsonString());
+            ["result"] = result, ["after"] = after, ["samples"] = samples,
+            ["measurement"] = miningMeasurement.DeepClone() }.ToJsonString());
         if (result["outcome"]?.ToString() != "done") throw new Exception("native mining replay failed: " + result);
         Console.WriteLine("MINING_REPLAY_PASS elapsed_ms=" + clock.ElapsedMilliseconds);
     }
