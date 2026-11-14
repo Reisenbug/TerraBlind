@@ -78,6 +78,12 @@ public sealed partial class BehaviorTrial
             miningMeasurement = new JsonObject { ["x"] = 1512, ["y"] = 321 };
             return true;
         });
+        if (tunnel)
+        {
+            var policy = await Call("task_policy", new JsonObject { ["operation"] = "get" });
+            await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = policy["revision"].DeepClone(),
+                ["code"] = ScriptLibrary.Example("safety_reactions")["code"].DeepClone() });
+        }
         var before = await Call("inspect_terrain", new JsonObject { ["radius"] = 8 });
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var pending = Call("mine", new JsonObject { ["dir"] = tunnel ? "left" : "down",
