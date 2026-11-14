@@ -5125,6 +5125,30 @@ public sealed partial class BehaviorTrial : ModSystem
         if (string.IsNullOrEmpty(QueenResumeRoot)) await OnMain(() =>
         {
             var player = Main.LocalPlayer;
+            var npcs = Main.npc;
+            bool manual = Manual.On, use = player.controlUseItem;
+            try
+            {
+                Main.npc = Enumerable.Range(0, Main.maxNPCs).Select(_ => new NPC()).ToArray();
+                Manual.On = false;
+                FightCoordinator.Start(20);
+                player.controlUseItem = true;
+                player.GetModPlayer<StateSnapshotPlayer>().SetControls();
+                if (player.controlUseItem) throw new Exception("agent input ownership retained raw weapon use");
+                FightCoordinator.Stop();
+                player.controlUseItem = true;
+                player.GetModPlayer<StateSnapshotPlayer>().SetControls();
+                if (!player.controlUseItem) throw new Exception("idle input ownership swallowed player weapon use");
+                FightCoordinator.Start(20); Manual.On = true;
+                player.controlUseItem = true;
+                player.GetModPlayer<StateSnapshotPlayer>().SetControls();
+                if (!player.controlUseItem) throw new Exception("manual input ownership swallowed player weapon use");
+                Console.WriteLine("QUEEN_INPUT_OWNERSHIP_VERIFIED autonomous=true idle=true manual=true");
+            }
+            finally
+            {
+                FightCoordinator.Stop(); Main.npc = npcs; Manual.On = manual; player.controlUseItem = use;
+            }
             if (Main.GameMode != 0 || player.ConsumedLifeCrystals != 0 || player.statLifeMax != 100)
                 throw new Exception("queen trial requires classic mode and a fresh 100-health player");
             int x = (int)player.Center.X / 16, y = (int)(player.Bottom.Y + 1) / 16;

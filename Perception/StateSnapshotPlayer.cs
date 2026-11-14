@@ -442,15 +442,18 @@ namespace TerraBlind
 		public override void SetControls()
 		{
 			bool beforePrimary = Player.controlUseItem;
+			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On
+				&& (NativeAgent.Processing || FightCoordinator.IsActive || AgentTools.ControlSession.Active))
+				Player.controlUseItem = false;
 			ApplyPrimaryControls();
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On)
 			{
-				if ((NativeAgent.Processing || FightCoordinator.IsActive) && Player.controlUseItem
+				if ((NativeAgent.Processing || FightCoordinator.IsActive) && (Player.controlUseItem || beforePrimary)
 					&& Player.itemAnimation == 0 && Player.itemTime == 0 && CombatLoadout.Usable(Player.HeldItem)
 					&& Main.GameUpdateCount - _primaryWeaponTraceTick >= 16)
 				{
 					_primaryWeaponTraceTick = Main.GameUpdateCount;
-					DiagLog.Write($"[agent_item_input] before_primary={beforePrimary} mouse_left={Main.mouseLeft} focused={Main.hasFocus} fight_use_prev={FightCoordinator.OwnsUseInput} weapon={Player.HeldItem.type} owner={AgentTools.ControlSession.Tool} nav={RecedingNav.Active} act={ActExecutor.IsActive} mine={MineCoordinator.IsActive} use_item={ItemUseCoordinator.IsActive} snapshot={FightCoordinator.NavigationSnapshotPending}");
+					DiagLog.Write($"[agent_item_input] before_primary={beforePrimary} after_primary={Player.controlUseItem} mouse_left={Main.mouseLeft} focused={Main.hasFocus} fight_use_prev={FightCoordinator.OwnsUseInput} weapon={Player.HeldItem.type} owner={AgentTools.ControlSession.Tool} nav={RecedingNav.Active} act={ActExecutor.IsActive} mine={MineCoordinator.IsActive} use_item={ItemUseCoordinator.IsActive} snapshot={FightCoordinator.NavigationSnapshotPending}");
 				}
 				FightCoordinator.Tick(Player, NativeAgent.Processing, Player.controlUseItem);
 			}
