@@ -137,9 +137,9 @@ public sealed partial class BehaviorTrial
         var after = await Call("get_state", new JsonObject());
         File.WriteAllText(Path.Combine(Main.SavePath, "contact-replay.json"), new JsonObject {
             ["elapsed_ms"] = clock.ElapsedMilliseconds, ["before"] = before, ["result"] = result, ["after"] = after }.ToJsonString());
-        if (result["verified_clearances"] is not JsonArray clearances
-            || !clearances.Any(c => c["resume_reason"]?.ToString() == "relocated_clear"))
-            throw new Exception("native replay did not verify relocated contact continuation: " + result);
+        if (result["done"]?.GetValue<bool>() != true || result["verified_clearances"] is not JsonArray { Count: > 0 }
+            || after["player"]["hp"].GetValue<int>() < 93)
+            throw new Exception("native contact replay did not reach its target without losing health: " + result);
         Console.WriteLine("CONTACT_REPLAY_PASS elapsed_ms=" + clock.ElapsedMilliseconds);
     }
 
