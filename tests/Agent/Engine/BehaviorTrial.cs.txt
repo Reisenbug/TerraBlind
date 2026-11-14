@@ -5118,6 +5118,65 @@ public sealed partial class BehaviorTrial : ModSystem
         Console.WriteLine("DECISION_COMPARISON_RECORDED variant=" + variant + " samples=" + samples.Count);
     }
 
+    async Task LocalIntentTrial()
+    {
+        var before = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("inventory_counts", "player") });
+        var clock = Stopwatch.StartNew();
+        string model = Environment.GetEnvironmentVariable("TB_QUEEN_MODEL") ?? "gpt-6.1-sol";
+        const string prompt = "/goal 用一段前台局部意图脚本，去地下丛林收集12个丛林孢子和9根毒刺，顺路开附近箱子，保护自己。";
+        await OnMain(() =>
+        {
+            queenClock = clock; Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = model;
+            NativeAgent.Submit(prompt); return true;
+        });
+        File.WriteAllText(Path.Combine(Main.SavePath, "local-intent-start.json"), new JsonObject {
+            ["prompt"] = prompt, ["model"] = model, ["seed"] = Main.ActiveWorldFileData.SeedText,
+            ["before"] = before.DeepClone(), ["natural_encounters"] = NaturalEncounters,
+            ["mining_speed_multiplier"] = Config.I.FastMining ? ConcessionSpeed.MiningSpeedMultiplier : 1 }.ToJsonString());
+        string handle = null; long started = 0; int deaths = 0; bool deadBefore = false;
+        JsonObject latest = null;
+        using var journal = new StreamWriter(Path.Combine(Main.SavePath, "local-intent-samples.jsonl")) { AutoFlush = true };
+        try
+        {
+            while (clock.Elapsed.TotalSeconds < 360)
+            {
+                await Task.Delay(1000);
+                latest = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("player", "inventory_counts", "local_intents", "action_tasks", "last_death") });
+                bool dead = latest["player"]["dead"].GetValue<bool>();
+                if (dead && !deadBefore) deaths++;
+                deadBefore = dead;
+                var intent = latest["local_intents"] as JsonObject;
+                bool running = latest["action_tasks"].AsArray().Any(a => a["status"]?.ToString() == "running"
+                    && a["inline"]?.GetValue<bool>() == true);
+                string active = !dead && running && intent?["current"] != null ? intent["owner"]?.ToString() : null;
+                if (active != handle) { handle = active; started = clock.ElapsedMilliseconds; }
+                long continuous = handle == null ? 0 : clock.ElapsedMilliseconds - started;
+                int resources = new[] { ItemID.JungleSpores, ItemID.Stinger }.Sum(type => Math.Max(0,
+                    (latest["inventory_counts"]?[type.ToString()]?.GetValue<int>() ?? 0) - (before["inventory_counts"]?[type.ToString()]?.GetValue<int>() ?? 0)));
+                var sample = new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["continuous_foreground_ms"] = continuous,
+                    ["deaths"] = deaths, ["resource_gain"] = resources, ["state"] = latest.DeepClone() };
+                journal.WriteLine(sample.ToJsonString());
+                File.WriteAllText(Path.Combine(Main.SavePath, "local-intent-progress.json"), sample.ToJsonString());
+                if (deaths > 1) throw new Exception("local intent trial exceeded one death; inspect exact death evidence");
+                if (continuous >= 30000 && (intent?["verified_actions"]?.GetValue<int>() ?? 0) >= 2 && resources > 0)
+                {
+                    File.WriteAllText(Path.Combine(Main.SavePath, "local-intent-result.json"), new JsonObject {
+                        ["ok"] = true, ["elapsed_ms"] = clock.ElapsedMilliseconds, ["continuous_foreground_ms"] = continuous,
+                        ["deaths"] = deaths, ["resource_gain"] = resources, ["after"] = latest.DeepClone(),
+                        ["covered_ms"] = queenCoveredMs, ["uncovered_ms"] = queenUncoveredMs,
+                        ["scope"] = "Agent-authored foreground policy with live Jev and native actions; full Queen Bee goal and human-like fluency remain unverified" }.ToJsonString());
+                    Console.WriteLine($"LOCAL_INTENT_NATIVE_PASS foreground_ms={continuous} resources={resources} deaths={deaths}");
+                    return;
+                }
+            }
+            throw new Exception("local intent trial did not sustain verified foreground execution in six minutes");
+        }
+        finally
+        {
+            await OnMain(() => { NativeAgent.Stop(); WorldFile.SaveWorld(); return true; });
+        }
+    }
+
     async Task QueenGoalTrial()
     {
         if (Environment.GetEnvironmentVariable("TB_DECISION_COMPARE") is string comparison)
@@ -5203,6 +5262,7 @@ public sealed partial class BehaviorTrial : ModSystem
             return true;
         });
         if (Environment.GetEnvironmentVariable("TB_QUEEN_NATIVE_CHECK_ONLY") == "1") return;
+        if (Environment.GetEnvironmentVariable("TB_LOCAL_INTENT_TRIAL") == "1") { await LocalIntentTrial(); return; }
         var before = await Call("get_state", new JsonObject());
         if (await OnMain(() => NPC.downedQueenBee)) throw new Exception("queen trial requires fresh world progression");
         int targetHealth = 100;
