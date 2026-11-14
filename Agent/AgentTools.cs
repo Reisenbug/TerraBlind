@@ -16,6 +16,7 @@ public static partial class AgentTools
     internal static readonly System.Text.Json.JsonSerializerOptions ModelJson = new(System.Text.Json.JsonSerializerOptions.Default)
     { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     internal const int ApiRevision = 2;
+    internal static Func<JsonObject> BeginActObservation, EndActObservation;
     sealed class TaskPolicyInstance
     {
         public readonly Guid Id = Guid.NewGuid();
@@ -2124,9 +2125,26 @@ public static partial class AgentTools
                 result = await Call("/craft", craftArgs, token);
                 break;
             case "act":
-                result = await Call("/act", args, token);
-                if (!Rejected(result)) result = await Wait("/act_status", "active", "/act_stop", 120, token,
-                    reactionContext: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
+                JsonObject observation = null;
+                bool observe = Bool(args, "observe");
+                if (observe)
+                {
+                    if (BeginActObservation == null || EndActObservation == null)
+                        return "{\"error\":\"observation_unavailable\"}";
+                    observation = await NativeAgent.OnMain(BeginActObservation, token);
+                    if (Rejected(observation)) return observation.ToJsonString();
+                }
+                try
+                {
+                    result = await Call("/act", args, token);
+                    if (!Rejected(result)) result = await Wait("/act_status", "active", "/act_stop", 120, token,
+                        reactionContext: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
+                }
+                finally
+                {
+                    if (observe) observation = await NativeAgent.OnMain(EndActObservation, default);
+                }
+                if (observation != null) result["observation"] = observation;
                 if (args["combat_candidate"] != null)
                     result = await NativeAgent.OnMain(() => CombatForecast.Receipt(args, result), token);
                 break;

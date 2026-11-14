@@ -637,6 +637,10 @@
           "timeout_frames": {
             "type": "integer",
             "description": "总超时帧数,默认1800(30秒)"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "记录本次操作的真实输入、弹射物运动和原生伤害事件，返回observation。最多采样1800帧，完整逐帧记录保存于实验目录。适用于比较不同按键和瞄准方式；记录只陈述实际发生的结果。"
           }
         },
         "required": [

@@ -45,12 +45,60 @@ static class ScriptTests
         ResolvedExecutionNotices();
         GatherTests.DecisionMovement();
         GatherTests.MiningAttackTurns();
+        await ActObservation();
         await ReactiveHostIntegration();
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=24 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=25 model_calls=0");
+    }
+
+    static async Task ActObservation()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var http = HttpServerSystem.Handler;
+        var begin = AgentTools.BeginActObservation; var end = AgentTools.EndActObservation;
+        int started = 0, ended = 0, actions = 0;
+        async Task<JsonNode> Execute()
+        {
+            var work = AgentTools.Execute("act", new JsonObject { ["observe"] = true,
+                ["steps"] = new JsonArray(new JsonObject { ["until"] = new JsonObject { ["frames"] = 1 } }) }, default);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (!work.IsCompleted)
+            {
+                Check(clock.Elapsed.TotalSeconds < 5, "observed act did not release its recorder");
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+            return JsonNode.Parse(await work);
+        }
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset();
+            AgentTools.BeginActObservation = () => { started++; return new JsonObject { ["id"] = "trial" }; };
+            AgentTools.EndActObservation = () => { ended++; return new JsonObject { ["id"] = "trial", ["damage"] = 7 }; };
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/act") { actions++; return (200, "{\"ok\":true}"); }
+                return (200, "{\"active\":false,\"outcome\":\"done\"}");
+            };
+            var result = await Execute();
+            Check(started == 1 && ended == 1 && actions == 1 && result["observation"]?["damage"]?.GetValue<int>() == 7,
+                "act lost its observation receipt or recorder lifetime");
+            HttpServerSystem.Handler = (_, _) => (200, "{\"error\":\"fixture_denied\"}");
+            result = await Execute();
+            Check(ended == 2 && result["observation"]?["id"]?.ToString() == "trial",
+                "rejected act leaked its recorder or discarded failure evidence");
+            AgentTools.BeginActObservation = () => new JsonObject { ["error"] = "observation_busy" };
+            result = await Execute();
+            Check(ended == 2 && result["error"]?.ToString() == "observation_busy", "busy recorder was replaced");
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.BeginActObservation = begin; AgentTools.EndActObservation = end;
+            HttpServerSystem.Handler = http; agent.Unload();
+        }
+        Console.WriteLine("PASS: observed act retains receipts and releases recording on rejected execution (recorder transport stubbed)");
     }
 
     static void ResolvedExecutionNotices()

@@ -21,6 +21,37 @@ public sealed class Engine : Mod { }
 
 public static class NavigationExecutionChecks
 {
+    public static void VerifyChannelInput()
+    {
+        var player = Main.LocalPlayer;
+        var item = player.inventory[0]; int slot = player.selectedItem, animation = player.itemAnimation;
+        bool use = player.controlUseItem;
+        if (ActExecutor.IsActive) throw new InvalidOperationException("channel input contract requires idle controls");
+        try
+        {
+            player.selectedItem = 0;
+            foreach (var fixture in new[] { (Channel: true, Animation: 4, Press: true, Expected: true),
+                (Channel: false, Animation: 4, Press: true, Expected: false),
+                (Channel: true, Animation: 4, Press: false, Expected: false),
+                (Channel: true, Animation: 0, Press: true, Expected: true) })
+            {
+                player.inventory[0] = new Item { type = 5011, stack = 1, channel = fixture.Channel };
+                player.itemAnimation = fixture.Animation; player.controlUseItem = false;
+                ActExecutor.Start(new List<ActStep> { new() { UseItem = fixture.Press, UntilKind = "frames", UntilN = 2 } }, 4);
+                ActExecutor.ApplyControls();
+                Console.WriteLine($"CHANNEL_INPUT channel={fixture.Channel} animation={fixture.Animation} press={fixture.Press} actual={player.controlUseItem}");
+                if (player.controlUseItem != fixture.Expected) throw new InvalidOperationException("act changed the requested channel input");
+                ActExecutor.Stop();
+            }
+            Console.WriteLine("CHANNEL_INPUT_CONTRACTS_COMPLETE checks=4 native_act=true gameplay_loop=false");
+        }
+        finally
+        {
+            ActExecutor.Stop(); player.inventory[0] = item; player.selectedItem = slot;
+            player.itemAnimation = animation; player.controlUseItem = use;
+        }
+    }
+
     public static void VerifyNativeCaptureTiming()
     {
         const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;

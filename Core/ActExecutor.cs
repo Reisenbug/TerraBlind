@@ -185,14 +185,12 @@ namespace TerraBlind
 			if (s.Hook) p.controlHook = true;
 			if (s.Mount) p.controlMount = true;
 
-			// USE, TAP semantics. Vanilla gates reuse on `releaseUseItem = !controlUseItem` from the previous frame,
-			// so holding the button down forever fires exactly once. Pressing only while itemAnimation == 0 gives the
-			// press/release alternation for free: the swing sets itemAnimation, we stop pressing, release registers.
-			if (s.UseItem && p.itemAnimation == 0)
+			if (s.UseItem && (p.itemAnimation == 0 || p.HeldItem.channel))
 			{
 				p.controlUseItem = true;
-				_times++;
+				if (p.itemAnimation == 0) _times++;
 			}
+			ActionObservation.RecordInput(p);
 
 			// INVARIANT, a declared fact that must hold for the step to make sense. Break it and stop AT ONCE with a
 			// full report, instead of flailing until the stall window expires. This is "stuck must be structurally
