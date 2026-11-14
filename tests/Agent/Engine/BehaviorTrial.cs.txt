@@ -5127,6 +5127,7 @@ public sealed partial class BehaviorTrial : ModSystem
             var player = Main.LocalPlayer;
             var npcs = Main.npc;
             bool manual = Manual.On, use = player.controlUseItem;
+            var mouseButtons = (Main.mouseLeft, Main.mouseRight);
             var controls = (player.controlLeft, player.controlRight, player.controlJump, player.selectedItem, Main.mouseX, Main.mouseY);
             try
             {
@@ -5134,21 +5135,27 @@ public sealed partial class BehaviorTrial : ModSystem
                 Manual.On = false;
                 FightCoordinator.Start(20);
                 player.controlUseItem = true;
+                Main.mouseLeft = Main.mouseRight = true;
                 player.GetModPlayer<StateSnapshotPlayer>().SetControls();
-                if (player.controlUseItem) throw new Exception("agent input ownership retained raw weapon use");
+                if (player.controlUseItem || Main.mouseLeft || Main.mouseRight)
+                    throw new Exception("agent input ownership retained raw weapon or inventory mouse input");
                 FightCoordinator.Stop();
                 player.controlUseItem = true;
+                Main.mouseLeft = Main.mouseRight = true;
                 player.GetModPlayer<StateSnapshotPlayer>().SetControls();
-                if (!player.controlUseItem) throw new Exception("idle input ownership swallowed player weapon use");
+                if (!player.controlUseItem || !Main.mouseLeft || !Main.mouseRight)
+                    throw new Exception("idle input ownership swallowed player weapon or inventory mouse input");
                 FightCoordinator.Start(20); Manual.On = true;
                 player.controlUseItem = true;
                 player.GetModPlayer<StateSnapshotPlayer>().SetControls();
-                if (!player.controlUseItem) throw new Exception("manual input ownership swallowed player weapon use");
+                if (!player.controlUseItem || !Main.mouseLeft || !Main.mouseRight)
+                    throw new Exception("manual input ownership swallowed player weapon or inventory mouse input");
                 Console.WriteLine("QUEEN_INPUT_OWNERSHIP_VERIFIED autonomous=true idle=true manual=true");
             }
             finally
             {
                 FightCoordinator.Stop(); Main.npc = npcs; Manual.On = manual; player.controlUseItem = use;
+                (Main.mouseLeft, Main.mouseRight) = mouseButtons;
                 (player.controlLeft, player.controlRight, player.controlJump, player.selectedItem, Main.mouseX, Main.mouseY) = controls;
             }
             if (Main.GameMode != 0 || player.ConsumedLifeCrystals != 0 || player.statLifeMax != 100)

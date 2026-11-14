@@ -444,7 +444,10 @@ namespace TerraBlind
 			bool beforePrimary = Player.controlUseItem;
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On
 				&& (NativeAgent.Processing || FightCoordinator.IsActive || AgentTools.ControlSession.Active))
+			{
 				Player.controlUseItem = false;
+				Main.mouseLeft = Main.mouseRight = false;
+			}
 			ApplyPrimaryControls();
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On)
 			{

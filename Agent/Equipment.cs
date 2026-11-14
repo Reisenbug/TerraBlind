@@ -26,7 +26,14 @@ public static class Equipment
         int source = args["inventory_slot"]?.GetValue<int>() ?? -1, target = args["equipment_slot"]?.GetValue<int>() ?? -1;
         if (source is < 0 or >= 50 || target is < 0 or >= 10) return new JsonObject { ["error"] = "invalid_equipment_slot" };
         if (Main.gameMenu || !player.active || player.dead || player.itemAnimation != 0 || player.itemTime != 0 || !Main.mouseItem.IsAir
-            || ItemUseCoordinator.IsActive || PlaceAnywhere.IsRunning) return new JsonObject { ["error"] = "equipment_busy" };
+            || ItemUseCoordinator.IsActive || PlaceAnywhere.IsRunning)
+            return new JsonObject { ["error"] = "equipment_busy", ["busy"] = new JsonObject
+            {
+                ["menu"] = Main.gameMenu, ["active"] = player.active, ["dead"] = player.dead,
+                ["item_animation"] = player.itemAnimation, ["item_time"] = player.itemTime,
+                ["mouse_item"] = ItemState(Main.mouseItem), ["item_use_active"] = ItemUseCoordinator.IsActive,
+                ["placement_active"] = PlaceAnywhere.IsRunning
+            } };
         bool Matches(Item item, JsonNode expected) => expected is JsonObject && expected["type"]?.GetValue<int>() == item.type
             && expected["prefix"]?.GetValue<int>() == item.prefix && expected["stack"]?.GetValue<int>() == item.stack;
         if (!Matches(player.inventory[source], args["expected_inventory"]) || !Matches(player.armor[target], args["expected_equipment"]))
