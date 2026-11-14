@@ -5162,8 +5162,28 @@ public sealed partial class BehaviorTrial : ModSystem
             bool site = PlaceSpot.FindSpot(player, ItemID.WorkBench, out int benchX, out int benchY);
             bool ready = site && PlaceSpot.Check(ItemID.WorkBench, benchX, benchY, PlaceSpot.Fill.Block, out _);
             Console.WriteLine($"QUEEN_NATIVE_WORKBENCH_SITE found={site} ready={ready} x={benchX} y={benchY}");
+            bool lead = Combat.UseLead, meleeAim = true;
+            try
+            {
+                Combat.UseLead = true;
+                var aim = typeof(Combat).GetMethod("Aim", HiddenStatic);
+                var target = new NPC { width = 32, height = 24,
+                    position = player.Center + new Vector2(16, -12), velocity = new Vector2(0, 2) };
+                foreach (int type in new[] { ItemID.CopperShortsword, ItemID.Trident, ItemID.WoodenSword, ItemID.ThrowingKnife })
+                {
+                    var weapon = new Item(); weapon.SetDefaults(type);
+                    float offset = Vector2.Distance((Vector2)aim.Invoke(null, new object[] { player, target, weapon }), target.Center);
+                    bool expected = type == ItemID.ThrowingKnife ? offset > 0.01f : offset <= 0.01f;
+                    meleeAim &= expected;
+                    Console.WriteLine($"QUEEN_NATIVE_WEAPON_AIM type={type} offset_pixels={offset} expected={expected}");
+                }
+            }
+            finally { Combat.UseLead = lead; }
+            if (!meleeAim) throw new Exception("native held melee aim used a free projectile intercept");
+            Console.WriteLine("QUEEN_NATIVE_WEAPON_AIM_VERIFIED held_melee=true thrown_lead=true");
             return true;
         });
+        if (Environment.GetEnvironmentVariable("TB_QUEEN_NATIVE_CHECK_ONLY") == "1") return;
         var before = await Call("get_state", new JsonObject());
         if (await OnMain(() => NPC.downedQueenBee)) throw new Exception("queen trial requires fresh world progression");
         int targetHealth = 100;

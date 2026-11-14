@@ -253,7 +253,12 @@ namespace TerraBlind
 		}
 
 		internal static Microsoft.Xna.Framework.Vector2 Aim(Player p, NPC npc, Item weapon)
-			=> UseLead ? Lead(p, npc, ShotSpeed(p, weapon)) : npc.Center;
+		{
+			if (!UseLead || Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(weapon.shoot, out var projectile)
+				&& projectile.aiStyle is Terraria.ID.ProjAIStyleID.ShortSword or Terraria.ID.ProjAIStyleID.Spear)
+				return npc.Center;
+			return Lead(p, npc, ShotSpeed(p, weapon));
+		}
 
 		static float ShotSpeed(Player p, Item weapon)
 		{
