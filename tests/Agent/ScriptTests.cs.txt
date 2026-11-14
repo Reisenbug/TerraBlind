@@ -61,7 +61,8 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=35 model_calls=0");
+        await ReactiveGatherFightIntegration();
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=36 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -149,9 +150,9 @@ static class ScriptTests
 
     static async Task SurvivalCombatPolicy()
     {
-        foreach (string scenario in new[] { "navigation", "idle", "boss", "unchaseable_enemy", "projectile_only", "quiet" })
+        foreach (string scenario in new[] { "navigation", "idle", "fight", "boss", "unchaseable_enemy", "projectile_only", "quiet" })
         {
-            bool boss = scenario == "boss", idle = scenario == "idle";
+            bool boss = scenario == "boss", idle = scenario is "idle" or "fight";
             int decisions = 0, updates = 0;
             var combat = JsonNode.Parse("""
                 {"tick":100,"boss_present":false,"player":{"hp":100,"max_hp":100,"pos":{"x":160,"y":320}},"projectiles":[],
@@ -170,7 +171,7 @@ static class ScriptTests
                     if (name == "nav_to")
                     {
                         for (int i = 0; i < 3; i++) await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject {
-                            ["kind"] = "tick", ["execution"] = new JsonObject { ["tool"] = idle ? "idle" : "nav_to",
+                            ["kind"] = "tick", ["execution"] = new JsonObject { ["tool"] = scenario == "fight" ? "fight" : idle ? "idle" : "nav_to",
                                 ["args"] = new JsonObject { ["x"] = 50, ["y"] = 20 } } }, token);
                         return "{}";
                     }
@@ -199,6 +200,57 @@ static class ScriptTests
                 "default combat policy blocked pending navigation, repeated a response or touched boss movement: " + result);
         }
         Console.WriteLine("PASS: default survival uses shared combat candidates during navigation and idle, deduplicates execution and preserves boss control");
+    }
+
+    static async Task ReactiveGatherFightIntegration()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var previous = Terraria.Main.npc;
+        int messages = AgentChat.Messages.Count;
+        bool reacted = false;
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.ControlSession.Reset(); AgentPermissions.Reset();
+            var player = Terraria.Main.LocalPlayer;
+            Terraria.Main.npc = Enumerable.Range(0, Terraria.Main.maxNPCs).Select(_ => new Terraria.NPC()).ToArray();
+            Terraria.Main.npc[0] = new Terraria.NPC { active = true, type = 42,
+                position = new(player.position.X + 80, player.position.Y) };
+            async Task<T> Pump<T>(Task<T> pending)
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (!pending.IsCompleted)
+                {
+                    Check(clock.Elapsed.TotalSeconds < 5, "gather combat reaction did not finish");
+                    agent.PostUpdateEverything();
+                    if (!reacted && AgentChat.Messages.Skip(messages).Contains("gather-combat-tick"))
+                    {
+                        Check(FightCoordinator.IsActive, "gather stopped attacking before servicing the reaction");
+                        reacted = true;
+                        Terraria.Main.npc[0].active = false;
+                    }
+                    await Task.Delay(1);
+                }
+                return await pending;
+            }
+            var configured = JsonNode.Parse(await Pump(AgentTools.Execute("task_policy", new JsonObject {
+                ["operation"] = "set", ["expected_revision"] = 0, ["code"] =
+                "on('tick',e=>{if(e.execution?.tool==='fight')tool('say',{text:'gather-combat-tick'});return {handled:true};});" }, default)));
+            Check(configured["active"]?.GetValue<bool>() == true, "gather reaction policy was not installed: " + configured);
+            var world = new GameGather(new[] { new GatherTarget(209, 1, Array.Empty<string>(), new[] { 42 }) });
+            var observed = await Pump(world.Observe(default));
+            var target = observed["candidates"].AsArray().OfType<JsonObject>().Single();
+            Check(AgentTools.ControlSession.Begin("gather", null, out _) == null, "gather failed to acquire its primary control");
+            var result = await Pump(world.Act(target, default));
+            Check(AgentChat.Messages.Skip(messages).Contains("gather-combat-tick")
+                && result["target_present"]?.GetValue<bool>() == false && !FightCoordinator.IsActive,
+                "gather omitted its in-flight reaction or retained the finished fight");
+        }
+        finally
+        {
+            AgentTools.NewTask(); AgentTools.ControlSession.Reset(); FightCoordinator.Stop(); Terraria.Main.npc = previous;
+            agent.Unload();
+        }
+        Console.WriteLine("PASS: actual gather combat services script reactions before target defeat while its attack stays active");
     }
 
     static async Task ProductiveMiningRecovery()
@@ -1472,6 +1524,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
+        await ReactiveGatherFightIntegration();
         await AtomicActionPolicy();
         await ResolvedNavigationClearance();
         await HouseTools();

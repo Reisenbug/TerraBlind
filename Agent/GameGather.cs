@@ -216,6 +216,8 @@ public sealed class GameGather : IGatherWorld
             for (int i = 0; i < 32; i++)
             {
                 await Task.Delay(250, token);
+                await AgentTools.ReactAtBoundary(token, context: new JsonObject { ["tool"] = "fight", ["owner_tool"] = "gather",
+                    ["args"] = new JsonObject { ["npc"] = who, ["npc_type"] = candidate["npc_type"].DeepClone() } });
                 combat = await NativeAgent.OnMain(() =>
                 {
                     var player = Main.LocalPlayer;

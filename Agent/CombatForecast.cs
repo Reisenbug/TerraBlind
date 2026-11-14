@@ -112,7 +112,7 @@ public sealed class CombatForecast : ModSystem
             var walk = StateSpacePlanner.PeekWalkIntent();
             if (prefix.Length < 6 && walk != null)
                 prefix = Enumerable.Repeat(walk.Value.Direction > 0 ? 2 : 1, requestedPrefix).ToArray();
-            if (prefix.Length == 0 && !RecedingNav.Active && !ActExecutor.IsActive && !AgentPermissions.Dodge)
+            if (prefix.Length == 0 && !RecedingNav.Active && !ActExecutor.IsActive)
                 prefix = new int[24];
             if (!VanillaNavigationDemo.Instance.WorkerReady)
                 unavailable = new JsonObject { ["status"] = "unavailable", ["reason"] = "worker_warming" };
@@ -257,7 +257,7 @@ public sealed class CombatForecast : ModSystem
             ["batch_roundtrip_ms"] = batch["roundtrip_ms"]?.DeepClone(), ["batch_queue_ms"] = batch["queue_ms"]?.DeepClone(),
             ["movements"] = movements,
             ["scope"] = execution ? "Fresh execution proof: observed movement prefix, then selected input for 24 frames, then release until landing."
-                : "All comparison metrics cover the same comparison_frames starting now, bounded by known route inputs and handoff_frames+24. Baseline replays queued keys or the current walk intent until its arrival threshold; later navigation is unknown. Alternatives first replay handoff_frames route inputs, then their input for 24 frames; safe_landing checks the longer landing continuation. damage includes ongoing health decay; hurt_events records new native hurts. Entity motion is a constant-velocity hypothesis." };
+                : "All comparison metrics cover the same comparison_frames starting now, bounded by known route inputs and handoff_frames+24. Baseline replays queued keys or the current walk intent until its arrival threshold; later navigation is unknown. With no navigation, the idle baseline assumes released movement; live reflex inputs may differ. Alternatives first replay handoff_frames route inputs, then their input for 24 frames; safe_landing checks the longer landing continuation. Fresh execution proof reserves its movement prefix. damage includes ongoing health decay; hurt_events records new native hurts. Entity motion is a constant-velocity hypothesis." };
     }
 
     internal static (int Frame, string Reason) EvaluateLanding(JsonObject branch, int initialHp, int minimum)

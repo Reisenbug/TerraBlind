@@ -57,7 +57,7 @@ public sealed class ScriptLibrary
             on('tick',event=>{
               const c=tool('combat_assess',{radius:15}),p=c.player;
               let destination=event.execution?.tool==='nav_to'?event.execution.args:null;
-              const idle=event.execution?.tool==='idle';
+              const idle=['idle','fight'].includes(event.execution?.tool);
               if(destination) idleDestination=null;
               if(!c.boss_present&&(destination||idle)&&(c.targets?.some(n=>n.contact_damage>0&&n.distance_tiles<12)||c.projectiles?.length)){
                 if(idle) destination=idleDestination??={x:Math.floor(p.pos.x/16),y:Math.floor(p.pos.y/16)};

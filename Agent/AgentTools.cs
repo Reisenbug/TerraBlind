@@ -1266,7 +1266,8 @@ public static partial class AgentTools
         foreach (var reactions in new[] { local, global }.Where(r => r != null).Distinct())
         {
             if (ReferenceEquals(reactions, global) && context?["tool"]?.ToString() == "fight"
-                && await NativeAgent.OnMain(() => ControlSession.Tool is not (null or "fight"), token)) continue;
+                && await NativeAgent.OnMain(() => ControlSession.Tool is not (null or "fight")
+                    && !(ControlSession.Tool == "gather" && context["owner_tool"]?.ToString() == "gather"), token)) continue;
             string[] kinds = reactions.Kinds.Except(ReferenceEquals(reactions, global) ? local?.Kinds ?? Array.Empty<string>() : Array.Empty<string>()).ToArray();
             await ServiceReaction(reactions, async () =>
             {
