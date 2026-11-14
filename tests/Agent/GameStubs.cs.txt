@@ -348,6 +348,7 @@ namespace TerraBlind
     public static class StateSpacePlanner { public static bool PreserveTerrain, ReservesItemUse; }
     public static class CombatForecast
     {
+        public static bool ReservesRoutePrefix;
         public static long CompletionVersion;
         public static Func<JsonObject, CancellationToken, Task<JsonObject>> RefreshHandler;
         public static Func<JsonObject, JsonObject> PrepareHandler;

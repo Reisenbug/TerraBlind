@@ -27,6 +27,9 @@ public sealed class CombatForecast : ModSystem
     static long completionVersion;
     internal static long CompletionVersion => Interlocked.Read(ref completionVersion);
     static int refreshing;
+    internal static bool ReservesRoutePrefix => Volatile.Read(ref refreshing) > 0
+        || prepared != null && (long)Main.GameUpdateCount - prepared.Tick
+            < (prepared.HandoffFrames > 0 ? prepared.HandoffFrames : prepared.Prefix.Length);
     static JsonObject unavailable;
     static JsonObject deferredArgs;
     static long deferredTick;

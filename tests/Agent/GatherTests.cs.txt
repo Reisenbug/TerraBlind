@@ -731,7 +731,7 @@ static class GatherTests
         var p = Main.LocalPlayer;
         var oldShots = Main.projectile; var oldNpcs = Main.npc;
         var oldVelocity = p.velocity; var oldPosition = p.position; float oldGravity = p.gravity;
-        bool oldManual = Manual.On, oldDodge = Dodge.Enabled;
+        bool oldManual = Manual.On, oldDodge = Dodge.Enabled, oldPrefix = CombatForecast.ReservesRoutePrefix;
         try
         {
             p.position = new(160, 160); p.velocity = default; p.gravity = 0; Manual.On = false;
@@ -755,6 +755,11 @@ static class GatherTests
             finally { AgentTools.Control.Release(boundary); }
             Main.npc = new NPC[Main.maxNPCs];
             for (int i = 0; i < Main.npc.Length; i++) Main.npc[i] = new NPC();
+            CombatForecast.ReservesRoutePrefix = true;
+            FightCoordinator.Tick(p, true);
+            Check(!p.controlLeft && !p.controlRight && !p.controlJump && !p.controlUseItem,
+                "legacy evasion replaced the movement prefix while its native execution proof was pending");
+            CombatForecast.ReservesRoutePrefix = false;
             FightCoordinator.Tick(p, true);
             Check((p.controlLeft || p.controlRight) && !p.controlUseItem,
                 $"thinking defense ignored projectile: dead={p.dead} manual={Manual.On} enabled={Config.I.AgentEnabled} automate={AgentNetwork.CanAutomate} attack={AgentPermissions.CanAttack(delegated: true)} dodge={AgentPermissions.CanDodge(delegated: true)} left={p.controlLeft} right={p.controlRight} idle={FightCoordinator.IsIdleDefending}");
@@ -814,6 +819,7 @@ static class GatherTests
             Main.projectile = oldShots; Main.npc = oldNpcs;
             p.position = oldPosition; p.velocity = oldVelocity; p.gravity = oldGravity; Manual.On = oldManual;
             Dodge.Enabled = oldDodge; Collision.SolidTest = null; Collision.HurtTest = null;
+            CombatForecast.ReservesRoutePrefix = oldPrefix;
         }
         Console.WriteLine("PASS: NPC evasion reacts to hostile trajectories, avoids blocked movement and ignores friendly or distant shots");
     }

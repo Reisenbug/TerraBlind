@@ -149,7 +149,7 @@ static class ScriptTests
 
     static async Task SurvivalCombatPolicy()
     {
-        foreach (string scenario in new[] { "navigation", "idle", "boss", "unreachable_enemy", "projectile_only", "quiet" })
+        foreach (string scenario in new[] { "navigation", "idle", "boss", "unchaseable_enemy", "projectile_only", "quiet" })
         {
             bool boss = scenario == "boss", idle = scenario == "idle";
             int decisions = 0, updates = 0;
@@ -161,7 +161,7 @@ static class ScriptTests
                      {"id":"avoid","movement":"right","weapon_type":24,"movement_available":true}]}}
                 """).AsObject();
             combat["boss_present"] = boss;
-            if (scenario == "unreachable_enemy") combat["targets"][0]["attackable"] = false;
+            if (scenario == "unchaseable_enemy") combat["targets"][0]["attackable"] = false;
             if (scenario is "projectile_only" or "quiet") combat["targets"] = new JsonArray();
             if (scenario == "projectile_only") combat["projectiles"] = new JsonArray(new JsonObject { ["damage"] = 20 });
             var result = await AgentScript.Run("(function(){" + ScriptLibrary.Example("safety_reactions")["code"]

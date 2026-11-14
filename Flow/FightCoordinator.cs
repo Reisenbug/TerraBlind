@@ -229,6 +229,7 @@ namespace TerraBlind
             if ((processing || IsActive) && !p.dead && !Manual.On && AgentNetwork.CanAutomate
                 && !PvpDuel.Active && !PlayerCombat.Active && !AgentTools.ContactEscapeActive
                 && !AgentTools.ControlSession.OwnsDirectMovement
+                && !CombatForecast.ReservesRoutePrefix
                 && AgentPermissions.CanDodge(delegated: true))
             {
                 bool bossMovement = false;
@@ -274,7 +275,7 @@ namespace TerraBlind
                 }
                 _animationSlot = -1;
             }
-            if (NavigationSnapshotPending || StateSpacePlanner.ReservesItemUse
+            if (NavigationSnapshotPending || CombatForecast.ReservesRoutePrefix || StateSpacePlanner.ReservesItemUse
                 || RecedingNav.Active && (VanillaNavBridge.Enabled && !RecedingNav.FieldReady
                     || VanillaNavBridge.Stage is "Approaching" or "Braking" or "Preparing"))
             {
