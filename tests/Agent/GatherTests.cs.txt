@@ -103,11 +103,11 @@ static class GatherTests
         Check(weakTool.Actions.Count == 1 && weakResult["outcome"].ToString() == "collection_no_progress"
             && weakResult["last_result"]["result"]["reason"].ToString() == "tool_weak",
             "collection failure was retried or mislabeled as a navigation failure");
-        foreach (var (damage, recovers, expectedActions) in new[] { (70, true, 2), (70, false, 2), (0, true, 1) })
+        foreach (var (damage, recovers, expectedActions) in new[] { (70, true, 2), (70, false, 2), (0, true, 2), (0, false, 2) })
         {
             var displaced = new World { LostMiningReach = true, RecoverOnRetry = recovers, MiningDamage = damage };
             var retried = await Gather.Run(new[] { Targets[0] }, 5, displaced, default);
-            Check(displaced.Actions.Count == expectedActions && retried["ok"].GetValue<bool>() == (damage > 0 && recovers),
+            Check(displaced.Actions.Count == expectedActions && retried["ok"].GetValue<bool>() == recovers,
                 "partial mining range loss did not reobserve and retry once, or hid persistent failure: " + retried);
         }
         var outsideMiningRange = new World { OutsideMiningRange = true };

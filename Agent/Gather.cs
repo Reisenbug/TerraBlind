@@ -160,8 +160,7 @@ public static class Gather
                 {
                     if (candidate["kind"].ToString() == "tile" && attempts[id] < 2
                         && last["result"]?["reason"]?.ToString() == "out_of_reach"
-                        && last["result"]?["target"]?["has_tile"]?.GetValue<bool>() == true
-                        && last["result"]?["target"]?["damage"]?.GetValue<int>() > 0) continue;
+                        && last["result"]?["target"]?["has_tile"]?.GetValue<bool>() == true) continue;
                     outcome = "collection_no_progress"; break;
                 }
                 if (last["result"]?["error"]?.ToString() == "collect_target_out_of_mining_range")
