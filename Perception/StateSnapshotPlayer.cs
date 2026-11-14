@@ -438,11 +438,22 @@ namespace TerraBlind
 			}
 		}
 
+		ulong _primaryWeaponTraceTick;
 		public override void SetControls()
 		{
+			bool beforePrimary = Player.controlUseItem;
 			ApplyPrimaryControls();
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On)
+			{
+				if ((NativeAgent.Processing || FightCoordinator.IsActive) && Player.controlUseItem
+					&& Player.itemAnimation == 0 && Player.itemTime == 0 && CombatLoadout.Usable(Player.HeldItem)
+					&& Main.GameUpdateCount - _primaryWeaponTraceTick >= 16)
+				{
+					_primaryWeaponTraceTick = Main.GameUpdateCount;
+					DiagLog.Write($"[agent_item_input] before_primary={beforePrimary} fight_use_prev={FightCoordinator.OwnsUseInput} weapon={Player.HeldItem.type} owner={AgentTools.ControlSession.Tool} nav={RecedingNav.Active} act={ActExecutor.IsActive} mine={MineCoordinator.IsActive} use_item={ItemUseCoordinator.IsActive} snapshot={FightCoordinator.NavigationSnapshotPending}");
+				}
 				FightCoordinator.Tick(Player, NativeAgent.Processing, Player.controlUseItem);
+			}
 		}
 
 		void ApplyPrimaryControls()

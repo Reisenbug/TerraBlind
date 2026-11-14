@@ -23,6 +23,7 @@ namespace TerraBlind
         private static NPC _animationTarget;
         private static bool _animationAttack, _animationSeen, _attackNext;
         public static Vector2? AimTarget { get; private set; }
+        internal static bool OwnsUseInput => _usingItem;
         public static bool AttackAnimationActive => _animationSlot >= 0 && _animationAttack && Main.LocalPlayer.itemAnimation > 0;
 
         static void RememberAnimation(Player p, bool attack)
