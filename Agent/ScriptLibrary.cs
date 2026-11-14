@@ -28,7 +28,7 @@ public sealed class ScriptLibrary
             on('tick',()=>{
               const c=tool('combat_assess',{radius:15}),p=c.player;
               if(c.boss_present||p.hp>p.max_hp*.75||!c.recent_damage||c.tick-c.recent_damage.tick>120) return {handled:true};
-              const s=state(['player','inventory_slots','codex_goal']);
+              const s=tool('get_state',{fields:['player','inventory_slots','codex_goal']});
               const recall=s.inventory_slots.find(i=>[50,2350,3199].includes(i.type)&&i.stack>0);
               if(!recall||s.player.hp>s.player.max_hp*.75) return {handled:true};
               const r=tool('jev_judge',{channel:'survival',context:'task-survival',interval_ms:500,max_age_ms:1000,
