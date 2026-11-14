@@ -33,7 +33,8 @@ public sealed class ScriptLibrary
               if(!recall||s.player.hp>s.player.max_hp*.75) return {handled:true};
               const r=tool('jev_judge',{channel:'survival',context:'task-survival',interval_ms:500,max_age_ms:1000,
                 state:{objective:s.codex_goal?.native?.objective,elapsed_seconds:s.codex_goal?.host_wall_elapsed_seconds,
-                  combat:c,player:s.player,terrain:tool('inspect_terrain',{radius:8}),recall},questions:{response:{type:'choice',
+                  combat:c,player:s.player,terrain:tool('inspect_terrain',{radius:8}),recall,
+                  coordinates:'Player positions are world pixels; enemy x/y and terrain cells are world tiles (16 pixels). Terrain rows start at terrain.origin; x right, y down.'},questions:{response:{type:'choice',
                   instructions:'Should this player continue the current task or recall to survive the immediate threats? Respect the objective and death constraints. Recall uses the shown item and returns to spawn; the task resumes from there. Consider health, potion cooldown, incoming damage, terrain and escape options.',
                   criteria:{continue:'Continue the task with current defense and movement.',recall:'Use the available recall item now to escape.'}}}});
               if(r.status!=='ready'||r.request_id===survivalRequest) return {handled:true};
