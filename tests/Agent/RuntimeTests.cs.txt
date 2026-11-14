@@ -546,6 +546,7 @@ static class RuntimeTests
                 AgentTools.ObserveContinuity();
                 if (mode == "danger") AgentTools.Watches.Emit("suffocating", "live-danger", new JsonObject());
                 var timer = System.Diagnostics.Stopwatch.StartNew();
+                long busyHeldMs = 0;
                 if (mode == "busy")
                 {
                     var busy = AgentTools.ControlSession.Begin("place_at", null, out busyTicket);
@@ -554,6 +555,7 @@ static class RuntimeTests
                     Check(AgentTools.LastContinuation == null && repairs == 0,
                         "prepared recovery started while an existing placement still held the input channels");
                     AgentTools.ControlSession.End(busyTicket); busyTicket = 0;
+                    busyHeldMs = timer.ElapsedMilliseconds;
                 }
                 if (mode is "danger" or "disabled")
                 {
@@ -570,7 +572,8 @@ static class RuntimeTests
                         : AgentTools.LastContinuation?["status"]?.ToString() == "execution_gap";
                 });
                 Check(timer.ElapsedMilliseconds < 1000, "prepared failure policy waited for a model turn mode=" + mode
-                    + " elapsed_ms=" + timer.ElapsedMilliseconds + " evidence=" + AgentTools.LastContinuation);
+                    + " elapsed_ms=" + timer.ElapsedMilliseconds + " busy_held_ms=" + busyHeldMs
+                    + " pump=" + lastPump + " evidence=" + AgentTools.LastContinuation);
                 for (int i = 0; i < 10; i++) { AgentTools.ContinuePreparedNode(default); Agent.PostUpdateEverything(); await Task.Delay(5); }
                 Check(repairs == (shouldRecover ? 1 : 0) && starts == (shouldRecover ? 2 : 1),
                     "unhandled failure retried itself or completed recovery replayed");
