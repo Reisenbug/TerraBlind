@@ -1440,8 +1440,12 @@ public static partial class AgentTools
                     {
                         args = (JsonObject)args.DeepClone();
                         args["task_node"] = owner;
-                        if (Text(args, "workflow") == "") args["workflow"] = "temporary-" + Guid.NewGuid().ToString("N");
                     }
+                }
+                if (Text(args, "task_node") != "" && args["code"] != null && Text(args, "workflow") == "")
+                {
+                    args = (JsonObject)args.DeepClone();
+                    args["workflow"] = "temporary-" + Guid.NewGuid().ToString("N");
                 }
                 if (!Actions.RunningScript && !preparedDispatch.Value
                     && Text(args, "task_node") != "" && args["code"] == null && args["tool"] == null

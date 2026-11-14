@@ -49,6 +49,7 @@ static class ScriptTests
         await IdleTaskPolicy();
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
+        await BackgroundRecovery(supplyWorkflow: false);
         await ActionReferences();
         await ProductiveMiningRecovery();
         await CombatApproach();
@@ -65,7 +66,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=39 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=40 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -542,7 +543,7 @@ static class ScriptTests
         Console.WriteLine("PASS: combat approach checks current weapons, separation, terrain and native navigation; refreshes the target after one move");
     }
 
-    static async Task BackgroundRecovery(bool inferOwner = false)
+    static async Task BackgroundRecovery(bool inferOwner = false, bool supplyWorkflow = true)
     {
         var agent = new NativeAgent(); agent.Load();
         var http = HttpServerSystem.Handler;
@@ -574,10 +575,11 @@ static class ScriptTests
             };
             var request = new JsonObject { ["background"] = true,
                 ["code"] = "return step('input',()=>tool('act',{steps:[{keys:['right'],until:{frames:60}}]}));" };
-            if (!inferOwner) { request["task_node"] = "travel"; request["workflow"] = "temporary"; }
+            if (!inferOwner) request["task_node"] = "travel";
+            if (!inferOwner && supplyWorkflow) request["workflow"] = "temporary";
             var started = await Call("run_script", request);
             Check(started["handle"] != null, "temporary script was rejected or waited for completion: " + started);
-            Check(!inferOwner || started["workflow_id"]?.ToString().StartsWith("temporary-") == true,
+            Check(!inferOwner && supplyWorkflow || started["workflow_id"]?.ToString().StartsWith("temporary-") == true,
                 "inferred input script omitted its independent checkpoint identity");
             Check(!AgentScript.ContainsInput("tool('task_plan_patch',{});return tool('action_query',{handle:'x'});")
                 && AgentScript.ContainsInput("return tool('equip_item',{});"), "preparation was misclassified as physical input");
@@ -1701,6 +1703,7 @@ static class ScriptTests
         await EquipmentAnimationHandoff();
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
+        await BackgroundRecovery(supplyWorkflow: false);
         await ActionReferences();
         await ProductiveMiningRecovery();
         await CombatApproach();
