@@ -58,18 +58,22 @@ static class ScriptTests
 
     static async Task SurvivalDecisionPolicy()
     {
+        foreach (bool taskPolicy in new[] { false, true })
         foreach (string scenario in new[] { "recall", "continue", "pending", "healthy", "healed", "no_item", "boss" })
         {
             int uses = 0, judgments = 0;
             var player = JsonNode.Parse("{\"hp\":40,\"max_hp\":100,\"pos\":{\"x\":160,\"y\":320},\"potion_delay_ticks\":3500}").AsObject();
             var combat = new JsonObject { ["tick"] = 100, ["boss_present"] = scenario == "boss",
-                ["player"] = player.DeepClone(), ["recent_damage"] = new JsonObject { ["tick"] = 80 } };
+                ["targets"] = new JsonArray(), ["player"] = player.DeepClone(), ["recent_damage"] = new JsonObject { ["tick"] = 80 } };
             if (scenario == "healthy") combat["player"]["hp"] = 100;
             if (scenario == "healed") player["hp"] = 100;
             var state = new JsonObject { ["player"] = player, ["codex_goal"] = null, ["healing_items"] = new JsonArray(),
+                ["agent"] = new JsonObject { ["auto_attack"] = true, ["combat_weapon_type"] = 24 },
                 ["inventory_slots"] = scenario == "no_item" ? new JsonArray()
                 : new JsonArray(new JsonObject { ["slot"] = 4, ["type"] = 2350, ["stack"] = 2 }) };
-            var result = await AgentScript.Run("(function(){" + ScriptLibrary.Example("safety_reactions")["code"]
+            string code = taskPolicy ? "const input={resources:[],weapon_order:[24],max_detour_tiles:0,health_reserve:0};"
+                + ScriptLibrary.Example("task_reactions")["code"] : ScriptLibrary.Example("safety_reactions")["code"].ToString();
+            var result = await AgentScript.Run("(function(){" + code
                 + "})();return tool('nav_to');", 5, (_, _) => { }, async (name, args, token) =>
                 {
                     if (name == "nav_to")
@@ -79,7 +83,9 @@ static class ScriptTests
                     }
                     if (name == "combat_assess") return combat.ToJsonString();
                     if (name == "get_state") return state.ToJsonString();
-                    if (name == "inspect_terrain") return "{\"rows\":[\"###\",\"...\"],\"origin\":{\"x\":9,\"y\":19}}";
+                    if (name == "script_program") return ScriptLibrary.Example("safety_reactions").ToJsonString();
+                    if (name is "watch" or "set_combat") return "{}";
+                    if (name == "inspect_terrain") return "{\"rows\":[\"###\",\"...\"],\"origin\":{\"x\":9,\"y\":19},\"near_body_tiles\":[]}";
                     if (name == "jev_judge")
                     {
                         judgments++;
@@ -91,10 +97,11 @@ static class ScriptTests
                     }
                     Check(name == "use_item" && args["slot"].GetValue<int>() == 4, "survival bypassed actual recall item input");
                     uses++; return "{\"outcome\":\"time_elapsed\"}";
-                }, _ => Task.CompletedTask, default);
+                }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("safety_reactions")));
             Check(result["ok"].GetValue<bool>() && uses == (scenario == "recall" ? 1 : 0)
                 && judgments == (scenario is "recall" or "continue" or "pending" ? 2 : 0),
-                "survival decision blocked, repeated a recall, or called the model without need: " + scenario + " " + result);
+                "survival decision blocked, repeated a recall, or called the model without need: " + scenario
+                    + " task_policy=" + taskPolicy + " " + result);
         }
         Console.WriteLine("PASS: fast survival policy uses typed decisions, current terrain and real item input without pausing for pending answers");
     }
