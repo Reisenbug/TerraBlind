@@ -11,7 +11,7 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -21,6 +21,17 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "safety_reactions") return Template(name,
+            "默认任务反应：导航被压力板拦住时，复核现场、用原版镐子拆除可达压力板、验证移除后续接。遵守当前挖掘权限；其他危险保留失败证据。可修改此JS并用task_policy替换。",
+            """
+            on('action_failed',event=>{
+              const nav=event.result.last_result?.result?.navigation??event.result.navigation??event.result;
+              if(nav.error!=='navigation_near_trap') return {retry:false};
+              const program=tool('script_program',{operation:'get',name:'recover_navigation'});
+              return skill('recover_navigation',program.revision,{error:nav.error,traps:nav.trap_tiles,allow_trigger_removal:true});
+            });
+            return {registered:true};
+            """);
         if (name == "inventory_space") return Template(name,
             "内置背包腾位技能，可直接调用revision=0。input含protected_types、trash_types和drop_types。保留收藏、工具和受保护物品，仅按当前策略回收或丢出，操作前核对物品快照，返回是否实际有空位。保存同名修订可替换实现，调用时取当前revision。",
             """

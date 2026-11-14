@@ -817,20 +817,7 @@ public sealed partial class BehaviorTrial : ModSystem
             return true;
         });
         var policy = await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
-            ["code"] = """
-                let removed=0;
-                on('action_failed',event=>{
-                  const n=event.result;
-                  if(n.error!=='navigation_near_trap'||!n.trap_tiles?.every(t=>t.kind==='pressure_plate'))return {retry:false};
-                  for(const t of n.trap_tiles){
-                    const r=tool('use_item',{slot:0,x:t.x,y:t.y});
-                    if(r.outcome!=='removed'||tool('inspect_terrain').trap_tiles.some(p=>p.x===t.x&&p.y===t.y))return {retry:false};
-                    removed++;
-                  }
-                  tool('say',{text:'task policy removed '+removed});
-                  return {retry:true};
-                });
-                """ });
+            ["code"] = ScriptLibrary.Example("safety_reactions")["code"].DeepClone() });
         if (policy["active"]?.GetValue<bool>() != true) throw new Exception("native task policy installation failed: " + policy);
         var steps = new JsonArray();
         for (int i = 0; i < 2; i++)

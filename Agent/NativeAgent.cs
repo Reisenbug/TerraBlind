@@ -288,6 +288,8 @@ public class NativeAgent : ModSystem
             try
             {
                 await _goalStopping.WaitAsync(token);
+                await AgentTools.Execute("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
+                    ["code"] = ScriptLibrary.Example("safety_reactions")["code"].DeepClone() }, token);
                 var modelContext = new AgentContext();
                 int contextRevision = 0;
                 Task<bool> Covered() => OnMain(() => (AgentTools.ControlSession.PrimaryActive || AgentTools.Actions.HasPrimaryControl)
