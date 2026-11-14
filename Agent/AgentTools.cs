@@ -1320,6 +1320,10 @@ public static partial class AgentTools
         {
             var notice = await read();
             if (notice == null) return null;
+            if (NativeAgent.GoalState is JsonObject goal)
+                notice["goal"] = new JsonObject { ["status"] = goal["native"]?["status"]?.DeepClone(),
+                    ["objective"] = goal["native"]?["objective"]?.DeepClone(),
+                    ["elapsed_seconds"] = goal["host_wall_elapsed_seconds"]?.DeepClone() };
             long started = Stopwatch.GetTimestamp();
             var decision = await reactions.Dispatch(notice, token);
             JsonObject review = null;

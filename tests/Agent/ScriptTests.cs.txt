@@ -153,9 +153,10 @@ static class ScriptTests
 
     static async Task SurvivalCombatPolicy()
     {
-        foreach (string scenario in new[] { "navigation", "idle", "fight", "boss", "unchaseable_enemy", "projectile_only", "quiet", "equipment_review", "ranged_review" })
+        foreach (string scenario in new[] { "navigation", "idle", "fight", "boss", "unchaseable_enemy", "projectile_only", "quiet", "equipment_review", "ranged_review", "progress_review", "progress_stale" })
         {
             bool boss = scenario == "boss", idle = scenario is "idle" or "fight";
+            bool progress = scenario.StartsWith("progress_");
             int decisions = 0, updates = 0, reviews = 0;
             var combat = JsonNode.Parse("""
                 {"tick":100,"boss_present":false,"player":{"hp":100,"max_hp":100,"pos":{"x":160,"y":320}},"projectiles":[],
@@ -167,9 +168,9 @@ static class ScriptTests
             combat["boss_present"] = boss;
             combat["terrain"] = JsonNode.Parse("{\"origin\":{\"x\":1,\"y\":2},\"rows\":[\"#.\"],\"legend\":\"#solid .air\"}");
             if (scenario == "unchaseable_enemy") combat["targets"][0]["attackable"] = false;
-            if (scenario is "projectile_only" or "quiet") combat["targets"] = new JsonArray();
+            if (scenario is "projectile_only" or "quiet" || progress) combat["targets"] = new JsonArray();
             if (scenario == "projectile_only") combat["projectiles"] = new JsonArray(new JsonObject { ["damage"] = 20 });
-            var result = await AgentScript.Run("(function(){" + ScriptLibrary.Example("safety_reactions")["code"]
+            var result = await AgentScript.Run("Date.now=()=>100000;(function(){" + ScriptLibrary.Example("safety_reactions")["code"]
                 + "})();return tool('nav_to');", 5, (_, _) => { }, async (name, args, token) =>
                 {
                     if (name == "nav_to")
@@ -177,6 +178,7 @@ static class ScriptTests
                         for (int i = 0; i < 3; i++)
                         {
                             var reaction = await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject {
+                            ["goal"] = progress ? new JsonObject { ["status"] = "active", ["objective"] = "finish within 25 minutes", ["elapsed_seconds"] = 900 } : null,
                             ["kind"] = "tick", ["execution"] = new JsonObject { ["tool"] = scenario == "fight" ? "fight" : idle ? "idle" : "nav_to",
                                 ["args"] = new JsonObject { ["x"] = 50, ["y"] = 20 } } }, token);
                             if (reaction?["agent_review"] != null) reviews++;
@@ -189,11 +191,26 @@ static class ScriptTests
                             Check(args["destination"]?["x"]?.GetValue<int>() == (idle ? 10 : 50), "combat policy lost the current navigation or idle anchor");
                         return combat.ToJsonString();
                     }
-                    if (name == "get_state") return "{\"codex_goal\":{\"native\":{\"objective\":\"reach the cave\"}}}";
+                    if (name == "get_state") return progress ? """
+                        {"codex_goal":{"native":{"status":"active","objective":"finish within 25 minutes"},"host_wall_elapsed_seconds":900},
+                         "task_plan":{"status":"active","revision":2,"current_step":"prepare","steps":[{"id":"prepare","conditions":[{"kind":"position","x":10,"y":20}]}]},
+                         "inventory_slots":[{"type":9,"stack":100}],"equipment_slots":[]}
+                        """ : "{\"codex_goal\":{\"native\":{\"objective\":\"reach the cave\"}}}";
                     if (name == "script_program") return ScriptLibrary.Example(args["name"].ToString()).ToJsonString();
                     if (name == "jev_judge")
                     {
                         decisions++;
+                        if (progress)
+                        {
+                            Check(args["channel"].ToString() == "task_progress" && args["interval_ms"].GetValue<int>() == 10000
+                                && args["state"]["elapsed_seconds"].GetValue<int>() == 900
+                                && args["state"]["current_step"].ToString() == "prepare",
+                                "progress review lost the live clock or current plan");
+                            var input = args["state"].DeepClone();
+                            if (scenario == "progress_stale") input["plan_revision"] = 1;
+                            return new JsonObject { ["status"] = "ready", ["request_id"] = 9, ["input_state"] = input,
+                                ["result"] = JsonNode.Parse("{\"elapsed_ms\":20,\"answers\":{\"response\":{\"choice\":\"review\"}}}") }.ToJsonString();
+                        }
                         Check(args["state"]["instruction"].ToString() == "reach the cave", "travel policy lost the current objective");
                         Check(args["state"]["terrain"]?["rows"]?[0]?.ToString() == "#.", "combat decision lost measured terrain cells");
                         Check(args["questions"]["attention"]?["criteria"]?["ranged_weapon"] != null, "combat decision could not request a ranged attack");
@@ -207,8 +224,8 @@ static class ScriptTests
                 }, _ => Task.CompletedTask, default,
                 programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-empty-skills-" + Guid.NewGuid())).Callable());
             bool inactive = boss || scenario == "quiet";
-            Check(result["ok"].GetValue<bool>() && decisions == (inactive ? 0 : 3) && updates == (inactive ? 0 : 1)
-                && reviews == (scenario is "equipment_review" or "ranged_review" ? 1 : 0),
+            Check(result["ok"].GetValue<bool>() && decisions == (progress ? 1 : inactive ? 0 : 3) && updates == (inactive || progress ? 0 : 1)
+                && reviews == (scenario is "equipment_review" or "ranged_review" or "progress_review" ? 1 : 0),
                 "default combat policy blocked pending navigation, repeated a response or touched boss movement: " + result);
         }
         Console.WriteLine("PASS: default survival uses shared combat candidates during navigation and idle, deduplicates execution and preserves boss control");
