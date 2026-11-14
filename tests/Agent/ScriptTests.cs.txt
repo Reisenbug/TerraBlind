@@ -95,7 +95,8 @@ static class ScriptTests
                     }
                     Check(name == "nav_intent" && args["mode"].ToString() == "withdraw", "travel policy seized input instead of updating the existing navigation");
                     updates++; return "{}";
-                }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("travel_intent")));
+                }, _ => Task.CompletedTask, default,
+                programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-empty-skills-" + Guid.NewGuid())).Callable());
             Check(result["ok"].GetValue<bool>() && decisions == (boss ? 0 : 3) && updates == (boss ? 0 : 1),
                 "default travel policy blocked pending navigation, repeated a response or touched boss movement: " + result);
         }

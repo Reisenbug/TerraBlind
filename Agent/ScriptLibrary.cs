@@ -931,7 +931,7 @@ public sealed class ScriptLibrary
     public JsonArray Callable()
     {
         lock (gate)
-            return new JsonArray(new[] { "recover_navigation", "inventory_space" }.Concat(Directory.Exists(directory)
+            return new JsonArray(new[] { "recover_navigation", "inventory_space", "travel_intent" }.Concat(Directory.Exists(directory)
                 ? Directory.EnumerateFiles(directory, "*.json").Select(Path.GetFileNameWithoutExtension)
                 : Enumerable.Empty<string>()).Distinct().OrderBy(name => name)
                 .Select(name => (JsonNode)Get(name, includeRuntime: false)).ToArray());
