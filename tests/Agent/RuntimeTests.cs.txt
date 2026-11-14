@@ -556,6 +556,7 @@ static class RuntimeTests
                         "prepared recovery started while an existing placement still held the input channels");
                     AgentTools.ControlSession.End(busyTicket); busyTicket = 0;
                     busyHeldMs = timer.ElapsedMilliseconds;
+                    timer.Restart();
                 }
                 if (mode is "danger" or "disabled")
                 {
@@ -571,8 +572,9 @@ static class RuntimeTests
                     return shouldRecover ? starts == 2 && AgentTools.LastContinuation?["status"]?.ToString() == "returned"
                         : AgentTools.LastContinuation?["status"]?.ToString() == "execution_gap";
                 });
-                Check(timer.ElapsedMilliseconds < 1000, "prepared failure policy waited for a model turn mode=" + mode
-                    + " elapsed_ms=" + timer.ElapsedMilliseconds + " busy_held_ms=" + busyHeldMs
+                long handoffMs = timer.ElapsedMilliseconds;
+                Check(handoffMs < 1000, "prepared failure policy waited for a model turn mode=" + mode
+                    + " elapsed_ms=" + handoffMs + " busy_held_ms=" + busyHeldMs
                     + " pump=" + lastPump + " evidence=" + AgentTools.LastContinuation);
                 for (int i = 0; i < 10; i++) { AgentTools.ContinuePreparedNode(default); Agent.PostUpdateEverything(); await Task.Delay(5); }
                 Check(repairs == (shouldRecover ? 1 : 0) && starts == (shouldRecover ? 2 : 1),
@@ -619,7 +621,7 @@ static class RuntimeTests
                         "newly prepared script was joined to the obsolete recovery instead of starting: " + restarted);
                     await PumpUntil(() => starts == 2);
                 }
-                Console.WriteLine($"PREPARED_FAILURE mode={mode} handoff_ms={timer.ElapsedMilliseconds} model_calls=0");
+                Console.WriteLine($"PREPARED_FAILURE mode={mode} handoff_ms={handoffMs} busy_held_ms={busyHeldMs} model_calls=0");
             }
             finally
             {
