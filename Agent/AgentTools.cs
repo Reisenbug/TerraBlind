@@ -1906,6 +1906,9 @@ public static partial class AgentTools
             case "inventory_review":
                 return (await NativeAgent.OnMain(PvpInventory.Review, token)).ToJsonString();
             case "equip_item":
+                while (!await NativeAgent.OnMain(() => Main.LocalPlayer.dead
+                    || Main.LocalPlayer.itemAnimation == 0 && Main.LocalPlayer.itemTime == 0, token))
+                    await NativeAgent.NextUpdate(token);
                 result = await NativeAgent.OnMain(() => Equipment.Swap(args), token);
                 break;
             case "npc_dialogue_status":

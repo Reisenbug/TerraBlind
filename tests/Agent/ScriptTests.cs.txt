@@ -42,6 +42,7 @@ static class ScriptTests
         await SurvivalDecisionPolicy();
         await SurvivalCombatPolicy();
         await TaskPolicyPatch();
+        await EquipmentAnimationHandoff();
         await IdleTaskPolicy();
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
@@ -60,7 +61,51 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=34 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=35 model_calls=0");
+    }
+
+    static async Task EquipmentAnimationHandoff()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var player = Terraria.Main.LocalPlayer;
+        int animation = player.itemAnimation, itemTime = player.itemTime;
+        bool dead = player.dead;
+        async Task Pump(Func<bool> done)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (!done())
+            { Check(clock.Elapsed.TotalSeconds < 5, "equipment animation handoff stalled"); agent.PostUpdateEverything(); await Task.Delay(1); }
+        }
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); player.dead = false;
+            player.itemAnimation = 3; player.itemTime = 5;
+            var pending = AgentTools.Execute("equip_item", new JsonObject(), default);
+            await Pump(() => AgentTools.ControlSession.OwnsItemUse);
+            for (int i = 0; i < 4; i++) { agent.PostUpdateEverything(); await Task.Delay(1); }
+            Check(!pending.IsCompleted && player.itemAnimation == 3 && player.itemTime == 5,
+                "equipment bypassed or forcibly finished the active animation");
+            player.itemAnimation = player.itemTime = 0;
+            await Pump(() => pending.IsCompleted);
+            var result = JsonNode.Parse(await pending);
+            Check(result["error"]?.ToString() == "equipment_requires_engine" && !AgentTools.ControlSession.PrimaryActive,
+                "equipment did not reach its adapter after animation completion or leaked its reservation");
+            player.itemAnimation = 3;
+            using var cancellation = new CancellationTokenSource();
+            pending = AgentTools.Execute("equip_item", new JsonObject(), cancellation.Token);
+            await Pump(() => AgentTools.ControlSession.OwnsItemUse);
+            cancellation.Cancel();
+            await Pump(() => pending.IsCompleted);
+            try { await pending; throw new Exception("equipment animation wait ignored cancellation"); }
+            catch (OperationCanceledException) { }
+            Check(!AgentTools.ControlSession.PrimaryActive, "cancelled equipment wait retained input ownership");
+            Console.WriteLine("PASS: equipment waits for animation completion with item-use ownership and releases its claim on cancellation (equipment adapter stubbed)");
+        }
+        finally
+        {
+            player.itemAnimation = animation; player.itemTime = itemTime; player.dead = dead;
+            AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); agent.Unload();
+        }
     }
 
     static async Task TaskPolicyPatch()
@@ -1398,6 +1443,7 @@ static class ScriptTests
         await SurvivalDecisionPolicy();
         await SurvivalCombatPolicy();
         await TaskPolicyPatch();
+        await EquipmentAnimationHandoff();
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
         await ActionReferences();
