@@ -301,6 +301,8 @@ public static partial class AgentTools
         var notice = new JsonObject { ["kind"] = kind, ["handle"] = action["handle"]?.DeepClone(),
             ["tool"] = action["tool"]?.DeepClone(), ["status"] = action["status"]?.DeepClone(), ["task_node"] = node,
             ["plan_revision"] = Plan.Snapshot()["revision"]?.DeepClone() };
+        if (NativeAgent.GoalState?["host_wall_elapsed_seconds"] is JsonNode noticeElapsed)
+            notice["goal_elapsed_seconds"] = noticeElapsed.DeepClone();
         int evidenceBudget = 1600;
         JsonObject Brief(JsonObject source, int depth = 0)
         {
@@ -894,6 +896,8 @@ public static partial class AgentTools
         };
         result["got"] = got; result["lost"] = lost;
         result["task_plan"] = Plan.Summary();
+        if (NativeAgent.GoalState?["host_wall_elapsed_seconds"] is JsonNode elapsed)
+            result["goal_elapsed_seconds"] = elapsed.DeepClone();
         if (progress.Count > 0) result["进度"] = progress;
         return result.ToJsonString();
     }, token);
