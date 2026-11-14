@@ -403,7 +403,9 @@ public sealed class CombatForecast : ModSystem
         {
             if (requestedContext == context && prepared?.Id == args["combat_candidate"]?["forecast_id"]?.GetValue<long>()) return false;
             var player = Main.LocalPlayer;
-            if (!(FightCoordinator.IsActive || FightCoordinator.IsIdleDefending)
+            bool weaponAnimation = (player.itemAnimation > 0 || player.itemTime > 0)
+                && CombatLoadout.Usable(player.HeldItem) && !ItemUseCoordinator.IsActive;
+            if (!(FightCoordinator.IsActive || FightCoordinator.IsIdleDefending || weaponAnimation)
                 || FightCoordinator.NavigationSnapshotPending) return false;
             FightCoordinator.NavigationSnapshotPending = true;
             DiagLog.Write("[combat_capture_boundary] waiting tick=" + Main.GameUpdateCount + " animation=" + player.itemAnimation
@@ -452,7 +454,10 @@ public sealed class CombatForecast : ModSystem
                     return (Job: job, Error: (JsonObject)null);
                 }
                 catch (NotSupportedException error)
-                { return (Job: (Forecast)null, Error: new JsonObject { ["error"] = "combat_candidate_capture_unavailable", ["reason"] = error.Message }); }
+                { return (Job: (Forecast)null, Error: new JsonObject { ["error"] = "combat_candidate_capture_unavailable", ["reason"] = error.Message,
+                    ["attack_boundary_reserved"] = reserved, ["item_animation"] = player.itemAnimation,
+                    ["item_time"] = player.itemTime, ["weapon_type"] = player.HeldItem.type,
+                    ["primary_item_use"] = ItemUseCoordinator.IsActive }); }
             }, token);
         }
         finally
