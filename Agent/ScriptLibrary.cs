@@ -22,13 +22,14 @@ public sealed class ScriptLibrary
     public static JsonObject Example(string name)
     {
         if (name == "safety_reactions") return Template(name,
-            "默认任务反应：导航被压力板拦住时，复核现场、用原版镐子拆除可达压力板、验证移除后续接。遵守当前挖掘权限；其他危险保留失败证据。可修改此JS并用task_policy替换。",
+            "默认任务反应：导航被压力板或近身接触伤害物拦住时，复核现场、用原版镐子拆除可达目标、验证移除后续接。遵守当前挖掘权限；其他危险保留失败证据。可修改此JS并用task_policy替换。",
             """
             on('action_failed',event=>{
               const nav=event.result.last_result?.result?.navigation??event.result.navigation??event.result;
-              if(nav.error!=='navigation_near_trap') return {retry:false};
+              if(!['navigation_near_trap','navigation_contact_escape'].includes(nav.error)) return {retry:false};
               const program=tool('script_program',{operation:'get',name:'recover_navigation'});
-              return skill('recover_navigation',program.revision,{error:nav.error,traps:nav.trap_tiles,allow_trigger_removal:true});
+              return skill('recover_navigation',program.revision,{error:nav.error,tile:nav.contact_escape?.predicted_tile,
+                traps:nav.trap_tiles,allow_trigger_removal:true});
             });
             return {registered:true};
             """);
