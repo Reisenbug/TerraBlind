@@ -71,8 +71,8 @@ static class ScriptTests
                 ["agent"] = new JsonObject { ["auto_attack"] = true, ["combat_weapon_type"] = 24 },
                 ["inventory_slots"] = scenario == "no_item" ? new JsonArray()
                 : new JsonArray(new JsonObject { ["slot"] = 4, ["type"] = 2350, ["stack"] = 2 }) };
-            string code = taskPolicy ? "const input={resources:[],weapon_order:[24],max_detour_tiles:0,health_reserve:0};"
-                + ScriptLibrary.Example("task_reactions")["code"] : ScriptLibrary.Example("safety_reactions")["code"].ToString();
+            string code = taskPolicy ? "return skill('task_reactions',0,{resources:[],weapon_order:[24],max_detour_tiles:0,health_reserve:0});"
+                : ScriptLibrary.Example("safety_reactions")["code"].ToString();
             var result = await AgentScript.Run("(function(){" + code
                 + "})();return tool('nav_to');", 5, (_, _) => { }, async (name, args, token) =>
                 {
@@ -97,7 +97,7 @@ static class ScriptTests
                     }
                     Check(name == "use_item" && args["slot"].GetValue<int>() == 4, "survival bypassed actual recall item input");
                     uses++; return "{\"outcome\":\"time_elapsed\"}";
-                }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("safety_reactions")));
+                }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("safety_reactions"), ScriptLibrary.Example("task_reactions")));
             Check(result["ok"].GetValue<bool>() && uses == (scenario == "recall" ? 1 : 0)
                 && judgments == (scenario is "recall" or "continue" or "pending" ? 2 : 0),
                 "survival decision blocked, repeated a recall, or called the model without need: " + scenario
@@ -2234,8 +2234,7 @@ static class ScriptTests
         foreach (bool permitted in new[] { true, false })
         {
             bool? actualPermission = null;
-            var policy = await AgentScript.Run("(function(){const input=" + Config().ToJsonString() + ";\n"
-                + ScriptLibrary.Example("task_reactions")["code"] + "})();return tool('nav_to');", 5, (_, _) => { },
+            var policy = await AgentScript.Run("skill('task_reactions',0," + Config().ToJsonString() + ");return tool('nav_to');", 5, (_, _) => { },
                 async (name, args, token) =>
                 {
                     if (name == "get_state") return new JsonObject { ["agent"] = new JsonObject
@@ -2247,7 +2246,7 @@ static class ScriptTests
                     if (name == "nav_to")
                         await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject { ["kind"] = "tick" }, token);
                     return "{}";
-                }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("safety_reactions")));
+                }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("safety_reactions"), ScriptLibrary.Example("task_reactions")));
             Check(policy["ok"].GetValue<bool>() && actualPermission == permitted,
                 "empty encounter changed the original defense permission: " + policy);
         }
