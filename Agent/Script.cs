@@ -327,7 +327,8 @@ public static class AgentScript
         + "\n整理与生存：查询和选择在行进中完成；需要交接时同段JS暂停、使用新鲜type/prefix/stack操作、核验、finally恢复。healing_items列直接治疗物，实际可用看potion_delay_ticks；last_automatic_heal是历史。"
         + "低血量仅唤醒观察，当前动作继续。health_dynamics的regen_direction说明引擎当下趋势，raw不是每秒伤害；last_damage.tick区分新伤。hp_at_hook不保证扣血后血量，查当前player.hp。"
         + "contact_escape_active仅在auto_dodge许可下启用；survival_escape_reobserve表示原动作未执行且位置已变。navigation_contact_escape需结合contact_escape实际起终、落脚和危险修复局部路线，再续接原目标。"
-        + "每次调用推进任务或解决未知；已知动作在JS连续执行，新事实需要模型时带证据交回。后台观察没有新决定可结束本轮，当前动作保持运行。";
+        + "每次调用推进任务或解决未知；已知动作在JS连续执行，新事实需要模型时带证据交回。后台观察没有新决定可结束本轮，当前动作保持运行。"
+        + "\n学习未知操作：act(observe:true)返回真实输入、弹射物轨迹、伤害归属及observation.id。比较短试验后用script_program保存可复用方法，结论引用实际试验ID，技能执行时读取现场参数并检验效果。";
 
     public static async Task<JsonObject> Run(string source, int seconds,
         Action<string, JsonObject> validate,

@@ -90,7 +90,8 @@ public sealed class ActionObservation : ModSystem
             var changes = history["transitions"].AsArray();
             if (changes.Count == 0 || !JsonNode.DeepEquals(changes[^1]["ai"]?[0], point["ai"]?[0]))
                 if (changes.Count < 48) changes.Add(point.DeepClone());
-            if (frame % 6 == 0 && history["path"].AsArray().Count < 60) history["path"].AsArray().Add(point.DeepClone());
+            var path = history["path"].AsArray();
+            if (path.Count < 8 || frame % 11 == 0 && path.Count < 24) path.Add(point.DeepClone());
         }
         active.Frames.Add(new JsonObject { ["frame"] = frame, ["x"] = player.position.X, ["y"] = player.position.Y,
             ["vx"] = player.velocity.X, ["vy"] = player.velocity.Y, ["hp"] = player.statLife,
