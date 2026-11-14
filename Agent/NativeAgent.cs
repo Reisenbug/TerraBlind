@@ -27,6 +27,7 @@ public class NativeAgent : ModSystem
     JsonObject _goalOptions;
     Task _goalStopping = Task.CompletedTask;
     Task _dangerDelivery = Task.CompletedTask;
+    Task _idleReaction = Task.CompletedTask;
     int _lastDangerNotice;
     internal static JsonObject GoalState => _instance?._codex?.GoalState;
     DateTime _lastFeedback;
@@ -224,6 +225,8 @@ public class NativeAgent : ModSystem
                 ["actions"] = AgentTools.Actions.Summary() });
             if (AgentTools.Watches.Samples % 20 == 0)
                 DiagLog.Write("[agent_observe] " + AgentTools.Watches.LastObservation.ToJsonString());
+            if (_running?.IsCompleted == false && _cancel?.IsCancellationRequested == false && _idleReaction.IsCompleted)
+                _idleReaction = AgentTools.ReactWhileIdle(_cancel.Token);
             if (_codex != null && Processing && _dangerDelivery.IsCompleted)
             {
                 var danger = AgentTools.Watches.Pending()["events"].AsArray().LastOrDefault(e =>

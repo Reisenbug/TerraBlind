@@ -22,8 +22,27 @@ public sealed class ScriptLibrary
     public static JsonObject Example(string name)
     {
         if (name == "safety_reactions") return Template(name,
-            "默认任务反应：导航被压力板或近身接触伤害物拦住时，复核现场、用原版镐子拆除可达目标、验证移除后续接。遵守当前挖掘权限；其他危险保留失败证据。可修改此JS并用task_policy替换。",
+            "默认任务反应：复核并拆除可达压力板与近身接触伤害物，验证后续接。近期受击且血量下降时，Jev结合当前任务、冷却、敌人与地形判断是否用已有回城道具脱险。遵守权限；可修改此JS并用task_policy替换。",
             """
+            let survivalRequest=null;
+            on('tick',()=>{
+              const c=tool('combat_assess',{radius:15}),p=c.player;
+              if(c.boss_present||p.hp>p.max_hp*.75||!c.recent_damage||c.tick-c.recent_damage.tick>120) return {handled:true};
+              const s=state(['player','inventory_slots','codex_goal']);
+              const recall=s.inventory_slots.find(i=>[50,2350,3199].includes(i.type)&&i.stack>0);
+              if(!recall||s.player.hp>s.player.max_hp*.75) return {handled:true};
+              const r=tool('jev_judge',{channel:'survival',context:'task-survival',interval_ms:500,max_age_ms:1000,
+                state:{objective:s.codex_goal?.native?.objective,elapsed_seconds:s.codex_goal?.host_wall_elapsed_seconds,
+                  combat:c,player:s.player,terrain:tool('inspect_terrain',{radius:8}),recall},questions:{response:{type:'choice',
+                  instructions:'Should this player continue the current task or recall to survive the immediate threats? Respect the objective and death constraints. Recall uses the shown item and returns to spawn; the task resumes from there. Consider health, potion cooldown, incoming damage, terrain and escape options.',
+                  criteria:{continue:'Continue the task with current defense and movement.',recall:'Use the available recall item now to escape.'}}}});
+              if(r.status!=='ready'||r.request_id===survivalRequest) return {handled:true};
+              survivalRequest=r.request_id;
+              print({decision:'survival',request:r.request_id,choice:r.result.answers.response.choice,model_ms:r.result.elapsed_ms});
+              if(r.result.answers.response.choice==='recall') tool('use_item',{slot:recall.slot,
+                x:Math.floor(s.player.pos.x/16),y:Math.floor(s.player.pos.y/16),duration_ticks:120});
+              return {handled:true};
+            });
             on('action_failed',event=>{
               const nav=event.result.last_result?.result?.navigation??event.result.navigation??event.result;
               if(!['navigation_near_trap','navigation_contact_escape'].includes(nav.error)) return {retry:false};

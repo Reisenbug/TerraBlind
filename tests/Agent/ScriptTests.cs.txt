@@ -39,6 +39,8 @@ static class ScriptTests
         await NavigationIntents();
         await GatherReactionConsumption();
         await NavigationRecoverySkill();
+        await SurvivalDecisionPolicy();
+        await IdleTaskPolicy();
         await ReactiveTravelExample();
         await ComposedReactions();
         await DecisionPreconditions();
@@ -51,7 +53,96 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=25 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=27 model_calls=0");
+    }
+
+    static async Task SurvivalDecisionPolicy()
+    {
+        foreach (string scenario in new[] { "recall", "continue", "pending", "healthy", "healed", "no_item", "boss" })
+        {
+            int uses = 0, judgments = 0;
+            var player = JsonNode.Parse("{\"hp\":40,\"max_hp\":100,\"pos\":{\"x\":160,\"y\":320},\"potion_delay_ticks\":3500}").AsObject();
+            var combat = new JsonObject { ["tick"] = 100, ["boss_present"] = scenario == "boss",
+                ["player"] = player.DeepClone(), ["recent_damage"] = new JsonObject { ["tick"] = 80 } };
+            if (scenario == "healthy") combat["player"]["hp"] = 100;
+            if (scenario == "healed") player["hp"] = 100;
+            var state = new JsonObject { ["player"] = player, ["inventory_slots"] = scenario == "no_item" ? new JsonArray()
+                : new JsonArray(new JsonObject { ["slot"] = 4, ["type"] = 2350, ["stack"] = 2 }) };
+            var result = await AgentScript.Run("(function(){" + ScriptLibrary.Example("safety_reactions")["code"]
+                + "})();return tool('nav_to');", 5, (_, _) => { }, async (name, args, token) =>
+                {
+                    if (name == "nav_to")
+                    {
+                        await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject { ["kind"] = "tick" }, token);
+                        return (await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject { ["kind"] = "tick" }, token)).ToJsonString();
+                    }
+                    if (name == "combat_assess") return combat.ToJsonString();
+                    if (name == "get_state") return state.ToJsonString();
+                    if (name == "inspect_terrain") return "{\"rows\":[\"###\",\"...\"],\"origin\":{\"x\":9,\"y\":19}}";
+                    if (name == "jev_judge")
+                    {
+                        judgments++;
+                        Check(args["state"]["player"]["potion_delay_ticks"].GetValue<int>() == 3500
+                            && args["state"]["terrain"]["rows"].AsArray().Count == 2, "survival judgment lost cooldown or actual terrain");
+                        return new JsonObject { ["status"] = scenario == "pending" ? "pending" : "ready", ["request_id"] = 9,
+                            ["result"] = new JsonObject { ["elapsed_ms"] = 20, ["answers"] = new JsonObject {
+                                ["response"] = new JsonObject { ["choice"] = scenario == "continue" ? "continue" : "recall" } } } }.ToJsonString();
+                    }
+                    Check(name == "use_item" && args["slot"].GetValue<int>() == 4, "survival bypassed actual recall item input");
+                    uses++; return "{\"outcome\":\"time_elapsed\"}";
+                }, _ => Task.CompletedTask, default);
+            Check(result["ok"].GetValue<bool>() && uses == (scenario == "recall" ? 1 : 0)
+                && judgments == (scenario is "recall" or "continue" or "pending" ? 2 : 0),
+                "survival decision blocked, repeated a recall, or called the model without need: " + scenario + " " + result);
+        }
+        Console.WriteLine("PASS: fast survival policy uses typed decisions, current terrain and real item input without pausing for pending answers");
+    }
+
+    static async Task IdleTaskPolicy()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var http = HttpServerSystem.Handler;
+        bool dead = Terraria.Main.LocalPlayer.dead, manual = Manual.On;
+        int effects = 0;
+        async Task Pump(Task task)
+        {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            { Check(timer.Elapsed.TotalSeconds < 5, "idle policy stalled"); agent.PostUpdateEverything(); await Task.Delay(1); }
+            await task;
+        }
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.ControlSession.Reset();
+            Manual.On = false; Terraria.Main.LocalPlayer.dead = false;
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"remain reactive while thinking","mode":"dag","steps":[{"id":"travel","description":"travel",
+                 "depends_on":[],"script":"return {};","conditions":[{"kind":"permanent_health","count":9999}]}]}
+                """).AsObject(), AgentTaskEvidence.Measure);
+            await Pump(AgentTools.Execute("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
+                ["code"] = "on('tick',()=>{tool('act',{steps:[{keys:['right'],until:{frames:1}}]});return {handled:true};});" }, default));
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/act")
+                { Check(ActionTasks.NodeContext.Value == "travel", "idle effect lost DAG ownership"); effects++; }
+                return (200, path == "/act_status" ? "{\"active\":false,\"outcome\":\"done\"}" : "{}");
+            };
+            Check(AgentTools.ControlSession.Begin("nav_to", null, out _) == null, "test could not acquire primary action");
+            await Pump(AgentTools.ReactWhileIdle(default));
+            Check(effects == 0, "idle policy competed with primary execution");
+            AgentTools.ControlSession.Reset();
+            await Pump(AgentTools.ReactWhileIdle(default));
+            Check(effects == 1, "policy stopped while the model had no primary action");
+            Terraria.Main.LocalPlayer.dead = true;
+            await Pump(AgentTools.ReactWhileIdle(default));
+            Check(effects == 1, "dead player executed an idle reaction");
+        }
+        finally
+        {
+            HttpServerSystem.Handler = http; Manual.On = manual; Terraria.Main.LocalPlayer.dead = dead;
+            AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); agent.Unload();
+        }
+        Console.WriteLine("PASS: idle reactions retain DAG ownership, leave primary actions alone and stop on death");
     }
 
     static async Task ActObservation()
@@ -1024,6 +1115,8 @@ static class ScriptTests
         await ReactiveTravelExample();
         await ReactiveHostIntegration();
         await TaskPolicyIntegration();
+        await IdleTaskPolicy();
+        await SurvivalDecisionPolicy();
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();

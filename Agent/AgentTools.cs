@@ -1216,6 +1216,31 @@ public static partial class AgentTools
         return output;
     }
 
+    internal static async Task ReactWhileIdle(CancellationToken token)
+    {
+        try
+        {
+            string node = await NativeAgent.OnMain(() =>
+            {
+                if (taskPolicy?.Reactions?.Active != true || Main.LocalPlayer.dead || Manual.On || ContactEscapeActive
+                    || ControlSession.PrimaryActive || Actions.HasPrimaryControl) return null;
+                return Plan.RequiresNodeExecution ? Plan.Snapshot()["current_step"]?.ToString() : "";
+            }, token);
+            if (node == null) return;
+            string previous = ActionTasks.NodeContext.Value;
+            ActionTasks.NodeContext.Value = node;
+            try { await ReactAtBoundary(token, context: new JsonObject { ["tool"] = "idle" }); }
+            finally { ActionTasks.NodeContext.Value = previous; }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception error)
+        {
+            DiagLog.Write("[task_policy_idle_failed] " + error.Message);
+            await NativeAgent.OnMain(() => { Watches.Request("task_policy_idle_failed",
+                new JsonObject { ["detail"] = error.Message }); return true; }, default);
+        }
+    }
+
     internal static async Task ReactAtBoundary(CancellationToken token,
         Func<CancellationToken, Task> pause = null, Func<CancellationToken, Task> resume = null, JsonObject context = null)
     {
