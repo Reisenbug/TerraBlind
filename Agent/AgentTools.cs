@@ -1429,11 +1429,14 @@ public static partial class AgentTools
                         return joined.Report.ToJsonString();
                     }
                 }
-                if (Bool(args, "background"))
+                bool goalBackground = !Actions.RunningScript && !args.ContainsKey("background")
+                    && Text(args, "task_node") != "" && NativeAgent.GoalState?["native"]?["status"]?.ToString() == "active"
+                    && (args["code"] == null || !AgentScript.PreparationOnly(Text(args, "code")));
+                if (Bool(args, "background") || goalBackground)
                 {
                     string node = Text(args, "task_node");
-                    if (node == "" || args.Any(p => p.Key is not ("task_node" or "background" or "event_delivery")))
-                        throw new ArgumentException("后台脚本需要task_node，仅可另传event_delivery。");
+                    if (node == "" || args["program"] != null || args["code"] != null && Text(args, "workflow") == "")
+                        throw new ArgumentException("后台脚本需要task_node；临时代码需要独立workflow。");
                     if (Actions.RunningScript) throw new InvalidOperationException("后台脚本不能嵌套启动后台脚本。");
                     return (await NativeAgent.OnMain(() =>
                     {
@@ -1445,9 +1448,11 @@ public static partial class AgentTools
                         ActionTasks.NodeContext.Value = node;
                         try
                         {
-                            var scriptArgs = new JsonObject { ["task_node"] = node };
-                            if (args["event_delivery"] != null) scriptArgs["event_delivery"] = args["event_delivery"].DeepClone();
-                            return Actions.Start("run_script", scriptArgs, token);
+                            var scriptArgs = (JsonObject)args.DeepClone();
+                            scriptArgs.Remove("background");
+                            var started = Actions.Start("run_script", scriptArgs, token);
+                            started["default_background"] = goalBackground;
+                            return started;
                         }
                         finally { ActionTasks.NodeContext.Value = previous; }
                     }, token)).ToJsonString();
