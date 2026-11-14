@@ -405,7 +405,8 @@ static class ScriptTests
                     }
                     Check(name == "use_item" && args["slot"].GetValue<int>() == 4, "survival bypassed actual recall item input");
                     uses++; return "{\"outcome\":\"time_elapsed\"}";
-                }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("safety_reactions"), ScriptLibrary.Example("task_reactions")));
+                }, _ => Task.CompletedTask, default,
+                programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-direct-task-skills-" + Guid.NewGuid())).Callable());
             Check(result["ok"].GetValue<bool>() && uses == (scenario == "recall" ? 1 : 0)
                 && judgments == (scenario is "recall" or "continue" or "pending" ? 2 : 0),
                 "survival decision blocked, repeated a recall, or called the model without need: " + scenario
@@ -642,6 +643,19 @@ static class ScriptTests
         {
             var library = new ScriptLibrary(directory);
             Check(library.Callable().Any(p => p["name"].ToString() == "recover_navigation"), "built-in recovery required a model save before use");
+            foreach (var (name, input, expected) in new[] {
+                ("use_life_crystals", "{\"target_health\":100}", "target_met"),
+                ("gather_route", "{\"gather_args\":{\"targets\":[{\"item_type\":331,\"count\":6}]},\"waypoints\":[]}", "collected"),
+                ("combat_approach", "{\"npc\":1,\"npc_type\":42}", "ready") })
+            {
+                Check(library.Get(name)["callable"]?.GetValue<bool>() == true, "direct helper was not advertised: " + name);
+                var direct = await AgentScript.Run("return skill(" + JsonValue.Create(name).ToJsonString() + ",0," + input + ");", 5,
+                    (_, _) => { }, (tool, _, _) => Task.FromResult(tool == "get_state"
+                        ? "{\"permanent_max_health\":100,\"inventory_counts\":{\"331\":6}}"
+                        : "{\"current_weapon_types\":[24]}"), _ => Task.CompletedTask, default, programs: library.Callable());
+                Check(direct["ok"]?.GetValue<bool>() == true && direct["value"]?["status"]?.ToString() == expected,
+                    "parameterized helper required a copied program before execution: " + name + " " + direct);
+            }
             library.Save("recover_navigation", "return {retry:false,reason:'custom_policy'};", 0);
             var custom = await AgentScript.Run("return skill('recover_navigation',1);", 5, (_, _) => { },
                 (_, _, _) => throw new Exception("custom recovery unexpectedly called a tool"), _ => Task.CompletedTask, default,

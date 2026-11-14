@@ -12,10 +12,12 @@ public sealed class ScriptLibrary
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
     static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent" };
+    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "gather_route", "use_life_crystals" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
         ["name"] = name, ["found"] = true, ["revision"] = 0, ["template"] = true,
+        ["callable"] = BuiltIns.Contains(name),
         ["validation"] = "example_not_live_verified", ["detail"] = detail, ["code"] = code
     };
 
@@ -672,7 +674,7 @@ public sealed class ScriptLibrary
             finally { tool('set_combat',{auto_attack:originalCombat.auto_attack,weapon_type:originalCombat.combat_weapon_type}); }
             """);
         if (name == "gather_route") return Template(name,
-            "参数化采集与来源暂时不可见的续接示例。保存后通过skill调用，input包含gather_args和当前世界查证的waypoints（最多8项，每项x/y及可选mode/source_area）。先收集当前位置可用来源，未达到真实库存目标且当前来源耗尽时，立即前往下一个预备位置并继续；其他失败保留证据交回。DAG按真实条件完成验收。",
+            "内置参数化采集技能，可直接调用revision=0；input包含gather_args和当前世界查证的waypoints（最多8项，每项x/y及可选mode/source_area）。先收集当前位置可用来源，未达到真实库存目标且当前来源耗尽时，立即前往下一个预备位置并继续；其他失败保留证据交回。DAG按真实条件完成验收。",
             """
             const config=typeof input==='undefined'?null:input;
             if(!config?.gather_args?.targets||!Array.isArray(config.waypoints)||config.waypoints.length>8)
@@ -799,7 +801,7 @@ public sealed class ScriptLibrary
             return {status:'collected_route_resumed',collection:result.result,route:resumed};
             """);
         if (name == "use_life_crystals") return Template(name,
-            "保存原模板后，通过skill(name,revision,{target_health,gather_args},key)传入本次目标与可选采集配置。入参采用当前世界已查证的来源和区域。所属DAG后台节点连续采集、使用生命水晶并核对永久生命；每颗使用后继续下一颗，采集需要审阅时返回证据。仅使用背包水晶时提供target_health即可。",
+            "内置生命水晶技能，可直接调用revision=0，通过skill(name,revision,{target_health,gather_args},key)传入目标与可选采集配置。入参采用当前世界已查证的来源和区域。所属DAG后台节点连续采集、使用生命水晶并核对永久生命；每颗使用后继续下一颗，采集需要审阅时返回证据。仅使用背包水晶时提供target_health即可。",
             """
             const config = typeof input==='undefined'?null:input;
             if(!config||!Number.isInteger(config.target_health)||config.target_health<100||config.target_health>400)
@@ -897,6 +899,7 @@ public sealed class ScriptLibrary
             if (File.Exists(path))
             {
                 var entry = JsonNode.Parse(File.ReadAllText(path)).AsObject();
+                entry["callable"] = true;
                 string runtime = Path.Combine(directory, "runtime", name + ".json");
                 if (includeRuntime && File.Exists(runtime)) entry["runtime"] = JsonNode.Parse(File.ReadAllText(runtime));
                 return entry;
@@ -934,7 +937,7 @@ public sealed class ScriptLibrary
     public JsonArray Callable()
     {
         lock (gate)
-            return new JsonArray(new[] { "recover_navigation", "inventory_space", "travel_intent", "joint_combat" }.Concat(Directory.Exists(directory)
+            return new JsonArray(BuiltIns.Concat(Directory.Exists(directory)
                 ? Directory.EnumerateFiles(directory, "*.json").Select(Path.GetFileNameWithoutExtension)
                 : Enumerable.Empty<string>()).Distinct().OrderBy(name => name)
                 .Select(name => (JsonNode)Get(name, includeRuntime: false)).ToArray());

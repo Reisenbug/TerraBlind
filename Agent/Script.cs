@@ -265,7 +265,7 @@ public static class AgentScript
         var programs = tools.First(t => t["function"]?["name"]?.ToString() == "script_program")["function"];
         programs["parameters"]["properties"]["operation"]["enum"].AsArray().Add("example");
         programs["description"] = programs["description"].ToString()
-            + "list包含内置技能模板(template:true,revision:0)和已保存技能。get读取模板源码，填写config后save(expected_revision:0)，再以返回版本执行；模板不是实机验证通过的技能。navigate_observe保持导航与观察并行；collect_detour采集后恢复原路线；use_life_crystals验证永久生命增长；recover_pressure_plate可按权限和当前工具配置后写入节点on_failure。"
+            + "list包含内置技能模板(template:true,revision:0)和已保存技能；callable:true可直接skill(name,revision,input)调用。get读取源码，可按任务修改并save为新修订；其余模板填写config后保存调用。模板标识不代表实机验收。task_reactions注册沿途采集、背包和默认自保；gather_route按已查证路点续采；use_life_crystals验证永久生命增长；combat_approach选择有射界的实际站位。"
             + "example返回可编辑JS示例，name为空列出名称；gather_route在来源暂不可见或本区域采尽时，按预备路点立即续采；sample_tile_variants演示按现场变体试采、保存所得、同句柄恢复及事件交回。示例不执行；先读源码，按任务修改config与策略，再save和run_script。";
         var events = tools.First(t => t["function"]?["name"]?.ToString() == "script_events")["function"];
         events["parameters"]["properties"]["max_events"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1,
