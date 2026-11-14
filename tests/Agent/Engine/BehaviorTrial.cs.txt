@@ -5215,14 +5215,15 @@ public sealed partial class BehaviorTrial : ModSystem
         await OnMain(() => { queenClock = clock; return true; });
         var deaths = new JsonArray(); bool wasDead = false;
         long? healthMs = null, chakramMs = null, queenSpawnMs = null;
+        string trialModel = Environment.GetEnvironmentVariable("TB_QUEEN_MODEL") ?? "gpt-6.1-sol";
         await OnMain(() =>
         {
-            Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = "gpt-6.1-sol";
+            Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = trialModel;
             NativeAgent.Submit(prompt);
             return true;
         });
         File.WriteAllText(Path.Combine(Main.SavePath, "queen-start.json"), new JsonObject
-        { ["prompt"] = prompt, ["before"] = before.DeepClone(), ["spawn"] = jungleSpawn?.DeepClone(), ["model"] = "gpt-6.1-sol", ["effort"] = "medium",
+        { ["prompt"] = prompt, ["before"] = before.DeepClone(), ["spawn"] = jungleSpawn?.DeepClone(), ["model"] = trialModel, ["effort"] = "medium",
             ["mining_speed_multiplier"] = Config.I.FastMining ? ConcessionSpeed.MiningSpeedMultiplier : 1,
             ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["natural_encounters"] = NaturalEncounters,
             ["resumed_from"] = QueenResumeRoot }.ToJsonString());
