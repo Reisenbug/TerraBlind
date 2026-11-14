@@ -40,6 +40,7 @@ static class ScriptTests
         await GatherReactionConsumption();
         await NavigationRecoverySkill();
         await SurvivalDecisionPolicy();
+        await SurvivalTravelIntent();
         await IdleTaskPolicy();
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
@@ -58,7 +59,47 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=32 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=33 model_calls=0");
+    }
+
+    static async Task SurvivalTravelIntent()
+    {
+        foreach (bool boss in new[] { false, true })
+        {
+            int decisions = 0, updates = 0;
+            var combat = JsonNode.Parse("""
+                {"tick":100,"boss_present":false,"player":{"hp":100,"max_hp":100},"projectiles":[],
+                 "targets":[{"who":7,"type":42,"attackable":true,"contact_damage":20,"distance_tiles":6}]}
+                """).AsObject();
+            combat["boss_present"] = boss;
+            var result = await AgentScript.Run("(function(){" + ScriptLibrary.Example("safety_reactions")["code"]
+                + "})();return tool('nav_to');", 5, (_, _) => { }, async (name, args, token) =>
+                {
+                    if (name == "nav_to")
+                    {
+                        for (int i = 0; i < 3; i++) await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject {
+                            ["kind"] = "tick", ["execution"] = new JsonObject { ["tool"] = "nav_to",
+                                ["args"] = new JsonObject { ["x"] = 50, ["y"] = 20 } } }, token);
+                        return "{}";
+                    }
+                    if (name == "combat_assess") return combat.ToJsonString();
+                    if (name == "get_state") return "{\"codex_goal\":{\"native\":{\"objective\":\"reach the cave\"}}}";
+                    if (name == "script_program") return ScriptLibrary.Example(args["name"].ToString()).ToJsonString();
+                    if (name == "jev_judge")
+                    {
+                        decisions++;
+                        Check(args["state"]["instruction"].ToString() == "reach the cave", "travel policy lost the current objective");
+                        return decisions == 1 ? "{\"status\":\"pending\"}" : new JsonObject {
+                            ["status"] = "ready", ["request_id"] = 9, ["input_state"] = args["state"].DeepClone(),
+                            ["result"] = JsonNode.Parse("{\"answers\":{\"response\":{\"choice\":\"withdraw\"}}}") }.ToJsonString();
+                    }
+                    Check(name == "nav_intent" && args["mode"].ToString() == "withdraw", "travel policy seized input instead of updating the existing navigation");
+                    updates++; return "{}";
+                }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("travel_intent")));
+            Check(result["ok"].GetValue<bool>() && decisions == (boss ? 0 : 3) && updates == (boss ? 0 : 1),
+                "default travel policy blocked pending navigation, repeated a response or touched boss movement: " + result);
+        }
+        Console.WriteLine("PASS: default survival uses background travel decisions before taking damage, deduplicates intents and preserves boss control");
     }
 
     static async Task ProductiveMiningRecovery()
@@ -1303,6 +1344,7 @@ static class ScriptTests
         await TaskPolicyIntegration();
         await IdleTaskPolicy();
         await SurvivalDecisionPolicy();
+        await SurvivalTravelIntent();
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
         await ActionReferences();

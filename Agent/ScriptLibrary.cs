@@ -47,9 +47,18 @@ public sealed class ScriptLibrary
         if (name == "safety_reactions") return Template(name,
             "默认任务反应：复核并拆除可达压力板与近身接触伤害物，验证后续接。近期受击且血量下降时，Jev结合当前任务、冷却、敌人与地形判断是否用已有回城道具脱险。遵守权限；可修改此JS并用task_policy替换。",
             """
-            let survivalRequest=null;
-            on('tick',()=>{
+            let survivalRequest=null,movementRequest=null,movementProgram=null;
+            const movementContext='survival-travel:'+Date.now();
+            on('tick',event=>{
               const c=tool('combat_assess',{radius:15}),p=c.player;
+              const destination=event.execution?.tool==='nav_to'?event.execution.args:null;
+              if(!c.boss_present&&destination&&c.targets?.some(n=>n.attackable&&n.contact_damage>0&&n.distance_tiles<12)){
+                movementProgram??=tool('script_program',{operation:'get',name:'travel_intent'});
+                const goal=tool('get_state',{fields:['codex_goal']}).codex_goal;
+                const intent=skill('travel_intent',movementProgram.revision,{context:movementContext+':'+destination.x+':'+destination.y,
+                  destination,instruction:goal?.native?.objective??'Reach the current destination while staying alive.',last_request:movementRequest});
+                movementRequest=intent.request_id??movementRequest;
+              }
               if(c.boss_present||p.hp>p.max_hp*.75||!c.recent_damage||c.tick-c.recent_damage.tick>120) return {handled:true};
               const s=tool('get_state',{fields:['player','inventory_slots','healing_items','codex_goal']});
               const recall=s.inventory_slots.find(i=>[50,2350,3199].includes(i.type)&&i.stack>0);
