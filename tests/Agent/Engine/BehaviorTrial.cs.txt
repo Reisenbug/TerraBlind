@@ -5127,6 +5127,7 @@ public sealed partial class BehaviorTrial : ModSystem
             var player = Main.LocalPlayer;
             var npcs = Main.npc;
             bool manual = Manual.On, use = player.controlUseItem;
+            var controls = (player.controlLeft, player.controlRight, player.controlJump, player.selectedItem, Main.mouseX, Main.mouseY);
             try
             {
                 Main.npc = Enumerable.Range(0, Main.maxNPCs).Select(_ => new NPC()).ToArray();
@@ -5148,6 +5149,7 @@ public sealed partial class BehaviorTrial : ModSystem
             finally
             {
                 FightCoordinator.Stop(); Main.npc = npcs; Manual.On = manual; player.controlUseItem = use;
+                (player.controlLeft, player.controlRight, player.controlJump, player.selectedItem, Main.mouseX, Main.mouseY) = controls;
             }
             if (Main.GameMode != 0 || player.ConsumedLifeCrystals != 0 || player.statLifeMax != 100)
                 throw new Exception("queen trial requires classic mode and a fresh 100-health player");
