@@ -371,7 +371,8 @@ namespace TerraBlind
 					return;
 				}
 				// 合格了:人别压着,够得着就挥
-				if (InBody(p, _tx, _ty)) { if (StepAside(p, _tx, _ty, out _)) { _ph = Ph.Move; } return; }
+				if (Main.tileSolid[p.inventory[PlaceAction.ResolveSlot(_item)].createTile] && InBody(p, _tx, _ty))
+				{ if (StepAside(p, _tx, _ty, out _)) { _ph = Ph.Move; } return; }
 				if (!Reach.CanPlace(p, _tx, _ty))
 				{
 					if (Unstick.Handle("placeany-furn", new Blocker(BlockKind.OutOfReach, _tx, _ty, "放家具够不着")))

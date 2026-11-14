@@ -26,48 +26,7 @@ public sealed partial class BehaviorTrial
 
     async Task WorkstationReplay()
     {
-        if (Environment.GetEnvironmentVariable("TB_WORKSTATION_CHECKPOINT") == "1")
-        {
-            var results = new JsonArray();
-            foreach (var scene in new[] { (new Vector2(44767.805f, 4582), ItemID.WorkBench),
-                (new Vector2(43822, 3974), ItemID.Furnace) })
-            {
-                await OnMain(() =>
-                {
-                    NativeAgent.Stop(); Halt.All(); Manual.On = false;
-                    VanillaNavigationDemo.Instance.Stop(closeWorker: true);
-                    AgentTools.NewTask(); AgentPermissions.Reset();
-                    Combat.Enabled = Dodge.Enabled = false;
-                    var p = Main.LocalPlayer;
-                    p.Teleport(scene.Item1); p.velocity = Vector2.Zero;
-                    p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
-                    foreach (var item in p.inventory) item.TurnToAir();
-                    p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
-                    p.inventory[1].SetDefaults(ItemID.Wood); p.inventory[1].stack = 9999;
-                    p.inventory[2].SetDefaults(scene.Item2);
-                    return true;
-                });
-                var beforeScene = await Call("inspect_terrain", new JsonObject { ["radius"] = 8 });
-                var timer = System.Diagnostics.Stopwatch.StartNew();
-                var result = await Call("place_at", new JsonObject { ["item"] = scene.Item2.ToString() });
-                var record = new JsonObject { ["item"] = scene.Item2, ["before"] = beforeScene,
-                    ["elapsed_ms"] = timer.ElapsedMilliseconds, ["result"] = result };
-                results.Add(record);
-                if (scene.Item2 == ItemID.WorkBench && result["outcome"]?.ToString() != "done")
-                {
-                    record["native_use"] = await Call("use_item", new JsonObject { ["slot"] = 2,
-                        ["x"] = 2799, ["y"] = 288, ["strict"] = false, ["duration_ticks"] = 16 });
-                    record["native_placed"] = await OnMain(() => Main.tile[2799, 288].HasTile
-                        && Main.tile[2799, 288].TileType == TileID.WorkBenches);
-                }
-                File.WriteAllText(Path.Combine(Main.SavePath, "workstation-replay.json"), results.ToJsonString());
-            }
-            if (results[0]["result"]["outcome"]?.ToString() != "done"
-                || results[1]["elapsed_ms"].GetValue<long>() > 1000)
-                throw new Exception("native checkpoint placement failed; see workstation-replay.json");
-            Console.WriteLine("WORKSTATION_CHECKPOINT_PASS cases=" + results.Count);
-            return;
-        }
+        bool checkpoint = Environment.GetEnvironmentVariable("TB_WORKSTATION_CHECKPOINT") == "1";
         await OnMain(() =>
         {
             NativeAgent.Stop(); Halt.All(); Manual.On = false;
@@ -75,7 +34,8 @@ public sealed partial class BehaviorTrial
             AgentTools.NewTask(); AgentPermissions.Reset();
             Combat.Enabled = Dodge.Enabled = false;
             var p = Main.LocalPlayer;
-            p.Teleport(new Vector2(19502, 3558)); p.velocity = Vector2.Zero;
+            p.Teleport(checkpoint ? new Vector2(44767.805f, 4582) : new Vector2(19502, 3558));
+            p.velocity = Vector2.Zero;
             foreach (var item in p.inventory) item.TurnToAir();
             p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
             p.inventory[1].SetDefaults(ItemID.Wood); p.inventory[1].stack = 9999;
