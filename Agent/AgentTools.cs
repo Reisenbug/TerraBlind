@@ -707,7 +707,10 @@ public static partial class AgentTools
                 ["crimson"] = healthPlayer.ZoneCrimson, ["corruption"] = healthPlayer.ZoneCorrupt,
                 ["hallow"] = healthPlayer.ZoneHallow, ["dungeon"] = healthPlayer.ZoneDungeon,
                 ["desert"] = healthPlayer.ZoneDesert, ["snow"] = healthPlayer.ZoneSnow, ["ocean"] = healthPlayer.ZoneBeach,
-                ["underground_desert"] = healthPlayer.ZoneUndergroundDesert, ["spider_cave"] = healthPlayer.ZoneSpiderCave };
+                ["underground_desert"] = healthPlayer.ZoneUndergroundDesert };
+            int wallType = Main.tile[(int)healthPlayer.Center.X / 16, (int)healthPlayer.Center.Y / 16].WallType;
+            observedPlayer["background_wall"] = new JsonObject { ["type"] = wallType,
+                ["spider"] = wallType == Terraria.ID.WallID.SpiderUnsafe };
             var ground = new JsonArray();
             int groundY = (int)(healthPlayer.position.Y + healthPlayer.height + 1) / 16;
             for (int x = (int)healthPlayer.position.X / 16; x <= (int)(healthPlayer.position.X + healthPlayer.width - 1) / 16; x++)
