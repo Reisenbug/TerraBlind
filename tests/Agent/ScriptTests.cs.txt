@@ -27,6 +27,7 @@ static class ScriptTests
 
     public static async Task Decisions()
     {
+        await IntentContracts();
         await TestDecisionChannels();
         await TestDecisionTravel();
         await TestJointDecision();
@@ -66,7 +67,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=40 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=41 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -1087,6 +1088,134 @@ static class ScriptTests
         Console.WriteLine("PASS: navigation intent selects separation, expires, respects ownership and permissions, and publishes without movement handoff");
     }
 
+    static async Task IntentContracts()
+    {
+        Check(AgentScript.ContainsInput("return intents({});") && !AgentScript.PreparationOnly("return intents({});"),
+            "intent execution was classified as background preparation");
+        foreach (bool detour in new[] { false, true })
+        {
+            int stage = 0, requests = 0, existingTicks = 0;
+            var actions = new List<string>();
+            string source = """
+                on('tick',()=>{tool('get_state',{tick_probe:true});return {handled:true};});
+                return intents({instruction:'collect while travelling',observe:()=>tool('get_state'),done:s=>s.stage===2,
+                  candidates:s=>s.stage===0?[
+                    {id:'travel',description:'Continue prepared travel',baseline:true,run:()=>tool('nav_to'),verify:r=>r.done},
+                    {id:'loot',description:'Collect nearby useful loot',detour:DETOUR,run:()=>tool('collect_treasure'),verify:r=>r.got===1}
+                  ]:[
+                    {id:'other',description:'A different prepared action',baseline:true,run:()=>tool('mine'),verify:r=>r.done},
+                    {id:'loot',description:'Collect nearby useful loot',run:()=>tool('collect_treasure'),verify:r=>r.got===1}
+                  ]});
+                """.Replace("DETOUR", detour ? "true" : "false");
+            var result = await AgentScript.Run(source, 10, (_, _) => { }, async (name, args, token) =>
+            {
+                if (name == "get_state")
+                {
+                    if (args["tick_probe"] != null) existingTicks++;
+                    return new JsonObject { ["stage"] = stage }.ToJsonString();
+                }
+                if (name == "jev_judge")
+                {
+                    requests++;
+                    return requests == 2 ? new JsonObject { ["status"] = "ready", ["request_id"] = 2,
+                        ["input_state"] = args["state"].DeepClone(), ["result"] = new JsonObject {
+                            ["answers"] = new JsonObject { ["response"] = new JsonObject { ["choice"] = "loot" } } } }.ToJsonString()
+                        : "{\"status\":\"pending\"}";
+                }
+                if (name == "nav_to")
+                {
+                    actions.Add("travel-start");
+                    await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject { ["kind"] = "tick" }, token);
+                    actions.Add("travel-end"); if (stage == 0) stage = 1;
+                    return "{\"done\":true}";
+                }
+                if (name == "collect_treasure") { actions.Add("loot"); stage = 2; return "{\"got\":1}"; }
+                actions.Add("unexpected:" + name); return "{\"done\":true}";
+            }, _ => Task.CompletedTask, default);
+            Check(result["ok"].GetValue<bool>() && result["value"]["status"].ToString() == "completed"
+                && existingTicks == 1 && actions.SequenceEqual(detour ? new[] { "travel-start", "loot", "travel-end" }
+                    : new[] { "travel-start", "travel-end", "loot" }),
+                "intent preselection or detour waited for Agent, lost the original handler, or changed the prepared action: " + result);
+        }
+        int failed = 0, good = 0;
+        var recovered = await AgentScript.Run("""
+            return intents({observe:()=>tool('get_state'),done:s=>s.good===1,candidates:s=>[
+              {id:'blocked',description:'Try observed source',baseline:true,run:()=>tool('mine'),verify:()=>false},
+              {id:'good',description:'Collect alternate source',baseline:true,run:()=>tool('collect_treasure'),verify:r=>r.got===1}
+            ]});
+            """, 10, (_, _) => { }, (name, _, _) => Task.FromResult(name switch {
+                "get_state" => new JsonObject { ["good"] = good }.ToJsonString(),
+                "jev_judge" => "{\"status\":\"pending\"}",
+                "mine" => ++failed > 0 ? "{\"done\":true}" : "{}",
+                "collect_treasure" => ++good > 0 ? "{\"got\":1}" : "{}", _ => "{}"
+            }), _ => Task.CompletedTask, default);
+        Check(recovered["ok"].GetValue<bool>() && recovered["value"]["status"].ToString() == "completed"
+            && failed == 1 && good == 1 && recovered["value"]["blocked"].AsArray().Count == 1,
+            "intent runtime repeated an unverified action or accepted its done flag as actual completion: " + recovered);
+        int mutations = 0;
+        var rejected = await AgentScript.Run("return intents({observe:()=>tool('nav_to'),done:()=>false,candidates:()=>[]});",
+            10, (_, _) => { }, (_, _, _) => { mutations++; return Task.FromResult("{}"); }, _ => Task.CompletedTask, default);
+        Check(!rejected["ok"].GetValue<bool>() && mutations == 0, "intent observer dispatched an input action");
+        var cursor = new ScriptProgress();
+        int blockedRuns = 0, collectedRuns = 0;
+        const string segmented = """
+            return intents({max_actions:1,observe:()=>tool('get_state'),done:s=>s.count===1,candidates:s=>[
+              {id:'blocked',description:'Observed blocked source',baseline:true,run:()=>tool('mine'),verify:()=>false},
+              {id:'collect',description:'Prepared alternative',baseline:true,run:()=>tool('collect_treasure'),verify:r=>r.got===1}
+            ]});
+            """;
+        Task<string> SegmentTool(string name, JsonObject args, CancellationToken token) => Task.FromResult(name switch {
+            "get_state" => new JsonObject { ["count"] = collectedRuns }.ToJsonString(),
+            "jev_judge" => "{\"status\":\"pending\"}",
+            "mine" => ++blockedRuns > 0 ? "{\"done\":true}" : "{}",
+            "collect_treasure" => ++collectedRuns > 0 ? "{\"got\":1}" : "{}", _ => "{}"
+        });
+        var firstSegment = await AgentScript.Run(segmented, 10, (_, _) => { }, SegmentTool, _ => Task.CompletedTask, default, cursor);
+        Check(firstSegment["value"]["status"].ToString() == "continue" && !cursor.Yielded && !cursor.ReviewRequested,
+            "intent segment unnecessarily yielded to Agent instead of preserving host continuation");
+        var secondSegment = await AgentScript.Run(segmented, 10, (_, _) => { }, SegmentTool, _ => Task.CompletedTask, default, cursor);
+        Check(secondSegment["value"]["status"].ToString() == "completed" && blockedRuns == 1 && collectedRuns == 1,
+            "intent segment lost the blocked-source cursor or failed to continue its prepared alternative");
+        var counts = new Dictionary<int, int> { [101] = 0, [102] = 0 };
+        int resourceRequests = 0, chestLoots = 0;
+        bool arrived = false;
+        var resources = await AgentScript.Run("""
+            return skill('resource_intents',0,{instruction:'Collect both resources and useful nearby treasure',
+              targets:[{item_type:101,count:2,tile_names:['FixtureSource']},{item_type:102,count:1,npc_types:[42]}],
+              destination:{x:30,y:20},chests:[{x:20,y:20}]});
+            """, 10, (_, _) => { }, async (name, args, token) =>
+            {
+                if (name == "get_state") return new JsonObject { ["player"] = new JsonObject {
+                    ["pos"] = new JsonObject { ["x"] = (arrived ? 30 : 10) * 16, ["y"] = 20 * 16 } },
+                    ["buffs"] = new JsonArray(),
+                    ["inventory_counts"] = new JsonObject(counts.Select(p => new KeyValuePair<string, JsonNode>(p.Key.ToString(), JsonValue.Create(p.Value)))) }.ToJsonString();
+                if (name == "gather_observe") return new JsonObject { ["candidates"] = new JsonArray(
+                    new JsonObject { ["id"] = "tile101", ["item_type"] = 101, ["kind"] = "tile" },
+                    new JsonObject { ["id"] = "npc102", ["item_type"] = 102, ["kind"] = "npc" }) }.ToJsonString();
+                if (name == "inspect_terrain") return "{\"rows\":[]}";
+                if (name == "opportunity_assess") return "{\"ok\":true}";
+                if (name == "jev_judge")
+                    return ++resourceRequests == 2 ? new JsonObject { ["status"] = "ready", ["request_id"] = 2,
+                        ["input_state"] = args["state"].DeepClone(), ["result"] = new JsonObject {
+                            ["answers"] = new JsonObject { ["response"] = new JsonObject { ["choice"] = "chest_20_20" } } } }.ToJsonString()
+                        : "{\"status\":\"pending\"}";
+                if (name == "nav_to")
+                {
+                    await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject { ["kind"] = "tick" }, token);
+                    arrived = true; return "{\"done\":true}";
+                }
+                if (name == "collect_treasure") { chestLoots++; return "{\"got\":{\"Potion\":1}}"; }
+                Check(name == "gather", "resource intentions dispatched an unexpected tool: " + name);
+                int type = args["targets"][0]["item_type"].GetValue<int>(); counts[type]++;
+                return "{\"outcome\":\"enough\"}";
+            }, _ => Task.CompletedTask, default,
+            programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-intent-skills-" + Guid.NewGuid())).Callable());
+        Check(resources["ok"].GetValue<bool>() && resources["value"]["status"].ToString() == "completed"
+            && counts[101] == 2 && counts[102] == 1 && chestLoots == 1 && arrived,
+            "resource intention skill lost the detour, repeated chest loot or failed actual inventory verification: " + resources);
+        Console.WriteLine("PASS: intents preselect successors during travel, execute resumable detours, retain failed evidence and enforce read-only observation");
+    }
+
     static async Task TestDecisionChannels()
     {
         var channels = new ScriptDecisionChannels();
@@ -1129,6 +1258,12 @@ static class ScriptTests
         Check(reactions.TickDue(channels.CompletionVersion) && !reactions.TickDue(channels.CompletionVersion),
             "a decision answer did not wake the next reaction exactly once");
         var answered = channels.Poll(first, Judge);
+        var display = channels.Snapshot();
+        Check(display.AsArray().Any(row => row["channel"].ToString() == "weapon"
+            && row["answers"]?["choice"]?["choice"]?.ToString() == "retreat")
+            && !display.ToJsonString().Contains("input_state"), "HUD snapshot lost the judgment or copied the large scene");
+        display[0]["status"] = "changed";
+        Check(channels.Snapshot()[0]["status"].ToString() == "ready", "HUD mutated retained decision channels");
         Check(answered["status"].ToString() == "ready" && answered["input_state"]["x"].GetValue<int>() == 10
             && answered["ready_wait_ms"].GetValue<double>() >= 0
             && answered["result"]["answers"]["choice"]["choice"].ToString() == "retreat",
@@ -1859,6 +1994,7 @@ static class ScriptTests
             Check(cancelled, "player cancellation became a model answer");
             Console.WriteLine("PASS: JS Jev judgments preserve typed facts, reject invalid choices and propagate cancellation without fallback actions");
         }
+        await IntentContracts();
         await TestDecisionChannels();
         await TestDecisionTravel();
         await TestJointDecision();

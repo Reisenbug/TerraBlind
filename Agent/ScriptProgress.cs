@@ -18,6 +18,13 @@ public sealed class ScriptProgress
     JsonObject last;
     JsonObject watchPolicy;
     string executedSource;
+    JsonObject intentMemory;
+    internal JsonObject IntentMemory { get { lock (gate) return intentMemory?.DeepClone().AsObject(); } }
+    internal void RecordIntents(JsonObject state)
+    {
+        lock (gate) intentMemory = new JsonObject { ["completed"] = state["completed"]?.DeepClone(),
+            ["blocked"] = state["blocked"]?.DeepClone(), ["verified_actions"] = state["verified_actions"]?.DeepClone() };
+    }
     int stepCalls;
     JsonObject navigationFailure;
     static readonly JsonSerializerOptions JsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
@@ -41,6 +48,7 @@ public sealed class ScriptProgress
         lock (gate)
         {
             if (running) throw new InvalidOperationException("workflow正在执行，不能并发续接。");
+            if (executedSource != source) intentMemory = null;
             executedSource = source;
             running = true; segment++; revision++;
         }

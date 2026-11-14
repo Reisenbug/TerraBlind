@@ -11,8 +11,8 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent" };
-    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents" };
+    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -23,6 +23,47 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "resource_intents") return Template(name,
+            "多目标采集的局部意图循环。input含已查证来源的targets（gather格式），可选destination、chests（已观察的x/y）、source_area、instruction和max_actions。后台Jev在赶路期间预选采集/拾取/开箱；临时处理后恢复原行动。每次采集以库存增长验证，目标数量按真实库存验收。返回blocked保留证据；来源耗尽需要Agent提供新目的地或策略。",
+            """
+            const config=input;
+            if(!Array.isArray(config.targets)||!config.targets.length||config.targets.length>8||(config.chests?.length??0)>6)
+              throw new Error('resource_intents needs 1..8 verified resource targets and at most six observed chests');
+            const count=(s,type)=>s.counts[type]??0;
+            const distance=(s,p)=>Math.hypot(s.player.pos.x/16-p.x,s.player.pos.y/16-p.y);
+            return intents({instruction:config.instruction,max_actions:config.max_actions,
+              observe:()=>{
+                const s=tool('get_state',{fields:['player','inventory_counts','buffs']});
+                const sources=tool('gather_observe',{targets:config.targets,source_area:config.source_area});
+                return {player:s.player,counts:s.inventory_counts,buffs:s.buffs,
+                  sources:sources.candidates.filter(c=>!c.blocked_reason&&c.can_pickup!==false).slice(0,24),
+                  terrain:tool('inspect_terrain',{radius:6})};
+              },
+              done:s=>config.targets.every(t=>count(s,t.item_type)>=t.count),
+              candidates:s=>{
+                const choices=[],travelling=config.destination&&distance(s,config.destination)>6;
+                if(travelling) choices.push({id:'travel',description:'Continue to the prepared resource area',baseline:true,
+                  evidence:{destination:config.destination,distance:distance(s,config.destination)},
+                  run:()=>tool('nav_to',config.destination),verify:(r,b,a)=>r.done===true&&distance(a,config.destination)<=6});
+                for(const target of config.targets){
+                  const actual=count(s,target.item_type),sources=s.sources.filter(c=>c.item_type===target.item_type);
+                  if(actual>=target.count||!sources.length) continue;
+                  choices.push({id:'resource_'+target.item_type,version:JSON.stringify([actual,...sources.map(c=>c.id).sort()]),
+                    description:'Collect one more unit of resource '+target.item_type,baseline:!travelling,detour:!!travelling,
+                    evidence:{target,actual,sources:sources.slice(0,3)},
+                    run:()=>tool('gather',{targets:[{...target,count:actual+1}],source_area:config.source_area}),
+                    verify:(r,b,a)=>count(a,target.item_type)>count(b,target.item_type)});
+                }
+                for(const chest of config.chests??[]){
+                  const assessed=tool('opportunity_assess',chest);
+                  if(!assessed.ok||distance(s,chest)>40) continue;
+                  choices.push({id:'chest_'+chest.x+'_'+chest.y,description:'Loot the observed nearby chest',detour:true,baseline:!choices.some(c=>c.baseline),
+                    evidence:{chest,assessment:assessed},run:()=>tool('collect_treasure',chest),
+                    verify:r=>!r.error&&Object.values(r.got??{}).some(n=>n>0)});
+                }
+                return choices;
+              }});
+            """);
         if (name == "combat_loadout") return Template(name,
             "内置随身武器判断，可直接调用revision=0。input含combat_assess返回的combat、instruction及last_request；Jev从含弹药与射界事实的武器中选择。背包武器换入已有武器槽或空快捷栏槽，交换前刷新type/prefix/stack，保留原物品；无合适槽位返回needs_review。原动作在判断期间继续。",
             """

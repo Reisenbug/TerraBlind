@@ -1,5 +1,23 @@
 # 内置 Agent
 
+### 局部意图与连续执行
+
+节点脚本可用 `intents({observe, candidates, done, instruction, max_actions})` 组织局部行动。`observe()` 返回当前现场；`candidates(scene)` 返回最多16项候选；`done(scene)` 核对本段目标。每个候选包含：
+
+- `id`：稳定标识；`version`：目标或事实版本，相关事实改变时更新。
+- `description`、`evidence`：给 Jev 的用途描述和实际证据。
+- `baseline: true`：判断尚未返回时，Agent 预先许可的默认行动。
+- `detour: true`：可在当前动作途中执行，处理后恢复原行动。
+- `run(before)`：执行动作或技能；`verify(result, before, after)`：用实际反馈核对完成。
+
+观察、候选生成、完成判断和验证回调只读。Jev 在动作执行期间预选后继；新选择经当前候选及版本校验后生效。相同版本的已完成或失败候选保存在 workflow 游标中，源码修改后重新评估。默认每段8次行动，返回 `continue` 后宿主可自动续跑当前 DAG 节点；候选耗尽时返回 `needs_review` 和失败证据。整项任务仍以 `task_step verify` 和最终验收为准。
+
+已有 `resource_intents` 内置技能，可直接 `skill('resource_intents', 0, config)`。`config.targets` 使用已查证来源的 gather 参数；可提供当前世界查到的 `destination`、最多6个已观察箱子的 `chests`、`source_area` 和 `instruction`。它组合赶路、多种资源采集、拾取和临时开箱，每次资源收集以真实库存增长核对。节点脚本继续使用默认安全策略，临场武器和避让由已有战术机制处理。
+
+`get_state({fields:['local_intents']})` 提供当前意图、预备意图、验证反馈及已完成/受阻游标。屏幕右下方自动汇总这份状态和各 Jev 通道的最新判断；局部行动的逐工具进度保留在日志中，聊天框只显示外层任务消息。
+
+### 接入与配置
+
 默认使用本机 Codex 后端。先安装 Codex CLI 并执行 `codex login`；mod 在首次收到任务时自动启动 `codex app-server`，不需要 Python 或额外终端窗口。在模组配置 → TerraBlind → 内置 Agent 中：
 
 - 使用 Codex 后端：默认开启。

@@ -62,6 +62,7 @@ public static partial class AgentTools
 
     internal static void ClearTaskPolicy(bool resetRevision = false)
     {
+        if (resetRevision) AgentScript.ResetIntents();
         AgentNavigationIntent.Reset();
         CombatForecast.Reset();
         DecisionChannels.Reset();
@@ -618,6 +619,7 @@ public static partial class AgentTools
     public static void NewTask() { ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
+        AgentScript.ResetIntents();
         AgentNavigationIntent.Reset();
         DecisionChannels.Reset();
         Actions.CancelAll();
@@ -801,6 +803,7 @@ public static partial class AgentTools
         state["script_workflows"] = workflows;
         state["action_tasks"] = Actions.Summary();
         state["dag_continuation"] = LastContinuation?.DeepClone();
+        state["local_intents"] = AgentScript.IntentStatus;
         state["execution_continuity"] = ExecutionContinuity?.DeepClone();
         state["last_route_loot"] = LastRouteLoot?.DeepClone();
         state["control_overrides"] = Control.Snapshot();
@@ -1366,12 +1369,13 @@ public static partial class AgentTools
 
     static async Task<string> ExecuteCore(string name, JsonObject args, CancellationToken token)
     {
+        bool localIntent = AgentScript.CurrentIntent.Value != null;
         var before = await NativeAgent.OnMain(() =>
         {
             DiagLog.Write($"[agent] tool {name} {args}");
             if (!ObservationTool(name) && name is not ("say" or "ask" or "nav_intent"))
                 NativeAgent.Progress("开始执行：" + name, "执行 " + name,
-                    !PvpDuel.Active && !name.StartsWith("combat_"));
+                    !localIntent && !PvpDuel.Active && !name.StartsWith("combat_"));
             return name is "get_state" or "say" or "ask" or "wiki_search" or "wiki_page" ? null : Inventory();
         }, token);
         if (name == "get_state") return await State(token, Bool(args, "include_tiles"), Bool(args, "include_watch_history"), args["fields"] as JsonArray);
@@ -2457,12 +2461,13 @@ public static partial class AgentTools
 
     static async Task<string> ToolFinished(string name, string output, CancellationToken token)
     {
+        bool localIntent = AgentScript.CurrentIntent.Value != null;
         return await NativeAgent.OnMain(() =>
         {
             DiagLog.Write($"[agent] result {name} {output}");
             if (!ObservationTool(name))
-                NativeAgent.Progress("执行结束：" + name + "，等待下一步决策。", "等待模型决策",
-                    !PvpDuel.Active && !name.StartsWith("combat_"));
+                NativeAgent.Progress(localIntent ? "局部意图完成：" + name : "执行结束：" + name + "，等待下一步决策。",
+                    localIntent ? "局部行动续接" : "等待模型决策", !localIntent && !PvpDuel.Active && !name.StartsWith("combat_"));
             return output;
         }, token);
     }

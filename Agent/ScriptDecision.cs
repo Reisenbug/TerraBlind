@@ -80,6 +80,30 @@ public sealed class ScriptDecisionChannels
     long completionVersion;
     public long CompletionVersion => Interlocked.Read(ref completionVersion);
 
+    public JsonArray Snapshot()
+    {
+        lock (gate)
+        {
+            var rows = new JsonArray();
+            foreach (var (name, channel) in channels)
+            {
+                var answers = new JsonObject();
+                if (channel.Answer?["result"]?["answers"] is JsonObject source)
+                    foreach (var (question, answer) in source)
+                        answers[question] = new JsonObject { ["choice"] = answer?["choice"]?.DeepClone(),
+                            ["noul"] = answer?["noul"]?.DeepClone() };
+                rows.Add(new JsonObject { ["channel"] = name,
+                    ["request_id"] = channel.Answer?["request_id"]?.DeepClone(),
+                    ["status"] = channel.Answer == null ? "pending" : channel.Answer["result"]?["error"] == null ? "ready" : "failed",
+                    ["in_flight"] = channel.Pending != null,
+                    ["answers"] = answers,
+                    ["error"] = channel.Answer?["result"]?["error"]?.DeepClone(),
+                    ["elapsed_ms"] = channel.Answer?["result"]?["elapsed_ms"]?.DeepClone() });
+            }
+            return rows;
+        }
+    }
+
     public JsonObject Poll(JsonObject args, Func<JsonObject, CancellationToken, Task<JsonObject>> judge)
     {
         string name = args["channel"]?.GetValue<string>();

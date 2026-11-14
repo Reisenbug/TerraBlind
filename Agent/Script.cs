@@ -11,6 +11,98 @@ namespace TerraBlind;
 
 public static class AgentScript
 {
+    internal static readonly AsyncLocal<string> CurrentIntent = new();
+    static readonly object intentGate = new();
+    static JsonObject intentStatus;
+    public static JsonObject IntentStatus { get { lock (intentGate) return intentStatus?.DeepClone().AsObject(); } }
+    internal static void ResetIntents() { lock (intentGate) intentStatus = null; }
+
+    const string IntentRuntime = """
+        let intentLoopActive=false;
+        const intents=options=>{
+          if(intentLoopActive||handling) throw new Error('intents must run once in the main script');
+          if(typeof options.observe!=='function'||typeof options.candidates!=='function'||typeof options.done!=='function')
+            throw new Error('intents needs observe, candidates and done callbacks');
+          const limit=options.max_actions??8;
+          if(!Number.isInteger(limit)||limit<1||limit>32) throw new Error('max_actions needs 1..32');
+          const context=options.context??'intents:'+Date.now();
+          const blocked=new Map((intentMemory.blocked??[]).map(c=>[c.id,c]));
+          const completed=new Map((intentMemory.completed??[]).map(c=>[c.id,c]));
+          let current=null,prepared=null,scene=null,pool=[],lastRequest=null,feedback=null,count=0,finished=false,terminal='continue';
+          let verifiedActions=intentMemory.verified_actions??0;
+          const key=c=>stringify([c.id,c.version??0]);
+          const describe=c=>c?{id:c.id,version:c.version??0,description:c.description}:null;
+          const publish=status=>setIntent(stringify({status,current:describe(current),prepared:describe(prepared),
+            candidates:pool.map(describe),feedback,actions:count,verified_actions:verifiedActions,
+            completed:[...completed.values()],blocked:[...blocked.values()]}),false);
+          const read=fn=>{setIntent('',true);try{return fn();}finally{setIntent('',false);}};
+          const refresh=()=>read(()=>{
+            scene=options.observe();
+            finished=options.done(scene)===true;
+            const available=finished?[]:options.candidates(scene);
+            if(!Array.isArray(available)||available.length>16) throw new Error('intents candidates needs up to 16 entries');
+            const ids=new Set();
+            for(const c of available){
+              if(typeof c.id!=='string'||!c.id.length||ids.has(c.id)||typeof c.description!=='string'
+                ||typeof c.run!=='function'||typeof c.verify!=='function')
+                throw new Error('each intent needs a unique id, description, run and verify');
+              ids.add(c.id);
+            }
+            pool=available.filter(c=>key(blocked.get(c.id)??{})!==key(c)&&key(completed.get(c.id)??{})!==key(c));
+            if(prepared) prepared=pool.find(c=>key(c)===key(prepared))??null;
+          });
+          const choose=()=>{
+            if(finished||!pool.length){prepared=null;return;}
+            if(pool.length===1){prepared=pool[0];return;}
+            const r=tool('jev_judge',{channel:'local_intents',context,interval_ms:options.interval_ms??500,
+              max_age_ms:options.max_age_ms??1500,state:{instruction:options.instruction??'',scene,current:describe(current),feedback,
+                candidates:pool.map(c=>({...describe(c),evidence:c.evidence,detour:c.detour===true}))},
+              questions:{response:{type:'choice',instructions:'Which available local intention best advances the instruction in this scene? Consider useful progress, threats, effort and the current intention. A detour returns to the current action.',
+                criteria:Object.fromEntries(pool.map(c=>[c.id,c.description]))}}});
+            if(r.status==='pending'||r.request_id===lastRequest) return;
+            lastRequest=r.request_id;
+            if(r.status!=='ready'){feedback={error:r.result?.error??'decision_unavailable'};return;}
+            const id=r.result.answers.response.choice;
+            const sampled=r.input_state.candidates.find(c=>c.id===id);
+            prepared=sampled?pool.find(c=>key(c)===key(sampled))??null:null;
+          };
+          const execute=c=>{
+            const before=scene;
+            if(prepared&&key(prepared)===key(c)) prepared=null;
+            current=c;count++;publish('executing');
+            const result=c.run(before);
+            refresh();
+            const verified=read(()=>c.verify(result,before,scene))===true;
+            feedback={...describe(c),verified,error:result?.error,outcome:result?.outcome};
+            if(verified){completed.set(c.id,describe(c));verifiedActions++;}else blocked.set(c.id,feedback);
+            publish(verified?'verified':'blocked');
+          };
+          intentLoopActive=true;
+          on('tick',()=>{
+            if(!intentLoopActive||!current||count>=limit) return {handled:true};
+            refresh();choose();publish('executing');
+            if(prepared?.detour&&key(prepared)!==key(current)){
+              const parent=current,detour=prepared;
+              execute(detour);current=parent;publish('executing');
+            }
+            return {handled:true};
+          },{append:true});
+          try{
+            while(count<limit){
+              refresh();
+              if(finished){current=null;terminal='completed';return {status:'completed',actions:count,completed:[...completed.values()],blocked:[...blocked.values()]};}
+              choose();
+              const next=prepared??pool.find(c=>c.baseline===true);
+              if(!next){current=null;terminal='needs_review';return {status:'needs_review',error:pool.length?'no_prepared_baseline':'no_executable_intent',
+                actions:count,completed:[...completed.values()],blocked:[...blocked.values()]};}
+              execute(next);current=null;
+            }
+            refresh();terminal=finished?'completed':'continue';
+            return {status:terminal,reason:finished?undefined:'intent_segment_complete',actions:count,completed:[...completed.values()],blocked:[...blocked.values()]};
+          }finally{intentLoopActive=false;current=null;publish(terminal);}
+        };
+        """;
+
     internal static readonly AsyncLocal<Reactions> CurrentReactions = new();
     internal static readonly AsyncLocal<CancellationToken> ReactionCancellation = new();
 
@@ -113,7 +205,7 @@ public static class AgentScript
             var ast = new Acornima.Parser().ParseScript("(function(){\n" + source + "\n});");
             bool Visit(Acornima.Ast.Node node) => node is Acornima.Ast.CallExpression call
                 && call.Callee is Acornima.Ast.Identifier name
-                && (name.Name == "skill" || name.Name == "tool" && call.Arguments.Count > 0
+                && (name.Name is "skill" or "intents" || name.Name == "tool" && call.Arguments.Count > 0
                     && call.Arguments[0] is Acornima.Ast.StringLiteral tool
                     && (AgentControlSession.ActionTool(tool.Value) || tool.Value == "action_start"))
                 || node.ChildNodes.Any(Visit);
@@ -134,14 +226,14 @@ public static class AgentScript
                 if (node is Acornima.Ast.Identifier id)
                 {
                     if (id.Name == "tool") references++;
-                    if (id.Name == "skill") dynamicOrAction = true;
+                    if (id.Name is "skill" or "intents") dynamicOrAction = true;
                 }
                 if (node is Acornima.Ast.CallExpression call && call.Callee is Acornima.Ast.Identifier { Name: "tool" })
                 {
                     if (call.Arguments.Count > 0 && call.Arguments[0] is Acornima.Ast.StringLiteral name
                         && name.Value is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
                             or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "item_info" or "wiki_search" or "wiki_page"
-                            or "recipe" or "script_program" or "jev_judge" or "find_biome" or "tile_names" or "find_descent" or "descent_route"
+                            or "recipe" or "script_program" or "jev_judge" or "gather_observe" or "find_biome" or "tile_names" or "find_descent" or "descent_route"
                             or "equipment_list" or "inventory_review" or "npc_find" or "npc_drop_sources" or "script_progress" or "script_report" or "house_site") queries++;
                     else dynamicOrAction = true;
                 }
@@ -322,6 +414,7 @@ public static class AgentScript
         + "\n途中反应：先用on(kind,event=>{...;return {handled:true};})注册本次脚本的处理函数，再执行主任务。watch订阅nearby_tile/nearby_chest/nearby_drop/nearby_npc_killed/inventory_full等现场事件；tick每250ms提供一次本地检查机会，适合检查受伤、威胁和武器，combat_assess提供事实。导航及gather内部导航会执行处理函数，原脚本和主动作句柄保持；只读和背包操作保持路线运行，需要移动/挖掘/放置时交接控制，结束后按当前位置重启原目的地。处理函数可调用tool/skill/step，步骤与主任务隔离。返回handled:false交回Agent；未注册事件沿用原交付。注册仅本次脚本有效，重新执行源码会使用新处理函数。"
         + "宿主已启用默认策略skill('safety_reactions',0);，含Jev联合自保、回城和局部障碍恢复。先get当前task_policy；扩展时保留技能调用，用on(kind,handler,{append:true})组合资源和背包反应；局部调整用patch，完整策略重写用set。节点script推进主任务，局部on处理该节点的特别情况。task_policy覆盖当前节点、后继节点、恢复脚本和独立后台动作。event.execution给出实际工具及args，event.task_node为所属节点，可据此决定顺路采集与返回。赶路时更新策略，初始化期间当前动作继续。task_reactions模板可用于整趟任务，reactive_travel用于单段。"
         + "快速现场判断可在tick里用jev_judge的channel/context后台发起，读取ready中的request_id、input_state和result后按现场执行，等待期间原动作继续。script_program example decision_reactions提供weapon/movement/opportunity三个可独立启停的可编辑示例，decisions数组选择维度，instruction给当前意图；保存为技能后可在task_policy中用skill调用。"
+        + "\n多目标短程接续用intents({observe,candidates,done,instruction,max_actions})。observe返回现场，candidates返回最多16个候选，每个含稳定id、version、description、run和verify(result,before,after)；baseline:true是Agent预先许可的默认行动，detour:true可途中执行并恢复原动作。observe/candidates/done/verify只读。Jev在动作中预选后继，完成以verify的真实状态核对；失败候选同版本不会重复执行。max_actions默认8，达到后返回continue，宿主可自动续本节点；completed/blocked游标保存在workflow，源码修改时重新评估。已查证资源可直接skill('resource_intents',0,{targets,destination,chests,instruction})，含多类采集、赶路和开箱；来源与地点由当前世界工具查询，目标数量按真实库存。get_state.local_intents可读当前意图、预备意图和反馈。"
         + "处理函数可返回{handled:true,agent_review:{key,reason,evidence}}请求Agent后台调整方案，原动作继续且处理函数保留。key标识同一问题，宿主按key去重并共享每指令6次机会唤醒预算；evidence保留关键现场，最多8000字符。"
         + "组合策略时先skill注册基础处理，再on(kind,handler,{append:true})追加该事件的处理；依注册顺序执行，handled:false交回审阅或retry:true重试时结束本次处理链。on默认替换同名处理。task_policy只写skill调用和增补代码，完整技能保存在script_program。"
         + "挖掘、use_item、place_at和act执行期间同样投递事件：只读判断立即运行，处理函数的物品或移动动作在当前原子动作完成后交接；原动作结果先保存，随后主脚本继续。长段输入拆成有明确世界结果的短动作，让策略及时接手。"
@@ -379,9 +472,14 @@ public static class AgentScript
         Exception hostFailure = null;
         JsonObject wake = null;
         JsonObject lastFailure = null;
+        string intentOwner = Guid.NewGuid().ToString("N");
+        bool observingIntent = false;
         string Clip(string text, int limit) => text.Length <= limit ? text : text[..limit] + "…";
         JsonObject Report(string error, string detail, JsonNode value = null, int? omittedOutputChars = null)
         {
+            lock (intentGate)
+                if (intentStatus?["owner"]?.ToString() == intentOwner)
+                { intentStatus["status"] = error == null ? intentStatus["status"]?.ToString() ?? "returned" : "interrupted"; intentStatus["current"] = null; }
             foreach (var call in skillCalls.Where(call => call["status"]?.ToString() == "running"))
             {
                 call["status"] = "interrupted";
@@ -463,6 +561,9 @@ public static class AgentScript
                     if (name is "run_script" or "ask") throw new InvalidOperationException("脚本内禁止嵌套run_script或ask；需要决策时return交回模型。");
                     if (json == null || json.Length > 32000) throw new ArgumentException("工具参数超过32000字符。");
                     var args = JsonNode.Parse(json) as JsonObject ?? throw new ArgumentException("工具参数必须是JSON对象。");
+                    if (observingIntent && (!PreparationOnly("tool(" + JsonValue.Create(name).ToJsonString() + ",{});")
+                        || name == "game_api" || name == "script_program" && args["operation"]?.ToString() is not ("get" or "list" or "example")))
+                        throw new InvalidOperationException("intent observation and verification callbacks are read-only");
                     try { validate(name, args); }
                     catch (ArgumentException error)
                     {
@@ -534,6 +635,21 @@ public static class AgentScript
                     logs.Add(Clip(text ?? "null", 1000));
                     DiagLog.Write("[script_log] " + Clip(text ?? "null", 1000));
                 }));
+                engine.SetValue("__gameIntent", new Action<string, bool>((json, observing) =>
+                {
+                    budget.Token.ThrowIfCancellationRequested();
+                    observingIntent = observing;
+                    if (json.Length == 0) return;
+                    var state = JsonNode.Parse(json).AsObject(); state["owner"] = intentOwner;
+                    CurrentIntent.Value = state["current"]?["id"]?.ToString();
+                    progress?.RecordIntents(state);
+                    lock (intentGate)
+                    {
+                        if (JsonNode.DeepEquals(intentStatus, state)) return;
+                        intentStatus = state;
+                    }
+                    DiagLog.Write("[local_intents] " + state.ToJsonString());
+                }));
                 engine.SetValue("__stepEnter", new Func<string, string>(id =>
                     ((reactions.Handling ? handlerProgress : progress) ?? throw new InvalidOperationException("step需要run_script.workflow。 ")).Enter(id).ToJsonString()));
                 engine.SetValue("__stepComplete", new Action<string, string>((id, json) =>
@@ -574,7 +690,7 @@ public static class AgentScript
                         + ",run:function(input){\n" + code + "\n}}";
                 }));
                 string wrapper = """
-                    (function(call, log, enter, complete, enterSkill, exitSkill, register, setHandling) {
+                    (function(call, log, enter, complete, enterSkill, exitSkill, register, setHandling, setIntent) {
                         delete globalThis.__gameTool;
                         delete globalThis.__gamePrint;
                         delete globalThis.__stepEnter;
@@ -583,6 +699,7 @@ public static class AgentScript
                         delete globalThis.__skillExit;
                         delete globalThis.__gameOn;
                         delete globalThis.__gameHandling;
+                        delete globalThis.__gameIntent;
                         const stringify = JSON.stringify;
                         const parse = JSON.parse;
                         const handlers = new Map();
@@ -656,6 +773,7 @@ public static class AgentScript
                                 return value;
                             } finally { stepPrefix = previous; }
                         };
+                    """ + "const intentMemory=" + (progress?.IntentMemory?.ToJsonString() ?? "{}") + ";\n" + IntentRuntime + """
                         const value = (function() {
                     """ + source + """
 
@@ -663,7 +781,7 @@ public static class AgentScript
                         if (value && typeof value.then === 'function') throw new Error('使用同步tool调用，不支持Promise返回');
                         const result = stringify({value});
                         return result;
-                    })(__gameTool, __gamePrint, __stepEnter, __stepComplete, __skillEnter, __skillExit, __gameOn, __gameHandling)
+                    })(__gameTool, __gamePrint, __stepEnter, __stepComplete, __skillEnter, __skillExit, __gameOn, __gameHandling, __gameIntent)
                     """;
                 var output = engine.Evaluate(wrapper).AsString();
                 if (hostFailure != null) throw hostFailure;
