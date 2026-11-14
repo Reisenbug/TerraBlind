@@ -19,7 +19,7 @@ using TerraBlind;
 
 namespace Engine;
 
-public sealed class BehaviorTrial : ModSystem
+public sealed partial class BehaviorTrial : ModSystem
 {
     readonly ConcurrentQueue<Action> queue = new();
     bool enabled, opened, finished;
@@ -249,9 +249,11 @@ public sealed class BehaviorTrial : ModSystem
         }
     }
     bool Natural => Environment.GetEnvironmentVariable("TB_BEHAVIOR_NATURAL") == "1";
-    bool NaturalEncounters => Environment.GetEnvironmentVariable("TB_NATIVE_ENCOUNTERS") == "1";
+    bool NaturalEncounters => Environment.GetEnvironmentVariable("TB_NATIVE_ENCOUNTERS") == "1"
+        || Environment.GetEnvironmentVariable("TB_SKILL_LEARNING") == "1";
     bool FullCraftTrial => Environment.GetEnvironmentVariable("TB_FULL_CRAFT_TRIAL") == "1";
-    int FrameLimit => DungeonTrial || FullCraftTrial || Environment.GetEnvironmentVariable("TB_HIVE_BUILD") == "1" ? 111600 : Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1"
+    int FrameLimit => Environment.GetEnvironmentVariable("TB_SKILL_LEARNING") == "1" ? 36000
+        : DungeonTrial || FullCraftTrial || Environment.GetEnvironmentVariable("TB_HIVE_BUILD") == "1" ? 111600 : Environment.GetEnvironmentVariable("TB_MATERIAL_MODEL_REVIEW") == "1"
         || Environment.GetEnvironmentVariable("TB_MATERIAL_AGENT_LIVE") == "1" ? 14400
         : Environment.GetEnvironmentVariable("TB_OPPORTUNITY_AGENT_LIVE") == "1"
             || Environment.GetEnvironmentVariable("TB_SOURCE_KNOWLEDGE_AGENT") == "1" ? 9600 : 7200;
@@ -544,6 +546,9 @@ public sealed class BehaviorTrial : ModSystem
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         if (frames++ == 0) Main.playerInventory = true;
+        if (Environment.GetEnvironmentVariable("TB_SKILL_LEARNING") == "1")
+            foreach (var npc in Main.npc)
+                if (npc.active && !learningTargets.Contains(npc.whoAmI)) npc.active = false;
         if ((ShortJungleTrial || ProgressionTrial) && shortJungleClock != null && firstJungleAction == null
             && ((AgentControlSession)SessionField.GetValue(null)).PrimaryActive)
         {
@@ -862,6 +867,7 @@ public sealed class BehaviorTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_SKILL_LEARNING") == "1") { await SkillLearningRun(); return; }
         if (Environment.GetEnvironmentVariable("TB_MINING_SPEED_TRIAL") == "1") { await MiningSpeedTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_ATOMIC_POLICY_TRIAL") == "1") { await AtomicPolicyTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_OPEN_ITEM_PROBE") == "1")

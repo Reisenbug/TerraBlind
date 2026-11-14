@@ -19,6 +19,219 @@ namespace Engine;
 
 public sealed class Engine : Mod { }
 
+public sealed partial class BehaviorTrial
+{
+    int[] learningTargets = Array.Empty<int>();
+    readonly Vector2 learningOrigin = new(3200, 3158);
+
+    async Task LearningScene(bool transfer = false)
+    {
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false;
+            VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+            AgentTools.NewTask();
+            Config.I.AgentEnabled = true;
+            Combat.Enabled = Dodge.Enabled = Concessions.Enabled = false;
+            Main.GameMode = 0; Main.dayTime = true; Main.time = 18000;
+            for (int x = 160; x <= 240; x++)
+            for (int y = 170; y <= 205; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                if (y >= 200) tile.ResetToType(TileID.Dirt);
+            }
+            var player = Main.LocalPlayer;
+            player.Teleport(learningOrigin); player.velocity = Vector2.Zero;
+            player.fallStart = player.fallStart2 = (int)(player.position.Y / 16);
+            player.statLife = player.statLifeMax = player.statLifeMax2 = 100;
+            player.itemAnimation = player.itemTime = 0; player.channel = false;
+            player.releaseUseItem = player.releaseJump = true;
+            foreach (var item in player.inventory) item.TurnToAir();
+            foreach (var item in player.armor) item.TurnToAir();
+            player.inventory[0].SetDefaults(ItemID.Mace); player.selectedItem = 0;
+            foreach (var shot in Main.projectile) if (shot.active && shot.owner == player.whoAmI) shot.Kill();
+            foreach (var npc in Main.npc) npc.active = false;
+            learningTargets = new int[2];
+            for (int i = 0; i < 2; i++)
+            {
+                float distance = i == 0 ? 44 : transfer ? 112 : 128;
+                var position = player.Center + new Vector2((transfer ? -1 : 1) * distance, -12);
+                int index = NPC.NewNPC(player.GetSource_FromThis(), (int)position.X, (int)position.Y, NPCID.BlueSlime);
+                var npc = Main.npc[index];
+                npc.position = position - new Vector2(npc.width / 2f, 0);
+                npc.velocity = Vector2.Zero; npc.aiStyle = -1; npc.noGravity = true;
+                npc.damage = npc.defense = 0; npc.knockBackResist = 0;
+                npc.life = npc.lifeMax = 10000; npc.timeLeft = 36000;
+                learningTargets[i] = index;
+            }
+            return true;
+        });
+        await Call("set_combat", new JsonObject { ["auto_attack"] = false, ["auto_dodge"] = false,
+            ["boss_control"] = false });
+    }
+
+    static IEnumerable<JsonObject> LearningReceipts(JsonNode value)
+    {
+        if (value is JsonObject obj)
+        {
+            if (obj["observation"] is JsonObject receipt) yield return receipt;
+            foreach (var pair in obj)
+                foreach (var nested in LearningReceipts(pair.Value)) yield return nested;
+        }
+        if (value is JsonArray array)
+            foreach (var entry in array)
+                foreach (var nested in LearningReceipts(entry)) yield return nested;
+    }
+
+    static JsonNode LearningView(JsonNode value)
+    {
+        if (value is JsonObject obj)
+        {
+            if (obj["slot"]?.ToString() == "0" && obj["name"] != null)
+            {
+                obj["name"] = "Experimental weapon"; obj.Remove("id"); obj.Remove("type");
+            }
+            if (obj["held_item"] is JsonObject held)
+            {
+                held["name"] = "Experimental weapon"; held.Remove("id"); held.Remove("type");
+            }
+            if (obj["identity"] != null && obj["transitions"] != null) obj.Remove("type");
+            foreach (var pair in obj) LearningView(pair.Value);
+        }
+        else if (value is JsonArray array) foreach (var entry in array) LearningView(entry);
+        return value;
+    }
+
+    async Task SkillLearningRun()
+    {
+        await LearningScene();
+        string directory = Path.Combine(Main.SavePath, "skill-learning"); Directory.CreateDirectory(directory);
+        if (Environment.GetEnvironmentVariable("TB_SKILL_LEARNING_CALIBRATE") == "1")
+        {
+            var check = await Call("act", JsonNode.Parse("""
+                {"observe":true,"steps":[
+                  {"slot":0,"rel":[8,-1],"use":true,"until":{"frames":60}},
+                  {"rel":[8,-1],"use":false,"until":{"frames":7}},
+                  {"rel":[8,-1],"use":true,"until":{"frames":45}},
+                  {"use":false,"until":{"frames":90}}]}
+                """).AsObject());
+            File.WriteAllText(Path.Combine(directory, "calibration.json"), check.ToJsonString());
+            var observed = check["observation"];
+            if (observed == null || observed["sampled_frames"].GetValue<int>() < 100)
+                throw new Exception("native action observation did not cover the calibration frames");
+            Console.WriteLine("SKILL_LEARNING_CALIBRATION " + observed.ToJsonString());
+            return;
+        }
+        if (!ModLoader.TryGetMod("TerraBlind", out var production)) throw new Exception("production mod missing");
+        var all = JsonNode.Parse(System.Text.Encoding.UTF8.GetString(production.GetFileBytes("Agent/Tools.json"))).AsArray();
+        AgentControlSession.DescribeClaims(all); AgentScript.DescribePrograms(all);
+        string[] allowed = { "get_state", "act", "script_program", "run_script", "inspect_terrain", "game_api" };
+        var schemas = new JsonArray(all.Where(schema => allowed.Contains(schema["function"]["name"].ToString()))
+            .Select(schema => schema.DeepClone()).ToArray());
+        schemas.First(schema => schema["function"]["name"].ToString() == "run_script")["function"]["parameters"] = new JsonObject {
+            ["type"] = "object", ["properties"] = new JsonObject { ["code"] = new JsonObject { ["type"] = "string" } },
+            ["required"] = new JsonArray("code") };
+        var calls = new JsonArray(); var replies = new JsonArray();
+        var trialIds = new HashSet<string>();
+        var library = new ScriptLibrary(Path.Combine(Main.SavePath, "TerraBlindAgent", "programs"));
+        async Task<string> ExecuteLearning(string name, JsonObject args, CancellationToken token)
+        {
+            if (!allowed.Contains(name) || calls.Count >= 80) throw new InvalidOperationException("learning tool budget exceeded");
+            var entry = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() }; calls.Add(entry);
+            JsonNode value;
+            if (name == "run_script")
+                value = await AgentScript.Run(args["code"].ToString(), 30,
+                    (tool, _) => { if (!allowed.Contains(tool)) throw new ArgumentException("tool unavailable in this experiment: " + tool); },
+                    ExecuteLearning, _ => Task.CompletedTask, token, programs: library.Callable(),
+                    onResult: report => library.RecordCalls(report["skill_calls"].AsArray(), Main.worldName));
+            else
+            {
+                if (name == "act") args["observe"] = true;
+                value = JsonNode.Parse(await AgentTools.Execute(name, args, token));
+            }
+            foreach (var receipt in LearningReceipts(value)) trialIds.Add(receipt["id"].ToString());
+            entry["result"] = value.DeepClone();
+            File.WriteAllText(Path.Combine(directory, "calls.json"), calls.ToJsonString());
+            if (name == "get_state" && value is JsonObject state)
+            {
+                var compact = new JsonObject();
+                foreach (string key in new[] { "player", "equipment", "enemies", "inventory_slots" })
+                    if (state[key] != null) compact[key] = state[key].DeepClone();
+                value = compact;
+            }
+            return LearningView(value).ToJsonString();
+        }
+        using var session = new CodexAgent();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(8));
+        const string prompt = """
+            Investigate the unlabeled weapon in inventory slot 0 through real game experiments. Discover its distinct control methods.
+            The two passive targets have different distances. Keep the player at the starting position. Damage is native engine damage.
+            Use act(observe:true) for experiments. Compare input timing, cursor direction and observed projectile motion and damage.
+            Form and revise hypotheses using observations; substantiate every claimed method with experiment IDs.
+            Save a reusable JS skill named learned_weapon with script_program. Its function body receives input.
+            input.report=true must return {methods:[{id,description,evidence:[experiment_id,...]}]} without performing actions.
+            Otherwise input.method selects one of your method IDs and input.target_id selects an observed NPC.
+            Read current game state to aim at that target and execute the method with observed act; return the action result.
+            The same source will be tested on targets moved to the other side at different distances, with no further model help.
+            Finish by reporting the discoveries and evidence. Prefer few informative experiments. No files, shell, source lookup or wiki.
+            """;
+        File.WriteAllText(Path.Combine(directory, "prompt.txt"), prompt);
+        var learningClock = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await session.RunAsync(prompt, "", Path.Combine(Main.SavePath, "TerraBlindAgent"), "gpt-6.1-sol",
+                "You learn game controls experimentally and save executable JavaScript skills. The item name is deliberately hidden.\n"
+                    + AgentScript.RuntimeInstructions,
+                schemas, ExecuteLearning,
+                text => { replies.Add(text); File.WriteAllText(Path.Combine(directory, "replies.json"), replies.ToJsonString()); }, deadline.Token);
+        }
+        finally { File.WriteAllText(Path.Combine(directory, "calls.json"), calls.ToJsonString()); }
+        long learningMs = learningClock.ElapsedMilliseconds;
+        var saved = library.Get("learned_weapon");
+        if (saved["found"]?.GetValue<bool>() != true || trialIds.Count < 2)
+            throw new Exception("learning did not produce a saved skill and multiple native trials");
+        int revision = saved["revision"].GetValue<int>();
+        string Invoke(JsonObject input) => "return skill('learned_weapon'," + revision + "," + input.ToJsonString() + ", 'acceptance');";
+        var description = await Call("run_script", new JsonObject { ["code"] = Invoke(new JsonObject { ["report"] = true }) });
+        var methods = description["value"]?["methods"]?.AsArray() ?? throw new Exception("saved skill does not describe its methods");
+        if (methods.Count < 2 || methods.Any(method => method?["evidence"] is not JsonArray evidence
+            || evidence.Count == 0 || evidence.Any(id => !trialIds.Contains(id.ToString()))))
+            throw new Exception("learned methods lack actual experiment evidence");
+        var transfer = new JsonArray();
+        var states = new HashSet<int>(); var hitDistances = new HashSet<int>(); int hits = 0;
+        foreach (var method in methods)
+        foreach (int targetIndex in new[] { 0, 1 })
+        {
+            await LearningScene(transfer: true);
+            var result = await Call("run_script", new JsonObject { ["code"] = Invoke(new JsonObject {
+                ["method"] = method["id"].DeepClone(), ["target_id"] = learningTargets[targetIndex] }) });
+            foreach (var receipt in LearningReceipts(result))
+            {
+                int targetHits = receipt["hits"].AsArray().Count(hit => hit["npc"].GetValue<int>() == learningTargets[targetIndex]);
+                hits += targetHits;
+                if (targetHits > 0) hitDistances.Add(targetIndex);
+                foreach (var shot in receipt["projectiles"].AsArray())
+                foreach (var change in shot["transitions"].AsArray()) states.Add((int)change["ai"][0].GetValue<float>());
+            }
+            transfer.Add(new JsonObject { ["method"] = method["id"].DeepClone(), ["target"] = learningTargets[targetIndex], ["result"] = result });
+            File.WriteAllText(Path.Combine(directory, "transfer.json"), transfer.ToJsonString());
+        }
+        var report = new JsonObject { ["model"] = "gpt-6.1-sol", ["model_trials"] = trialIds.Count,
+            ["skill"] = saved, ["methods"] = methods.DeepClone(), ["transfer_hits"] = hits,
+            ["learning_elapsed_ms"] = learningMs, ["transfer_hit_distances"] = hitDistances.Count,
+            ["source_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(saved["code"].ToString()))).ToLowerInvariant(),
+            ["transfer_source_unchanged"] = library.Get("learned_weapon")["code"].ToString() == saved["code"].ToString(),
+            ["native_states"] = new JsonArray(states.Select(value => JsonValue.Create(value)).ToArray()),
+            ["transfer_model_calls"] = 0, ["transfer"] = transfer };
+        File.WriteAllText(Path.Combine(directory, "result.json"), report.ToJsonString());
+        if (hits < 2 || hitDistances.Count != 2 || !states.Contains(0) || !states.Contains(1) || !states.Contains(6)
+            || report["transfer_source_unchanged"].GetValue<bool>() != true)
+            throw new Exception("learned skill did not demonstrate the native weapon control methods in transfer");
+        Console.WriteLine("SKILL_LEARNING_COMPLETE trials=" + trialIds.Count + " transfer_hits=" + hits + " transfer_model_calls=0");
+    }
+}
+
 public static class NavigationExecutionChecks
 {
     public static void VerifyChannelInput()
