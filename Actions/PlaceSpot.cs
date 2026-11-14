@@ -21,6 +21,11 @@ namespace TerraBlind
 			if (p == null) return false;
 			int cx = ActExecutor.OriginCx(p), cy = ActExecutor.OriginCy(p);
 			int span = Player.tileRangeX + p.blockRange + 4;
+			var item = new Item(); item.SetDefaults(itemId);
+			var data = TileObjectData.GetTileData(item.createTile, item.placeStyle);
+			(int X, int Y)? prepared = null;
+			Blocker preparation = default;
+			int terrain = 0, footing = 0, other = 0;
 			for (int r = 1; r <= span; r++)
 				for (int dy = -r; dy <= r; dy++)
 					for (int dx = -r; dx <= r; dx++)
@@ -29,10 +34,37 @@ namespace TerraBlind
 						int x = cx + dx, y = cy + dy;
 						if (!Predicates.InBounds(x, y)) continue;
 						if (!Reach.CanPlace(p, x, y)) continue;
-						if (!Check(itemId, x, y, Fill.Block, out _)) continue;
+						if (!Check(itemId, x, y, Fill.Block, out var blocker))
+						{
+							if (blocker.Kind == BlockKind.Terrain) terrain++;
+							else if (blocker.Kind == BlockKind.NoFooting) footing++;
+							else other++;
+							if (prepared == null && blocker.Kind == BlockKind.NoFooting && data != null
+								&& data.AnchorBottom.tileCount > 0 && Reach.CanPlace(p, blocker.Wx, blocker.Wy)
+								&& !Predicates.IsLava(x, y) && !Predicates.IsLava(blocker.Wx, blocker.Wy))
+							{
+								int left = x - data.Origin.X + data.AnchorBottom.checkStart, bottom = y - data.Origin.Y + data.Height;
+								for (int i = 0; i < data.AnchorBottom.tileCount; i++)
+								{
+									if (!Predicates.InBounds(left + i, bottom)) continue;
+									var support = Main.tile[left + i, bottom];
+									if (support.HasUnactuatedTile && Main.tileSolid[support.TileType]
+										&& support.Slope == SlopeType.Solid && !support.IsHalfBlock)
+									{ prepared = (x, y); preparation = blocker; break; }
+								}
+							}
+							continue;
+						}
 						bx = x; by = y;
 						return true;
 					}
+			if (prepared is { } point)
+			{
+				bx = point.X; by = point.Y;
+				DiagLog.Write($"[placement_site] prepare item={itemId} target={bx},{by} blocker={preparation}");
+				return true;
+			}
+			DiagLog.Write($"[placement_site] none item={itemId} player={cx},{cy} terrain={terrain} footing={footing} other={other}");
 			return false;
 		}
 

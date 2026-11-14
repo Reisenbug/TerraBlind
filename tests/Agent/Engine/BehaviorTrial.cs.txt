@@ -5159,6 +5159,9 @@ public sealed partial class BehaviorTrial : ModSystem
                 throw new Exception($"queen trial requires native jungle surface flags and jungle grass underfoot; x={x} y={y} bottom={player.Bottom.Y} jungle={player.ZoneJungle} crimson={player.ZoneCrimson} corrupt={player.ZoneCorrupt} overworld={player.ZoneOverworldHeight} ground={(Main.tile[x, y].HasTile ? Main.tile[x, y].TileType : -1)}");
             jungleSpawn["zone_jungle"] = player.ZoneJungle; jungleSpawn["zone_crimson"] = player.ZoneCrimson;
             jungleSpawn["zone_corrupt"] = player.ZoneCorrupt; jungleSpawn["ground_tile_type"] = (int)Main.tile[x, y].TileType;
+            bool site = PlaceSpot.FindSpot(player, ItemID.WorkBench, out int benchX, out int benchY);
+            bool ready = site && PlaceSpot.Check(ItemID.WorkBench, benchX, benchY, PlaceSpot.Fill.Block, out _);
+            Console.WriteLine($"QUEEN_NATIVE_WORKBENCH_SITE found={site} ready={ready} x={benchX} y={benchY}");
             return true;
         });
         var before = await Call("get_state", new JsonObject());
