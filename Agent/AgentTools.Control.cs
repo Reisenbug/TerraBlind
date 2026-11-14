@@ -29,7 +29,8 @@ public static partial class AgentTools
         }
         else
         {
-            if (!Enum.TryParse<ControlLifetime>(Text(args, "scope"), true, out var lifetime) || !Enum.IsDefined(lifetime))
+            string scope = args["scope"] == null ? "task" : Text(args, "scope");
+            if (!Enum.TryParse<ControlLifetime>(scope, true, out var lifetime) || !Enum.IsDefined(lifetime))
                 throw new ArgumentException("scope需要action/task/persistent。");
             string handle = Text(args, "action");
             if (lifetime == ControlLifetime.Action && !Actions.Summary().Any(item => item["handle"]?.ToString() == handle

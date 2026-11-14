@@ -38,10 +38,12 @@ public sealed class AgentControlSession
     public static void DescribeClaims(JsonArray schemas)
     {
         var control = schemas.First(s => s["function"]["name"].ToString() == "control")["function"];
+        control["parameters"]["properties"]["scope"]["default"] = "task";
         control["parameters"]["properties"]["operation"]["enum"].AsArray().Add("confine");
         control["description"] = control["description"].ToString()
             + "confine将behaviors限定在region矩形内，默认navigation/dodge；边界为世界格坐标，人物整个碰撞箱应在区域内。"
-            + "deny配合region可保护具体区域的mining/placement/navigation；scope控制action/task/persistent有效期，release按id撤销。";
+            + "deny配合region可保护具体区域的mining/placement/navigation；scope默认task，控制action/task/persistent有效期，release按id撤销。"
+            + "equip_item、inventory_swap、craft等常规工具已完成原子输入交接，可直接调用；claim用于自行持续接管输入。";
         foreach (var schema in schemas)
             if (ActionTool(schema["function"]?["name"]?.ToString()))
                 schema["function"]["parameters"]["properties"]["control_claim"] = new JsonObject

@@ -43,6 +43,7 @@ static class ScriptTests
         await SurvivalCombatPolicy();
         await BackpackLoadout();
         await TacticalReviews();
+        await DefaultControlScope();
         await TaskPolicyPatch();
         await EquipmentAnimationHandoff();
         await IdleTaskPolicy();
@@ -64,7 +65,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=38 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=39 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -210,6 +211,33 @@ static class ScriptTests
                 "default combat policy blocked pending navigation, repeated a response or touched boss movement: " + result);
         }
         Console.WriteLine("PASS: default survival uses shared combat candidates during navigation and idle, deduplicates execution and preserves boss control");
+    }
+
+    static async Task DefaultControlScope()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.ControlSession.Reset();
+            foreach (string operation in new[] { "claim", "deny" })
+            {
+                var args = new JsonObject { ["operation"] = operation, ["channels"] = new JsonArray("movement"),
+                    ["behaviors"] = new JsonArray("dodge"), ["reason"] = "temporary task control" };
+                var pending = AgentTools.Execute("control", args, default);
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (!pending.IsCompleted)
+                { Check(clock.Elapsed.TotalSeconds < 5, "default control scope did not finish"); agent.PostUpdateEverything(); await Task.Delay(1); }
+                var result = JsonNode.Parse(await pending);
+                Check(result["error"] == null && result["overrides"]?["rules"]?[0]?["scope"]?.ToString() == "task",
+                    "optional control scope was rejected or received a different lifetime: " + result);
+                AgentTools.NewTask();
+            }
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.NewTask(); AgentTools.ControlSession.Reset(); agent.Unload();
+        }
+        Console.WriteLine("PASS: omitted control scope follows its advertised task lifetime for claim and deny");
     }
 
     static async Task TacticalReviews()
@@ -1641,6 +1669,7 @@ static class ScriptTests
         await SurvivalCombatPolicy();
         await BackpackLoadout();
         await TacticalReviews();
+        await DefaultControlScope();
         await TaskPolicyPatch();
         await EquipmentAnimationHandoff();
         await BackgroundRecovery();
