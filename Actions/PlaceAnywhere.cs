@@ -56,7 +56,7 @@ namespace TerraBlind
 			_failureRevision = Unstick.FailureRevision;
 			_lastPx = int.MinValue; _blockedFrames = 0; _asideNav = false; _where = ""; _heartbeat = 0;
 			Outcome = "running"; Reason = "";
-			if (Occupied(tx, ty))
+			if (Occupied(tx, ty) && (!IsMultiCell(out _) || PlaceSpot.Blocks(tx, ty)))
 			{ Outcome = "done"; _ph = Ph.Done; DiagLog.Write($"[placeany] ({tx},{ty})已经有东西"); return true; }
 			// 【先问有没有货,再谈放哪儿】。Build() 只做几何搜索,它不知道背包里有没有这件东西,
 			// 所以手上没料时报出来的是"接不到任何有锚的地方" -- 一句几何措辞,把调用方指向
@@ -345,7 +345,7 @@ namespace TerraBlind
 				return;
 			}
 
-			if (Occupied(_tx, _ty))
+			if (Occupied(_tx, _ty) && (!IsMultiCell(out _) || PlaceSpot.Blocks(_tx, _ty)))
 			{
 				Outcome = "done"; _ph = Ph.Done;
 				DiagLog.Write($"[placeany] DONE ({_tx},{_ty}) 接了{_idx}格");
