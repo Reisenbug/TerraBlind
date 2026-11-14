@@ -159,7 +159,7 @@ static class ScriptTests
                 }
                 return "{\"done\":true}";
             }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("inventory_space")));
-            Check(result["ok"].GetValue<bool>() && result["value"]["done"].GetValue<bool>()
+            Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["done"]?.GetValue<bool>() == true
                 && chests == (scenario == "failed_chest" ? 2 : 0)
                 && (scenario != "one_weapon" || weapons == 1), "decision precondition broke continuous execution: " + scenario + " " + result);
         }
@@ -2709,7 +2709,7 @@ static class ScriptTests
                 Check(result["ok"].GetValue<bool>(), "shared policy failed in node " + node + ": " + result);
                 Check(AgentTools.Watches.Subscribed("nearby_drop"), "node watch removed a task policy subscription");
                 var verified = await Call("task_step", new JsonObject { ["id"] = node, ["action"] = "verify" });
-                Check(verified["verified"].GetValue<bool>(), "node completion was not host verified");
+                Check(verified["verified"].GetValue<bool>(), "node completion was not host verified: " + verified);
                 if (node == "first")
                 {
                     var saved = await Call("task_policy", new JsonObject { ["operation"] = "get" });
