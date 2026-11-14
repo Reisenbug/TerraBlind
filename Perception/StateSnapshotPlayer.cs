@@ -450,7 +450,7 @@ namespace TerraBlind
 					&& Main.GameUpdateCount - _primaryWeaponTraceTick >= 16)
 				{
 					_primaryWeaponTraceTick = Main.GameUpdateCount;
-					DiagLog.Write($"[agent_item_input] before_primary={beforePrimary} fight_use_prev={FightCoordinator.OwnsUseInput} weapon={Player.HeldItem.type} owner={AgentTools.ControlSession.Tool} nav={RecedingNav.Active} act={ActExecutor.IsActive} mine={MineCoordinator.IsActive} use_item={ItemUseCoordinator.IsActive} snapshot={FightCoordinator.NavigationSnapshotPending}");
+					DiagLog.Write($"[agent_item_input] before_primary={beforePrimary} mouse_left={Main.mouseLeft} focused={Main.hasFocus} fight_use_prev={FightCoordinator.OwnsUseInput} weapon={Player.HeldItem.type} owner={AgentTools.ControlSession.Tool} nav={RecedingNav.Active} act={ActExecutor.IsActive} mine={MineCoordinator.IsActive} use_item={ItemUseCoordinator.IsActive} snapshot={FightCoordinator.NavigationSnapshotPending}");
 				}
 				FightCoordinator.Tick(Player, NativeAgent.Processing, Player.controlUseItem);
 			}
