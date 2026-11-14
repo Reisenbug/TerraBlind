@@ -284,10 +284,11 @@ static class ScriptTests
             var output = JsonNode.Parse(await Pump(AgentTools.Execute("run_script", new JsonObject
             {
                 ["workflow"] = "gather-reaction-consumption", ["code"] = """
+                    let healed=false;
                     on('tick',()=>{
                       const gathered=tool('gather',{targets:[{item_type:29,count:1}]});
                       const used=tool('use_item',{slot:49,x:10,y:10,duration_ticks:1});
-                      tool('use_item',{slot:48,x:10,y:10,duration_ticks:1});
+                      if(!healed){tool('use_item',{slot:48,x:10,y:10,duration_ticks:1});healed=true;}
                       print({gathered:gathered.outcome,used:used.outcome});
                       return {handled:true};
                     });
