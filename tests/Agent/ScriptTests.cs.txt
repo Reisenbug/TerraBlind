@@ -164,6 +164,7 @@ static class ScriptTests
                      {"id":"avoid","movement":"right","weapon_type":24,"movement_available":true}]}}
                 """).AsObject();
             combat["boss_present"] = boss;
+            combat["terrain"] = JsonNode.Parse("{\"origin\":{\"x\":1,\"y\":2},\"rows\":[\"#.\"],\"legend\":\"#solid .air\"}");
             if (scenario == "unchaseable_enemy") combat["targets"][0]["attackable"] = false;
             if (scenario is "projectile_only" or "quiet") combat["targets"] = new JsonArray();
             if (scenario == "projectile_only") combat["projectiles"] = new JsonArray(new JsonObject { ["damage"] = 20 });
@@ -193,6 +194,7 @@ static class ScriptTests
                     {
                         decisions++;
                         Check(args["state"]["instruction"].ToString() == "reach the cave", "travel policy lost the current objective");
+                        Check(args["state"]["terrain"]?["rows"]?[0]?.ToString() == "#.", "combat decision lost measured terrain cells");
                         return decisions == 1 ? "{\"status\":\"pending\"}" : new JsonObject {
                             ["status"] = "ready", ["request_id"] = 9, ["input_state"] = args["state"].DeepClone(),
                             ["result"] = JsonNode.Parse("{\"elapsed_ms\":20,\"answers\":{\"response\":{\"choice\":\"avoid\"},\"attention\":{\"choice\":\""

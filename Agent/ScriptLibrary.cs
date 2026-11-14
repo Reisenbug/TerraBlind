@@ -422,7 +422,7 @@ public sealed class ScriptLibrary
         if (name == "joint_combat") return Template(name,
             "内置共享战斗决策，可直接调用revision=0；joint_reactions传combat_skill_revision。input含context、destination、instruction、last_request及interval_ms/max_age_ms。候选后台计算，pending期间原动作继续。返回request_id和applied供调用者去重；宿主执行前核对轨迹，执行期间检测偏离。",
             """
-            const c=tool('combat_assess',{radius:25,forecast:true,context:input.context,destination:input.destination});
+            const c=tool('combat_assess',{radius:25,terrain_radius:8,forecast:true,context:input.context,destination:input.destination});
             const f=c.forecast;
             if(c.boss_present||f.status!=='ready'||f.plans.length<2) return {status:f.status,reason:f.reason};
             if(!c.targets.some(n=>n.contact_damage>0)&&!c.projectiles.length) return {status:'no_threat'};
@@ -433,7 +433,7 @@ public sealed class ScriptLibrary
               max_age_ms:input.max_age_ms??2000,state:{instruction:input.instruction??'',destination:input.destination,
                 current_tick:c.tick,current_player_pixels:c.player,targets:c.targets.map(({weapons,...n})=>n),projectiles:c.projectiles,
                 sample_targets:f.sample_targets,sample_projectiles:f.sample_projectiles,
-                weapons,recent_damage:c.recent_damage,
+                weapons,recent_damage:c.recent_damage,terrain:c.terrain,
                 forecast_id:f.id,sample_tick:f.sample_tick,age_frames:f.age_frames,sample_player_pixels:f.sample_player,
                 comparison_frames:f.comparison_frames,
                 scope:f.scope,known_route_frames:f.known_route_frames,prefix_source:f.prefix_source,walk_intent:f.walk_intent,
@@ -458,6 +458,7 @@ public sealed class ScriptLibrary
               evidence:{choice:attention,request_id:r.request_id,instruction:input.instruction,tick:c.tick,player:c.player,
                 weapons:weapons.map(({type,name,damage,has_ammo,mana_available})=>({type,name,damage,has_ammo,mana_available})),
                 targets:c.targets.map(({who,type,hp,contact_damage,distance_tiles})=>({who,type,hp,contact_damage,distance_tiles})),
+                terrain:c.terrain?{origin:c.terrain.origin,rows:c.terrain.rows,legend:c.terrain.legend,player_bounds:c.terrain.player_bounds}:null,
                 selected_plan:plan,model_ms:r.result.elapsed_ms}}:null;
             let applied;
             if(!plan?.movement_available) applied={error:'landing_unresolved'};
