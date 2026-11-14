@@ -131,6 +131,8 @@ public sealed class CodexAgent : IDisposable
         {
             lock (_goalGate) return _goal == null ? null : new JsonObject { ["native"] = _goal.DeepClone(),
                 ["host_tokens_used"] = GoalTokens, ["history"] = _goalHistory.DeepClone(),
+                ["host_wall_elapsed_seconds"] = _goal["createdAt"] is JsonValue created && created.TryGetValue<long>(out var unix)
+                    ? Math.Max(0, DateTimeOffset.UtcNow.ToUnixTimeSeconds() - unix) : null,
                 ["scheduler"] = "game_host", ["completion_authority"] = "verified_game_state" };
         }
     }

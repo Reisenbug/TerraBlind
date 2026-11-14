@@ -1017,7 +1017,8 @@ static class CodexTests
 
     static async Task GoalProtocol()
     {
-        var server = new Server();
+        var server = new Server { Goal = new JsonObject {
+            ["createdAt"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 45, ["timeUsedSeconds"] = 0 } };
         using var agent = new CodexAgent((_, _) => server.Connect());
         var options = new JsonObject { ["objective"] = "collect and verify", ["request"] = "initial" };
         Task Run() => agent.RunAsync("work", "mock", "/tmp", "", "game", Tools,
@@ -1027,6 +1028,9 @@ static class CodexTests
             && server.ThreadArgs["config"]["features.goals"].GetValue<bool>() == false,
             "goal session was not persistent or left model-side completion/dispatch uncontrolled");
         Check(server.Efforts.Single() == "medium", "long goals did not receive their planning budget");
+        Check(agent.GoalState["host_wall_elapsed_seconds"].GetValue<long>() is >= 45 and < 60
+            && agent.GoalState["native"]["timeUsedSeconds"].GetValue<int>() == 0,
+            "host wall time inherited the native zero timer");
         var rejected = await agent.CompleteGoal(_ => Task.FromResult(new JsonObject { ["verified"] = false }), default);
         Check(rejected["error"]?.ToString() == "goal_not_verified" && server.Goal["status"].ToString() == "active",
             "model ending or failed verification completed native goal");
