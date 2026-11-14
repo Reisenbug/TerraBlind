@@ -56,7 +56,7 @@ public sealed class ScriptLibrary
               let destination=event.execution?.tool==='nav_to'?event.execution.args:null;
               const idle=event.execution?.tool==='idle';
               if(destination) idleDestination=null;
-              if(!c.boss_present&&(destination||idle)&&c.targets?.some(n=>n.attackable&&n.contact_damage>0&&n.distance_tiles<12)){
+              if(!c.boss_present&&(destination||idle)&&(c.targets?.some(n=>n.contact_damage>0&&n.distance_tiles<12)||c.projectiles?.length)){
                 if(idle) destination=idleDestination??={x:Math.floor(p.pos.x/16),y:Math.floor(p.pos.y/16)};
                 movementProgram??=tool('script_program',{operation:'get',name:'joint_combat'});
                 const goal=tool('get_state',{fields:['codex_goal']}).codex_goal;
