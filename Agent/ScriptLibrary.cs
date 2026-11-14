@@ -364,6 +364,7 @@ public sealed class ScriptLibrary
         if (name is "reactive_travel" or "task_reactions" or "decision_travel" or "decision_reactions" or "joint_reactions") return Template(name,
             "task_reactions和decision_reactions注册整趟任务策略，目的地从event.execution的实际导航读取；travel版本另需destination并执行单段导航。input包含resources（item_type/count/tile_type/tile_name及可选frame_x/frame_y）、weapon_order、trash_types/drop_types、max_detour_tiles、health_reserve、contact_pass_types、allow_trigger_removal。decision版本默认启用weapon/movement/opportunity三维后台判断，decisions数组可单独启停作对照；instruction给当前意图，decision_interval_ms、decision_max_age_ms和decision_max_displacement_tiles调整更新及应用条件。判断期间原动作继续，只有执行具体干预才暂停并恢复。print记录每次采用的request_id、选择、耗时和动作结果。资源来源提前查证，策略源码可随现场修改。",
             "const policyOnly=" + (name is "task_reactions" or "decision_reactions" or "joint_reactions" ? "true" : "false") + ";\n"
+            + (name == "task_reactions" ? "const safety=tool('script_program',{operation:'get',name:'safety_reactions'});skill('safety_reactions',safety.revision);\n" : "")
             + "const defaultDecisions=" + (name == "joint_reactions" ? "['combat','opportunity']" : name.StartsWith("decision_") ? "['weapon','movement','opportunity']" : "[]") + ";\n" + """
             const config=typeof input==='undefined'?null:input;
             if(!config||!policyOnly&&!config.destination||!Array.isArray(config.resources)||!Array.isArray(config.weapon_order)
@@ -621,7 +622,7 @@ public sealed class ScriptLibrary
                 if(r.error) return {handled:false,reason:r.error};
               }
               return handled();
-            });
+            """ + (name == "task_reactions" ? "},{append:true});\n" : "});\n") + """
             const tileTypes=[...new Set(config.resources.map(r=>r.tile_type).filter(Number.isInteger))];
             tool('watch',{events:[...(tileTypes.length?['nearby_tile']:[]),'nearby_drop','nearby_chest','inventory_full'],
               tile_types:tileTypes,

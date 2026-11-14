@@ -2233,13 +2233,14 @@ static class ScriptTests
                 {
                     if (name == "get_state") return new JsonObject { ["agent"] = new JsonObject
                         { ["auto_attack"] = permitted, ["combat_weapon_type"] = 65 } }.ToJsonString();
-                    if (name == "combat_assess") return "{\"tick\":100,\"targets\":[]}";
+                    if (name == "script_program") return ScriptLibrary.Example("safety_reactions").ToJsonString();
+                    if (name == "combat_assess") return "{\"tick\":100,\"targets\":[],\"player\":{\"hp\":100,\"max_hp\":100}}";
                     if (name == "inspect_terrain") return "{\"near_body_tiles\":[]}";
                     if (name == "set_combat") { actualPermission = args["auto_attack"].GetValue<bool>(); return "{}"; }
                     if (name == "nav_to")
                         await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject { ["kind"] = "tick" }, token);
                     return "{}";
-                }, _ => Task.CompletedTask, default);
+                }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("safety_reactions")));
             Check(policy["ok"].GetValue<bool>() && actualPermission == permitted,
                 "empty encounter changed the original defense permission: " + policy);
         }
