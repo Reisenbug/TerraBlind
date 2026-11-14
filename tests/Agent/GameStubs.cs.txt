@@ -194,6 +194,9 @@ namespace Terraria
     public class Mount { public bool Active; }
     public class Projectile
     {
+        public static Action<Projectile> PrepareBomb;
+        public void SetDefaults(int value) => type = value;
+        public void PrepareBombToBlow() => PrepareBomb?.Invoke(this);
         public bool active, arrow, friendly, hostile, ownerHitCheck, tileCollide = true;
         public int owner, damage, identity, whoAmI, type, extraUpdates, aiStyle;
         public int width = 8, height = 8;
@@ -234,12 +237,16 @@ namespace Terraria
 namespace Terraria.ID
 {
     public static class WallID { public const int SpiderUnsafe = 62; }
-    public static class ProjAIStyleID { public const int ShortSword = 161, Spear = 19; }
+    public static class ProjAIStyleID { public const int ShortSword = 161, Spear = 19, Explosive = 16; }
     public static class ItemID { public const int FixtureGoal = 191, Umbrella = 946, TragicUmbrella = 4707; }
     public static class NPCID { public const int FixtureEnemy = 222, Lihzahrd = 198, LihzahrdCrawler = 199, FlyingSnake = 226; }
     public static class ProjectileID
     {
-        public static class Sets { public static bool[] NoMeleeSpeedVelocityScaling = new bool[1200]; }
+        public static class Sets
+        {
+            public static bool[] NoMeleeSpeedVelocityScaling = new bool[1200];
+            public static bool[] Explosive = new bool[1200], RocketsSkipDamageForPlayers = new bool[1200];
+        }
     }
     public static class LiquidID { public const int Water = 0, Lava = 1, Honey = 2, Shimmer = 3; }
     public static class TileID

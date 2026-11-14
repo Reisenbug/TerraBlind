@@ -327,6 +327,9 @@ static class GatherTests
         bool hadSample = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(77, out var sample);
         bool hadPassing = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(78, out var passing);
         bool hadSpear = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(46, out var spear);
+        bool hadExplosive = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(1170, out var explosive);
+        bool skipSelfDamage = Terraria.ID.ProjectileID.Sets.RocketsSkipDamageForPlayers[1170];
+        var prepareBomb = Projectile.PrepareBomb;
         float attackSpeed = p.MeleeAttackSpeed;
         try
         {
@@ -370,6 +373,24 @@ static class GatherTests
             target.position.X = 480;
             p.inventory[2].shoot = 78;
             Check(CombatLoadout.Select(p, target) == 2, "unmodeled spear projectile lost its ranged behavior");
+            Terraria.ID.ContentSamples.ProjectilesByType[1170] = new Projectile { type = 1170, aiStyle = Terraria.ID.ProjAIStyleID.Explosive };
+            Terraria.ID.ProjectileID.Sets.RocketsSkipDamageForPlayers[1170] = false;
+            Projectile.PrepareBomb = shot => { shot.width = shot.height = 128; };
+            p.inventory[3] = new Item { type = 53, stack = 5, damage = 300, shoot = 1170 };
+            target.position.X = 180;
+            Check(CombatLoadout.Select(p, target) != 3, "automatic attack threw a self-damaging explosive inside its blast range");
+            Main.npc = new[] { target };
+            var assessment = AgentTools.CombatAssessment(30);
+            var explosiveFact = assessment["targets"][0]["weapons"].AsArray().First(w => w["type"].GetValue<int>() == 53);
+            Check(explosiveFact["self_blast_size_pixels"][0].GetValue<float>() == 128
+                && !explosiveFact["line_or_reach_passed"].GetValue<bool>(), "combat decisions lost the native blast size or close-range rejection");
+            Main.npc = npcs;
+            target.position.X = 360;
+            Check(CombatLoadout.Select(p, target) == 3, "self-damaging explosive lost a distant firing opportunity");
+            Terraria.ID.ProjectileID.Sets.RocketsSkipDamageForPlayers[1170] = true;
+            target.position.X = 180;
+            Check(CombatLoadout.Select(p, target) == 3, "native self-damage exemption was treated as an unsafe explosive");
+            p.inventory[3] = new Item();
             wallPassing.aiStyle = 0; p.inventory[2].damage = 15;
             Collision.LineTest = (_, _) => false;
             CombatLoadout.PreferredType = 51;
@@ -406,6 +427,10 @@ static class GatherTests
             else Terraria.ID.ContentSamples.ProjectilesByType.Remove(78);
             if (hadSpear) Terraria.ID.ContentSamples.ProjectilesByType[46] = spear;
             else Terraria.ID.ContentSamples.ProjectilesByType.Remove(46);
+            if (hadExplosive) Terraria.ID.ContentSamples.ProjectilesByType[1170] = explosive;
+            else Terraria.ID.ContentSamples.ProjectilesByType.Remove(1170);
+            Terraria.ID.ProjectileID.Sets.RocketsSkipDamageForPlayers[1170] = skipSelfDamage;
+            Projectile.PrepareBomb = prepareBomb;
             p.MeleeAttackSpeed = attackSpeed;
         }
         Console.WriteLine("PASS: target-aware melee reach, projectile obstruction and recent attacker priority preserve agent filters");

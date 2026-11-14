@@ -2758,6 +2758,13 @@ public static partial class AgentTools
     {
         if (radius is < 1 or > 60) throw new ArgumentException("radius需要1..60格。");
         var p = Main.LocalPlayer;
+        JsonArray SelfBlast(Item weapon)
+        {
+            int type = weapon.shoot;
+            if (weapon.useAmmo > 0 && !p.PickAmmo(weapon, out type, out _, out _, out _, out _, true)) return null;
+            var size = FightCoordinator.SelfBlastSize(type);
+            return new JsonArray(size.X, size.Y);
+        }
         var targets = Main.npc.Where(n => n != null && n.active && !n.friendly && !n.townNPC && n.life > 0
             && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) <= radius * 16)
             .OrderBy(n => Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center)).Take(8);
@@ -2798,6 +2805,7 @@ public static partial class AgentTools
                         ["prefix"] = entry.item.prefix, ["stack"] = entry.item.stack,
                         ["damage"] = p.GetWeaponDamage(entry.item), ["use_time_ticks"] = entry.item.useTime,
                         ["projectile_type"] = entry.item.shoot, ["shoot_speed"] = entry.item.shootSpeed,
+                        ["self_blast_size_pixels"] = SelfBlast(entry.item),
                         ["consumable"] = entry.item.consumable, ["mana_cost"] = entry.item.mana,
                         ["needs_clear_line"] = FightCoordinator.NeedsClearLine(entry.item),
                         ["has_ammo"] = entry.item.useAmmo <= 0 || p.HasAmmo(entry.item),

@@ -22,6 +22,7 @@ namespace TerraBlind
         private static Vector2 _animationAim;
         private static NPC _animationTarget;
         private static bool _animationAttack, _animationSeen, _attackNext;
+        private static readonly Dictionary<int, Vector2> _selfBlastSizes = new();
         public static Vector2? AimTarget { get; private set; }
         internal static bool OwnsUseInput => _usingItem;
         public static bool AttackAnimationActive => _animationSlot >= 0 && _animationAttack && Main.LocalPlayer.itemAnimation > 0;
@@ -41,6 +42,17 @@ namespace TerraBlind
         internal static bool CanHitTarget(Player player, Item weapon, Vector2 target, float targetRadius = 0)
             => CanHitTargetFrom(player, weapon, player.Center, target, targetRadius);
 
+        internal static Vector2 SelfBlastSize(int type)
+        {
+            if (!ContentSamples.ProjectilesByType.TryGetValue(type, out var shot)
+                || shot.aiStyle != ProjAIStyleID.Explosive && !ProjectileID.Sets.Explosive[type]
+                || ProjectileID.Sets.RocketsSkipDamageForPlayers[type]) return Vector2.Zero;
+            if (_selfBlastSizes.TryGetValue(type, out var size)) return size;
+            var blast = new Projectile(); blast.SetDefaults(type); blast.owner = Main.myPlayer;
+            blast.PrepareBombToBlow();
+            return _selfBlastSizes[type] = new Vector2(blast.width, blast.height);
+        }
+
         internal static bool CanHitTargetFrom(Player player, Item weapon, Vector2 source, Vector2 target, float targetRadius = 0)
         {
             if (weapon.shoot <= 0)
@@ -49,6 +61,9 @@ namespace TerraBlind
                     && Collision.CanHitLine(source, 4, 4, target, 4, 4);
             int shotType = weapon.shoot;
             if (weapon.useAmmo > 0 && !player.PickAmmo(weapon, out shotType, out _, out _, out _, out _, true)) return false;
+            var blast = SelfBlastSize(shotType);
+            if (blast != Vector2.Zero && Math.Abs(source.X - target.X) <= (blast.X + player.width) / 2 + targetRadius
+                && Math.Abs(source.Y - target.Y) <= (blast.Y + player.height) / 2 + targetRadius) return false;
             if (ContentSamples.ProjectilesByType.TryGetValue(shotType, out var shot))
             {
                 if (shot.aiStyle == ProjAIStyleID.ShortSword && Vector2.Distance(source, target)

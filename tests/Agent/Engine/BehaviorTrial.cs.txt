@@ -5188,6 +5188,18 @@ public sealed partial class BehaviorTrial : ModSystem
             finally { Combat.UseLead = lead; }
             if (!meleeAim) throw new Exception("native held melee aim used a free projectile intercept");
             Console.WriteLine("QUEEN_NATIVE_WEAPON_AIM_VERIFIED held_melee=true thrown_lead=true");
+            var blastSize = typeof(FightCoordinator).GetMethod("SelfBlastSize", HiddenStatic);
+            var hitTarget = typeof(FightCoordinator).GetMethod("CanHitTargetFrom", HiddenStatic);
+            foreach (var (type, width) in new[] { (ItemID.Grenade, 128), (ItemID.Dynamite, 250), (ItemID.ThrowingKnife, 0) })
+            {
+                var weapon = new Item(); weapon.SetDefaults(type);
+                var size = (Vector2)blastSize.Invoke(null, new object[] { weapon.shoot });
+                bool near = (bool)hitTarget.Invoke(null, new object[] { player, weapon, player.Center, player.Center + new Vector2(32, 0), 0f });
+                if (size.X != width || size.Y != width || width > 0 && near)
+                    throw new Exception($"native explosive range mismatch type={type} blast={size} near={near}");
+                Console.WriteLine($"QUEEN_NATIVE_EXPLOSIVE_RANGE type={type} width={size.X} height={size.Y} near_allowed={near}");
+            }
+            Console.WriteLine("QUEEN_NATIVE_EXPLOSIVE_RANGE_VERIFIED close_self_damage_rejected=true");
             return true;
         });
         if (Environment.GetEnvironmentVariable("TB_QUEEN_NATIVE_CHECK_ONLY") == "1") return;
