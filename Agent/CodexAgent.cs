@@ -434,7 +434,7 @@ public sealed class CodexAgent : IDisposable
             }
             var started = await _rpc.Request("turn/start", new JsonObject
             {
-                ["threadId"] = _thread, ["effort"] = "low",
+                ["threadId"] = _thread, ["effort"] = goalOptions == null ? "low" : "medium",
                 ["input"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = input })
             }, token);
             turn = started["turn"]?["id"]?.GetValue<string>() ?? throw new IOException("Codex 没有返回执行编号。");

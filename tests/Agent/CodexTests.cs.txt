@@ -45,6 +45,7 @@ static class CodexTests
         { calls++; return Task.FromResult("{\"wood\":23}"); }
         await agent.RunAsync("检查背包", "mock", "/tmp", "", "game instructions", Tools, Execute, spoken.Add, default);
         await agent.RunAsync("继续", "mock", "/tmp", "", "game instructions", Tools, Execute, spoken.Add, default);
+        Check(server.Efforts.All(effort => effort == "low"), "ordinary commands changed their reasoning budget");
         Check(calls == 2 && server.Threads == 1 && spoken.Count == 2, "Codex did not reuse thread or deduplicate replies");
         Check(agent.TokenUsage["total"]["totalTokens"].GetValue<int>() == 200 && agent.UsageUpdates == 2 && agent.TurnsStarted == 2,
             "Codex usage telemetry did not preserve cumulative token usage across turns");
@@ -1025,6 +1026,7 @@ static class CodexTests
         Check(server.GoalSets == 1 && server.ThreadArgs["ephemeral"].GetValue<bool>() == false
             && server.ThreadArgs["config"]["features.goals"].GetValue<bool>() == false,
             "goal session was not persistent or left model-side completion/dispatch uncontrolled");
+        Check(server.Efforts.Single() == "medium", "long goals did not receive their planning budget");
         var rejected = await agent.CompleteGoal(_ => Task.FromResult(new JsonObject { ["verified"] = false }), default);
         Check(rejected["error"]?.ToString() == "goal_not_verified" && server.Goal["status"].ToString() == "active",
             "model ending or failed verification completed native goal");
@@ -1360,6 +1362,7 @@ static class CodexTests
         public int RepeatedToolCalls = 1;
         public readonly List<JsonObject> ToolResponses = new();
         public readonly List<string> Inputs = new();
+        public readonly List<string> Efforts = new();
         public readonly List<JsonObject> Steers = new();
         public void Drop() => _input.End();
         public CodexConnection Connect() => new(_input, new Writer(Receive), () => { Stopped = true; _input.End(); });
@@ -1422,6 +1425,7 @@ static class CodexTests
             else if (method == "thread/goal/get") Reply(message["id"], new JsonObject { ["goal"] = Goal?.DeepClone() });
             else if (method == "turn/start")
             {
+                Efforts.Add(message["params"]["effort"].ToString());
                 Inputs.Add(message["params"]["input"][0]["text"].ToString());
                 _turn++;
                 Reply(message["id"], new JsonObject { ["turn"] = new JsonObject { ["id"] = "turn" + _turn } });

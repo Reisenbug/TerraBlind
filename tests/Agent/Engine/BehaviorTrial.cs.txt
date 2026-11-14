@@ -5222,7 +5222,7 @@ public sealed partial class BehaviorTrial : ModSystem
             return true;
         });
         File.WriteAllText(Path.Combine(Main.SavePath, "queen-start.json"), new JsonObject
-        { ["prompt"] = prompt, ["before"] = before.DeepClone(), ["spawn"] = jungleSpawn?.DeepClone(), ["model"] = "gpt-6.1-sol", ["effort"] = "low",
+        { ["prompt"] = prompt, ["before"] = before.DeepClone(), ["spawn"] = jungleSpawn?.DeepClone(), ["model"] = "gpt-6.1-sol", ["effort"] = "medium",
             ["mining_speed_multiplier"] = Config.I.FastMining ? ConcessionSpeed.MiningSpeedMultiplier : 1,
             ["world_seed"] = Main.ActiveWorldFileData.SeedText, ["natural_encounters"] = NaturalEncounters,
             ["resumed_from"] = QueenResumeRoot }.ToJsonString());
