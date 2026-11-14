@@ -44,6 +44,7 @@ static class ScriptTests
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
         await ActionReferences();
+        await ProductiveMiningRecovery();
         await CombatApproach();
         await ReactiveTravelExample();
         await ComposedReactions();
@@ -57,7 +58,52 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=31 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=32 model_calls=0");
+    }
+
+    static async Task ProductiveMiningRecovery()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var previous = HttpServerSystem.Handler;
+        var tile = Terraria.Main.tile[12, 34];
+        try
+        {
+            foreach (int mined in new[] { 0, 8 })
+            {
+                AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
+                Terraria.Main.tile[12, 34] = default;
+                int mining = 0, navigation = 0;
+                HttpServerSystem.Handler = (path, payload) =>
+                {
+                    if (path == "/mine") mining++;
+                    if (path == "/mine_status") return (200, new JsonObject { ["running"] = false,
+                        ["outcome"] = "out_of_reach", ["mined"] = mined }.ToJsonString());
+                    if (path == "/nav_recede")
+                    {
+                        navigation++;
+                        var args = JsonNode.Parse(payload);
+                        Check(args["gx"].GetValue<int>() == 12 && args["gy"].GetValue<int>() == 34,
+                            "productive mining recovery changed the requested destination");
+                    }
+                    return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{}");
+                };
+                var pending = AgentTools.Execute("mine", new JsonObject { ["dir"] = "left", ["target_x"] = 12, ["target_y"] = 34 }, default);
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (!pending.IsCompleted)
+                { Check(clock.Elapsed.TotalSeconds < 5, "mining recovery waited for another decision"); agent.PostUpdateEverything(); await Task.Delay(1); }
+                var result = JsonNode.Parse(await pending);
+                Check(mining == 1 && navigation == (mined > 0 ? 1 : 0)
+                    && result["outcome"].ToString() == (mined > 0 ? "done" : "out_of_reach")
+                    && (mined == 0 || result["mining_attempt"]["mined"].GetValue<int>() == mined),
+                    "mining recovery retried an unproductive action or lost completed excavation: " + result);
+            }
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+            HttpServerSystem.Handler = previous; Terraria.Main.tile[12, 34] = tile; agent.Unload();
+        }
+        Console.WriteLine("PASS: productive mining drift replans to the same endpoint; zero-progress reach failures retain their evidence");
     }
 
     static async Task ActionReferences()
@@ -1260,6 +1306,7 @@ static class ScriptTests
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
         await ActionReferences();
+        await ProductiveMiningRecovery();
         await CombatApproach();
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
