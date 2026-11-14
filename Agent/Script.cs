@@ -664,11 +664,16 @@ public static class AgentScript
                 var output = engine.Evaluate(wrapper).AsString();
                 if (hostFailure != null) throw hostFailure;
                 budget.Token.ThrowIfCancellationRequested();
+                var parsed = JsonNode.Parse(output);
                 if (output.Length > 16000)
-                    return Report(lastFailure == null ? "script_result_too_large" : "tool_failed",
-                        "脚本主体已执行，但返回值超过16000字符，已省略；这不是任务完成或动作回滚。先用action_query/get_state/script_progress核对实际效果与原句柄，只返回所需字段，不要重跑已执行动作。",
-                        omittedOutputChars: output.Length);
-                var value = JsonNode.Parse(output)?["value"]?.DeepClone();
+                {
+                    int references = ReferenceActions(parsed);
+                    if (references == 0 || parsed.ToJsonString().Length > 16000)
+                        return Report(lastFailure == null ? "script_result_too_large" : "tool_failed",
+                            "脚本主体已执行，但返回值超过16000字符，已省略；这不是任务完成或动作回滚。先用action_query/get_state/script_progress核对实际效果与原句柄，只返回所需字段，不要重跑已执行动作。",
+                            omittedOutputChars: output.Length);
+                }
+                var value = parsed?["value"]?.DeepClone();
                 return Report(lastFailure != null && value == null ? "tool_failed" : null,
                     lastFailure != null && value == null ? "工具失败未处理；返回完整失败证据以修复。" : "脚本执行结束；任务是否完成仍由task_step verify检查。", value);
             }, token);
@@ -702,5 +707,22 @@ public static class AgentScript
             return result;
         }
         finally { if (session != null) session.Retire(() => { }); }
+    }
+
+    static int ReferenceActions(JsonNode node)
+    {
+        if (node is JsonObject action && action["handle"] is JsonValue && action["tool"] is JsonValue
+            && action["status"] is JsonValue && action["attempt"] is JsonValue
+            && action.ContainsKey("args") && action.ContainsKey("observation") && action.ContainsKey("result"))
+        {
+            foreach (string field in action.Select(field => field.Key).Where(field => field is not
+                ("handle" or "tool" or "status" or "attempt" or "task_node")).ToArray()) action.Remove(field);
+            action["detail_tool"] = "action_query";
+            action["referenced"] = true;
+            return 1;
+        }
+        if (node is JsonObject obj) return obj.Sum(field => ReferenceActions(field.Value));
+        if (node is JsonArray array) return array.Sum(ReferenceActions);
+        return 0;
     }
 }

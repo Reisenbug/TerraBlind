@@ -43,6 +43,7 @@ static class ScriptTests
         await IdleTaskPolicy();
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
+        await ActionReferences();
         await CombatApproach();
         await ReactiveTravelExample();
         await ComposedReactions();
@@ -56,7 +57,29 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=30 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=31 model_calls=0");
+    }
+
+    static async Task ActionReferences()
+    {
+        foreach (int length in new[] { 20, 20000 })
+        {
+            var action = new JsonObject { ["handle"] = "original", ["tool"] = "run_script", ["status"] = "failed",
+                ["attempt"] = 3, ["task_node"] = "collect", ["args"] = new JsonObject(), ["observation"] = new JsonObject(),
+                ["result"] = new JsonObject { ["error"] = "navigation_incomplete", ["detail"] = new string('x', length) } };
+            var result = await AgentScript.Run("return {status:'needs_review',reason:'route blocked',blocked:tool('action_query',{handle:'original'})};",
+                5, (_, _) => { }, (_, _, _) => Task.FromResult(action.ToJsonString()), _ => Task.CompletedTask, default);
+            var blocked = result["value"]?["blocked"];
+            Check(result["ok"].GetValue<bool>() && result["value"]["status"].ToString() == "needs_review"
+                && result["value"]["reason"].ToString() == "route blocked" && blocked["handle"].ToString() == "original"
+                && blocked["status"].ToString() == "failed" && blocked["attempt"].GetValue<int>() == 3,
+                "large action evidence erased the review decision or changed original identity: " + result);
+            Check(length < 16000 ? blocked["result"]["error"].ToString() == "navigation_incomplete"
+                : blocked["referenced"].GetValue<bool>() && blocked["detail_tool"].ToString() == "action_query"
+                    && action["result"]["detail"].ToString().Length == length,
+                "action reference changed stored evidence or compacted a small result");
+        }
+        Console.WriteLine("PASS: oversized action receipts become queryable references while preserving the review decision and original evidence");
     }
 
     static async Task CombatApproach()
@@ -1236,6 +1259,7 @@ static class ScriptTests
         await SurvivalDecisionPolicy();
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
+        await ActionReferences();
         await CombatApproach();
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
