@@ -11,8 +11,8 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent" };
-    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "gather_route", "use_life_crystals" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent" };
+    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -23,6 +23,45 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "combat_loadout") return Template(name,
+            "内置随身武器判断，可直接调用revision=0。input含combat_assess返回的combat、instruction及last_request；Jev从含弹药与射界事实的武器中选择。背包武器换入已有武器槽或空快捷栏槽，交换前刷新type/prefix/stack，保留原物品；无合适槽位返回needs_review。原动作在判断期间继续。",
+            """
+            const c=input.combat;
+            const weapons=[...new Map((c.targets??[]).flatMap(n=>n.weapons??[]).map(w=>[w.slot,w])).values()];
+            const usable=weapons.filter(w=>w.has_ammo&&w.mana_available);
+            if(!usable.some(w=>w.slot>=10)) return {status:'no_backpack_weapon'};
+            const criteria={keep:'Keep the current loadout while continuing the task.',
+              ...Object.fromEntries(usable.map(w=>['slot_'+w.slot,{weapon:w,action:w.slot<10?'select hotbar weapon':'swap this backpack weapon into a hotbar weapon or empty slot, then select it'}]))};
+            const r=tool('jev_judge',{channel:'loadout',context:'task-loadout',interval_ms:1500,max_age_ms:1500,
+              state:{instruction:input.instruction,combat:c,weapons:usable},questions:{response:{type:'choice',
+                instructions:'Which available weapon best supports the current task and nearby threats? Consider attack reach, firing lines, enemy movement, damage, ammo and mana. Moving a backpack weapon costs one inventory swap; keep a suitable existing loadout.',criteria}}});
+            if(r.status==='pending'||r.request_id===input.last_request) return {status:r.status};
+            if(r.status==='failed') return {request_id:r.request_id,error:r.result.error};
+            const choice=r.result.answers.response.choice;
+            if(choice==='keep') return {request_id:r.request_id,status:'kept'};
+            const selected=r.input_state.weapons.find(w=>'slot_'+w.slot===choice);
+            const now=tool('combat_assess',{radius:15});
+            const current=now.targets.flatMap(n=>n.weapons).find(w=>w.slot===selected.slot&&w.type===selected.type
+              &&w.prefix===selected.prefix&&w.stack===selected.stack&&w.has_ammo&&w.mana_available);
+            if(!current) return {request_id:r.request_id,status:'weapon_changed'};
+            if(current.slot>=10){
+              const inventory=tool('get_state',{fields:['inventory_slots']}).inventory_slots;
+              const hotbar=now.targets.flatMap(n=>n.weapons).filter(w=>w.slot<10);
+              const destination=hotbar.find(w=>w.type===now.preferred_weapon_type)??hotbar[0]
+                ??inventory.find(i=>i.slot<10&&i.type===0);
+              if(!destination) return {request_id:r.request_id,status:'needs_review',reason:'no_hotbar_weapon_or_empty_slot'};
+              const from=inventory.find(i=>i.slot===current.slot),to=inventory.find(i=>i.slot===destination.slot);
+              const identity=i=>({type:i.type,prefix:i.prefix,stack:i.stack});
+              if(!from||!to||from.type!==current.type||from.prefix!==current.prefix||from.stack!==current.stack||to.type!==destination.type)
+                return {request_id:r.request_id,status:'weapon_changed'};
+              const moved=tool('inventory_swap',{src:from.slot,dst:to.slot,expected_src:identity(from),expected_dst:identity(to)});
+              if(moved.error) return {request_id:r.request_id,error:moved.error};
+            }
+            const applied=tool('set_combat',{weapon_type:current.type});
+            print({decision:'loadout',request:r.request_id,choice,weapon_type:current.type,
+              model_ms:r.result.elapsed_ms,swapped_from:current.slot>=10?current.slot:null,error:applied.error});
+            return {request_id:r.request_id,status:applied.error?'needs_review':'selected',weapon_type:current.type,error:applied.error};
+            """);
         if (name == "combat_approach") return Template(name,
             "选择有射界的交战站位。input含npc、npc_type、可选min_distance_tiles（默认4格）。复用npc_combat_observe的原版射程、当前武器许可及支撑测量，检查落脚危险，导航到站位后刷新目标及射界。一次最多移动到一个站位；返回ready才可继续攻击或恢复原采集。可修改并保存同名技能。",
             """
@@ -52,10 +91,17 @@ public sealed class ScriptLibrary
         if (name == "safety_reactions") return Template(name,
             "默认任务反应：近敌时用原生推演候选联合选择短程走位与武器，覆盖导航和等待模型期间。复核并拆除可达压力板与近身接触伤害物，验证后续接。近期受击且血量下降时，Jev结合当前任务、冷却、敌人与地形判断是否用已有回城道具脱险。遵守权限；可修改此JS并用task_policy替换。",
             """
-            let survivalRequest=null,movementRequest=null,movementProgram=null,idleDestination=null;
+            let survivalRequest=null,movementRequest=null,movementProgram=null,idleDestination=null,loadoutRequest=null,loadoutProgram=null;
             const movementContext='survival-combat:'+Date.now();
             on('tick',event=>{
               const c=tool('combat_assess',{radius:15}),p=c.player;
+              if(!c.boss_present&&c.targets?.some(n=>n.attackable&&n.contact_damage>0
+                  &&n.weapons?.some(w=>w.slot>=10&&w.has_ammo&&w.mana_available))){
+                loadoutProgram??=tool('script_program',{operation:'get',name:'combat_loadout'});
+                const objective=tool('get_state',{fields:['codex_goal']}).codex_goal?.native?.objective;
+                const loadout=skill('combat_loadout',loadoutProgram.revision,{combat:c,instruction:objective,last_request:loadoutRequest});
+                loadoutRequest=loadout.request_id??loadoutRequest;
+              }
               let destination=event.execution?.tool==='nav_to'?event.execution.args:null;
               const idle=['idle','fight'].includes(event.execution?.tool);
               if(destination) idleDestination=null;

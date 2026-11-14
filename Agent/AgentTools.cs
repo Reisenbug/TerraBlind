@@ -2734,6 +2734,7 @@ public static partial class AgentTools
             && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) <= radius * 16)
             .OrderBy(n => Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center)).Take(8);
         return new JsonObject { ["tick"] = Main.GameUpdateCount, ["recent_damage"] = LastDamage?.DeepClone(),
+            ["preferred_weapon_type"] = CombatLoadout.PreferredType,
             ["navigation_options"] = AgentNavigationIntent.Options(),
             ["boss_present"] = Main.npc.Any(n => n != null && n.active && n.boss
                 && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) < 3200),
@@ -2762,10 +2763,11 @@ public static partial class AgentTools
                 ["vx_pixels_per_tick"] = n.velocity.X, ["vy_pixels_per_tick"] = n.velocity.Y,
                 ["distance_tiles"] = Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) / 16,
                 ["attackable"] = n.CanBeChasedBy(p) && FightCoordinator.TempleTargetAllowed(p, n),
-                ["weapons"] = new JsonArray(p.inventory.Take(10).Select((item, slot) => (item, slot))
+                ["weapons"] = new JsonArray(p.inventory.Take(50).Select((item, slot) => (item, slot))
                     .Where(entry => CombatLoadout.Usable(entry.item)).Select(entry => (JsonNode)new JsonObject
                     {
                         ["slot"] = entry.slot, ["type"] = entry.item.type, ["name"] = entry.item.Name,
+                        ["prefix"] = entry.item.prefix, ["stack"] = entry.item.stack,
                         ["damage"] = p.GetWeaponDamage(entry.item), ["use_time_ticks"] = entry.item.useTime,
                         ["projectile_type"] = entry.item.shoot, ["shoot_speed"] = entry.item.shootSpeed,
                         ["consumable"] = entry.item.consumable, ["mana_cost"] = entry.item.mana,
