@@ -124,8 +124,7 @@ static class ScriptTests
                 ["code"] = "on('tick',()=>{tool('act',{steps:[{keys:['right'],until:{frames:1}}]});return {handled:true};});" }, default));
             HttpServerSystem.Handler = (path, _) =>
             {
-                if (path == "/act")
-                { Check(ActionTasks.NodeContext.Value == "travel", "idle effect lost DAG ownership"); effects++; }
+                if (path == "/act") effects++;
                 return (200, path == "/act_status" ? "{\"active\":false,\"outcome\":\"done\"}" : "{}");
             };
             Check(AgentTools.ControlSession.Begin("nav_to", null, out _) == null, "test could not acquire primary action");
@@ -133,7 +132,8 @@ static class ScriptTests
             Check(effects == 0, "idle policy competed with primary execution");
             AgentTools.ControlSession.Reset();
             await Pump(AgentTools.ReactWhileIdle(default));
-            Check(effects == 1, "policy stopped while the model had no primary action: "
+            Check(effects == 1 && AgentTools.TaskPolicyStatus()["last_reaction"]?["task_node"]?.ToString() == "travel",
+                "policy stopped or lost DAG ownership while the model had no primary action: "
                 + AgentTools.TaskPolicyStatus() + " recovery=" + AgentTools.Recovery.Snapshot()
                 + " plan=" + AgentTools.Plan.Snapshot());
             Terraria.Main.LocalPlayer.dead = true;
