@@ -442,7 +442,9 @@ public sealed class ScriptLibrary
                 'Which available movement and weapon combination best avoids incoming damage while carrying out state.instruction?',criteria},
                 attention:{type:'choice',instructions:
                   'Do the available controls suffice to make useful progress, or should the Agent revise equipment or terrain preparation? Current actions continue during review. Consider the task, incoming damage, weapon reach, ammo and the measured candidate outcomes.',
-                  criteria:{continue:'Continue with current preparation and control.',equipment:'Ask the Agent to prepare a more suitable weapon, ammunition, armor or supplies.',
+                  criteria:{continue:'Continue with current preparation and control.',
+                    ranged_weapon:'Ask the Agent to obtain a practical ranged attack with usable ammunition for enemies beyond melee reach.',
+                    equipment:'Ask the Agent to improve or equip the available loadout, armor or supplies.',
                     terrain:'Ask the Agent to change local terrain or the approach plan to make progress.'}}}});
             if(r.status==='pending'||r.request_id===input.last_request) return {status:r.status};
             const record={decision:'combat',request:r.request_id,request_age_ms:r.request_age_ms,ready_wait_ms:r.ready_wait_ms,model_ms:r.result.elapsed_ms};
@@ -452,12 +454,12 @@ public sealed class ScriptLibrary
             const plan=r.input_state.plans.find(p=>p.id===r.result.answers.response.choice);
             const attention=r.result.answers.attention?.choice;
             const agentReview=attention&&attention!=='continue'?{
-              key:attention+':'+(attention==='equipment'?weapons.map(w=>w.type+':'+w.has_ammo).sort().join(',')
+              key:attention+':'+(attention!=='terrain'?weapons.map(w=>w.type+':'+w.has_ammo).sort().join(',')
                 :input.context+':'+c.targets.map(n=>n.who+':'+n.type).join(',')),
-              reason:'Decision model requests '+attention+' preparation',
+              reason:attention==='ranged_weapon'?'Prepare a practical ranged attack and usable ammunition':'Decision model requests '+attention+' preparation',
               evidence:{choice:attention,request_id:r.request_id,instruction:input.instruction,tick:c.tick,player:c.player,
                 weapons:weapons.map(({type,name,damage,has_ammo,mana_available})=>({type,name,damage,has_ammo,mana_available})),
-                targets:c.targets.map(({who,type,hp,contact_damage,distance_tiles})=>({who,type,hp,contact_damage,distance_tiles})),
+                targets:c.targets.map(({who,type,name,hp,contact_damage,distance_tiles})=>({who,type,name,hp,contact_damage,distance_tiles})),
                 terrain:c.terrain?{origin:c.terrain.origin,rows:c.terrain.rows,legend:c.terrain.legend,player_bounds:c.terrain.player_bounds}:null,
                 selected_plan:plan,model_ms:r.result.elapsed_ms}}:null;
             let applied;

@@ -153,7 +153,7 @@ static class ScriptTests
 
     static async Task SurvivalCombatPolicy()
     {
-        foreach (string scenario in new[] { "navigation", "idle", "fight", "boss", "unchaseable_enemy", "projectile_only", "quiet", "equipment_review" })
+        foreach (string scenario in new[] { "navigation", "idle", "fight", "boss", "unchaseable_enemy", "projectile_only", "quiet", "equipment_review", "ranged_review" })
         {
             bool boss = scenario == "boss", idle = scenario is "idle" or "fight";
             int decisions = 0, updates = 0, reviews = 0;
@@ -196,10 +196,11 @@ static class ScriptTests
                         decisions++;
                         Check(args["state"]["instruction"].ToString() == "reach the cave", "travel policy lost the current objective");
                         Check(args["state"]["terrain"]?["rows"]?[0]?.ToString() == "#.", "combat decision lost measured terrain cells");
+                        Check(args["questions"]["attention"]?["criteria"]?["ranged_weapon"] != null, "combat decision could not request a ranged attack");
                         return decisions == 1 ? "{\"status\":\"pending\"}" : new JsonObject {
                             ["status"] = "ready", ["request_id"] = 9, ["input_state"] = args["state"].DeepClone(),
                             ["result"] = JsonNode.Parse("{\"elapsed_ms\":20,\"answers\":{\"response\":{\"choice\":\"avoid\"},\"attention\":{\"choice\":\""
-                                + (scenario == "equipment_review" ? "equipment" : "continue") + "\"}}}") }.ToJsonString();
+                                + (scenario == "equipment_review" ? "equipment" : scenario == "ranged_review" ? "ranged_weapon" : "continue") + "\"}}}") }.ToJsonString();
                     }
                     Check(name == "act" && args["combat_candidate"]?["plan_id"]?.ToString() == "avoid", "combat policy lost native candidate validation");
                     updates++; return "{}";
@@ -207,7 +208,7 @@ static class ScriptTests
                 programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-empty-skills-" + Guid.NewGuid())).Callable());
             bool inactive = boss || scenario == "quiet";
             Check(result["ok"].GetValue<bool>() && decisions == (inactive ? 0 : 3) && updates == (inactive ? 0 : 1)
-                && reviews == (scenario == "equipment_review" ? 1 : 0),
+                && reviews == (scenario is "equipment_review" or "ranged_review" ? 1 : 0),
                 "default combat policy blocked pending navigation, repeated a response or touched boss movement: " + result);
         }
         Console.WriteLine("PASS: default survival uses shared combat candidates during navigation and idle, deduplicates execution and preserves boss control");
