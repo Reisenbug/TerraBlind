@@ -676,6 +676,7 @@ public static partial class AgentTools
                 if (!npc.active || npc.type != Int(enemy, "type", -1)) { enemy["observation_stale"] = true; continue; }
                 enemy["attackable"] = npc.CanBeChasedBy(healthPlayer);
                 enemy["contact_damage"] = npc.damage;
+                enemy["defense"] = npc.defense;
                 enemy["dont_take_damage"] = npc.dontTakeDamage;
                 enemy["immortal"] = npc.immortal;
             }
@@ -705,7 +706,8 @@ public static partial class AgentTools
             observedPlayer["biome_flags"] = new JsonObject { ["jungle"] = healthPlayer.ZoneJungle,
                 ["crimson"] = healthPlayer.ZoneCrimson, ["corruption"] = healthPlayer.ZoneCorrupt,
                 ["hallow"] = healthPlayer.ZoneHallow, ["dungeon"] = healthPlayer.ZoneDungeon,
-                ["desert"] = healthPlayer.ZoneDesert, ["snow"] = healthPlayer.ZoneSnow, ["ocean"] = healthPlayer.ZoneBeach };
+                ["desert"] = healthPlayer.ZoneDesert, ["snow"] = healthPlayer.ZoneSnow, ["ocean"] = healthPlayer.ZoneBeach,
+                ["underground_desert"] = healthPlayer.ZoneUndergroundDesert, ["spider_cave"] = healthPlayer.ZoneSpiderCave };
             var ground = new JsonArray();
             int groundY = (int)(healthPlayer.position.Y + healthPlayer.height + 1) / 16;
             for (int x = (int)healthPlayer.position.X / 16; x <= (int)(healthPlayer.position.X + healthPlayer.width - 1) / 16; x++)
@@ -2648,7 +2650,7 @@ public static partial class AgentTools
                     ["vy_pixels_per_tick"] = shot.velocity.Y * (shot.extraUpdates + 1) }).ToArray()),
             ["targets"] = new JsonArray(targets.Select(n => (JsonNode)new JsonObject
             {
-                ["who"] = n.whoAmI, ["type"] = n.type, ["hp"] = n.life, ["contact_damage"] = n.damage,
+                ["who"] = n.whoAmI, ["type"] = n.type, ["hp"] = n.life, ["contact_damage"] = n.damage, ["defense"] = n.defense,
                 ["name"] = Lang.GetNPCNameValue(n.type),
                 ["x"] = n.Center.X / 16, ["y"] = n.Center.Y / 16,
                 ["width_tiles"] = n.width / 16f, ["height_tiles"] = n.height / 16f,
