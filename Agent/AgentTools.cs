@@ -1957,6 +1957,24 @@ public static partial class AgentTools
                                 cell["x"].GetValue<int>(), cell["y"].GetValue<int>()));
                     }
                     var terrain = PvpTerrain.Observe(player, npc.Center);
+                    var probes = terrain["stance_probes"].AsArray();
+                    var seen = probes.OfType<JsonObject>().Select(p => (Int(p, "support_x"), Int(p, "support_y"))).ToHashSet();
+                    foreach (float fraction in new[] { .25f, .5f, .75f, 1f })
+                    foreach (int dx in new[] { -6, 0, 6 })
+                    foreach (int dy in new[] { -8, 0, 8 })
+                    {
+                        var sample = Microsoft.Xna.Framework.Vector2.Lerp(player.Center, npc.Center, fraction);
+                        int x = (int)(sample.X / 16) + dx;
+                        int firstY = (int)((sample.Y + player.height / 2f) / 16) + dy;
+                        for (int y = firstY; y <= firstY + 8; y++)
+                        {
+                            if (!seen.Add((x, y))) continue;
+                            var probe = PvpTerrain.ProbeStance(player, npc.Center, x, y);
+                            if (probe["supported"]?.GetValue<bool>() != true) continue;
+                            if (probe["body_fits"]?.GetValue<bool>() == true) probes.Add(probe);
+                            break;
+                        }
+                    }
                     var weapons = player.inventory.Take(10).Where(item => CombatLoadout.Usable(item)
                         && (CombatLoadout.PreferredType == 0 || item.type == CombatLoadout.PreferredType)
                         && (item.useAmmo == 0 || player.HasAmmo(item)) && item.mana * player.manaCost <= player.statMana).ToArray();
@@ -1972,6 +1990,7 @@ public static partial class AgentTools
                         stance["weapon_types"] = stance["body_fits"]?.GetValue<bool>() == true ? HittingWeapons(center) : new JsonArray();
                     }
                     return new JsonObject { ["npc"] = who, ["npc_type"] = npc.type, ["hp"] = npc.life,
+                        ["distance_tiles"] = Microsoft.Xna.Framework.Vector2.Distance(player.Center, npc.Center) / 16,
                         ["attackable"] = npc.CanBeChasedBy(player), ["contact_damage"] = npc.damage,
                         ["dont_take_damage"] = npc.dontTakeDamage, ["immortal"] = npc.immortal,
                         ["clear_line"] = terrain["direct_line"]["clear"].DeepClone(),

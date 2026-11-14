@@ -29,9 +29,11 @@ public sealed class ScriptLibrary
             const query={npc:input.npc,npc_type:input.npc_type};
             const scene=tool('npc_combat_observe',query);
             if(scene.error) return {status:'needs_review',reason:scene.error};
-            if(scene.current_weapon_types?.length) return {status:'ready',weapon_types:scene.current_weapon_types};
-            const positions=scene.terrain.stance_probes.filter(p=>p.body_fits&&p.weapon_types?.length
-              &&p.target_distance_tiles>=(input.min_distance_tiles??4))
+            const maximum=input.max_distance_tiles??40;
+            if(scene.current_weapon_types?.length&&scene.distance_tiles<=maximum)
+              return {status:'ready',weapon_types:scene.current_weapon_types};
+            const positions=scene.terrain.stance_probes.filter(p=>p.body_fits&&p.supported!==false&&p.weapon_types?.length
+              &&p.target_distance_tiles>=(input.min_distance_tiles??4)&&p.target_distance_tiles<=maximum)
               .sort((a,b)=>a.player_distance_tiles-b.player_distance_tiles);
             for(const p of positions){
               const x=p.support_x,y=p.support_y-1;
@@ -40,8 +42,9 @@ public sealed class ScriptLibrary
               const moved=tool('nav_to',{x,y,mode:'stand'});
               if(!moved.done) return {status:'needs_review',reason:'stance_unreached',x,y,movement:moved};
               const current=tool('npc_combat_observe',query);
-              return {status:current.current_weapon_types?.length?'ready':'needs_review',
-                reason:current.error??(current.current_weapon_types?.length?null:'target_or_shot_changed'),
+              const ready=current.current_weapon_types?.length&&current.distance_tiles<=maximum;
+              return {status:ready?'ready':'needs_review',
+                reason:current.error??(ready?null:'target_or_shot_changed'),
                 npc:input.npc,npc_type:input.npc_type,x,y,weapon_types:current.current_weapon_types??[]};
             }
             return {status:'needs_review',reason:'no_observed_firing_position',npc:input.npc,npc_type:input.npc_type};

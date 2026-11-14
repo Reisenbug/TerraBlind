@@ -270,7 +270,7 @@ static class ScriptTests
 
     static async Task CombatApproach()
     {
-        foreach (string scenario in new[] { "current", "move", "changed", "blocked", "no_position" })
+        foreach (string scenario in new[] { "current", "move", "changed", "blocked", "no_position", "far", "moved_far" })
         {
             int moves = 0, observations = 0;
             var result = await AgentScript.Run(ScriptLibrary.Example("combat_approach")["code"].ToString()
@@ -284,9 +284,11 @@ static class ScriptTests
                             "combat approach lost observed target identity");
                         if (observations > 1 && scenario == "changed") return Task.FromResult("{\"error\":\"target_changed\"}");
                         return Task.FromResult(new JsonObject {
-                            ["current_weapon_types"] = scenario == "current" || observations > 1 ? new JsonArray(39) : new JsonArray(),
+                            ["distance_tiles"] = scenario == "far" && observations == 1 || scenario == "moved_far" && observations > 1 ? 65 : 8,
+                            ["current_weapon_types"] = scenario is "current" or "far" || observations > 1 ? new JsonArray(39) : new JsonArray(),
                             ["terrain"] = new JsonObject { ["stance_probes"] = JsonNode.Parse("""
-                                [{"body_fits":true,"weapon_types":[39],"target_distance_tiles":1,"player_distance_tiles":1,"support_x":1,"support_y":20},
+                                [{"body_fits":true,"supported":false,"weapon_types":[39],"target_distance_tiles":8,"player_distance_tiles":0,"support_x":0,"support_y":20},
+                                 {"body_fits":true,"weapon_types":[39],"target_distance_tiles":1,"player_distance_tiles":1,"support_x":1,"support_y":20},
                                  {"body_fits":false,"weapon_types":[39],"target_distance_tiles":8,"player_distance_tiles":2,"support_x":2,"support_y":20},
                                  {"body_fits":true,"weapon_types":[],"target_distance_tiles":8,"player_distance_tiles":3,"support_x":3,"support_y":20},
                                  {"body_fits":true,"weapon_types":[39],"target_distance_tiles":8,"player_distance_tiles":4,"support_x":4,"support_y":20},
@@ -302,7 +304,7 @@ static class ScriptTests
                     return Task.FromResult(scenario == "blocked" ? "{\"done\":false,\"error\":\"navigation_incomplete\"}" : "{\"done\":true}");
                 }, _ => Task.CompletedTask, default);
             Check(result["ok"].GetValue<bool>() && result["value"]["status"].ToString()
-                == (scenario is "current" or "move" ? "ready" : "needs_review")
+                == (scenario is "current" or "move" or "far" ? "ready" : "needs_review")
                 && moves == (scenario is "current" or "no_position" ? 0 : 1), "combat approach retried stale positions or misreported readiness: " + result);
         }
         Console.WriteLine("PASS: combat approach checks current weapons, separation, terrain and native navigation; refreshes the target after one move");
@@ -656,7 +658,7 @@ static class ScriptTests
                 var direct = await AgentScript.Run("return skill(" + JsonValue.Create(name).ToJsonString() + ",0," + input + ");", 5,
                     (_, _) => { }, (tool, _, _) => Task.FromResult(tool == "get_state"
                         ? "{\"permanent_max_health\":100,\"inventory_counts\":{\"331\":6}}"
-                        : "{\"current_weapon_types\":[24]}"), _ => Task.CompletedTask, default, programs: library.Callable());
+                        : "{\"current_weapon_types\":[24],\"distance_tiles\":8}"), _ => Task.CompletedTask, default, programs: library.Callable());
                 Check(direct["ok"]?.GetValue<bool>() == true && direct["value"]?["status"]?.ToString() == expected,
                     "parameterized helper required a copied program before execution: " + name + " " + direct);
             }
