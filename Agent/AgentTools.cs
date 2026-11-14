@@ -2067,7 +2067,8 @@ public static partial class AgentTools
                     ["target_wx"] = Int(args, "target_x"), ["target_wy"] = Int(args, "target_y") }, token);
                 if (!Rejected(result)) result = await Wait("/mine_status", "running", "/mine_stop", 120, token,
                     reactionContext: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
-                if (Text(result, "outcome") == "out_of_box")
+                if (Text(result, "outcome") == "out_of_box"
+                    || Text(result, "outcome") == "out_of_reach" && Int(result, "mined") > 0)
                 {
                     var mining = result;
                     var navigation = await Navigate(new JsonObject { ["x"] = args["target_x"].DeepClone(),
