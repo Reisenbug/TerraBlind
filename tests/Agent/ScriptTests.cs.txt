@@ -41,6 +41,7 @@ static class ScriptTests
         await NavigationRecoverySkill();
         await SurvivalDecisionPolicy();
         await SurvivalCombatPolicy();
+        await TaskPolicyPatch();
         await IdleTaskPolicy();
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
@@ -59,7 +60,46 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=33 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=34 model_calls=0");
+    }
+
+    static async Task TaskPolicyPatch()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        async Task<JsonObject> Call(JsonObject args)
+        {
+            var pending = AgentTools.Execute("task_policy", args, default);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (!pending.IsCompleted)
+            { Check(clock.Elapsed.TotalSeconds < 5, "policy patch stalled"); agent.PostUpdateEverything(); await Task.Delay(1); }
+            return JsonNode.Parse(await pending).AsObject();
+        }
+        Task<JsonObject> Patch(int revision, string oldText, string newText) => Call(new JsonObject {
+            ["operation"] = "patch", ["expected_revision"] = revision, ["old_text"] = oldText, ["new_text"] = newText });
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
+            const string source = "on('tick',()=>{print('before');return {handled:true};});on('action_failed',()=>({retry:false}));";
+            await Call(new JsonObject { ["operation"] = "set", ["expected_revision"] = 0, ["code"] = source });
+            var result = await Patch(1, "'before'", "'after'");
+            Check(result["revision"]?.GetValue<int>() == 2 && result["active"]?.GetValue<bool>() == true
+                && result["events"].AsArray().Select(e => e.ToString()).Order().SequenceEqual(new[] { "action_failed", "tick" }),
+                "policy patch removed unrelated reactions: " + result);
+            string expected = source.Replace("'before'", "'after'");
+            var saved = await Call(new JsonObject { ["operation"] = "get" });
+            Check(saved["code"]?.ToString() == expected, "policy patch changed more than the selected text");
+            foreach (var (revision, oldText, newText) in new[] { (1, "'after'", "'stale'"), (2, "missing", "x"),
+                (2, "on(", "bad"), (2, "'after'", "'") })
+            {
+                var rejected = await Patch(revision, oldText, newText);
+                Check(rejected["error"] != null, "invalid policy patch was accepted: " + rejected);
+                saved = await Call(new JsonObject { ["operation"] = "get" });
+                Check(saved["revision"]?.GetValue<int>() == 2 && saved["code"]?.ToString() == expected
+                    && saved["active"]?.GetValue<bool>() == true, "failed patch replaced the working policy");
+            }
+            Console.WriteLine("PASS: policy patch preserves unrelated handlers and keeps the active version on stale, ambiguous or invalid edits");
+        }
+        finally { AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); agent.Unload(); }
     }
 
     static async Task SurvivalCombatPolicy()
@@ -1357,6 +1397,7 @@ static class ScriptTests
         await IdleTaskPolicy();
         await SurvivalDecisionPolicy();
         await SurvivalCombatPolicy();
+        await TaskPolicyPatch();
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
         await ActionReferences();

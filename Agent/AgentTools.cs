@@ -149,8 +149,23 @@ public static partial class AgentTools
                 throw new InvalidOperationException("任务或策略版本已改变，请重新读取。");
             ClearTaskPolicy(); return TaskPolicyStatus();
         }, token);
-        if (operation != "set") throw new ArgumentException("operation需要get/set/clear。");
+        if (operation is not ("set" or "patch")) throw new ArgumentException("operation需要get/set/patch/clear。");
         string code = Text(args, "code");
+        if (operation == "patch")
+        {
+            string oldText = Text(args, "old_text"), newText = args["new_text"]?.GetValue<string>();
+            if (oldText.Length == 0 || newText == null) throw new ArgumentException("patch需要非空old_text和new_text。");
+            code = await NativeAgent.OnMain(() =>
+            {
+                if (expected != taskPolicyRevision || epoch != taskPolicyEpoch)
+                    throw new InvalidOperationException("任务或策略版本已改变，请重新读取。");
+                string previous = taskPolicy?.Code;
+                int start = previous?.IndexOf(oldText, StringComparison.Ordinal) ?? -1;
+                if (start < 0 || previous.IndexOf(oldText, start + 1, StringComparison.Ordinal) >= 0)
+                    throw new ArgumentException("task_policy_patch_not_unique：old_text须在当前源码中恰好匹配一次。");
+                return previous[..start] + newText + previous[(start + oldText.Length)..];
+            }, token);
+        }
         if (string.IsNullOrWhiteSpace(code) || code.Length > 15000) throw new ArgumentException("策略code需要1..15000字符。");
         var unchanged = await NativeAgent.OnMain(() =>
         {

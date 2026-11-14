@@ -173,11 +173,13 @@ public static class AgentScript
         tools.Add(new JsonObject { ["type"] = "function", ["function"] = new JsonObject
         {
             ["name"] = "task_policy",
-            ["description"] = "整项任务共用的JS反应策略。先get读取版本，set提交初始化源码：用on注册处理函数、watch配置观察，可调用已保存技能；动作放在处理函数中。所有DAG节点及后台动作自动使用此策略，局部on优先覆盖同名事件。策略闭包状态跨节点保留。更新先初始化新策略，成功后切换，当前动作和已进入的旧处理继续；失败保持旧策略。clear关闭未来反应，已发生的游戏效果保留。新指令任务及离开世界清除策略。",
+            ["description"] = "整项任务共用的JS反应策略。先get读取源码和版本；调整治疗、武器等局部行为用patch，以old_text/new_text唯一替换并保留其余源码。set提交整套初始化源码：用on注册处理函数、watch配置观察，可调用已保存技能；动作放在处理函数中。所有DAG节点及后台动作自动使用此策略，局部on优先覆盖同名事件。策略闭包状态跨节点保留。更新先初始化新策略，成功后切换，当前动作和已进入的旧处理继续；失败保持旧策略。clear关闭未来反应，已发生的游戏效果保留。新指令任务及离开世界清除策略。",
             ["parameters"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject
             {
-                ["operation"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("get", "set", "clear") },
+                ["operation"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("get", "set", "patch", "clear") },
                 ["code"] = new JsonObject { ["type"] = "string", ["minLength"] = 1, ["maxLength"] = 15000 },
+                ["old_text"] = new JsonObject { ["type"] = "string", ["minLength"] = 1 },
+                ["new_text"] = new JsonObject { ["type"] = "string" },
                 ["expected_revision"] = new JsonObject { ["type"] = "integer", ["minimum"] = 0 }
             }, ["required"] = new JsonArray("operation") }
         } });
@@ -317,7 +319,7 @@ public static class AgentScript
         + "每step结果限8000字符，return限16000字符；print每条限1000字符，log_truncations记录截断。只返回决策字段，完整执行轨迹按report_id用script_report查询。tool_counts表示请求次数，效果用真实状态核验。"
         + "\nDAG执行：第一步目的地与验收明确后建立最小计划，从ready节点后台启动；最终要求从初始conditions保留，末端包含仍需持有物品。调查、后继script和on_failure在行进期间补齐，前置通过宿主验收后自动派发。依赖表示已验收，输入互斥由执行器管理。"
         + "\n途中反应：先用on(kind,event=>{...;return {handled:true};})注册本次脚本的处理函数，再执行主任务。watch订阅nearby_tile/nearby_chest/nearby_drop/nearby_npc_killed/inventory_full等现场事件；tick每250ms提供一次本地检查机会，适合检查受伤、威胁和武器，combat_assess提供事实。导航及gather内部导航会执行处理函数，原脚本和主动作句柄保持；只读和背包操作保持路线运行，需要移动/挖掘/放置时交接控制，结束后按当前位置重启原目的地。处理函数可调用tool/skill/step，步骤与主任务隔离。返回handled:false交回Agent；未注册事件沿用原交付。注册仅本次脚本有效，重新执行源码会使用新处理函数。"
-        + "整趟任务的资源、背包、压力板和战斗反应先挂到task_policy，随后开始首段行动；节点script只推进主任务，局部on用于该节点的特别处理。task_policy覆盖当前节点、后继节点、恢复脚本和独立后台动作；不依赖后继节点开始才生效。event.execution给出本次实际工具及args，event.task_node为所属节点，可据此决定顺路采集与返回。赶路时更新同一策略，注册与新策略初始化保持当前动作运行。task_reactions模板可用于整趟任务，reactive_travel用于单段。"
+        + "宿主已启用默认safety_reactions，含Jev联合自保、回城和局部障碍恢复。先get当前task_policy；局部调整用patch，完整策略重写用set。把整趟任务的资源和背包反应补入同一策略；节点script推进主任务，局部on处理该节点的特别情况。task_policy覆盖当前节点、后继节点、恢复脚本和独立后台动作。event.execution给出实际工具及args，event.task_node为所属节点，可据此决定顺路采集与返回。赶路时更新策略，初始化期间当前动作继续。task_reactions模板可用于整趟任务，reactive_travel用于单段。"
         + "快速现场判断可在tick里用jev_judge的channel/context后台发起，读取ready中的request_id、input_state和result后按现场执行，等待期间原动作继续。script_program example decision_reactions提供weapon/movement/opportunity三个可独立启停的可编辑示例，decisions数组选择维度，instruction给当前意图；保存为技能后可在task_policy中用skill调用。"
         + "组合策略时先skill注册基础处理，再on(kind,handler,{append:true})追加该事件的处理；依注册顺序执行，handled:false交回审阅或retry:true重试时结束本次处理链。on默认替换同名处理。task_policy只写skill调用和增补代码，完整技能保存在script_program。"
         + "挖掘、use_item、place_at和act执行期间同样投递事件：只读判断立即运行，处理函数的物品或移动动作在当前原子动作完成后交接；原动作结果先保存，随后主脚本继续。长段输入拆成有明确世界结果的短动作，让策略及时接手。"
