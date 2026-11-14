@@ -1429,7 +1429,7 @@ public static partial class AgentTools
                         return joined.Report.ToJsonString();
                     }
                 }
-                bool goalBackground = !Actions.RunningScript && !args.ContainsKey("background")
+                bool goalBackground = !Actions.RunningScript && !preparedDispatch.Value && !args.ContainsKey("background")
                     && Text(args, "task_node") != "" && NativeAgent.GoalState?["native"]?["status"]?.ToString() == "active"
                     && (args["code"] == null || !AgentScript.PreparationOnly(Text(args, "code")));
                 if (Bool(args, "background") || goalBackground)
