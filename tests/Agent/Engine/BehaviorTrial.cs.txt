@@ -382,7 +382,7 @@ public sealed partial class BehaviorTrial : ModSystem
         if (enabled)
         {
             On_Main.Update += Open; IL_Main.DoUpdate += Focus;
-            if (Environment.GetEnvironmentVariable("TB_MINING_SPEED_TRIAL") == "1") On_Player.PickTile += MeasureMining;
+            if (Environment.GetEnvironmentVariable("TB_MINING_SPEED_TRIAL") == "1" || Environment.GetEnvironmentVariable("TB_QUEEN_MINING_REPLAY") == "1") On_Player.PickTile += MeasureMining;
             if (Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") == "1") On_WorldGen.KillTile += TraceLarva;
         }
         if (enabled && Environment.GetEnvironmentVariable("TB_TRACE_PRIMARY") == "1")
@@ -449,7 +449,7 @@ public sealed partial class BehaviorTrial : ModSystem
         if (enabled)
         {
             On_Main.Update -= Open; IL_Main.DoUpdate -= Focus;
-            if (Environment.GetEnvironmentVariable("TB_MINING_SPEED_TRIAL") == "1") On_Player.PickTile -= MeasureMining;
+            if (Environment.GetEnvironmentVariable("TB_MINING_SPEED_TRIAL") == "1" || Environment.GetEnvironmentVariable("TB_QUEEN_MINING_REPLAY") == "1") On_Player.PickTile -= MeasureMining;
             if (Environment.GetEnvironmentVariable("TB_QUEEN_GOAL") == "1") On_WorldGen.KillTile -= TraceLarva;
         }
     }
@@ -546,6 +546,8 @@ public sealed partial class BehaviorTrial : ModSystem
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         if (frames++ == 0) Main.playerInventory = true;
+        if (Environment.GetEnvironmentVariable("TB_QUEEN_MINING_REPLAY") == "1" && frames % 60 == 0 && MineCoordinator.IsActive)
+            Console.WriteLine($"MINING_REPLAY_INPUT tick={Main.GameUpdateCount} slot={Main.LocalPlayer.selectedItem} use={Main.LocalPlayer.controlUseItem} animation={Main.LocalPlayer.itemAnimation} time={Main.LocalPlayer.itemTime} delay={Main.LocalPlayer.delayUseItem} mouse={Main.LocalPlayer.mouseInterface} target={Player.tileTargetX},{Player.tileTargetY} state={MineCoordinator.StatusJson()}");
         if (Environment.GetEnvironmentVariable("TB_SKILL_LEARNING") == "1")
             foreach (var npc in Main.npc)
                 if (npc.active && !learningTargets.Contains(npc.whoAmI)) npc.active = false;
@@ -868,6 +870,7 @@ public sealed partial class BehaviorTrial : ModSystem
     async Task Run()
     {
         if (Environment.GetEnvironmentVariable("TB_SKILL_LEARNING") == "1") { await SkillLearningRun(); return; }
+        if (Environment.GetEnvironmentVariable("TB_QUEEN_MINING_REPLAY") == "1") { await QueenMiningReplay(); return; }
         if (Environment.GetEnvironmentVariable("TB_MINING_SPEED_TRIAL") == "1") { await MiningSpeedTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_ATOMIC_POLICY_TRIAL") == "1") { await AtomicPolicyTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_OPEN_ITEM_PROBE") == "1")

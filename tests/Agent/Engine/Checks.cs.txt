@@ -24,6 +24,39 @@ public sealed partial class BehaviorTrial
     int[] learningTargets = Array.Empty<int>();
     readonly Vector2 learningOrigin = new(3200, 3158);
 
+    async Task QueenMiningReplay()
+    {
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false;
+            VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+            AgentTools.NewTask(); AgentPermissions.Reset();
+            Combat.Enabled = Dodge.Enabled = false;
+            var player = Main.LocalPlayer;
+            player.Teleport(new Vector2(24198.145f, 5094)); player.velocity = Vector2.Zero;
+            foreach (var item in player.inventory) item.TurnToAir();
+            player.inventory[0].SetDefaults(ItemID.CopperShortsword);
+            player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+            player.inventory[2].SetDefaults(ItemID.CopperAxe);
+            player.inventory[3].SetDefaults(ItemID.Wood); player.inventory[3].stack = 9999;
+            player.selectedItem = 1;
+            for (int x = 1512; x <= 1513; x++)
+            for (int y = 318; y <= 320; y++)
+                if (Main.tile[x, y].TileType != TileID.SmallPiles) Main.tile[x, y].ClearTile();
+            miningMeasurement = new JsonObject { ["x"] = 1512, ["y"] = 321 };
+            return true;
+        });
+        var before = await Call("inspect_terrain", new JsonObject { ["radius"] = 8 });
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var result = await Call("mine", new JsonObject { ["dir"] = "down", ["target_x"] = 1513, ["target_y"] = 340 });
+        var after = await Call("get_state", new JsonObject());
+        File.WriteAllText(Path.Combine(Main.SavePath, "mining-replay.json"), new JsonObject {
+            ["elapsed_ms"] = clock.ElapsedMilliseconds, ["before"] = before,
+            ["result"] = result, ["after"] = after, ["measurement"] = miningMeasurement.DeepClone() }.ToJsonString());
+        if (result["outcome"]?.ToString() != "done") throw new Exception("native mining replay failed: " + result);
+        Console.WriteLine("MINING_REPLAY_PASS elapsed_ms=" + clock.ElapsedMilliseconds);
+    }
+
     async Task LearningScene(bool transfer = false)
     {
         await OnMain(() =>
