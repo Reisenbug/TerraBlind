@@ -135,6 +135,8 @@ namespace Terraria
         public Microsoft.Xna.Framework.Vector2 Bottom => new(Center.X, position.Y + height);
         public bool HasAmmo(Item item) => HasAmmunition;
         public int GetWeaponDamage(Item item) => item.damage;
+        public float MeleeAttackSpeed = 1;
+        public float GetTotalAttackSpeed(Terraria.ModLoader.DamageClass damageClass) => MeleeAttackSpeed;
         public Item[] inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
         public void DropSelectedItem(int slot, ref Item item)
         {
@@ -232,10 +234,13 @@ namespace Terraria
 namespace Terraria.ID
 {
     public static class WallID { public const int SpiderUnsafe = 62; }
-    public static class ProjAIStyleID { public const int ShortSword = 161; }
+    public static class ProjAIStyleID { public const int ShortSword = 161, Spear = 19; }
     public static class ItemID { public const int FixtureGoal = 191, Umbrella = 946, TragicUmbrella = 4707; }
     public static class NPCID { public const int FixtureEnemy = 222, Lihzahrd = 198, LihzahrdCrawler = 199, FlyingSnake = 226; }
-    public static class ProjectileID { }
+    public static class ProjectileID
+    {
+        public static class Sets { public static bool[] NoMeleeSpeedVelocityScaling = new bool[1200]; }
+    }
     public static class LiquidID { public const int Water = 0, Lava = 1, Honey = 2, Shimmer = 3; }
     public static class TileID
     {
@@ -261,6 +266,12 @@ namespace Terraria.ID
 }
 namespace Terraria.ModLoader
 {
+    public class DamageClass { public static readonly DamageClass Melee = new(); }
+    public static class CombinedHooks
+    {
+        public static int TotalAnimationTime(float animation, Terraria.Player player, Terraria.Item item)
+            => Math.Max(1, (int)(animation / player.MeleeAttackSpeed));
+    }
     public static class ItemLoader
     {
         public static int ItemCount = 6000;

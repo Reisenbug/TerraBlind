@@ -53,9 +53,35 @@ namespace TerraBlind
                 if (shot.aiStyle == ProjAIStyleID.ShortSword && Vector2.Distance(source, target)
                     > weapon.shootSpeed * 14 + new Vector2(shot.width, shot.height).Length() * weapon.scale / 2 + targetRadius)
                     return false;
+                if (shot.aiStyle == ProjAIStyleID.Spear && Vector2.Distance(source, target)
+                    > SpearReach(player, weapon, shot, shotType) + targetRadius) return false;
                 if (!shot.tileCollide && !shot.ownerHitCheck) return true;
             }
             return Collision.CanHitLine(source, 4, 4, target, 4, 4);
+        }
+
+        static float SpearReach(Player player, Item weapon, Projectile shot, int type)
+        {
+            var (initial, extension) = type switch
+            {
+                46 => (3f, 1.4f), 105 => (3f, 2.1f), 367 => (3f, 1.5f), 368 => (3f, 1.4f),
+                47 => (4f, .9f), 153 => (4f, 1.3f), 49 => (4f, .85f),
+                64 or 215 => (3f, 1.7f), 66 or 97 or 212 or 218 => (3f, 1.9f),
+                877 or 878 or 879 => (28f, .4f),
+                _ => (float.PositiveInfinity, 0f)
+            };
+            int duration = CombinedHooks.TotalAnimationTime(weapon.useAnimation, player, weapon);
+            float speed = player.GetTotalAttackSpeed(DamageClass.Melee);
+            float velocity = weapon.shootSpeed * (ProjectileID.Sets.NoMeleeSpeedVelocityScaling[type] ? 1 : speed);
+            float body = new Vector2(shot.width, shot.height).Length() / 2;
+            float tip = type switch
+            {
+                46 => 10 + 50 * speed + 25 * MathF.Sqrt(2) / 2,
+                105 => 10 + 50 * speed + 30 * MathF.Sqrt(2) / 2,
+                153 => 10 + 40 * speed + 20 * MathF.Sqrt(2) / 2,
+                _ => 0
+            };
+            return velocity * (initial + extension * (duration - duration / 3)) + Math.Max(body, tip);
         }
 
         internal static bool TempleTargetAllowed(Player player, NPC npc)

@@ -314,6 +314,8 @@ static class GatherTests
         bool manual = Manual.On, dodge = AgentPermissions.Dodge;
         bool hadSample = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(77, out var sample);
         bool hadPassing = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(78, out var passing);
+        bool hadSpear = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(46, out var spear);
+        float attackSpeed = p.MeleeAttackSpeed;
         try
         {
             FightCoordinator.Stop(); Manual.On = false; AgentPermissions.Dodge = false;
@@ -341,6 +343,21 @@ static class GatherTests
             Collision.LineTest = (_, _) => true;
             p.inventory[2].damage = 200;
             Check(CombatLoadout.Select(p, target) == 1, "projectile shortsword was treated as a ranged weapon");
+            wallPassing.aiStyle = Terraria.ID.ProjAIStyleID.Spear;
+            Terraria.ID.ContentSamples.ProjectilesByType[46] = wallPassing;
+            p.inventory[2].shoot = 46; p.inventory[2].shootSpeed = 2.5f; p.inventory[2].useAnimation = 30;
+            target.position.X = 480;
+            Check(CombatLoadout.Select(p, target) == 1, "finite spear reach was treated as ranged");
+            target.position.X = 280;
+            Check(CombatLoadout.Select(p, target) == 2, "native spear extension hitbox was excluded");
+            p.MeleeAttackSpeed = 2;
+            target.position.X = 340;
+            Check(CombatLoadout.Select(p, target) == 2, "melee speed lost the spear extension hitbox");
+            p.MeleeAttackSpeed = attackSpeed;
+            wallPassing.aiStyle = Terraria.ID.ProjAIStyleID.Spear;
+            target.position.X = 480;
+            p.inventory[2].shoot = 78;
+            Check(CombatLoadout.Select(p, target) == 2, "unmodeled spear projectile lost its ranged behavior");
             wallPassing.aiStyle = 0; p.inventory[2].damage = 15;
             Collision.LineTest = (_, _) => false;
             CombatLoadout.PreferredType = 51;
@@ -375,6 +392,9 @@ static class GatherTests
             else Terraria.ID.ContentSamples.ProjectilesByType.Remove(77);
             if (hadPassing) Terraria.ID.ContentSamples.ProjectilesByType[78] = passing;
             else Terraria.ID.ContentSamples.ProjectilesByType.Remove(78);
+            if (hadSpear) Terraria.ID.ContentSamples.ProjectilesByType[46] = spear;
+            else Terraria.ID.ContentSamples.ProjectilesByType.Remove(46);
+            p.MeleeAttackSpeed = attackSpeed;
         }
         Console.WriteLine("PASS: target-aware melee reach, projectile obstruction and recent attacker priority preserve agent filters");
     }
