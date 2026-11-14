@@ -2648,8 +2648,8 @@ public static partial class AgentTools
                     return WorldGen.InWorld(x, y) && (!Main.tile[x, y].HasTile || Main.tile[x, y].TileType != Int(tile, "type"));
                 });
                 bool relocated = escape["start_pos"] is JsonObject origin
-                    && Math.Pow(player.position.X - origin["x"].GetValue<double>(), 2)
-                        + Math.Pow(player.position.Y - origin["y"].GetValue<double>(), 2) >= Math.Pow(Math.Max(player.width, player.height), 2);
+                    && Math.Pow(player.position.X - origin["x"].Deserialize<double>(), 2)
+                        + Math.Pow(player.position.Y - origin["y"].Deserialize<double>(), 2) >= Math.Pow(Math.Max(player.width, player.height), 2);
                 if (!removed && !relocated) return null;
                 string site = string.Join(";", hazards.Select(tile => tile["x"] + "," + tile["y"] + ":" + tile["type"]));
                 if (!clearedSites.Add(site)) return null;
