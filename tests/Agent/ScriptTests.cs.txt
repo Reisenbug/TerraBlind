@@ -596,7 +596,7 @@ static class ScriptTests
         JsonObject Request(string name)
         {
             var request = JsonNode.Parse("""
-            {"channel":"weapon","context":"encounter-1","interval_ms":100,"max_age_ms":100,
+            {"channel":"weapon","context":"encounter-1","interval_ms":5000,"max_age_ms":5000,
              "state":{"x":10},"questions":{"choice":{"type":"choice","instructions":"Choose a concrete action",
              "criteria":{"continue":"Continue along the route","retreat":"Retreat behind cover"}}}}
             """).AsObject();
@@ -627,6 +627,7 @@ static class ScriptTests
         answered["input_state"]["x"] = -100;
         Check(channels.Poll(first, Judge)["input_state"]["x"].GetValue<int>() == 10,
             "script mutated retained decision evidence");
+        first["interval_ms"] = first["max_age_ms"] = 100;
         await Task.Delay(130);
         var expired = channels.Poll(first, Judge);
         Check(expired["status"].ToString() == "pending" && expired["result"] == null,
@@ -634,6 +635,7 @@ static class ScriptTests
         await WaitFor(4);
         var refresh = pending.ToArray()[3];
         first["context"] = "encounter-2"; first["state"]["x"] = 30;
+        first["interval_ms"] = first["max_age_ms"] = 5000;
         var changed = channels.Poll(first, Judge);
         Check(changed["status"].ToString() == "pending" && refresh.Token.IsCancellationRequested,
             "changing the tactical context reused the previous answer or left its request running");
