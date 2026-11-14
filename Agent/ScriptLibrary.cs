@@ -45,18 +45,21 @@ public sealed class ScriptLibrary
             return {status:'needs_review',reason:'no_observed_firing_position',npc:input.npc,npc_type:input.npc_type};
             """);
         if (name == "safety_reactions") return Template(name,
-            "默认任务反应：复核并拆除可达压力板与近身接触伤害物，验证后续接。近期受击且血量下降时，Jev结合当前任务、冷却、敌人与地形判断是否用已有回城道具脱险。遵守权限；可修改此JS并用task_policy替换。",
+            "默认任务反应：近敌时用原生推演候选联合选择短程走位与武器，覆盖导航和等待模型期间。复核并拆除可达压力板与近身接触伤害物，验证后续接。近期受击且血量下降时，Jev结合当前任务、冷却、敌人与地形判断是否用已有回城道具脱险。遵守权限；可修改此JS并用task_policy替换。",
             """
-            let survivalRequest=null,movementRequest=null,movementProgram=null;
-            const movementContext='survival-travel:'+Date.now();
+            let survivalRequest=null,movementRequest=null,movementProgram=null,idleDestination=null;
+            const movementContext='survival-combat:'+Date.now();
             on('tick',event=>{
               const c=tool('combat_assess',{radius:15}),p=c.player;
-              const destination=event.execution?.tool==='nav_to'?event.execution.args:null;
-              if(!c.boss_present&&destination&&c.targets?.some(n=>n.attackable&&n.contact_damage>0&&n.distance_tiles<12)){
-                movementProgram??=tool('script_program',{operation:'get',name:'travel_intent'});
+              let destination=event.execution?.tool==='nav_to'?event.execution.args:null;
+              const idle=event.execution?.tool==='idle';
+              if(destination) idleDestination=null;
+              if(!c.boss_present&&(destination||idle)&&c.targets?.some(n=>n.attackable&&n.contact_damage>0&&n.distance_tiles<12)){
+                if(idle) destination=idleDestination??={x:Math.floor(p.pos.x/16),y:Math.floor(p.pos.y/16)};
+                movementProgram??=tool('script_program',{operation:'get',name:'joint_combat'});
                 const goal=tool('get_state',{fields:['codex_goal']}).codex_goal;
-                const intent=skill('travel_intent',movementProgram.revision,{context:movementContext+':'+destination.x+':'+destination.y,
-                  destination,instruction:goal?.native?.objective??'Reach the current destination while staying alive.',last_request:movementRequest});
+                const intent=skill('joint_combat',movementProgram.revision,{context:movementContext+':'+(idle?'idle:':'route:')+destination.x+':'+destination.y,
+                  destination,instruction:goal?.native?.objective??'Continue the current task while staying alive.',last_request:movementRequest});
                 movementRequest=intent.request_id??movementRequest;
               }
               if(c.boss_present||p.hp>p.max_hp*.75||!c.recent_damage||c.tick-c.recent_damage.tick>120) return {handled:true};
@@ -363,7 +366,7 @@ public sealed class ScriptLibrary
             return {registered:true};
             """);
         if (name == "joint_combat") return Template(name,
-            "单次tick的共享战斗决策。先将本示例保存为同名skill；joint_reactions传combat_skill_revision。input含context、destination、instruction、last_request及interval_ms/max_age_ms。候选后台计算，pending期间原动作继续。返回request_id和applied供调用者去重；宿主执行前核对轨迹，执行期间检测偏离。",
+            "内置共享战斗决策，可直接调用revision=0；joint_reactions传combat_skill_revision。input含context、destination、instruction、last_request及interval_ms/max_age_ms。候选后台计算，pending期间原动作继续。返回request_id和applied供调用者去重；宿主执行前核对轨迹，执行期间检测偏离。",
             """
             const c=tool('combat_assess',{radius:25,forecast:true,context:input.context,destination:input.destination});
             const f=c.forecast;
@@ -931,7 +934,7 @@ public sealed class ScriptLibrary
     public JsonArray Callable()
     {
         lock (gate)
-            return new JsonArray(new[] { "recover_navigation", "inventory_space", "travel_intent" }.Concat(Directory.Exists(directory)
+            return new JsonArray(new[] { "recover_navigation", "inventory_space", "travel_intent", "joint_combat" }.Concat(Directory.Exists(directory)
                 ? Directory.EnumerateFiles(directory, "*.json").Select(Path.GetFileNameWithoutExtension)
                 : Enumerable.Empty<string>()).Distinct().OrderBy(name => name)
                 .Select(name => (JsonNode)Get(name, includeRuntime: false)).ToArray());

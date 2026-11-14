@@ -40,7 +40,7 @@ static class ScriptTests
         await GatherReactionConsumption();
         await NavigationRecoverySkill();
         await SurvivalDecisionPolicy();
-        await SurvivalTravelIntent();
+        await SurvivalCombatPolicy();
         await IdleTaskPolicy();
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
@@ -62,14 +62,18 @@ static class ScriptTests
         Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=33 model_calls=0");
     }
 
-    static async Task SurvivalTravelIntent()
+    static async Task SurvivalCombatPolicy()
     {
-        foreach (bool boss in new[] { false, true })
+        foreach (string scenario in new[] { "navigation", "idle", "boss" })
         {
+            bool boss = scenario == "boss", idle = scenario == "idle";
             int decisions = 0, updates = 0;
             var combat = JsonNode.Parse("""
-                {"tick":100,"boss_present":false,"player":{"hp":100,"max_hp":100},"projectiles":[],
-                 "targets":[{"who":7,"type":42,"attackable":true,"contact_damage":20,"distance_tiles":6}]}
+                {"tick":100,"boss_present":false,"player":{"hp":100,"max_hp":100,"pos":{"x":160,"y":320}},"projectiles":[],
+                 "targets":[{"who":7,"type":42,"attackable":true,"contact_damage":20,"distance_tiles":6,"weapons":[]}],
+                 "forecast":{"status":"ready","id":1,"movements":[],"sample_targets":[],"sample_projectiles":[],
+                   "plans":[{"id":"follow","movement":"follow_route","weapon_type":24,"movement_available":true},
+                     {"id":"avoid","movement":"right","weapon_type":24,"movement_available":true}]}}
                 """).AsObject();
             combat["boss_present"] = boss;
             var result = await AgentScript.Run("(function(){" + ScriptLibrary.Example("safety_reactions")["code"]
@@ -78,11 +82,16 @@ static class ScriptTests
                     if (name == "nav_to")
                     {
                         for (int i = 0; i < 3; i++) await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject {
-                            ["kind"] = "tick", ["execution"] = new JsonObject { ["tool"] = "nav_to",
+                            ["kind"] = "tick", ["execution"] = new JsonObject { ["tool"] = idle ? "idle" : "nav_to",
                                 ["args"] = new JsonObject { ["x"] = 50, ["y"] = 20 } } }, token);
                         return "{}";
                     }
-                    if (name == "combat_assess") return combat.ToJsonString();
+                    if (name == "combat_assess")
+                    {
+                        if (args["forecast"]?.GetValue<bool>() == true)
+                            Check(args["destination"]?["x"]?.GetValue<int>() == (idle ? 10 : 50), "combat policy lost the current navigation or idle anchor");
+                        return combat.ToJsonString();
+                    }
                     if (name == "get_state") return "{\"codex_goal\":{\"native\":{\"objective\":\"reach the cave\"}}}";
                     if (name == "script_program") return ScriptLibrary.Example(args["name"].ToString()).ToJsonString();
                     if (name == "jev_judge")
@@ -91,16 +100,16 @@ static class ScriptTests
                         Check(args["state"]["instruction"].ToString() == "reach the cave", "travel policy lost the current objective");
                         return decisions == 1 ? "{\"status\":\"pending\"}" : new JsonObject {
                             ["status"] = "ready", ["request_id"] = 9, ["input_state"] = args["state"].DeepClone(),
-                            ["result"] = JsonNode.Parse("{\"answers\":{\"response\":{\"choice\":\"withdraw\"}}}") }.ToJsonString();
+                            ["result"] = JsonNode.Parse("{\"elapsed_ms\":20,\"answers\":{\"response\":{\"choice\":\"avoid\"}}}") }.ToJsonString();
                     }
-                    Check(name == "nav_intent" && args["mode"].ToString() == "withdraw", "travel policy seized input instead of updating the existing navigation");
+                    Check(name == "act" && args["combat_candidate"]?["plan_id"]?.ToString() == "avoid", "combat policy lost native candidate validation");
                     updates++; return "{}";
                 }, _ => Task.CompletedTask, default,
                 programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-empty-skills-" + Guid.NewGuid())).Callable());
             Check(result["ok"].GetValue<bool>() && decisions == (boss ? 0 : 3) && updates == (boss ? 0 : 1),
-                "default travel policy blocked pending navigation, repeated a response or touched boss movement: " + result);
+                "default combat policy blocked pending navigation, repeated a response or touched boss movement: " + result);
         }
-        Console.WriteLine("PASS: default survival uses background travel decisions before taking damage, deduplicates intents and preserves boss control");
+        Console.WriteLine("PASS: default survival uses shared combat candidates during navigation and idle, deduplicates execution and preserves boss control");
     }
 
     static async Task ProductiveMiningRecovery()
@@ -1347,7 +1356,7 @@ static class ScriptTests
         await TaskPolicyIntegration();
         await IdleTaskPolicy();
         await SurvivalDecisionPolicy();
-        await SurvivalTravelIntent();
+        await SurvivalCombatPolicy();
         await BackgroundRecovery();
         await BackgroundRecovery(inferOwner: true);
         await ActionReferences();
