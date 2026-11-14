@@ -61,6 +61,7 @@ public static class Gather
         var timer = Stopwatch.StartNew();
         var attempts = new Dictionary<string, int>();
         var unreachable = new HashSet<string>();
+        var combatBlocked = new Dictionary<string, string>();
         var inventoryBefore = new Dictionary<int, int>();
         var unproductiveTiles = new Dictionary<int, JsonArray>();
         JsonObject scene = null, last = null;
@@ -115,6 +116,7 @@ public static class Gather
                     .Where(CanPickup)
                     .Where(c => c["blocked_reason"] == null)
                     .Where(c => !unreachable.Contains(c["id"].ToString()))
+                    .Where(c => !combatBlocked.ContainsKey(c["id"].ToString()))
                     .Where(c => attempts.GetValueOrDefault(c["id"].ToString()) < 2)
                     .OrderBy(c => c["distance"].GetValue<float>() + (c["kind"].ToString() == "drop" ? -1000 : c["kind"].ToString() == "npc" ? -20 : 0))
                     .FirstOrDefault();
@@ -125,8 +127,9 @@ public static class Gather
                         ? "inventory_full" : available.Length == 0 ? "source_unavailable"
                         : available.All(c => unreachable.Contains(c["id"].ToString())) ? "navigation_no_progress"
                         : available.All(c => c["blocked_reason"] != null)
-                            ? available[0]["blocked_reason"]?.ToString() ?? "source_blocked" : "attempt_limit";
-                    foreach (var source in available.Where(c => !unreachable.Contains(c["id"].ToString())))
+                            ? available[0]["blocked_reason"]?.ToString() ?? "source_blocked"
+                            : available.Select(c => combatBlocked.GetValueOrDefault(c["id"].ToString())).FirstOrDefault(reason => reason != null) ?? "attempt_limit";
+                    foreach (var source in available.Where(c => !unreachable.Contains(c["id"].ToString()) && !combatBlocked.ContainsKey(c["id"].ToString())))
                         blockedSources.Add(new JsonObject { ["candidate"] = source.DeepClone(),
                             ["reason"] = !CanPickup(source) ? "inventory_full"
                                 : source["blocked_reason"] != null
@@ -173,7 +176,12 @@ public static class Gather
                     && after > 0 && after < before)
                     attempts[id] = 0;
                 if (last["result"]?["outcome"]?.ToString() is "combat_obstructed" or "combat_out_of_range")
-                { outcome = last["result"]["outcome"].ToString(); break; }
+                {
+                    combatBlocked[id] = last["result"]["outcome"].ToString();
+                    blockedSources.Add(new JsonObject { ["candidate"] = candidate.DeepClone(),
+                        ["reason"] = combatBlocked[id], ["attempts"] = attempts[id], ["result"] = last["result"].DeepClone() });
+                    continue;
+                }
                 if (last["result"]?["outcome"]?.ToString() == "unsafe"
                     || last["result"]?["navigation"]?["outcome"]?.ToString() == "unsafe")
                 { outcome = "unsafe"; break; }
@@ -185,8 +193,9 @@ public static class Gather
         }
         scene = await world.Observe(token);
         bool enough = targets.All(t => Count(t) >= t.Count);
-        var combatCandidate = last?["candidate"]?["kind"]?.ToString() == "npc" ? last["candidate"] : scene?["candidates"]?.AsArray()
-            .FirstOrDefault(candidate => candidate["kind"]?.ToString() == "npc");
+        var combatCandidate = blockedSources.LastOrDefault(source => source["reason"]?.ToString() == outcome)?["candidate"]
+            ?? (last?["candidate"]?["kind"]?.ToString() == "npc" ? last["candidate"] : scene?["candidates"]?.AsArray()
+                .FirstOrDefault(candidate => candidate["kind"]?.ToString() == "npc"));
         if (!enough && outcome == "source_unavailable" && area != null
             && targets.Any(t => Count(t) > inventoryBefore[t.ItemType])) outcome = "source_area_exhausted";
         return new JsonObject { ["ok"] = enough, ["outcome"] = enough ? "enough" : outcome,

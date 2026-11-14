@@ -220,9 +220,21 @@ static class GatherTests
         world = new World { Obstructed = true };
         result = await Gather.Run(Targets, 5, world, default);
         Check(!result["ok"].GetValue<bool>() && result["outcome"].ToString() == "combat_obstructed"
-            && world.Actions.Count == 1 && world.Stops == 1
-            && result["last_result"]["result"]["target_x"].GetValue<int>() == 30,
-            "obstructed combat was silently repeated or lost its repositioning evidence");
+            && world.Actions.SequenceEqual(new[] { "npc", "tile" }) && world.Stops == 1
+            && result["blocked_sources"][0]["result"]["target_x"].GetValue<int>() == 30,
+            "obstructed combat prevented another resource or lost its repositioning evidence");
+        foreach (bool allBlocked in new[] { false, true })
+        {
+            var alternatives = new AlternativeCombatWorld { AllBlocked = allBlocked };
+            var gathered = await Gather.Run(new[] { new GatherTarget(20, 1, Array.Empty<string>(), new[] { 42 }) }, 5, alternatives, default);
+            Check(alternatives.Actions.SequenceEqual(allBlocked ? new[] { "npc:1", "npc:2" } : new[] { "npc:1", "npc:2", "drop:2" })
+                && gathered["ok"].GetValue<bool>() == !allBlocked
+                && gathered["blocked_sources"].AsArray().Count == (allBlocked ? 2 : 1),
+                "gather retried an obstructed target or missed another source/drop: " + gathered);
+            if (allBlocked) Check(gathered["outcome"].ToString() == "combat_obstructed"
+                && gathered["recovery_skill"]["input"]["npc_type"].GetValue<int>() == 42,
+                "exhausted combat alternatives lost their executable recovery hint");
+        }
         world = new World { Ambiguous = true };
         result = await Gather.Run(Targets, 5, world, default);
         Check(world.Actions.Count == 0 && result["outcome"].ToString() == "ambiguous_tile_name"
@@ -970,6 +982,29 @@ static class GatherTests
         Console.WriteLine("PASS: production NPC attack filters target types, preserves ordinary selection and refuses friendly targets");
     }
 
+    sealed class AlternativeCombatWorld : IGatherWorld
+    {
+        public bool AllBlocked;
+        public List<string> Actions = new();
+        bool killed, picked;
+        public Task<JsonObject> Observe(CancellationToken token)
+        {
+            JsonObject Source(string id, string kind, int who) => new() { ["id"] = id, ["kind"] = kind,
+                ["item_type"] = 20, ["who"] = who, ["npc_type"] = 42, ["distance"] = (float)who };
+            return Task.FromResult(new JsonObject { ["counts"] = new JsonObject { ["20"] = picked ? 1 : 0 },
+                ["candidates"] = new JsonArray(Source("npc:1", "npc", 1), Source(killed ? "drop:2" : "npc:2", killed ? "drop" : "npc", 2)) });
+        }
+        public Task<JsonObject> Act(JsonObject candidate, CancellationToken token)
+        {
+            string id = candidate["id"].ToString(); Actions.Add(id);
+            if (id == "npc:1" || AllBlocked) return Task.FromResult(new JsonObject { ["outcome"] = "combat_obstructed" });
+            if (candidate["kind"].ToString() == "drop") picked = true;
+            else killed = true;
+            return Task.FromResult(new JsonObject());
+        }
+        public Task Stop(CancellationToken token) => Task.CompletedTask;
+    }
+
     sealed class CombatProgressWorld : IGatherWorld
     {
         public int Hp, Damage, Actions;
@@ -1049,7 +1084,7 @@ static class GatherTests
                     ["target"] = new JsonObject { ["has_tile"] = true, ["damage"] = MiningDamage } };
             if (OutsideMiningRange) return new JsonObject { ["error"] = "collect_target_out_of_mining_range",
                 ["x"] = 10, ["y"] = 0, ["navigation"] = new JsonObject { ["done"] = true, ["status"] = "done" } };
-            if (Obstructed) return new JsonObject { ["outcome"] = "combat_obstructed", ["target_x"] = 30, ["target_y"] = 20 };
+            if (Obstructed && candidate["kind"].ToString() == "npc") return new JsonObject { ["outcome"] = "combat_obstructed", ["target_x"] = 30, ["target_y"] = 20 };
             if (Unsafe) return new JsonObject { ["error"] = "cannot_reach_collect_target",
                 ["navigation"] = new JsonObject { ["outcome"] = "unsafe", ["error"] = "navigation_near_trap",
                     ["trap_tiles"] = new JsonArray(new JsonObject { ["x"] = 12, ["y"] = 34 }) } };
