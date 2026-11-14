@@ -159,7 +159,7 @@ static class ScriptTests
                 }
                 return "{\"done\":true}";
             }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("inventory_space")));
-            Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["done"]?.GetValue<bool>() == true
+            Check(result["ok"].GetValue<bool>() && result["value"]["done"].GetValue<bool>()
                 && chests == (scenario == "failed_chest" ? 2 : 0)
                 && (scenario != "one_weapon" || weapons == 1), "decision precondition broke continuous execution: " + scenario + " " + result);
         }
@@ -2565,7 +2565,7 @@ static class ScriptTests
                 agent.PostUpdateEverything(); await Task.Delay(1);
             }
             var result = JsonNode.Parse(await task);
-            Check(result["ok"].GetValue<bool>() && result["value"]["done"].GetValue<bool>()
+            Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["done"]?.GetValue<bool>() == true
                 && starts == (rejected ? 1 : 2) && readingWhileMoving && actingAfterStop == !rejected,
                 "production reaction dispatch failed query/movement handoff: " + result + " starts=" + starts + " stops=" + stops);
             Check(actedDuringAnimation.SequenceEqual(rejected ? Array.Empty<bool>() : itemUse ? new[] { true, false } : new[] { true }),
