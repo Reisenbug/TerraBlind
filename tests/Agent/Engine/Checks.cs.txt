@@ -100,7 +100,7 @@ public sealed partial class BehaviorTrial
             await Task.Delay(100);
         }
         var completed = await pending;
-        var result = tunnel ? completed["value"] as JsonObject ?? completed : completed;
+        var result = tunnel && completed["value"] is JsonObject value ? (JsonObject)value.DeepClone() : completed;
         var after = await Call("get_state", new JsonObject());
         File.WriteAllText(Path.Combine(Main.SavePath, "mining-replay.json"), new JsonObject {
             ["elapsed_ms"] = clock.ElapsedMilliseconds, ["before"] = before,

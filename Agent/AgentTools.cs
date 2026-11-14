@@ -2628,12 +2628,14 @@ public static partial class AgentTools
             if (!escaped) break;
             while (await NativeAgent.OnMain(() => ContactEscapeActive && !Main.LocalPlayer.dead, token))
                 await NativeAgent.NextUpdate(token);
+            JsonObject remainingHazard = null;
             var clearance = await NativeAgent.OnMain(() =>
             {
                 var escape = LastContactEscape;
                 if (Main.LocalPlayer.dead || Main.LocalPlayer.suffocating || Text(escape, "status") != "controls_released"
-                    || !Bool(escape, "contact_clear")
-                    || TerrainInspection.NavigationHazard(acceptedTraps) != null) return null;
+                    || !Bool(escape, "contact_clear")) return null;
+                remainingHazard = TerrainInspection.NavigationHazard(acceptedTraps);
+                if (remainingHazard != null) return null;
                 var hazards = (escape["hazard_tiles"] as JsonArray)?.OfType<JsonObject>().ToList() ?? new List<JsonObject>();
                 if (escape["predicted_tile"] is JsonObject predicted && !hazards.Any(tile =>
                     Int(tile, "x") == Int(predicted, "x") && Int(tile, "y") == Int(predicted, "y") && Int(tile, "type") == Int(predicted, "type")))
@@ -2648,7 +2650,11 @@ public static partial class AgentTools
                 escapeBefore = escape;
                 return (JsonObject)escape.DeepClone();
             }, token);
-            if (clearance == null || seconds > 0 && clock.Elapsed.TotalSeconds >= seconds) break;
+            if (clearance == null || seconds > 0 && clock.Elapsed.TotalSeconds >= seconds)
+            {
+                if (remainingHazard != null) result = remainingHazard;
+                break;
+            }
             clearances.Add(clearance);
             DiagLog.Write("[agent_navigation_resume] " + new JsonObject { ["target"] = args.DeepClone(),
                 ["clearance"] = clearance.DeepClone(), ["elapsed_ms"] = clock.ElapsedMilliseconds });
@@ -2659,7 +2665,8 @@ public static partial class AgentTools
             if (clearances.Count > 0) result["verified_clearances"] = clearances;
             if (!Bool(result, "done") && LastContactEscape != null && !ReferenceEquals(escapeBefore, LastContactEscape))
             {
-                result["outcome"] = "unsafe"; result["error"] = "navigation_contact_escape";
+                result["outcome"] = "unsafe";
+                if (result["error"] == null) result["error"] = "navigation_contact_escape";
                 result["contact_escape"] = LastContactEscape.DeepClone();
             }
             int distance = Math.Max(Math.Abs(ActExecutor.OriginCx(p) - Int(args, "x")), Math.Abs(ActExecutor.OriginCy(p) - Int(args, "y")));

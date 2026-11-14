@@ -2554,15 +2554,17 @@ static class ScriptTests
         var player = Terraria.Main.LocalPlayer;
         var position = player.position;
         var savedTile = Terraria.Main.tile[30, 30];
+        var savedTrap = Terraria.Main.tile[12, 11];
         bool dead = player.dead, suffocating = player.suffocating;
         try
         {
-            foreach (string scenario in new[] { "cleared", "naturally_cleared", "predicted_cleared", "unverified", "predicted_unverified", "repeated", "different_failure" })
+            foreach (string scenario in new[] { "cleared", "naturally_cleared", "predicted_cleared", "unverified", "predicted_unverified", "repeated", "different_failure", "remaining_trap" })
             {
                 AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
                 AgentTools.LastContactEscape = null; AgentTools.ContactEscapeActive = false;
                 player.dead = player.suffocating = false; player.position = new System.Numerics.Vector2(160, 160);
                 Terraria.Main.tile[30, 30].HasUnactuatedTile = false;
+                Terraria.Main.tile[12, 11].HasUnactuatedTile = false;
                 int starts = 0;
                 HttpServerSystem.Handler = (path, payload) =>
                 {
@@ -2582,6 +2584,11 @@ static class ScriptTests
                                 AgentTools.LastContactEscape["hazard_tiles"] = new JsonArray();
                             }
                             RecedingNav.Active = false;
+                            if (scenario == "remaining_trap")
+                            {
+                                Terraria.Main.tile[12, 11].HasUnactuatedTile = true;
+                                Terraria.Main.tile[12, 11].TileType = Terraria.ID.TileID.PressurePlates;
+                            }
                             return (200, new JsonObject { ["done"] = false, ["status"] = "failed",
                                 ["reason"] = scenario == "different_failure" ? "engine_route_failed" : "stopped" }.ToJsonString());
                         }
@@ -2598,6 +2605,9 @@ static class ScriptTests
                     agent.PostUpdateEverything(); await Task.Delay(1);
                 }
                 var result = await pending;
+                Check(scenario != "remaining_trap" || result["error"]?.ToString() == "navigation_near_trap"
+                    && result["trap_tiles"]?[0]?["x"]?.GetValue<int>() == 12 && result["contact_escape"] != null,
+                    "cleared contact masked the still-present trap and prevented the correct repair: " + result);
                 Check(starts == (scenario is "cleared" or "naturally_cleared" or "predicted_cleared" or "repeated" ? 2 : 1)
                     && (result["done"]?.GetValue<bool>() == true) == (scenario is "cleared" or "naturally_cleared" or "predicted_cleared")
                     && (result["verified_clearances"]?.AsArray().Count ?? 0) == (scenario is "cleared" or "naturally_cleared" or "predicted_cleared" or "repeated" ? 1 : 0),
@@ -2610,6 +2620,7 @@ static class ScriptTests
             AgentTools.Stop(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.Watches.Reset();
             AgentTools.LastContactEscape = null; AgentTools.ContactEscapeActive = false;
             Terraria.Main.tile[30, 30] = savedTile; player.position = position; player.dead = dead; player.suffocating = suffocating;
+            Terraria.Main.tile[12, 11] = savedTrap;
             HttpServerSystem.Handler = originalHttp; agent.Unload();
         }
     }
