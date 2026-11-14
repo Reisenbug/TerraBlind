@@ -41,6 +41,7 @@ static class ScriptTests
         await NavigationRecoverySkill();
         await SurvivalDecisionPolicy();
         await IdleTaskPolicy();
+        await BackgroundRecovery();
         await ReactiveTravelExample();
         await ComposedReactions();
         await DecisionPreconditions();
@@ -53,7 +54,61 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=27 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=28 model_calls=0");
+    }
+
+    static async Task BackgroundRecovery()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var http = HttpServerSystem.Handler;
+        bool dead = Terraria.Main.LocalPlayer.dead;
+        bool release = false;
+        int effects = 0;
+        async Task<T> Pump<T>(Task<T> task)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            { Check(clock.Elapsed.TotalSeconds < 5, "background recovery blocked the caller"); agent.PostUpdateEverything(); await Task.Delay(1); }
+            return await task;
+        }
+        async Task<JsonObject> Call(string name, JsonObject args) => JsonNode.Parse(
+            await Pump(AgentTools.Execute(name, args, default))).AsObject();
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.ControlSession.Reset();
+            Terraria.Main.LocalPlayer.dead = false;
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"observe long temporary work","mode":"dag","steps":[{"id":"travel","description":"travel",
+                 "depends_on":[],"script":"return {original:true};","conditions":[{"kind":"permanent_health","count":9999}]}]}
+                """).AsObject(), AgentTaskEvidence.Measure);
+            string original = AgentTools.Plan.Script("travel").ToJsonString();
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/act") effects++;
+                return (200, path == "/act_status" ? "{\"active\":" + (!release).ToString().ToLowerInvariant() + "}" : "{}");
+            };
+            var started = await Call("run_script", new JsonObject { ["task_node"] = "travel", ["background"] = true,
+                ["workflow"] = "temporary", ["code"] = "return step('input',()=>tool('act',{steps:[{keys:['right'],until:{frames:60}}]}));" });
+            Check(started["handle"] != null, "temporary script was rejected or waited for completion: " + started);
+            string handle = started["handle"].ToString();
+            var running = await Pump(AgentTools.Actions.Query(handle, 250, default));
+            await Call("get_state", new JsonObject { ["fields"] = new JsonArray("player") });
+            Check(running["status"].ToString() == "running" && effects == 1 && !release,
+                "long temporary work prevented observation or used the original node script: " + running);
+            release = true;
+            JsonObject finished;
+            do { finished = await Pump(AgentTools.Actions.Query(handle, 250, default)); }
+            while (finished["status"].ToString() == "running");
+            Check(finished["status"].ToString() == "completed" && effects == 1
+                && AgentTools.Plan.Script("travel").ToJsonString() == original,
+                "background temporary work replaced the parent script, repeated input or failed: " + finished);
+        }
+        finally
+        {
+            HttpServerSystem.Handler = http; Terraria.Main.LocalPlayer.dead = dead;
+            AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); agent.Unload();
+        }
+        Console.WriteLine("PASS: long temporary node scripts return a live handle, permit observation and retain original node code");
     }
 
     static async Task SurvivalDecisionPolicy()
@@ -1127,6 +1182,7 @@ static class ScriptTests
         await TaskPolicyIntegration();
         await IdleTaskPolicy();
         await SurvivalDecisionPolicy();
+        await BackgroundRecovery();
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
