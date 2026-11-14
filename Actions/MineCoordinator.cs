@@ -200,8 +200,10 @@ namespace TerraBlind
 			_lastRemaining = remaining;
 			if (_stallFrames > StallMax)
 			{
-				DiagLog.Write($"[mine] stalled {StallMax}f dir={req.Dir} target=({req.TargetWx},{req.TargetWy}) → stop");
-				Finish("stalled", $"挖了{StallMax}帧一格没掉,多半镐不够硬");
+				bool mineable = DigTable.MineableWith(tx, ty, p.inventory[slot].pick);
+				string evidence = $"tile=({tx},{ty}) type={Main.tile[tx, ty].TileType} pick={p.inventory[slot].pick} mineable={mineable} held={p.HeldItem.type} animation={p.itemAnimation} item_time={p.itemTime}";
+				DiagLog.Write($"[mine] stalled {StallMax}f dir={req.Dir} target=({req.TargetWx},{req.TargetWy}) {evidence} → stop");
+				Finish("stalled", $"挖了{StallMax}帧一格没掉; {evidence}");
 				return;
 			}
 
