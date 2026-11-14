@@ -174,14 +174,20 @@ static class RuntimeTests
             Check(denied["error"] != null && actions == 1, "temporary recovery overwrote the original workflow");
             var missingWorkflow = (JsonObject)recovery.DeepClone(); missingWorkflow.Remove("workflow");
             var missing = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", missingWorkflow, default)));
-            Check(missing["error"] != null && actions == 1, "temporary recovery ran without its own checkpoint identity");
+            string generatedWorkflow = missing["workflow_id"]?.ToString();
+            Check(missing["ok"]?.GetValue<bool>() == true && actions == 2
+                && generatedWorkflow?.StartsWith("temporary-") == true
+                && AgentTools.Workflows[generatedWorkflow].Completed == 1
+                && JsonNode.DeepEquals(AgentTools.Plan.Script("travel"), original)
+                && !AgentTools.Workflows.ContainsKey(originalWorkflow),
+                "temporary recovery failed to retain an independent checkpoint identity: " + missing);
             var unowned = (JsonObject)recovery.DeepClone(); unowned.Remove("task_node");
             unowned["code"] = "return tool('act',{steps:[{keys:['right'],until:{frames:1}}]});";
             var outside = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", unowned, default)));
-            Check(outside["ok"]?.GetValue<bool>() == true && outside["task_node"]?.ToString() == "travel" && actions == 2,
+            Check(outside["ok"]?.GetValue<bool>() == true && outside["task_node"]?.ToString() == "travel" && actions == 3,
                 "temporary recovery failed to inherit its sole ready node: " + outside);
             await Execute(AgentTools.Execute("run_script", new JsonObject { ["task_node"] = "travel" }, default));
-            Check(actions == 3 && AgentTools.Workflows[originalWorkflow].Completed == 1,
+            Check(actions == 4 && AgentTools.Workflows[originalWorkflow].Completed == 1,
                 "original node failed to continue with its own script and checkpoint");
             int retainedWorkflows = AgentTools.Workflows.Count;
             for (int i = 0; i < 40; i++)
@@ -203,7 +209,7 @@ static class RuntimeTests
             independent["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone();
             AgentTools.Plan.Revise(independent, _ => 0);
             var ambiguous = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", unowned, default)));
-            Check(ambiguous["value"]?["error"]?.ToString() == "dag_node_required" && actions == 3,
+            Check(ambiguous["value"]?["error"]?.ToString() == "dag_node_required" && actions == 4,
                 "ambiguous recovery selected a node without ownership");
             Console.WriteLine("PASS: temporary recovery inherits only a sole ready node, retains checkpoints and requires explicit ambiguous ownership");
         }
