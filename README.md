@@ -157,7 +157,7 @@ python3 scripts/dev_client.py run --role agent
 
 ### License
 
-MIT
+[MIT](LICENSE)
 
 ---
 
@@ -246,4 +246,4 @@ The project is developed with AI coding tools. The author defines requirements, 
 
 ### License
 
-MIT
+[MIT](LICENSE)
