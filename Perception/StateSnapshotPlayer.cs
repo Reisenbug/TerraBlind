@@ -443,7 +443,7 @@ namespace TerraBlind
 		{
 			bool beforePrimary = Player.controlUseItem;
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On
-				&& (NativeAgent.Processing || FightCoordinator.IsActive || AgentTools.ControlSession.Active))
+				&& (AgentTools.AutonomyActive || FightCoordinator.IsActive))
 			{
 				Player.controlUseItem = false;
 				Main.mouseLeft = Main.mouseRight = false;
@@ -458,7 +458,7 @@ namespace TerraBlind
 					_primaryWeaponTraceTick = Main.GameUpdateCount;
 					DiagLog.Write($"[agent_item_input] before_primary={beforePrimary} after_primary={Player.controlUseItem} mouse_left={Main.mouseLeft} focused={Main.hasFocus} fight_use_prev={FightCoordinator.OwnsUseInput} weapon={Player.HeldItem.type} owner={AgentTools.ControlSession.Tool} nav={RecedingNav.Active} act={ActExecutor.IsActive} mine={MineCoordinator.IsActive} use_item={ItemUseCoordinator.IsActive} snapshot={FightCoordinator.NavigationSnapshotPending}");
 				}
-				FightCoordinator.Tick(Player, NativeAgent.Processing, Player.controlUseItem);
+				FightCoordinator.Tick(Player, AgentTools.AutonomyActive, Player.controlUseItem);
 			}
 		}
 

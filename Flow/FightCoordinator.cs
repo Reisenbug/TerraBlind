@@ -230,7 +230,7 @@ namespace TerraBlind
             DiagLog.Write("[agent_defense] released");
         }
 
-        public static void Tick(Player p) => Tick(p, NativeAgent.Processing);
+        public static void Tick(Player p) => Tick(p, AgentTools.AutonomyActive);
 
         internal static void Tick(Player p, bool processing, bool primaryItemUse = false)
         {

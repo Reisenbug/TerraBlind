@@ -28,7 +28,7 @@ public static class NavigationSurvival
 
     public static bool Apply(Player player)
     {
-        if (!(RecedingNav.Active || NativeAgent.Processing) || player.dead
+        if (!(RecedingNav.Active || AgentTools.AutonomyActive) || player.dead
             || !AgentTools.ControlAllows(ControlBehavior.Survival, ControlChannels.All, delegated: true))
         {
             Reset(player);

@@ -13,6 +13,7 @@ namespace TerraBlind;
 
 public static partial class AgentTools
 {
+    internal static bool AutonomyActive => NativeAgent.Processing || Actions.HasPrimaryControl || ControlSession.Active;
     internal static readonly System.Text.Json.JsonSerializerOptions ModelJson = new(System.Text.Json.JsonSerializerOptions.Default)
     { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     internal const int ApiRevision = 2;
