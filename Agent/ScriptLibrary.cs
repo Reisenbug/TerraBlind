@@ -188,6 +188,9 @@ public sealed class ScriptLibrary
                 loadoutRequest=loadout.request_id??loadoutRequest;
               }
               let destination=event.execution?.tool==='nav_to'?event.execution.args:null;
+              const construction=event.execution?.tool==='place_at'&&!event.execution.args?.local;
+              if(construction)destination=event.execution.args?.x!=null&&event.execution.args?.y!=null
+                ?{x:event.execution.args.x,y:event.execution.args.y}:{x:Math.floor(p.pos.x/16),y:Math.floor(p.pos.y/16)};
               const idle=['idle','fight'].includes(event.execution?.tool)
                 ||event.execution?.tool==='gather'&&event.execution.phase==='observe_sources';
               if(!idle)idleDestination=null;
@@ -198,7 +201,8 @@ public sealed class ScriptLibrary
                 movementProgram??=tool('script_program',{operation:'get',name:'joint_combat'});
                 const goal=tool('get_state',{fields:['codex_goal']}).codex_goal;
                 const intent=skill('joint_combat',movementProgram.revision,{context:movementContext+':'+(idle?'idle:':'route:')+destination.x+':'+destination.y,
-                  destination,instruction:goal?.native?.objective??'Continue the current task while staying alive.',last_request:movementRequest,intent:movementIntent});
+                  destination,execution:event.execution,allow_cover:!construction,
+                  instruction:goal?.native?.objective??'Continue the current task while staying alive.',last_request:movementRequest,intent:movementIntent});
                 movementRequest=intent.request_id??movementRequest;
                 movementIntent=intent.intent??null;
                 agentReview=intent.agent_review??null;
@@ -547,7 +551,7 @@ public sealed class ScriptLibrary
             const movements=(f.movements??[]).map(({engine_ms,roundtrip_ms,queue_ms,...m})=>m);
             const weapons=[...new Map(c.targets.flatMap(n=>n.weapons).map(({line_or_reach_passed,...w})=>[w.type,w])).values()];
             const r=tool('jev_judge',{channel:'combat',context:input.context,interval_ms:input.interval_ms??750,
-              max_age_ms:input.max_age_ms??2000,state:{instruction:input.instruction??'',destination:input.destination,
+              max_age_ms:input.max_age_ms??2000,state:{instruction:input.instruction??'',destination:input.destination,execution:input.execution,
                 current_tick:c.tick,current_player_pixels:c.player,targets:c.targets.map(({weapons,...n})=>n),projectiles:c.projectiles,
                 sample_targets:f.sample_targets,sample_projectiles:f.sample_projectiles,
                 weapons,recent_damage:c.recent_damage,terrain:c.terrain,fall_forecast:c.fall_forecast,

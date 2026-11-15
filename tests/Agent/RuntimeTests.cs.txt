@@ -16,6 +16,73 @@ using Game = Terraria.Main;
 static class RuntimeTests
 {
     static readonly NativeAgent Agent = new();
+    static async Task TestPlacementReaction()
+    {
+        Agent.Load(); AgentTools.NewTask(); AgentTools.Plan.Reset();
+        var savedTile = Game.tile[10, 10];
+        var previousHandler = HttpServerSystem.Handler;
+        var player = Game.LocalPlayer;
+        int starts = 0, stops = 0, dodges = 0;
+        bool running = false;
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            Game.tile[10, 10] = new Terraria.Tile();
+            HttpServerSystem.Handler = (path, body) =>
+            {
+                if (path == "/place_anywhere")
+                {
+                    starts++; running = true;
+                    var args = JsonNode.Parse(body);
+                    if (starts > 1) Check(args["world"].ToJsonString() == "[10,10]", "placement reaction changed the original target");
+                    else { player.itemAnimation = 3; player.itemTime = 8; }
+                    return (200, "{\"accepted\":true,\"world\":[10,10],\"expected_tile\":18,\"expected_wall\":-1}");
+                }
+                if (path == "/place_anywhere_status")
+                {
+                    if (starts > 1) { running = false; Game.tile[10, 10] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 18 }; }
+                    return (200, new JsonObject { ["running"] = running, ["outcome"] = running ? "running" : "done" }.ToJsonString());
+                }
+                if (path == "/place_anywhere_stop") { stops++; running = false; }
+                if (path == "/act")
+                {
+                    Check(stops > 0 && starts == 1 && player.itemAnimation == 0 && player.itemTime == 0,
+                        "evasion preceded the placement animation boundary or waited for the whole placement");
+                    dodges++;
+                    return (200, "{\"accepted\":true}");
+                }
+                return (200, "{\"active\":false,\"outcome\":\"done\",\"ok\":true}");
+            };
+            var task = AgentTools.Execute("run_script", new JsonObject { ["code"] = """
+                let escaped=false;
+                on('tick',event=>{
+                  if(event.execution?.tool==='place_at'&&!escaped
+                      &&tool('get_state',{fields:['control_execution']}).control_execution.tool==='place_at'){
+                    escaped=true;
+                    tool('act',{steps:[{keys:['right'],use:true,until:{frames:12}}]});
+                  }
+                  return {handled:true};
+                });
+                return tool('place_at',{item:'36'});
+                """ }, cancellation.Token);
+            await PumpUntil(() => stops > 0 || task.IsCompleted);
+            Check(stops == 1 && !task.IsCompleted && dodges == 0 && starts == 1,
+                "placement could not yield before completion while retaining its animation");
+            player.itemAnimation = player.itemTime = 0;
+            var report = JsonNode.Parse(await Execute(task));
+            Check(report["ok"]?.GetValue<bool>() == true && report["value"]?["placed"]?.GetValue<int>() == 1
+                && starts == 2 && dodges == 1, "placement failed to resume and verify after evasion: " + report);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            player.itemAnimation = player.itemTime = 0;
+            HttpServerSystem.Handler = previousHandler; Game.tile[10, 10] = savedTile;
+            AgentTools.NewTask();
+        }
+        Console.WriteLine("PASS: placement yields at the animation boundary and resumes its original target after evasion");
+    }
+
     static void TestPassiveOpportunityWake()
     {
         long now = 0;
@@ -1019,6 +1086,7 @@ static class RuntimeTests
 
     public static async Task Run()
     {
+        await TestPlacementReaction();
         TestHoneyNotice();
         TestPassiveOpportunityWake();
         TestInventoryNotice();

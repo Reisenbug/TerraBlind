@@ -216,7 +216,8 @@ static class ScriptTests
                     if (name == "combat_assess")
                     {
                         if (args["forecast"]?.GetValue<bool>() == true)
-                            Check(args["destination"]?["x"]?.GetValue<int>() == (scenario == "idle_after_place" && phase == 2 ? 20 : idle ? 10 : 50),
+                            Check(args["destination"]?["x"]?.GetValue<int>() == (scenario == "idle_after_place" && phase == 1 ? 50
+                                : scenario == "idle_after_place" && phase == 2 ? 20 : idle ? 10 : 50),
                                 "combat policy lost the current navigation or retained an idle anchor across construction");
                         return combat.ToJsonString();
                     }
@@ -260,7 +261,7 @@ static class ScriptTests
                 }, _ => Task.CompletedTask, default,
                 programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-empty-skills-" + Guid.NewGuid())).Callable());
             bool inactive = boss || scenario == "quiet";
-            Check(result["ok"].GetValue<bool>() && decisions == (progress ? 3 : inactive ? 0 : scenario == "idle_after_place" ? 2 : 3) && updates == (inactive || progress ? 0 : scenario == "idle_after_place" ? 1 : 2)
+            Check(result["ok"].GetValue<bool>() && decisions == (inactive ? 0 : 3) && updates == (inactive || progress ? 0 : scenario == "idle_after_place" ? 1 : 2)
                 && reviews == (scenario is "equipment_review" or "ranged_review" or "progress_review" ? 1 : 0),
                 "default combat policy blocked pending navigation, repeated a response or touched boss movement: " + result);
         }

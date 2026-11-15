@@ -3700,6 +3700,8 @@ public sealed partial class BehaviorTrial : ModSystem
         });
         if (Environment.GetEnvironmentVariable("TB_CANCELLED_NAVIGATION_PROBE") == "1")
         { await CancelledNavigationTrial(x, floor); return; }
+        if (Environment.GetEnvironmentVariable("TB_PLACEMENT_EVASION_PROBE") == "1")
+        { await PlacementEvasionTrial(x, floor); return; }
         await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
             ["code"] = "skill('safety_reactions',0);" });
         var input = new JsonObject { ["station"] = new JsonObject { ["x"] = x + 3, ["y"] = floor - 1 },
@@ -3729,6 +3731,47 @@ public sealed partial class BehaviorTrial : ModSystem
             || result["value"]?["first"]?["completed"]?[0]?["approach"]?["condition_met"]?.GetValue<bool>() != true)
             throw new Exception("native crafting batch did not verify station approach and inventory targets: " + result);
         Console.WriteLine($"CRAFT_BATCH_NATIVE_PASS elapsed_ms={clock.ElapsedMilliseconds} bow=1 arrows=50 repeated_crafts=0 model_calls=0");
+    }
+
+    async Task PlacementEvasionTrial(int x, int floor)
+    {
+        var target = new JsonObject { ["item"] = "36", ["x"] = x + 10, ["y"] = floor - 1 };
+        var clock = Stopwatch.StartNew();
+        string script = "const target=" + target.ToJsonString() + ";" + """
+            let evasion=null;
+            const bench=tool('craft',{name:'WorkBench'});
+            if(!bench.ok)throw new Error(JSON.stringify(bench));
+            on('tick',event=>{
+              if(event.execution?.tool==='place_at'&&!evasion
+                  &&tool('get_state',{fields:['control_execution']}).control_execution.tool==='place_at'){
+                evasion={started:Date.now()};
+                evasion.result=tool('act',{steps:[{keys:['right'],until:{frames:24}}]});
+                evasion.completed=Date.now();
+              }
+              return {handled:true};
+            });
+            const placement=tool('place_at',target);
+            return {placement,evasion};
+            """;
+        var running = Call("run_script", new JsonObject { ["code"] = script });
+        long firstPlacedAt = 0;
+        while (!running.IsCompleted)
+        {
+            if (firstPlacedAt == 0 && await OnMain(() => Main.tile[x + 10, floor - 1].HasTile
+                && Main.tile[x + 10, floor - 1].TileType == TileID.WorkBenches))
+                firstPlacedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            await Task.Delay(10);
+        }
+        var result = await running;
+        File.WriteAllText(Path.Combine(Main.SavePath, "placement-evasion-native.json"), new JsonObject {
+            ["elapsed_ms"] = clock.ElapsedMilliseconds, ["target"] = target, ["result"] = result,
+            ["first_placed_at"] = firstPlacedAt, ["fixture_terrain"] = true, ["model_calls"] = 0 }.ToJsonString());
+        if (result["ok"]?.GetValue<bool>() != true || result["value"]?["placement"]?["placed"]?.GetValue<int>() != 1
+            || result["value"]?["evasion"]?["result"]?["outcome"]?.ToString() != "done"
+            || firstPlacedAt == 0 || result["value"]["evasion"]["completed"].GetValue<long>() > firstPlacedAt
+            || !await OnMain(() => Main.tile[x + 10, floor - 1].HasTile && Main.tile[x + 10, floor - 1].TileType == TileID.WorkBenches))
+            throw new Exception("native placement did not resume its original target after evasion: " + result);
+        Console.WriteLine($"PLACEMENT_EVASION_NATIVE_PASS elapsed_ms={clock.ElapsedMilliseconds} placed=1 model_calls=0");
     }
 
     async Task CancelledNavigationTrial(int x, int floor)

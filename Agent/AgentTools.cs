@@ -913,7 +913,7 @@ public static partial class AgentTools
 
     internal static async Task<JsonObject> Wait(string path, string active, string stop, int seconds, CancellationToken token,
         Func<double, Task<JsonObject>> navigationProgress = null, JsonObject reactionContext = null,
-        Func<JsonObject, Task> onCompleted = null)
+        Func<JsonObject, Task> onCompleted = null, Func<CancellationToken, Task> restart = null)
     {
         var stopArgs = stop == "/fight" ? new JsonObject { ["active"] = false } : null;
         async Task StopAction()
@@ -947,10 +947,16 @@ public static partial class AgentTools
                     JsonObject completed = null;
                     await ReactAtBoundary(token, pause: async ct =>
                     {
+                        if (restart != null)
+                        {
+                            await StopAction();
+                            await NativeAgent.OnMain(() => { Halt.All(); return true; }, ct);
+                            return;
+                        }
                         if (completed != null) return;
                         int remaining = seconds <= 0 ? 0 : Math.Max(1, (int)Math.Ceiling(seconds - timer.Elapsed.TotalSeconds));
                         completed = await Wait(path, active, stop, remaining, ct, navigationProgress, onCompleted: onCompleted);
-                    }, context: reactionContext);
+                    }, resume: restart, context: reactionContext);
                     if (completed != null) return completed;
                 }
                 if (navigationProgress != null)
@@ -1332,6 +1338,7 @@ public static partial class AgentTools
     {
         if (!reactions.TryEnter()) return null;
         bool paused = false;
+        bool construction = false;
         Action restore = null;
         var previous = reactions.BeforeAction;
         reactions.BeforeAction = async (name, args, ct) =>
@@ -1340,14 +1347,16 @@ public static partial class AgentTools
             bool changesRoute = name is "nav_to" or "gather" or "mine" or "mine_vein" or "chop_wood" or "use_item"
                 or "place_at" or "act" or "collect_treasure" or "build_house" or "hell_run" or "combat_reposition";
             if (changesRoute && !paused && pause != null) { await pause(ct); paused = true; }
-            if ((AgentControlSession.RequiredChannels(name, args) & ControlChannels.ItemUse) != 0)
-                while (await NativeAgent.OnMain(() => Main.LocalPlayer.itemAnimation > 0, ct)) await NativeAgent.NextUpdate(ct);
+            if ((AgentControlSession.RequiredChannels(name, args) & ControlChannels.ItemUse) != 0 || construction && paused)
+                while (await NativeAgent.OnMain(() => !Main.LocalPlayer.dead
+                    && (Main.LocalPlayer.itemAnimation > 0 || construction && paused && Main.LocalPlayer.itemTime > 0), ct)) await NativeAgent.NextUpdate(ct);
             if (restore == null) restore = await NativeAgent.OnMain(ControlSession.SuspendPrimary, ct);
         };
         try
         {
             var notice = await read();
             if (notice == null) return null;
+            construction = notice["execution"]?["tool"]?.ToString() == "place_at";
             if (NativeAgent.GoalState is JsonObject goal)
                 notice["goal"] = new JsonObject { ["status"] = goal["native"]?["status"]?.DeepClone(),
                     ["objective"] = goal["native"]?["objective"]?.DeepClone(),
@@ -2930,7 +2939,14 @@ public static partial class AgentTools
             if (!Rejected(result)) result = await Wait(local ? "/place_at_status" : "/place_anywhere_status", "running",
                 local ? "/place_at_stop" : "/place_anywhere_stop", local ? 0 : 120, token,
                 local ? null : elapsed => NativeAgent.OnMain(() => PlacementProgress(progress, elapsed, placement), token),
-                new JsonObject { ["tool"] = "place_at", ["args"] = args.DeepClone() });
+                new JsonObject { ["tool"] = "place_at", ["args"] = args.DeepClone() },
+                restart: local ? null : async ct =>
+                {
+                    var resumed = await Call("/place_anywhere", new JsonObject { ["item"] = payload["item"]?.DeepClone(),
+                        ["world"] = placement["world"]?.DeepClone() }, ct);
+                    if (Rejected(resumed)) throw new InvalidOperationException(resumed.ToJsonString());
+                    progress = new NavigationProgress();
+                });
             if (local)
             {
                 placement["world"] = payload["world"]?.DeepClone();
