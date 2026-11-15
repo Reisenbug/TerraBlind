@@ -13,6 +13,8 @@ public sealed class ScriptLibrary
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
     static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch" };
     static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch" };
+    internal static string BuiltinIndex => string.Join("\n", BuiltIns.Select(name =>
+        name + "@0: " + Example(name)["detail"].ToString().Split('。')[0]));
 
     static JsonObject Template(string name, string detail, string code) => new()
     {

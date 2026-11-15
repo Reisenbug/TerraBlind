@@ -398,6 +398,8 @@ public static class AgentScript
         + "顶层提供run_script、get_state、say、ask、game_api、terrain_map、action_query、script_program。action_query直接读取动作证据，script_program直接读取或修改技能源码；两者返回完整对象，组合行为时也可在JS内调用。terrain_map可直接返回现场图片。\n"
         + system
         + RuntimeInstructions
+        + "\n可直接调用的内置技能目录。编写节点时复用适用技能；script_program get读取入参、源码和限制，skill(name,0,input)执行。技能可以修改后保存为新版本，效果按现场核验。\n"
+        + ScriptLibrary.BuiltinIndex
         + "\n以下是API用途索引。首次使用前game_api({names:[所需工具名]})批量查询完整定义，已读定义可复用。\n"
         + string.Join("\n", tools.Where(t => t["function"]?["name"]?.ToString() is not ("run_script" or "ask"))
             .Select(t => t["function"]["name"] + ": " + t["function"]["description"]?.ToString().Split('。')[0]));
