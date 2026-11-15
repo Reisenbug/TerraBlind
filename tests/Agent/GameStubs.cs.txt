@@ -421,6 +421,10 @@ namespace TerraBlind
         public static string Phase = "idle", Outcome = "", Reason = "";
         public static bool Start(out string why) { why = ""; return true; }
     }
+    public static class NavigationSurvival
+    {
+        public static JsonObject AssessFall(Terraria.Player player) => new() { ["damage"] = FallSafety.Damage };
+    }
     public static class FallSafety
     {
         public static int Damage;

@@ -156,7 +156,7 @@ static class ScriptTests
 
     static async Task SurvivalCombatPolicy()
     {
-        foreach (string scenario in new[] { "navigation", "idle", "fight", "boss", "unchaseable_enemy", "projectile_only", "quiet", "equipment_review", "ranged_review", "progress_review", "progress_stale" })
+        foreach (string scenario in new[] { "navigation", "idle", "fight", "boss", "unchaseable_enemy", "projectile_only", "fall_only", "quiet", "equipment_review", "ranged_review", "progress_review", "progress_stale" })
         {
             bool boss = scenario == "boss", idle = scenario is "idle" or "fight";
             bool progress = scenario.StartsWith("progress_");
@@ -171,8 +171,9 @@ static class ScriptTests
             combat["boss_present"] = boss;
             combat["terrain"] = JsonNode.Parse("{\"origin\":{\"x\":1,\"y\":2},\"rows\":[\"#.\"],\"legend\":\"#solid .air\"}");
             if (scenario == "unchaseable_enemy") combat["targets"][0]["attackable"] = false;
-            if (scenario is "projectile_only" or "quiet" || progress) combat["targets"] = new JsonArray();
+            if (scenario is "projectile_only" or "fall_only" or "quiet" || progress) combat["targets"] = new JsonArray();
             if (scenario == "projectile_only") combat["projectiles"] = new JsonArray(new JsonObject { ["damage"] = 20 });
+            if (scenario == "fall_only") combat["fall_forecast"] = new JsonObject { ["damage"] = 50, ["frames"] = 20 };
             var result = await AgentScript.Run("let clock=100000;Date.now=()=>clock+=" + (progress ? "2000" : "0") + ";(function(){" + ScriptLibrary.Example("safety_reactions")["code"]
                 + "})();return tool('nav_to');", 5, (_, _) => { }, async (name, args, token) =>
                 {
@@ -220,6 +221,8 @@ static class ScriptTests
                         }
                         Check(args["state"]["instruction"].ToString() == "reach the cave", "travel policy lost the current objective");
                         Check(args["state"]["terrain"]?["rows"]?[0]?.ToString() == "#.", "combat decision lost measured terrain cells");
+                        if (scenario == "fall_only") Check(args["state"]["fall_forecast"]?["damage"]?.GetValue<int>() == 50,
+                            "fall-only evasion lost the projected damage");
                         Check(args["questions"]["attention"]?["criteria"]?["ranged_weapon"] != null, "combat decision could not request a ranged attack");
                         return decisions == 1 ? "{\"status\":\"pending\"}" : new JsonObject {
                             ["status"] = "ready", ["request_id"] = 9, ["input_state"] = args["state"].DeepClone(),
@@ -1248,7 +1251,7 @@ static class ScriptTests
             {
                 if (name == "get_state") return new JsonObject { ["player"] = new JsonObject {
                     ["pos"] = new JsonObject { ["x"] = (arrived ? 30 : 10) * 16, ["y"] = 20 * 16 } },
-                    ["buffs"] = new JsonArray(),
+                    ["buffs"] = new JsonArray(), ["movement_capabilities"] = new JsonObject(),
                     ["inventory_counts"] = new JsonObject(counts.Select(p => new KeyValuePair<string, JsonNode>(p.Key.ToString(), JsonValue.Create(p.Value)))) }.ToJsonString();
                 if (name == "gather_observe") return new JsonObject { ["candidates"] = new JsonArray(
                     new JsonObject { ["id"] = "tile101", ["item_type"] = 101, ["kind"] = "tile" },
@@ -1384,7 +1387,7 @@ static class ScriptTests
     {
         Console.WriteLine("DECISION_TEMPLATE_CHARS " + string.Join(' ', new[] { "decision_reactions", "joint_reactions", "joint_combat" }
             .Select(name => name + "=" + ScriptLibrary.Example(name)["code"].ToString().Length)));
-        foreach (string scenario in new[] { "pending", "follow", "move", "invalid", "unsafe", "replayed", "projectile_only" })
+        foreach (string scenario in new[] { "pending", "follow", "move", "invalid", "unsafe", "replayed", "projectile_only", "fall_only" })
         {
             int acted = 0, selected = 0, judged = 0;
             var input = new JsonObject { ["context"] = "journey", ["destination"] = new JsonObject { ["x"] = 50, ["y"] = 20 },
@@ -1398,10 +1401,11 @@ static class ScriptTests
                 """).AsObject();
             if (scenario == "pending") combat["forecast"]["status"] = "pending";
             if (scenario == "unsafe") combat["forecast"]["plans"][1]["movement_available"] = false;
-            if (scenario == "projectile_only")
+            if (scenario is "projectile_only" or "fall_only")
             {
                 combat["targets"] = new JsonArray();
-                combat["projectiles"] = new JsonArray(new JsonObject { ["damage"] = 20 });
+                if (scenario == "projectile_only") combat["projectiles"] = new JsonArray(new JsonObject { ["damage"] = 20 });
+                else combat["fall_forecast"] = new JsonObject { ["damage"] = 50, ["frames"] = 20 };
             }
             var report = await AgentScript.Run("const input=" + input.ToJsonString() + ";\n" + ScriptLibrary.Example("joint_combat")["code"],
                 5, (_, _) => { }, (name, args, _) =>
@@ -1413,7 +1417,7 @@ static class ScriptTests
                         judged++;
                         Check(args["questions"]["response"]["criteria"].AsObject().Count == 2
                             && args["state"]["forecast_id"].GetValue<int>() == 11
-                            && (scenario == "projectile_only" ? args["state"]["weapons"].AsArray().Count == 0
+                            && (scenario is "projectile_only" or "fall_only" ? args["state"]["weapons"].AsArray().Count == 0
                                 : args["state"]["weapons"][0]["type"].GetValue<int>() == 279),
                             "joint judgment lost coherent movement/weapon alternatives or source forecast");
                         result = new JsonObject { ["status"] = "ready", ["request_id"] = 1, ["request_age_ms"] = 200,
@@ -1434,7 +1438,7 @@ static class ScriptTests
                     return Task.FromResult(result.ToJsonString());
                 }, _ => Task.CompletedTask, default);
             Check(report["ok"].GetValue<bool>() && judged == (scenario == "pending" ? 0 : 1)
-                && acted == (scenario is "move" or "invalid" or "projectile_only" ? 1 : 0) && selected == (scenario == "follow" ? 1 : 0),
+                && acted == (scenario is "move" or "invalid" or "projectile_only" or "fall_only" ? 1 : 0) && selected == (scenario == "follow" ? 1 : 0),
                 "joint policy waited, replayed effects or ignored an unavailable candidate: " + scenario + " " + report);
             if (scenario == "invalid") Check(report["value"]["applied"].GetValue<bool>() == false,
                 "host rejection was reported as an applied movement");

@@ -33,9 +33,9 @@ public sealed class ScriptLibrary
             const distance=(s,p)=>Math.hypot(s.player.pos.x/16-p.x,s.player.pos.y/16-p.y);
             return intents({instruction:config.instruction,max_actions:config.max_actions,
               observe:()=>{
-                const s=tool('get_state',{fields:['player','inventory_counts','buffs']});
+                const s=tool('get_state',{fields:['player','inventory_counts','buffs','movement_capabilities']});
                 const sources=tool('gather_observe',{targets:config.targets,source_area:config.source_area});
-                return {player:s.player,counts:s.inventory_counts,buffs:s.buffs,
+                return {player:s.player,counts:s.inventory_counts,buffs:s.buffs,movement:s.movement_capabilities,
                   sources:sources.candidates.filter(c=>!c.blocked_reason&&c.can_pickup!==false).slice(0,24),
                   terrain:tool('inspect_terrain',{radius:6})};
               },
@@ -149,7 +149,8 @@ public sealed class ScriptLibrary
               let destination=event.execution?.tool==='nav_to'?event.execution.args:null;
               const idle=['idle','fight'].includes(event.execution?.tool);
               if(destination) idleDestination=null;
-              if(!c.boss_present&&(destination||idle)&&(c.targets?.some(n=>n.contact_damage>0&&n.distance_tiles<12)||c.projectiles?.length)){
+              if(!c.boss_present&&(destination||idle)&&(c.targets?.some(n=>n.contact_damage>0&&n.distance_tiles<12)
+                  ||c.projectiles?.length||(c.fall_forecast?.damage??0)>0)){
                 if(idle) destination=idleDestination??={x:Math.floor(p.pos.x/16),y:Math.floor(p.pos.y/16)};
                 movementProgram??=tool('script_program',{operation:'get',name:'joint_combat'});
                 const goal=tool('get_state',{fields:['codex_goal']}).codex_goal;
@@ -492,7 +493,7 @@ public sealed class ScriptLibrary
             const c=tool('combat_assess',{radius:25,terrain_radius:8,forecast:true,context:input.context,destination:input.destination});
             const f=c.forecast;
             if(c.boss_present||f.status!=='ready'||f.plans.length<2) return {status:f.status,reason:f.reason};
-            if(!c.targets.some(n=>n.contact_damage>0)&&!c.projectiles.length) return {status:'no_threat'};
+            if(!c.targets.some(n=>n.contact_damage>0)&&!c.projectiles.length&&(c.fall_forecast?.damage??0)<=0) return {status:'no_threat'};
             const criteria=Object.fromEntries(f.plans.map(p=>[p.id,{movement:p.movement,weapon_type:p.weapon_type}]));
             const movements=f.movements.map(({engine_ms,roundtrip_ms,queue_ms,...m})=>m);
             const weapons=[...new Map(c.targets.flatMap(n=>n.weapons).map(({line_or_reach_passed,...w})=>[w.type,w])).values()];
@@ -500,13 +501,13 @@ public sealed class ScriptLibrary
               max_age_ms:input.max_age_ms??2000,state:{instruction:input.instruction??'',destination:input.destination,
                 current_tick:c.tick,current_player_pixels:c.player,targets:c.targets.map(({weapons,...n})=>n),projectiles:c.projectiles,
                 sample_targets:f.sample_targets,sample_projectiles:f.sample_projectiles,
-                weapons,recent_damage:c.recent_damage,terrain:c.terrain,
+                weapons,recent_damage:c.recent_damage,terrain:c.terrain,fall_forecast:c.fall_forecast,
                 forecast_id:f.id,sample_tick:f.sample_tick,age_frames:f.age_frames,sample_player_pixels:f.sample_player,
                 comparison_frames:f.comparison_frames,
                 scope:f.scope,known_route_frames:f.known_route_frames,prefix_source:f.prefix_source,walk_intent:f.walk_intent,
                 movements,plans:f.plans},
               questions:{response:{type:'choice',instructions:
-                'Which available movement and weapon combination best avoids incoming damage while carrying out state.instruction?',criteria},
+                'Which available movement and weapon combination best avoids incoming damage and fall damage while carrying out state.instruction? Use the measured candidate outcomes and landing checks; fall_forecast describes the current fall under its stated assumptions.',criteria},
                 attention:{type:'choice',instructions:
                   'Do the available controls suffice to make useful progress, or should the Agent revise equipment or terrain preparation? Current actions continue during review. Consider the task, incoming damage, weapon reach, ammo and the measured candidate outcomes.',
                   criteria:{continue:'Continue with current preparation and control.',

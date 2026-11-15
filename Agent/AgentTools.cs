@@ -719,6 +719,8 @@ public static partial class AgentTools
             ["extra_fall_tiles"] = healthPlayer.extraFall, ["extra_jump_usable"] = healthPlayer.AnyExtraJumpUsable(),
             ["wing_time_frames"] = healthPlayer.wingTime
         };
+        if (selected == null || selected.Contains("movement_capabilities"))
+            state["movement_capabilities"]["fall_forecast"] = NavigationSurvival.AssessFall(healthPlayer);
         state["health_dynamics"] = new JsonObject
         {
             ["tick"] = Main.GameUpdateCount, ["hp"] = healthPlayer.statLife, ["dead"] = healthPlayer.dead,
@@ -2777,6 +2779,7 @@ public static partial class AgentTools
             && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) <= radius * 16)
             .OrderBy(n => Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center)).Take(8);
         return new JsonObject { ["tick"] = Main.GameUpdateCount, ["recent_damage"] = LastDamage?.DeepClone(),
+            ["fall_forecast"] = NavigationSurvival.AssessFall(p),
             ["preferred_weapon_type"] = CombatLoadout.PreferredType,
             ["navigation_options"] = AgentNavigationIntent.Options(),
             ["boss_present"] = Main.npc.Any(n => n != null && n.active && n.boss
