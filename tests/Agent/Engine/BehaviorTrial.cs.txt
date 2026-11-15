@@ -993,6 +993,7 @@ public sealed partial class BehaviorTrial : ModSystem
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_TASK_POLICY_PROBE") == "1") { await TaskPolicyTrial(); return; }
+        if (Environment.GetEnvironmentVariable("TB_COVER_PROBE") == "1") { await CoverTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_FALL_CATCH_PROBE") == "1") { await FallCatchTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_FALL_PLACEMENT_PROBE") == "1") { await FallPlacementTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_CONSUMABLE_HANDOFF_PROBE") == "1") { await ConsumableHandoffTrial(); return; }
@@ -3667,6 +3668,117 @@ public sealed partial class BehaviorTrial : ModSystem
             || after["inventory_slots"].AsArray().Where(i => i["type"]?.GetValue<int>() == ItemID.LifeCrystal).Sum(i => i["stack"].GetValue<int>()) != 1)
             throw new Exception("native atomic policy failed: " + report);
         Console.WriteLine("ATOMIC_POLICY_NATIVE_PASS " + report.ToJsonString());
+    }
+
+    async Task CoverTrial()
+    {
+        int x = Main.spawnTileX, floor = Main.spawnTileY + 8;
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); AgentTools.NewTask(); Manual.On = false;
+            Concessions.Enabled = false; AgentPermissions.Reset(); AgentPermissions.Attack = AgentPermissions.Dodge = false;
+            Combat.Enabled = Dodge.Enabled = false; Config.I.AgentEnabled = true;
+            foreach (var npc in Main.npc) npc.active = false;
+            foreach (var shot in Main.projectile) shot.active = false;
+            var p = Main.LocalPlayer;
+            foreach (var item in p.inventory) item.TurnToAir();
+            foreach (var item in p.armor) item.TurnToAir();
+            for (int tx = x - 12; tx <= x + 16; tx++)
+            for (int ty = floor - 10; ty <= floor + 2; ty++)
+            {
+                Main.tile[tx, ty].ClearEverything();
+                if (ty >= floor) Main.tile[tx, ty].ResetToType(TileID.Stone);
+            }
+            p.inventory[3].SetDefaults(ItemID.Wood); p.inventory[3].stack = 40;
+            p.position = new Vector2(x * 16, floor * 16 - p.height); p.velocity = Vector2.Zero;
+            p.statLife = p.statLifeMax = p.statLifeMax2 = 100; p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            p.itemAnimation = p.itemTime = 0; p.selectedItem = 0;
+            target = NPC.NewNPC(new EntitySource_Misc("cover-probe"), (x + 18) * 16, (floor - 1) * 16, NPCID.GoblinArcher);
+            return true;
+        });
+        string code = """
+            let selected=null,last=null;
+            for(let i=0;i<24;i++){
+              const r=skill('joint_combat',0,{context:'native-cover',destination:DESTINATION,
+                instruction:'Build useful temporary cover with the available blocks to separate the nearby threat while preparing equipment. Then continue the task.',last_request:last});
+              last=r.request_id??last;
+              if(r.applied&&r.cover){selected=r;break;}
+              tool('act',{steps:[{keys:[],until:{frames:2}}]});
+            }
+            if(!selected)return {status:'needs_review',reason:'no_cover_selected'};
+            tool('act',{steps:[{keys:['left'],until:{frames:60}}]});
+            return selected;
+            """.Replace("DESTINATION", new JsonObject { ["x"] = x - 10, ["y"] = floor - 1 }.ToJsonString());
+        var clock = Stopwatch.StartNew();
+        var created = await Call("task_plan", new JsonObject { ["goal"] = "Build cover and continue left", ["mode"] = "dag",
+            ["steps"] = new JsonArray(new JsonObject { ["id"] = "cover", ["description"] = "Build and continue",
+                ["depends_on"] = new JsonArray(), ["script"] = code,
+                ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "position", ["count"] = 1, ["x"] = x - 10, ["y"] = floor - 1, ["radius"] = 6 }) }) });
+        if (created["status"]?.ToString() != "active") throw new Exception("cover DAG creation failed: " + created);
+        var started = await Call("run_script", new JsonObject { ["task_node"] = "cover", ["background"] = true });
+        string handle = started["handle"]?.ToString() ?? throw new Exception("cover probe did not start: " + started);
+        JsonObject action;
+        bool protectedWhileRunning = false;
+        bool idleInputIsolated = false;
+        var built = new List<Point>();
+        do
+        {
+            await Task.Delay(50);
+            action = await Call("action_query", new JsonObject { ["handle"] = handle });
+            await OnMain(() =>
+            {
+                var session = (AgentControlSession)SessionField.GetValue(null);
+                if (!session.Active && !(bool)ProcessingProperty.GetValue(null) && ((ActionTasks)ActionsField.GetValue(null)).HasPrimaryControl)
+                {
+                    Main.mouseLeft = Main.mouseRight = Main.LocalPlayer.controlUseItem = true;
+                    Main.LocalPlayer.GetModPlayer<StateSnapshotPlayer>().SetControls();
+                    idleInputIsolated |= !Main.mouseLeft && !Main.mouseRight && !Main.LocalPlayer.controlUseItem;
+                }
+                built.Clear();
+                for (int tx = x - 4; tx <= x + 5; tx++)
+                for (int ty = floor - 4; ty < floor; ty++)
+                    if (Main.tile[tx, ty].HasTile && Main.tile[tx, ty].TileType == TileID.WoodBlock) built.Add(new Point(tx, ty));
+                var policy = (AgentControlPolicy)typeof(AgentTools).GetField("Control", HiddenStatic).GetValue(null);
+                if (action["status"]?.ToString() == "running" && built.Count == 4)
+                    protectedWhileRunning |= built.All(p => policy.ForbiddenAt(ControlBehavior.Mining, p.X, p.Y));
+                return true;
+            });
+            if (clock.Elapsed.TotalSeconds > 15) throw new Exception("cover probe exceeded execution deadline: " + action);
+        } while (action["status"]?.ToString() == "running");
+        var report = await OnMain(() => new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds,
+            ["action"] = action.DeepClone(), ["blocks"] = built.Count, ["wood_remaining"] = Main.LocalPlayer.inventory.Where(i => i.type == ItemID.Wood).Sum(i => i.stack),
+            ["platforms_auto_crafted"] = Main.LocalPlayer.inventory.Where(i => i.type == ItemID.WoodPlatform).Sum(i => i.stack),
+            ["protected_while_running"] = protectedWhileRunning,
+            ["model_idle_input_isolated"] = idleInputIsolated,
+            ["continued_distance_pixels"] = x * 16 - Main.LocalPlayer.position.X,
+            ["protection_released"] = built.All(p => !((AgentControlPolicy)typeof(AgentTools).GetField("Control", HiddenStatic).GetValue(null)).ForbiddenAt(ControlBehavior.Mining, p.X, p.Y)),
+            ["hp"] = Main.LocalPlayer.statLife, ["fixture_terrain"] = true, ["live_jev"] = true, ["slow_model_calls"] = 0 });
+        if (built.Count == 4)
+        {
+            int wallX = built[0].X;
+            int hp = await OnMain(() => Main.LocalPlayer.statLife);
+            int arrow = await OnMain(() =>
+            {
+                foreach (var npc in Main.npc) npc.active = false;
+                int id = Projectile.NewProjectile(new EntitySource_Misc("cover-arrow-probe"),
+                    new Vector2((wallX + 4) * 16, Main.LocalPlayer.Center.Y), new Vector2(-8, 0), ProjectileID.WoodenArrowFriendly, 20, 0);
+                Main.projectile[id].friendly = false; Main.projectile[id].hostile = true; Main.projectile[id].tileCollide = true;
+                return id;
+            });
+            await Task.Delay(350);
+            report["arrow"] = await OnMain(() => new JsonObject { ["active"] = Main.projectile[arrow].active,
+                ["x"] = Main.projectile[arrow].Center.X, ["wall_x"] = wallX * 16,
+                ["hp_before"] = hp, ["hp_after"] = Main.LocalPlayer.statLife });
+        }
+        File.WriteAllText(Path.Combine(Main.SavePath, "cover-native.json"), report.ToJsonString());
+        Console.WriteLine($"COVER_NATIVE_MEASURED blocks={built.Count} elapsed_ms={clock.ElapsedMilliseconds} continued_px={report["continued_distance_pixels"]} input_isolated={idleInputIsolated}");
+        if (built.Count != 4 || report["wood_remaining"].GetValue<int>() != 36 - report["platforms_auto_crafted"].GetValue<int>() / 2
+            || !protectedWhileRunning || !idleInputIsolated
+            || !report["protection_released"].GetValue<bool>() || report["continued_distance_pixels"].GetValue<float>() < 64
+            || report["arrow"]["active"].GetValue<bool>() || report["arrow"]["hp_before"].GetValue<int>() != report["arrow"]["hp_after"].GetValue<int>()
+            || Math.Abs(report["arrow"]["x"].GetValue<float>() - report["arrow"]["wall_x"].GetValue<int>()) > 32)
+            throw new Exception("native Jev cover failed; inspect " + Path.Combine(Main.SavePath, "cover-native.json"));
+        Console.WriteLine("COVER_NATIVE_PASS cells=4 live_jev=true protected_until_action_end=true slow_model_calls=0");
     }
 
     async Task FallCatchTrial()
