@@ -35,6 +35,9 @@ static class ScriptTests
         await IntentPolicyIntegration(overridePolicy: true);
         await IdlePolicyHandoff();
         await CraftBatchContracts();
+        await NavigationConditionContracts();
+        await NavigationConditionContracts(existingTick: true);
+        NavigationGoalProgress();
         BuiltinDiscovery();
         await CombatIntentContinuation();
         CoverCandidateContracts();
@@ -81,7 +84,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "no_prefix_rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=55 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=58 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -1380,6 +1383,115 @@ static class ScriptTests
             && index.Length < builtins.Sum(s => s["code"].ToString().Length) / 5,
             "startup hid callable skills or embedded their source instead of a compact capability index");
         Console.WriteLine("PASS: initial model instructions expose callable skill names and purposes without inlining source; chars=" + index.Length);
+    }
+
+    static void NavigationGoalProgress()
+    {
+        var terrain = new Dictionary<int, long> { [0] = 1 };
+        var route = new NavigationProgress(requireApproach: true);
+        var construction = new NavigationProgress();
+        var diggingRoute = new NavigationProgress(requireApproach: true);
+        route.Observe(0, 0, 0, 1000, terrain);
+        construction.Observe(0, 0, 0, 1000, terrain);
+        diggingRoute.Observe(0, 0, 0, 1000, terrain);
+        JsonObject stalled = null;
+        for (int second = 1; second <= 40; second++)
+        {
+            terrain[0] = second % 2;
+            stalled = route.Observe(second, second % 2 * 100, 0, 1000 + second % 2 * 100, terrain);
+            Check(second < 30 ? stalled == null : stalled?["reason"]?.ToString() == "moving_without_route_progress",
+                "terrain edits masked a route without goal progress");
+            Check(construction.Observe(second, 0, 0, 1000, terrain) == null,
+                "productive stationary construction inherited the navigation deadline");
+            Check(diggingRoute.Observe(second, second * 16, 0, 1000 - second * 16, terrain) == null,
+                "forward excavation inherited an earlier no-progress deadline");
+        }
+        var p = Terraria.Main.LocalPlayer;
+        var position = p.position;
+        try
+        {
+            p.position = new(168 - p.width / 2f, 176 - p.height);
+            Check(AgentTools.NavigationDistance(p, 10, 10, stand: true) == 0,
+                "stand progress used player center instead of the native feet contract");
+            p.position.Y -= 16;
+            Check(AgentTools.NavigationDistance(p, 10, 10, stand: true) == 16,
+                "a platform one tile above the requested stand goal was mistaken for arrival");
+        }
+        finally { p.position = position; }
+        Console.WriteLine("PASS: route progress survives incidental edits while productive digging and construction continue");
+    }
+
+    static async Task NavigationConditionContracts(bool existingTick = false)
+    {
+        int effects = 0;
+        foreach (string code in new[] {
+            "return navigate_until({x:20,y:10},()=>true);",
+            "return navigate_until({x:20,y:10},()=>{tool('craft',{name:'WorkBench'});return true;});",
+            "return navigate_until({x:20,y:10},()=>({ready:true}));" })
+        {
+            var result = await AgentScript.Run(code, 5, (_, _) => { }, (name, args, token) =>
+            { effects++; return Task.FromResult("{}"); }, _ => Task.CompletedTask, default);
+            bool ready = code.EndsWith("()=>true);");
+            Check(result["ok"]?.GetValue<bool>() == ready && effects == 0
+                && (!ready || result["value"]?["condition_met"]?.GetValue<bool>() == true
+                    && result["value"]?["done"] == null), "navigation readiness mutated state or claimed arrival: " + result);
+            Check(AgentScript.ContainsInput(code) && !AgentScript.PreparationOnly(code),
+                "conditional navigation bypassed input ownership");
+        }
+        var agent = new NativeAgent(); agent.Load();
+        var http = HttpServerSystem.Handler;
+        var p = Terraria.Main.LocalPlayer;
+        var position = p.position;
+        int hp = p.statLife, animation = p.itemAnimation, itemTime = p.itemTime;
+        bool dead = p.dead, suffocating = p.suffocating;
+        int starts = 0, polls = 0, stops = 0;
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+            p.position = new(160, 160); p.statLife = 100;
+            p.dead = p.suffocating = false; p.itemAnimation = p.itemTime = 0;
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
+                if (path == "/nav_recede_stop") { stops++; RecedingNav.Active = false; }
+                if (path == "/recipe") return (200, "{\"recipes\":[{\"can_craft_now\":" + (polls >= 3 ? "true" : "false") + "}]}");
+                if (path == "/nav_recede_done")
+                {
+                    if (++polls == 3) p.statLife = 99;
+                    return (200, "{\"done\":false}");
+                }
+                return (200, "{}");
+            };
+            var task = AgentTools.Execute("run_script", new JsonObject { ["code"] = "let ticks=0;"
+                + (existingTick ? "on('tick',()=>{ticks++;return {handled:true};});" : "") + """
+                const approach=navigate_until({x:1000,y:10,mode:'stand'},
+                  ()=>tool('recipe',{name:'WoodenBow'}).recipes.some(r=>r.can_craft_now));
+                return {approach,ticks,next:tool('recipe',{name:'WoodenBow'}).recipes[0].can_craft_now};
+                """ }, default);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            {
+                Check(clock.Elapsed.TotalSeconds < 5, "conditional navigation did not hand off");
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+            var result = JsonNode.Parse(await task);
+            Check(result["ok"]?.GetValue<bool>() == true
+                && result["value"]?["approach"]?["condition_met"]?.GetValue<bool>() == true
+                && result["value"]?["approach"]?["done"] == null
+                && result["value"]?["next"]?.GetValue<bool>() == true
+                && (result["value"]?["ticks"]?.GetValue<int>() > 0) == existingTick
+                && starts == 1 && stops == 1 && !RecedingNav.Active
+                && !AgentTools.ControlSession.Active && AgentTools.Actions.NavigationArrivals == 0,
+                "readiness failed to stop the original navigation and continue without claiming arrival: " + result);
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Watches.Reset(); AgentTools.Plan.Reset();
+            p.position = position; p.statLife = hp; p.dead = dead; p.suffocating = suffocating;
+            p.itemAnimation = animation; p.itemTime = itemTime;
+            HttpServerSystem.Handler = http; agent.Unload();
+        }
+        Console.WriteLine("PASS: readonly navigation readiness hands off the same action without claiming coordinate arrival");
     }
 
     static async Task CraftBatchContracts()

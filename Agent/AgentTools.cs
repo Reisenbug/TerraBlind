@@ -1323,6 +1323,7 @@ public static partial class AgentTools
                 }
                 return notice;
             }, token, pause, resume);
+            if (local?.NavigationConditionMet == true) break;
         }
     }
 
@@ -2660,7 +2661,8 @@ public static partial class AgentTools
                 if (clearances.Count > 0) start["verified_clearances"] = clearances;
                 return start;
             }
-            var progress = new NavigationProgress();
+            var progress = new NavigationProgress(requireApproach: true);
+            var reactions = AgentScript.CurrentReactions.Value;
             bool? lastPlanning = null;
             int remaining = seconds <= 0 ? 0 : Math.Max(1, (int)Math.Ceiling(seconds - clock.Elapsed.TotalSeconds));
             result = await Wait("/nav_recede_done", "nav", "/nav_recede_stop", remaining, token,
@@ -2676,8 +2678,10 @@ public static partial class AgentTools
                         {
                             var restarted = await Call("/nav_recede", request, ct);
                             if (Rejected(restarted)) throw new InvalidOperationException(restarted.ToJsonString());
-                            progress = new NavigationProgress();
+                            progress = new NavigationProgress(requireApproach: true);
                         }, new JsonObject { ["tool"] = "nav_to", ["args"] = args.DeepClone() });
+                if (reactions?.NavigationConditionMet == true)
+                    return new JsonObject { ["outcome"] = "condition_met", ["condition_met"] = true };
                 return await NativeAgent.OnMain(() =>
             {
                 var interrupted = interruption?.Invoke();
@@ -2714,8 +2718,7 @@ public static partial class AgentTools
                         terrain[x * Main.maxTilesY + y] = tile.HasTile
                             ? 1L + ((long)tile.TileType << 8) + ((long)tile.Slope << 4) + (tile.IsHalfBlock ? 2 : 0) : 0;
                     }
-                double distance = Math.Abs(player.Center.X - Int(args, "x") * 16)
-                    + Math.Abs(player.Center.Y - Int(args, "y") * 16);
+                double distance = NavigationDistance(player, gx, gy, Bool(request, "stand"));
                 return progress.Observe(elapsed, player.position.X, player.position.Y, distance, terrain, planning);
                 }, token);
             });
@@ -2778,10 +2781,14 @@ public static partial class AgentTools
                 result["mode_adjustment"] = "non_solid_target_use_reach_then_use_tool";
             if (Bool(result, "done") && !arrived)
             { result["done"] = false; result["status"] = "stopped_short"; result["dist"] = distance; }
-            if (!Bool(result, "done") && !Rejected(result)) result["error"] = "navigation_incomplete";
+            if (!Bool(result, "done") && !Bool(result, "condition_met") && !Rejected(result)) result["error"] = "navigation_incomplete";
             return result;
         }, token);
     }
+
+    internal static double NavigationDistance(Player player, int gx, int gy, bool stand) =>
+        Math.Abs(player.Center.X - (gx * 16 + 8))
+        + Math.Abs((stand ? player.position.Y + player.height : player.Center.Y) - (gy * 16 + (stand ? 16 : 8)));
 
     internal static JsonObject CombatAssessment(int radius)
     {

@@ -3723,7 +3723,8 @@ public sealed partial class BehaviorTrial : ModSystem
         if (result["ok"]?.GetValue<bool>() != true || result["value"]?["first"]?["status"]?.ToString() != "completed"
             || result["value"]?["second"]?["completed"]?.AsArray().Any(i => i["already_owned"]?.GetValue<bool>() != true) != false
             || result["value"]?["counts"]?[ItemID.WoodenBow.ToString()]?.GetValue<int>() != 1
-            || result["value"]?["counts"]?[ItemID.WoodenArrow.ToString()]?.GetValue<int>() != 50)
+            || result["value"]?["counts"]?[ItemID.WoodenArrow.ToString()]?.GetValue<int>() != 50
+            || result["value"]?["first"]?["completed"]?[0]?["approach"]?["condition_met"]?.GetValue<bool>() != true)
             throw new Exception("native crafting batch did not verify station approach and inventory targets: " + result);
         Console.WriteLine($"CRAFT_BATCH_NATIVE_PASS elapsed_ms={clock.ElapsedMilliseconds} bow=1 arrows=50 repeated_crafts=0 model_calls=0");
     }

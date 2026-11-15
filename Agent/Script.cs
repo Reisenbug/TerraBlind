@@ -118,6 +118,7 @@ public static class AgentScript
         Action retired;
         public bool Active { get; private set; } = true;
         public bool Handling { get; set; }
+        internal volatile bool NavigationConditionMet;
         public Func<string, JsonObject, CancellationToken, Task> BeforeAction;
         public bool TryEnter()
         {
@@ -213,7 +214,7 @@ public static class AgentScript
             var ast = new Acornima.Parser().ParseScript("(function(){\n" + source + "\n});");
             bool Visit(Acornima.Ast.Node node) => node is Acornima.Ast.CallExpression call
                 && call.Callee is Acornima.Ast.Identifier name
-                && (name.Name is "skill" or "intents" || name.Name == "tool" && call.Arguments.Count > 0
+                && (name.Name is "skill" or "intents" or "navigate_until" || name.Name == "tool" && call.Arguments.Count > 0
                     && call.Arguments[0] is Acornima.Ast.StringLiteral tool
                     && (AgentControlSession.ActionTool(tool.Value) || tool.Value == "action_start"))
                 || node.ChildNodes.Any(Visit);
@@ -234,7 +235,7 @@ public static class AgentScript
                 if (node is Acornima.Ast.Identifier id)
                 {
                     if (id.Name == "tool") references++;
-                    if (id.Name is "skill" or "intents") dynamicOrAction = true;
+                    if (id.Name is "skill" or "intents" or "navigate_until") dynamicOrAction = true;
                 }
                 if (node is Acornima.Ast.CallExpression call && call.Callee is Acornima.Ast.Identifier { Name: "tool" })
                 {
@@ -419,6 +420,7 @@ public static class AgentScript
 
     public const string RuntimeInstructions =
         "\n运行约定：源码是同步JS函数体，tool直接返回对象；step保存可独立核验的小效果，跨段变量存于step返回值。"
+        + "接近期间可用navigate_until(navArgs,()=>只读条件)。条件必须返回boolean；开始前及导航tick检查，满足后停止接近，返回condition_met:true，随后直接执行并核验下一步。用于实际可制作、可操作等就绪条件；坐标到达仍由done:true表示。主脚本调用，条件内只允许查询。"
         + "每step结果限8000字符，return限16000字符；print每条限1000字符，log_truncations记录截断。只返回决策字段，完整执行轨迹按report_id用script_report查询。tool_counts表示请求次数，效果用真实状态核验。"
         + "\nDAG执行：第一步目的地与验收明确后建立最小计划，从ready节点后台启动；最终要求从初始conditions保留，末端包含仍需持有物品。调查、后继script和on_failure在行进期间补齐，前置通过宿主验收后自动派发。依赖表示已验收，输入互斥由执行器管理。"
         + "\n途中反应：先用on(kind,event=>{...;return {handled:true};})注册本次脚本的处理函数，再执行主任务。watch订阅nearby_tile/nearby_chest/nearby_drop/nearby_npc_killed/inventory_full等现场事件；tick每250ms提供一次本地检查机会，适合检查受伤、威胁和武器，combat_assess提供事实。导航及gather内部导航会执行处理函数，原脚本和主动作句柄保持；只读和背包操作保持路线运行，需要移动/挖掘/放置时交接控制，结束后按当前位置重启原目的地。处理函数可调用tool/skill/step，步骤与主任务隔离。返回handled:false交回Agent；未注册事件沿用原交付。注册仅本次脚本有效，重新执行源码会使用新处理函数。"
@@ -660,6 +662,7 @@ public static class AgentScript
                     }
                     DiagLog.Write("[local_intents] " + state.ToJsonString());
                 }));
+                engine.SetValue("__gameNavigationCondition", new Action<bool>(value => reactions.NavigationConditionMet = value));
                 engine.SetValue("__stepEnter", new Func<string, string>(id =>
                     ((reactions.Handling ? handlerProgress : progress) ?? throw new InvalidOperationException("step需要run_script.workflow。 ")).Enter(id).ToJsonString()));
                 engine.SetValue("__stepComplete", new Action<string, string>((id, json) =>
@@ -700,7 +703,7 @@ public static class AgentScript
                         + ",run:function(input){\n" + code + "\n}}";
                 }));
                 string wrapper = """
-                    (function(call, log, enter, complete, enterSkill, exitSkill, register, setHandling, setIntent) {
+                    (function(call, log, enter, complete, enterSkill, exitSkill, register, setHandling, setIntent, setNavigationCondition) {
                         delete globalThis.__gameTool;
                         delete globalThis.__gamePrint;
                         delete globalThis.__stepEnter;
@@ -710,15 +713,23 @@ public static class AgentScript
                         delete globalThis.__gameOn;
                         delete globalThis.__gameHandling;
                         delete globalThis.__gameIntent;
+                        delete globalThis.__gameNavigationCondition;
                         const stringify = JSON.stringify;
                         const parse = JSON.parse;
                         const handlers = new Map();
                         let handling = false;
+                        let navigationCondition = null;
                         const dispatch = event => {
                             handling = true;
                             setHandling(true, '{}');
                             let value;
-                            try { value = handlers.get(event.kind)(event); return value; }
+                            try {
+                                if (event.kind === 'tick' && event.execution?.tool === 'nav_to' && navigationCondition?.()) {
+                                    setNavigationCondition(true);
+                                    value = {handled:true,condition_met:true};
+                                } else value = handlers.get(event.kind)(event);
+                                return value;
+                            }
                             finally { handling = false; setHandling(false, stringify(value) ?? '{}'); }
                         };
                         const policyInheritance = new Map();
@@ -752,6 +763,24 @@ public static class AgentScript
                             });
                         };
                         const print = value => log(typeof value === 'string' ? value : stringify(value));
+                        const navigate_until = (args, ready) => {
+                            if (handling || navigationCondition) throw new Error('navigate_until needs the script main body');
+                            if (typeof ready !== 'function') throw new Error('navigate_until needs a readonly readiness predicate');
+                            const check = () => {
+                                setIntent('', true);
+                                try {
+                                    const value = ready();
+                                    if (typeof value !== 'boolean') throw new Error('navigation readiness must return boolean');
+                                    return value;
+                                } finally { setIntent('', false); }
+                            };
+                            if (check()) return {outcome:'condition_met',condition_met:true};
+                            if (!handlers.has('tick')) on('tick', () => ({handled:true}), {append:true});
+                            navigationCondition = check;
+                            setNavigationCondition(false);
+                            try { return tool('nav_to', args); }
+                            finally { navigationCondition = null; setNavigationCondition(false); }
+                        };
                         let stepPrefix = '';
                         const step = (id, action) => {
                             id = stepPrefix + id;
@@ -794,7 +823,7 @@ public static class AgentScript
                         if (value && typeof value.then === 'function') throw new Error('使用同步tool调用，不支持Promise返回');
                         const result = stringify({value});
                         return result;
-                    })(__gameTool, __gamePrint, __stepEnter, __stepComplete, __skillEnter, __skillExit, __gameOn, __gameHandling, __gameIntent)
+                    })(__gameTool, __gamePrint, __stepEnter, __stepComplete, __skillEnter, __skillExit, __gameOn, __gameHandling, __gameIntent, __gameNavigationCondition)
                     """;
                 var output = engine.Evaluate(wrapper).AsString();
                 if (hostFailure != null) throw hostFailure;

@@ -7,9 +7,12 @@ namespace TerraBlind;
 public sealed class NavigationProgress
 {
     readonly Dictionary<int, long> tiles = new();
+    readonly bool requireApproach;
     bool initialized;
     double anchorX, anchorY, localX, localY, bestDistance;
     double lastMovement, lastLocalProgress, lastProgress;
+
+    public NavigationProgress(bool requireApproach = false) => this.requireApproach = requireApproach;
 
     public JsonObject Observe(double seconds, double x, double y, double distance, IReadOnlyDictionary<int, long> terrain, bool planning = false)
     {
@@ -32,7 +35,11 @@ public sealed class NavigationProgress
         { localX = x; localY = y; lastLocalProgress = seconds; }
         if (distance <= bestDistance - 16)
         { bestDistance = distance; lastLocalProgress = lastProgress = seconds; }
-        if (edited) lastMovement = lastLocalProgress = lastProgress = seconds;
+        if (edited)
+        {
+            lastMovement = lastLocalProgress = seconds;
+            if (!requireApproach) lastProgress = seconds;
+        }
         string reason = null;
         if (seconds - lastMovement >= 8) reason = "stationary";
         else if (seconds - lastLocalProgress >= 8) reason = "local_oscillation";

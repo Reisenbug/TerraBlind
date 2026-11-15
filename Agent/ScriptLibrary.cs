@@ -46,11 +46,13 @@ public sealed class ScriptLibrary
               const name=catalog.matches?.find(m=>m.type===item.item_type)?.internal;
               if(!name)return {status:'needs_review',error:'item_name_unresolved',item,completed,evidence:catalog};
               const query=()=>tool('recipe',{name});
+              let approach;
               let available=query();
               if(available.error)return {status:'needs_review',error:available.error,item,completed,evidence:available};
               if(!available.recipes?.some(r=>r.can_craft_now===true)&&input.station){
-                const arrival=tool('nav_to',{...input.station,mode:'stand'});
-                if(arrival.done!==true)return {status:'needs_review',error:'station_approach_failed',item,completed,evidence:arrival};
+                const arrival=navigate_until({...input.station,mode:'stand'},()=>query().recipes?.some(r=>r.can_craft_now===true)===true);
+                if(arrival.done!==true&&arrival.condition_met!==true)return {status:'needs_review',error:'station_approach_failed',item,completed,evidence:arrival};
+                approach={condition_met:arrival.condition_met===true,arrived:arrival.done===true};
                 available=query();
               }
               if(!available.recipes?.some(r=>r.can_craft_now===true))
@@ -58,7 +60,7 @@ public sealed class ScriptLibrary
               const made=tool('craft',{name,amount:item.count-before});
               const actual=counts()[item.item_type]??0;
               if(actual<item.count)return {status:'needs_review',error:made.error??'craft_target_not_met',item,actual,completed,evidence:made};
-              completed.push({item_type:item.item_type,actual,gained:actual-before});
+              completed.push({item_type:item.item_type,actual,gained:actual-before,...(approach?{approach}:{})});
             }
             return {status:'completed',completed};
             """);
