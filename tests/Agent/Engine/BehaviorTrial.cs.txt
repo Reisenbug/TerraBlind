@@ -5014,7 +5014,8 @@ public sealed partial class BehaviorTrial : ModSystem
     {
         if (variant is not ("baseline" or "combat")) throw new ArgumentException("Fight comparison expects baseline or combat");
         bool model = variant == "combat";
-        bool codeDodge = !model && Environment.GetEnvironmentVariable("TB_DECISION_IDLE_BASELINE") != "1";
+        bool retainIntent = Environment.GetEnvironmentVariable("TB_DECISION_KEEP_INTENT") == "1";
+        bool codeDodge = model || Environment.GetEnvironmentVariable("TB_DECISION_IDLE_BASELINE") != "1";
         int duration = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_SECONDS") ?? "40");
         int health = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_HEALTH") ?? "200");
         var warmup = Stopwatch.StartNew();
@@ -5045,6 +5046,8 @@ public sealed partial class BehaviorTrial : ModSystem
             return p.Center;
         });
         await Call("set_combat", new JsonObject { ["auto_attack"] = true, ["auto_dodge"] = codeDodge, ["weapon_type"] = ItemID.ThrowingKnife });
+        if (model && !await OnMain(() => AgentPermissions.CanDodge(delegated: true)))
+            throw new Exception("Decision comparison must permit native movement candidates");
         if (model)
         {
             var helper = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "joint_combat",
@@ -5056,8 +5059,9 @@ public sealed partial class BehaviorTrial : ModSystem
             var policy = await Call("task_policy", new JsonObject { ["operation"] = "get" });
             var registered = await Call("task_policy", new JsonObject { ["operation"] = "set",
                 ["expected_revision"] = policy["revision"].DeepClone(),
-                ["code"] = "const config=" + input.ToJsonString() + ";let last=null;on('tick',()=>{const r=skill('joint_combat',"
-                    + helper["revision"] + ",{...config,last_request:last},'combat');if(r.request_id)last=r.request_id;return {handled:true};});" });
+                ["code"] = "const config=" + input.ToJsonString() + ";let last=null,intent=null;on('tick',()=>{const r=skill('joint_combat',"
+                    + helper["revision"] + ",{...config,last_request:last,intent:" + (retainIntent ? "intent" : "null")
+                    + "},'combat');if(r.request_id)last=r.request_id;intent=r.intent??null;return {handled:true};});" });
             if (registered["error"] != null) throw new Exception("Joint fight policy rejected: " + registered);
         }
         var before = await Call("get_state", new JsonObject());
@@ -5091,6 +5095,7 @@ public sealed partial class BehaviorTrial : ModSystem
                         }
                     return new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["tick"] = Main.GameUpdateCount,
                         ["hp"] = p.statLife, ["dead"] = p.dead, ["x"] = p.position.X, ["y"] = p.position.Y,
+                        ["decision_control_active"] = ((AgentControlSession)SessionField.GetValue(null)).Tool == "act" && ActExecutor.IsActive,
                         ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["attack"] = p.controlUseItem,
                         ["item_animation"] = p.itemAnimation, ["held_type"] = p.HeldItem.type,
                         ["selected_slot"] = p.selectedItem, ["mouse_interface"] = p.mouseInterface,
@@ -5120,6 +5125,7 @@ public sealed partial class BehaviorTrial : ModSystem
             await Call("task_policy", new JsonObject { ["operation"] = "clear", ["expected_revision"] = policy["revision"].DeepClone() });
             File.WriteAllText(Path.Combine(Main.SavePath, "decision-comparison.json"), new JsonObject {
                 ["variant"] = variant, ["fight_trial"] = true, ["code_dodge"] = codeDodge, ["terrain_edits"] = 0, ["unarmed"] = false,
+                ["retained_intention_enabled"] = retainIntent,
                 ["initial_poison"] = Environment.GetEnvironmentVariable("TB_DECISION_START_POISON") == "1",
                 ["policy_config"] = new JsonObject { ["weapon_order"] = new JsonArray((int)ItemID.ThrowingKnife) },
                 ["seed"] = Main.ActiveWorldFileData.SeedText, ["start_health"] = health, ["spawns"] = spawns,

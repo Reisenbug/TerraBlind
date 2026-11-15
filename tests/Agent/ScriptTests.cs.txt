@@ -36,6 +36,7 @@ static class ScriptTests
         await IdlePolicyHandoff();
         await CraftBatchContracts();
         BuiltinDiscovery();
+        await CombatIntentContinuation();
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();
@@ -78,7 +79,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=52 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=53 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -247,7 +248,7 @@ static class ScriptTests
                 }, _ => Task.CompletedTask, default,
                 programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-empty-skills-" + Guid.NewGuid())).Callable());
             bool inactive = boss || scenario == "quiet";
-            Check(result["ok"].GetValue<bool>() && decisions == (progress ? 3 : inactive ? 0 : scenario == "idle_after_place" ? 2 : 3) && updates == (inactive || progress ? 0 : 1)
+            Check(result["ok"].GetValue<bool>() && decisions == (progress ? 3 : inactive ? 0 : scenario == "idle_after_place" ? 2 : 3) && updates == (inactive || progress ? 0 : scenario == "idle_after_place" ? 1 : 2)
                 && reviews == (scenario is "equipment_review" or "ranged_review" or "progress_review" ? 1 : 0),
                 "default combat policy blocked pending navigation, repeated a response or touched boss movement: " + result);
         }
@@ -1310,6 +1311,61 @@ static class ScriptTests
             AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); agent.Unload();
         }
         Console.WriteLine("PASS: death observations remain readable after repeated failures and respawn; failed actions stay guarded");
+    }
+
+    static async Task CombatIntentContinuation()
+    {
+        JsonNode memo = null;
+        foreach (string scenario in new[] { "fresh", "pending", "same_reply", "expired", "context_changed", "missing", "unsafe", "failed", "rejected", "quiet", "boss", "new_reply" })
+        {
+            int moves = 0, weapons = 0;
+            var input = new JsonObject { ["context"] = scenario == "context_changed" ? "new-route" : "route",
+                ["destination"] = new JsonObject { ["x"] = 50, ["y"] = 20 }, ["last_request"] = scenario == "fresh" ? 0 : 9,
+                ["intent"] = memo?.DeepClone() };
+            var combat = JsonNode.Parse("""
+                {"tick":100,"boss_present":false,"player":{"hp":100},"targets":[{"contact_damage":20,"weapons":[]}],"projectiles":[],
+                 "forecast":{"status":"ready","id":22,"plans":[
+                   {"id":"follow","movement":"follow_route","weapon_type":24,"movement_available":true},
+                   {"id":"left","movement":"left","weapon_type":24,"movement_available":true}]}}
+                """).AsObject();
+            if (scenario == "missing") combat["forecast"]["plans"].AsArray().RemoveAt(1);
+            if (scenario == "unsafe") combat["forecast"]["plans"][1]["movement_available"] = false;
+            if (scenario == "quiet") combat["targets"] = new JsonArray();
+            if (scenario == "boss") combat["boss_present"] = true;
+            var report = await AgentScript.Run("Date.now=()=>" + (scenario == "expired" ? 12000 : 10000)
+                + ";const input=" + input.ToJsonString() + ";" + ScriptLibrary.Example("joint_combat")["code"],
+                5, (_, _) => { }, (name, args, _) =>
+                {
+                    JsonObject result;
+                    if (name == "combat_assess") result = combat;
+                    else if (name == "jev_judge") result = new JsonObject {
+                        ["status"] = scenario == "failed" ? "failed" : scenario is "fresh" or "same_reply" or "new_reply" ? "ready" : "pending",
+                        ["request_id"] = scenario is "failed" or "new_reply" ? 10 : 9, ["request_age_ms"] = 200,
+                        ["input_state"] = args["state"].DeepClone(), ["result"] = new JsonObject { ["elapsed_ms"] = 150,
+                            ["error"] = scenario == "failed" ? "fixture_error" : null,
+                            ["answers"] = new JsonObject { ["response"] = new JsonObject { ["choice"] = scenario == "new_reply" ? "follow" : "left" } } } };
+                    else if (name == "set_combat") { weapons++; result = new JsonObject(); }
+                    else
+                    {
+                        Check(name == "act" && args["combat_candidate"]?["forecast_id"]?.GetValue<int>() == 22,
+                            "retained intention reused an old physical trajectory instead of the current forecast");
+                        moves++; result = scenario == "rejected" ? new JsonObject { ["error"] = "native_rejected" }
+                            : new JsonObject { ["outcome"] = "done", ["execution_forecast_id"] = 23 };
+                    }
+                    return Task.FromResult(result.ToJsonString());
+                }, _ => Task.CompletedTask, default);
+            Check(report["ok"]?.GetValue<bool>() == true && moves == (scenario is "fresh" or "pending" or "same_reply" or "rejected" ? 1 : 0)
+                && weapons == (scenario == "new_reply" ? 1 : 0), "combat intention ignored expiry, current feasibility or new judgment: " + scenario + " " + report);
+            var value = report["value"];
+            if (scenario == "fresh")
+            {
+                memo = value["intent"].DeepClone();
+                Check(memo["expires"]?.GetValue<int>() == 11800, "retained intention reset the source decision age");
+            }
+            else Check((value["intent"] != null) == (scenario is "pending" or "same_reply"),
+                "failed, obsolete or superseded combat intention remained active: " + scenario);
+        }
+        Console.WriteLine("PASS: pending combat judgments retain their bounded intent using current native candidates; expiry, context, rejection and new replies terminate it");
     }
 
     static void BuiltinDiscovery()
@@ -2481,6 +2537,7 @@ static class ScriptTests
         await IdlePolicyHandoff();
         await CraftBatchContracts();
         BuiltinDiscovery();
+        await CombatIntentContinuation();
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();
