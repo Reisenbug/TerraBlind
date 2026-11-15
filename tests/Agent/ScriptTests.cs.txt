@@ -42,6 +42,7 @@ static class ScriptTests
         await PreparedGapHandoff(danger: true);
         await CancelledNavigationContinuation();
         WaypointCorrections();
+        await GatherObservationPolicy();
         BuiltinDiscovery();
         await CombatIntentContinuation();
         CoverCandidateContracts();
@@ -88,7 +89,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "no_prefix_rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=62 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=63 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -176,9 +177,9 @@ static class ScriptTests
 
     static async Task SurvivalCombatPolicy()
     {
-        foreach (string scenario in new[] { "navigation", "idle", "idle_after_place", "fight", "boss", "unchaseable_enemy", "projectile_only", "fall_only", "quiet", "equipment_review", "ranged_review", "progress_review", "progress_stale" })
+        foreach (string scenario in new[] { "navigation", "idle", "idle_after_place", "gather_scan", "fight", "boss", "unchaseable_enemy", "projectile_only", "fall_only", "quiet", "equipment_review", "ranged_review", "progress_review", "progress_stale" })
         {
-            bool boss = scenario == "boss", idle = scenario is "idle" or "idle_after_place" or "fight";
+            bool boss = scenario == "boss", idle = scenario is "idle" or "idle_after_place" or "fight" or "gather_scan";
             bool progress = scenario.StartsWith("progress_");
             int decisions = 0, updates = 0, reviews = 0, phase = 0;
             var combat = JsonNode.Parse("""
@@ -205,7 +206,8 @@ static class ScriptTests
                             if (scenario == "idle_after_place" && i == 1) combat["player"]["pos"]["x"] = 320;
                             var reaction = await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject {
                             ["goal"] = progress ? new JsonObject { ["status"] = "active", ["objective"] = "finish within 25 minutes", ["elapsed_seconds"] = 900 } : null,
-                            ["kind"] = "tick", ["execution"] = new JsonObject { ["tool"] = scenario == "idle_after_place" && i == 1 ? "place_at" : scenario == "fight" ? "fight" : idle ? "idle" : "nav_to",
+                            ["kind"] = "tick", ["execution"] = new JsonObject { ["tool"] = scenario == "gather_scan" ? "gather" : scenario == "idle_after_place" && i == 1 ? "place_at" : scenario == "fight" ? "fight" : idle ? "idle" : "nav_to",
+                                ["phase"] = scenario == "gather_scan" ? "observe_sources" : null,
                                 ["args"] = new JsonObject { ["x"] = 50, ["y"] = 20 } } }, token);
                             if (reaction?["agent_review"] != null) reviews++;
                         }
@@ -231,6 +233,7 @@ static class ScriptTests
                         {
                             Check(args["channel"].ToString() == "task_progress" && args["interval_ms"].GetValue<int>() == 10000
                                 && args["state"]["elapsed_seconds"].GetValue<int>() == 900
+                                && args["state"]["coordinates"]?.ToString().Contains("world tiles (16 pixels)") == true
                                 && args["state"]["current_step"].ToString() == "prepare",
                                 "progress review lost the live clock or current plan");
                             if (scenario == "progress_review" && decisions > 1)
@@ -1387,6 +1390,53 @@ static class ScriptTests
             && index.Length < builtins.Sum(s => s["code"].ToString().Length) / 5,
             "startup hid callable skills or embedded their source instead of a compact capability index");
         Console.WriteLine("PASS: initial model instructions expose callable skill names and purposes without inlining source; chars=" + index.Length);
+    }
+
+    static async Task GatherObservationPolicy()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var http = HttpServerSystem.Handler;
+        bool dead = Terraria.Main.LocalPlayer.dead;
+        int effects = 0;
+        async Task Pump(Task task)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            {
+                Check(clock.Elapsed.TotalSeconds < 5, "gather observation policy did not settle");
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+            await task;
+        }
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+            Terraria.Main.LocalPlayer.dead = false;
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/act") effects++;
+                return (200, path == "/act_status" ? "{\"active\":false}" : "{}");
+            };
+            await Pump(AgentTools.Execute("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
+                ["code"] = """
+                on('tick',event=>{
+                  if(event.execution?.tool!=='gather'||event.execution.phase!=='observe_sources')throw new Error('missing gather phase');
+                  tool('act',{steps:[{keys:['right'],until:{frames:1}}]});return {handled:true};
+                });
+                """ }, default));
+            var world = new GameGather(Array.Empty<GatherTarget>());
+            await Pump(AgentTools.Execute("gather_observe", JsonNode.Parse("{\"targets\":[{\"item_type\":191,\"count\":1}]}").AsObject(), default));
+            Check(effects == 0, "readonly gathering observation executed a defense action");
+            await Pump(world.Observe(default));
+            Check(effects == 1 && AgentTools.TaskPolicyStatus()["last_reaction"]?["execution_phase"]?.ToString() == "observe_sources",
+                "active gathering scan did not expose its phase to the defense policy");
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+            Terraria.Main.LocalPlayer.dead = dead; HttpServerSystem.Handler = http; agent.Unload();
+        }
+        Console.WriteLine("PASS: active gather scans allow tactical reactions while readonly snapshots keep their query contract");
     }
 
     static void WaypointCorrections()
@@ -2629,6 +2679,7 @@ static class ScriptTests
     {
         await CancelledNavigationContinuation();
         WaypointCorrections();
+        await GatherObservationPolicy();
         await QuietObservation();
         await MixedBiomeObservation();
         await ReactiveHandlers();

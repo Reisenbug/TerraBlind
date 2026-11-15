@@ -188,7 +188,8 @@ public sealed class ScriptLibrary
                 loadoutRequest=loadout.request_id??loadoutRequest;
               }
               let destination=event.execution?.tool==='nav_to'?event.execution.args:null;
-              const idle=['idle','fight'].includes(event.execution?.tool);
+              const idle=['idle','fight'].includes(event.execution?.tool)
+                ||event.execution?.tool==='gather'&&event.execution.phase==='observe_sources';
               if(!idle)idleDestination=null;
               if(!idle&&!destination)movementIntent=null;
               if(!c.boss_present&&(destination||idle)&&(c.targets?.some(n=>n.contact_damage>0&&n.distance_tiles<12)
@@ -207,6 +208,7 @@ public sealed class ScriptLibrary
                 const s=tool('get_state',{fields:['task_plan','inventory_slots','equipment_slots']}),plan=s.task_plan;
                 if(plan?.status==='active'){
                   const facts={objective:event.goal.objective,elapsed_seconds:event.goal.elapsed_seconds,previous_review_request:lastProgressReview,
+                    coordinates:'Player pos uses world pixels. Position conditions and navigation x/y use world tiles (16 pixels). x increases right and y down.',
                     plan_revision:plan.revision,current_step:plan.current_step,player:p,execution:event.execution,
                     steps:plan.steps.map(({id,description,status,conditions,best_actual})=>({id,description,status,conditions,best_actual})),
                     inventory:s.inventory_slots.filter(i=>i.type>0).map(({type,name,stack})=>({type,name,stack})),

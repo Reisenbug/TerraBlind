@@ -1370,6 +1370,7 @@ public static partial class AgentTools
             }
             var record = new JsonObject { ["kind"] = notice["kind"]?.DeepClone(),
                 ["execution_tool"] = notice["execution"]?["tool"]?.DeepClone(),
+                ["execution_phase"] = notice["execution"]?["phase"]?.DeepClone(),
                 ["elapsed_ms"] = Stopwatch.GetElapsedTime(started).TotalMilliseconds, ["took_control"] = paused,
                 ["handled"] = decision?["handled"]?.DeepClone(), ["retry"] = decision?["retry"]?.DeepClone(),
                 ["outcome"] = decision?["outcome"]?.DeepClone(), ["reason"] = decision?["reason"]?.DeepClone(),
@@ -1832,7 +1833,7 @@ public static partial class AgentTools
                 var gatherWorld = new GameGather(targets, sourceArea);
                 if (name == "gather_observe")
                 {
-                    result = await gatherWorld.Observe(token);
+                    result = await gatherWorld.Observe(token, reactive: false);
                     if (sourceArea != null)
                         result["candidates"] = new JsonArray(result["candidates"].AsArray().OfType<JsonObject>()
                             .Where(sourceArea.Contains).Select(c => c.DeepClone()).ToArray());

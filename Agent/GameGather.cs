@@ -18,9 +18,12 @@ public sealed class GameGather : IGatherWorld
     int npcGeneration;
     public GameGather(GatherTarget[] targets, GatherArea area = null) { _targets = targets; _area = area; }
 
-    public async Task<JsonObject> Observe(CancellationToken token)
+    public Task<JsonObject> Observe(CancellationToken token) => Observe(token, reactive: true);
+
+    internal async Task<JsonObject> Observe(CancellationToken token, bool reactive)
     {
-        await AgentTools.ReactAtBoundary(token);
+        if (reactive) await AgentTools.ReactAtBoundary(token, context: new JsonObject {
+            ["tool"] = "gather", ["phase"] = "observe_sources" });
         var scene = await NativeAgent.OnMain(() =>
         {
             var p = Main.LocalPlayer;
