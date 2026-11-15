@@ -40,7 +40,7 @@ public static partial class AgentTools
         }
     }
     static volatile TaskPolicyInstance taskPolicy;
-    sealed record CombatPreparation(string Key, CancellationTokenSource Lifetime, Task<JsonObject> Work);
+    sealed record CombatPreparation(string Key, CancellationTokenSource Lifetime, Task<JsonObject> Work, AgentScript.Reactions Owner);
     static readonly object combatPreparationGate = new();
     static CombatPreparation combatPreparation;
     static long combatPreparationVersion;
@@ -80,12 +80,13 @@ public static partial class AgentTools
         previous?.Retire();
     }
 
-    static void ClearCombatPreparation()
+    static void ClearCombatPreparation(AgentScript.Reactions owner = null)
     {
         lock (combatPreparationGate)
         {
-            var previous = combatPreparation; combatPreparation = null;
-            if (previous == null) return;
+            var previous = combatPreparation;
+            if (previous == null || owner != null && !ReferenceEquals(previous.Owner, owner)) return;
+            combatPreparation = null;
             previous.Lifetime.Cancel();
             _ = previous.Work.ContinueWith(_ => previous.Lifetime.Dispose(), TaskScheduler.Default);
         }
@@ -122,7 +123,7 @@ public static partial class AgentTools
             }
             var lifetime = CancellationTokenSource.CreateLinkedTokenSource(root, AgentScript.ReactionCancellation.Value);
             var work = CombatForecast.Refresh(args.DeepClone().AsObject(), () => CombatAssessment(25), lifetime.Token);
-            combatPreparation = new CombatPreparation(key, lifetime, work);
+            combatPreparation = new CombatPreparation(key, lifetime, work, AgentScript.CurrentReactions.Value);
             DiagLog.Write($"[combat_preparation] status=pending key={key}");
             _ = work.ContinueWith(_ => Interlocked.Increment(ref combatPreparationVersion),
                 CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
@@ -1701,6 +1702,7 @@ public static partial class AgentTools
                 Interlocked.Increment(ref executingScripts);
                 if (mayAct) Interlocked.Increment(ref actionScripts);
                 long currentInvocation = Interlocked.Increment(ref invocationSequence);
+                AgentScript.Reactions scriptReactions = null;
                 try
                 {
                     result = await AgentScript.Run(source, Int(args, "seconds", 120), NativeAgent.ValidateTool,
@@ -1722,10 +1724,15 @@ public static partial class AgentTools
                         }, cleanupToken), token, workflow,
                         localEvents ? null : checkToken => NativeAgent.OnMain(() => Watches.HasRecoveryBlocker ? Watches.Pending(recoveryOnly: true) : null, checkToken),
                         new ScriptLibrary(System.IO.Path.Combine(Main.SavePath, "TerraBlindAgent", "programs")).Callable(), RecordSkills,
-                        kind => NativeAgent.OnMain(() => { Watches.RegisterHandler(handlerReader, kind); return true; }, token).GetAwaiter().GetResult());
+                        kind =>
+                        {
+                            scriptReactions = AgentScript.CurrentReactions.Value;
+                            NativeAgent.OnMain(() => { Watches.RegisterHandler(handlerReader, kind); return true; }, token).GetAwaiter().GetResult();
+                        });
                 }
                 finally
                 {
+                    if (scriptReactions != null) ClearCombatPreparation(scriptReactions);
                     Interlocked.Decrement(ref executingScripts);
                     if (mayAct) Interlocked.Decrement(ref actionScripts);
                     await NativeAgent.OnMain(() => { Watches.EndHandlers(handlerReader); return true; }, default);

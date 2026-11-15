@@ -87,9 +87,12 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveHostIntegration(candidateMode: "no_prefix");
         await ReactiveHostIntegration(candidateMode: "no_prefix_rejected");
+        await PendingCombatNavigation();
+        await PendingCombatNavigation(rejected: true);
+        await PendingCombatNavigation(ownerEnded: true);
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=63 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=66 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -2712,6 +2715,9 @@ static class ScriptTests
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
         await AtomicActionPolicy();
+        await PendingCombatNavigation();
+        await PendingCombatNavigation(rejected: true);
+        await PendingCombatNavigation(ownerEnded: true);
         await ResolvedNavigationClearance();
         await HouseTools();
         PlacementProgress();
@@ -4193,6 +4199,116 @@ static class ScriptTests
             AgentTools.Stop(); AgentTools.ClearTaskPolicy(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.Watches.Reset();
             HttpServerSystem.Handler = originalHttp; player.inventory[49] = savedItem;
             player.dead = dead; player.suffocating = suffocating; agent.Unload();
+        }
+    }
+
+    static async Task PendingCombatNavigation(bool rejected = false, bool ownerEnded = false)
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var http = HttpServerSystem.Handler;
+        var refresh = CombatForecast.RefreshHandler;
+        var prepare = CombatForecast.PrepareHandler;
+        bool manual = Manual.On;
+        using var lifetime = new CancellationTokenSource();
+        var release = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int starts = 0, stops = 0, moves = 0, computations = 0, pendingPolls = 0;
+        string handle = null;
+        bool notified = false, finished = false, proofCancelled = false;
+        int messages = AgentChat.Messages.Count;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        long pendingAt = 0;
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); Manual.On = false;
+            CombatForecast.RefreshHandler = async (args, token) =>
+            {
+                if (args["combat_candidate"]["forecast_id"].GetValue<int>() == 2) return args;
+                computations++;
+                pendingAt = clock.ElapsedMilliseconds;
+                Check(RecedingNav.Active && stops == 0 && AgentTools.ControlSession.Tool == "nav_to",
+                    "background preparation took navigation input before its proof");
+                handle = AgentTools.Actions.ActiveHandle;
+                try { return await release.Task.WaitAsync(token); }
+                catch (OperationCanceledException) { proofCancelled = true; throw; }
+            };
+            CombatForecast.PrepareHandler = args => args;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
+                if (path == "/nav_recede_stop") { stops++; RecedingNav.Active = false; }
+                if (path == "/act")
+                {
+                    Check(!RecedingNav.Active && stops == 1, "ready maneuver skipped navigation handoff");
+                    moves++; finished = true;
+                }
+                if (path == "/nav_recede_done")
+                {
+                    if (computations > 0 && !release.Task.IsCompleted)
+                    {
+                        pendingPolls++;
+                        if (!notified)
+                        { notified = true; AgentTools.Watches.Emit("nearby_chest", "pending-proof", new JsonObject()); }
+                    }
+                    if (AgentChat.Messages.Skip(messages).Contains("proof rejected")) finished = true;
+                    if (ownerEnded && pendingPolls > 5 && AgentChat.Messages.Skip(messages).Contains("observed during proof")) finished = true;
+                    return (200, new JsonObject { ["done"] = finished && (ownerEnded || rejected || starts > 1) }.ToJsonString());
+                }
+                return (200, "{\"active\":false,\"outcome\":\"done\"}");
+            };
+            var task = AgentTools.Execute("run_script", new JsonObject { ["code"] = """
+                let done=false;
+                on('nearby_chest',()=>{tool('say',{text:'observed during proof'});return {handled:true};});
+                on('tick',()=>{
+                  if(done||tool('get_state',{fields:['control_execution']}).control_execution.tool!=='nav_to')return {handled:true};
+                  const r=tool('act',{steps:[{keys:['right'],until:{frames:1}}],
+                    combat_candidate:{context:'pending-test',forecast_id:1,plan_id:'right_weapon_279'}});
+                  if(r.status==='combat_preparing')return {handled:true};
+                  done=true;
+                  if(r.error)tool('say',{text:'proof rejected'});
+                  return {handled:true};
+                });
+                tool('watch',{events:['nearby_chest']});
+                return tool('nav_to',{x:20,y:10});
+                """ }, lifetime.Token);
+            long releasedAt = 0;
+            while (!task.IsCompleted)
+            {
+                Check(clock.Elapsed.TotalSeconds < 10, "pending combat/navigation integration stalled");
+                agent.PostUpdateEverything(); await Task.Delay(1);
+                if (!ownerEnded && !release.Task.IsCompleted && pendingPolls > 5 && clock.ElapsedMilliseconds - pendingAt >= 2300
+                    && AgentChat.Messages.Skip(messages).Contains("observed during proof"))
+                {
+                    Check(RecedingNav.Active && stops == 0 && moves == 0 && computations == 1,
+                        "pending physics stopped navigation, duplicated preparation or executed without proof");
+                    releasedAt = clock.ElapsedMilliseconds;
+                    release.SetResult(rejected ? new JsonObject { ["error"] = "fixture_candidate_changed" }
+                        : JsonNode.Parse("""{"combat_candidate":{"context":"pending-test","forecast_id":2,"plan_id":"right_weapon_279"}}""").AsObject());
+                }
+            }
+            var result = JsonNode.Parse(await task);
+            if (ownerEnded)
+            {
+                var cleanup = System.Diagnostics.Stopwatch.StartNew();
+                while (!proofCancelled && cleanup.ElapsedMilliseconds < 250)
+                { agent.PostUpdateEverything(); await Task.Delay(1); }
+                Check(proofCancelled && moves == 0 && starts == 1 && stops == 0,
+                    "finished navigation left its background physics running or applied a late maneuver");
+                Console.WriteLine("COMBAT_PENDING_NAV owner_ended=true proof_cancelled=true model_calls=0");
+                return;
+            }
+            Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["done"]?.GetValue<bool>() == true
+                && starts == (rejected ? 1 : 2) && stops == (rejected ? 0 : 1) && moves == (rejected ? 0 : 1),
+                "ready or rejected combat proof failed navigation continuation: " + result);
+            Check(AgentTools.Actions.Summary().Any(a => a["handle"]?.ToString() == handle
+                && a["attempt"]?.GetValue<int>() == 1 && a["status"]?.ToString() == "completed"),
+                "combat proof replaced the original navigation handle");
+            Console.WriteLine($"COMBAT_PENDING_NAV rejected={rejected} pending_ms={releasedAt - pendingAt} pending_polls={pendingPolls} completion_after_proof_ms={clock.ElapsedMilliseconds - releasedAt} model_calls=0");
+        }
+        finally
+        {
+            lifetime.Cancel(); AgentTools.Stop(); AgentTools.ClearTaskPolicy(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+            HttpServerSystem.Handler = http; CombatForecast.RefreshHandler = refresh; CombatForecast.PrepareHandler = prepare;
+            Manual.On = manual; agent.Unload();
         }
     }
 

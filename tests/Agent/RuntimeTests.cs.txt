@@ -42,6 +42,9 @@ static class RuntimeTests
                 Check(AgentTools.PrepareCombatReaction(Request("left", i + 2), lifetime.Token)["status"]?.ToString() == "combat_preparing",
                     "pending preparation was replaced by a comparison forecast update");
             Check(starts == 1, "each tick launched another copy of the same preparation");
+            await Execute(AgentTools.Execute("run_script", new JsonObject {
+                ["code"] = "on('tick',()=>({handled:true}));return {observed:true};" }, lifetime.Token));
+            Check(running == 1 && starts == 1, "an unrelated observer retired another owner's combat preparation");
             release.SetResult(Request("left", 100));
             JsonObject ready = null;
             await PumpUntil(() => (ready = AgentTools.PrepareCombatReaction(Request("left", 9), lifetime.Token))["status"] == null);
