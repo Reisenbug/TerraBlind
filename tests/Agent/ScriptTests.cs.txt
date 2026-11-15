@@ -1329,11 +1329,11 @@ static class ScriptTests
     static async Task CombatIntentContinuation()
     {
         JsonNode memo = null;
-        foreach (string scenario in new[] { "fresh", "pending", "same_reply", "expired", "context_changed", "missing", "unsafe", "failed", "rejected", "quiet", "boss", "new_reply" })
+        foreach (string scenario in new[] { "fresh", "preparing_fresh", "preparing_retained", "pending", "same_reply", "expired", "context_changed", "missing", "unsafe", "failed", "rejected", "quiet", "boss", "new_reply" })
         {
             int moves = 0, weapons = 0;
             var input = new JsonObject { ["context"] = scenario == "context_changed" ? "new-route" : "route",
-                ["destination"] = new JsonObject { ["x"] = 50, ["y"] = 20 }, ["last_request"] = scenario == "fresh" ? 0 : 9,
+                ["destination"] = new JsonObject { ["x"] = 50, ["y"] = 20 }, ["last_request"] = scenario is "fresh" or "preparing_fresh" ? 0 : 9,
                 ["intent"] = memo?.DeepClone() };
             var combat = JsonNode.Parse("""
                 {"tick":100,"boss_present":false,"player":{"hp":100},"targets":[{"contact_damage":20,"weapons":[]}],"projectiles":[],
@@ -1352,7 +1352,7 @@ static class ScriptTests
                     JsonObject result;
                     if (name == "combat_assess") result = combat;
                     else if (name == "jev_judge") result = new JsonObject {
-                        ["status"] = scenario == "failed" ? "failed" : scenario is "fresh" or "same_reply" or "new_reply" ? "ready" : "pending",
+                        ["status"] = scenario == "failed" ? "failed" : scenario is "fresh" or "preparing_fresh" or "same_reply" or "new_reply" ? "ready" : "pending",
                         ["request_id"] = scenario is "failed" or "new_reply" ? 10 : 9, ["request_age_ms"] = 200,
                         ["input_state"] = args["state"].DeepClone(), ["result"] = new JsonObject { ["elapsed_ms"] = 150,
                             ["error"] = scenario == "failed" ? "fixture_error" : null,
@@ -1362,12 +1362,13 @@ static class ScriptTests
                     {
                         Check(name == "act" && args["combat_candidate"]?["forecast_id"]?.GetValue<int>() == 22,
                             "retained intention reused an old physical trajectory instead of the current forecast");
-                        moves++; result = scenario == "rejected" ? new JsonObject { ["error"] = "native_rejected" }
+                        moves++; result = scenario.StartsWith("preparing_") ? new JsonObject { ["status"] = "combat_preparing" }
+                            : scenario == "rejected" ? new JsonObject { ["error"] = "native_rejected" }
                             : new JsonObject { ["outcome"] = "done", ["execution_forecast_id"] = 23 };
                     }
                     return Task.FromResult(result.ToJsonString());
                 }, _ => Task.CompletedTask, default);
-            Check(report["ok"]?.GetValue<bool>() == true && moves == (scenario is "fresh" or "pending" or "same_reply" or "rejected" ? 1 : 0)
+            Check(report["ok"]?.GetValue<bool>() == true && moves == (scenario is "fresh" or "preparing_fresh" or "preparing_retained" or "pending" or "same_reply" or "rejected" ? 1 : 0)
                 && weapons == (scenario == "new_reply" ? 1 : 0), "combat intention ignored expiry, current feasibility or new judgment: " + scenario + " " + report);
             var value = report["value"];
             if (scenario == "fresh")
@@ -1375,8 +1376,11 @@ static class ScriptTests
                 memo = value["intent"].DeepClone();
                 Check(memo["expires"]?.GetValue<int>() == 11800, "retained intention reset the source decision age");
             }
-            else Check((value["intent"] != null) == (scenario is "pending" or "same_reply"),
+            else Check((value["intent"] != null) == (scenario is "preparing_fresh" or "preparing_retained" or "pending" or "same_reply"),
                 "failed, obsolete or superseded combat intention remained active: " + scenario);
+            if (scenario.StartsWith("preparing_")) Check(value["applied"]?.GetValue<bool>() == false
+                && value["intent"]["expires"].GetValue<int>() == 11800,
+                "pending physics was marked executed or extended its decision lifetime");
         }
         Console.WriteLine("PASS: pending combat judgments retain their bounded intent using current native candidates; expiry, context, rejection and new replies terminate it");
     }

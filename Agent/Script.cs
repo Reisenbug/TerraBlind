@@ -118,6 +118,7 @@ public static class AgentScript
         Action retired;
         public bool Active { get; private set; } = true;
         public bool Handling { get; set; }
+        internal string Kind { get; private set; }
         internal volatile bool NavigationConditionMet;
         public Func<string, JsonObject, CancellationToken, Task> BeforeAction;
         public bool TryEnter()
@@ -188,6 +189,7 @@ public static class AgentScript
                     if (request.Completion.Task.IsCompleted) continue;
                     if (request.Token.IsCancellationRequested) { request.Completion.TrySetCanceled(request.Token); continue; }
                     Handling = true;
+                    Kind = request.Event["kind"]?.ToString();
                     try
                     {
                         ExecutionContext.Run(request.Context, _ =>
@@ -198,7 +200,7 @@ public static class AgentScript
                         }, null);
                     }
                     catch (Exception error) { request.Completion.TrySetException(error); }
-                    finally { Handling = false; }
+                    finally { Handling = false; Kind = null; }
                     continue;
                 }
                 if (task.IsCompleted) return task.GetAwaiter().GetResult();

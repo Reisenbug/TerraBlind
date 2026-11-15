@@ -16,6 +16,98 @@ using Game = Terraria.Main;
 static class RuntimeTests
 {
     static readonly NativeAgent Agent = new();
+    static async Task TestCombatReactionPreparation()
+    {
+        Agent.Load(); AgentTools.NewTask(); AgentTools.Plan.Reset();
+        var previous = CombatForecast.RefreshHandler;
+        using var lifetime = new CancellationTokenSource();
+        var release = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int starts = 0, running = 0, maximum = 0;
+        CombatForecast.RefreshHandler = async (args, token) =>
+        {
+            starts++; maximum = Math.Max(maximum, ++running);
+            try { return await release.Task.WaitAsync(token); }
+            finally { running--; }
+        };
+        JsonObject Request(string plan, int forecast = 1) => new() { ["combat_candidate"] = new JsonObject {
+            ["context"] = "fixture", ["plan_id"] = plan, ["forecast_id"] = forecast } };
+        try
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var pending = AgentTools.PrepareCombatReaction(Request("left"), lifetime.Token);
+            long dispatch = clock.ElapsedMilliseconds;
+            Check(pending["status"]?.ToString() == "combat_preparing" && running == 1 && dispatch < 200,
+                "physics preparation blocked the reaction loop");
+            for (int i = 0; i < 4; i++)
+                Check(AgentTools.PrepareCombatReaction(Request("left", i + 2), lifetime.Token)["status"]?.ToString() == "combat_preparing",
+                    "pending preparation was replaced by a comparison forecast update");
+            Check(starts == 1, "each tick launched another copy of the same preparation");
+            release.SetResult(Request("left", 100));
+            JsonObject ready = null;
+            await PumpUntil(() => (ready = AgentTools.PrepareCombatReaction(Request("left", 9), lifetime.Token))["status"] == null);
+            Check(ready["combat_candidate"]["forecast_id"].GetValue<int>() == 100,
+                "ready preparation returned the decision trajectory instead of fresh proof");
+            release = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+            AgentTools.PrepareCombatReaction(Request("left"), lifetime.Token);
+            AgentTools.PrepareCombatReaction(Request("right"), lifetime.Token);
+            await PumpUntil(() => { AgentTools.PrepareCombatReaction(Request("right"), lifetime.Token); return starts == 3; });
+            Check(maximum == 1 && running == 1, "superseded decisions ran concurrent physics preparations");
+            AgentTools.Stop();
+            await PumpUntil(() => running == 0);
+            Console.WriteLine($"COMBAT_PREPARATION pending_dispatch_ms={dispatch} duplicated=0 max_in_flight={maximum} model_calls=0");
+        }
+        finally
+        {
+            lifetime.Cancel(); AgentTools.Stop();
+            await PumpUntil(() => running == 0);
+            CombatForecast.RefreshHandler = previous;
+        }
+        Console.WriteLine("PASS: pending combat physics releases the reaction loop, deduplicates work and cancels superseded or stopped preparation");
+    }
+
+    static async Task TestIdleReactionScheduling()
+    {
+        Agent.Load(); NativeAgent.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset();
+        var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        var cancelField = typeof(NativeAgent).GetField("_cancel", flags);
+        var watchField = typeof(NativeAgent).GetField("_lastWatch", flags);
+        var previousCancel = cancelField.GetValue(Agent);
+        var previousWatch = watchField.GetValue(Agent);
+        var previousHandler = HttpServerSystem.Handler;
+        bool previousManual = Manual.On;
+        using var cancellation = new CancellationTokenSource();
+        int starts = 0;
+        long released = 0, resumed = 0;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/act") { starts++; if (starts == 2) resumed = clock.ElapsedMilliseconds; }
+                bool active = starts == 1 && clock.ElapsedMilliseconds < 350;
+                if (path == "/act_status" && !active && released == 0) released = clock.ElapsedMilliseconds;
+                return (200, new JsonObject { ["active"] = active, ["outcome"] = active ? "running" : "done" }.ToJsonString());
+            };
+            await Execute(AgentTools.Execute("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
+                ["code"] = "on('tick',()=>{tool('act',{steps:[{keys:['right'],until:{frames:12}}]});return {handled:true};});" }, cancellation.Token));
+            Manual.On = false;
+            cancelField.SetValue(Agent, cancellation);
+            watchField.SetValue(Agent, DateTime.UtcNow.AddMinutes(1));
+            await PumpUntil(() => starts >= 2);
+            Check(released > 0 && resumed - released < 100,
+                "idle action continuation waited for the observation timer: " + (resumed - released) + "ms");
+            Console.WriteLine($"IDLE_REACTION_HANDOFF gap_ms={resumed - released} model_calls=0");
+        }
+        finally
+        {
+            cancellation.Cancel(); AgentTools.Stop();
+            await PumpUntil(() => NativeAgent.IdleReaction.IsCompleted);
+            cancelField.SetValue(Agent, previousCancel); watchField.SetValue(Agent, previousWatch);
+            HttpServerSystem.Handler = previousHandler; Manual.On = previousManual;
+        }
+        Console.WriteLine("PASS: idle action continuation runs independently of the observation timer");
+    }
+
     public static async Task QueryHandoff()
     {
         Agent.Load();
@@ -1159,6 +1251,8 @@ static class RuntimeTests
 
     public static async Task Run()
     {
+        await TestCombatReactionPreparation();
+        await TestIdleReactionScheduling();
         await QueryHandoff();
         await TestPlacementReaction();
         TestHoneyNotice();

@@ -228,8 +228,6 @@ public class NativeAgent : ModSystem
                 ["actions"] = AgentTools.Actions.Summary() });
             if (AgentTools.Watches.Samples % 20 == 0)
                 DiagLog.Write("[agent_observe] " + AgentTools.Watches.LastObservation.ToJsonString());
-            if (runtimeActive && _idleReaction.IsCompleted)
-                _idleReaction = AgentTools.ReactWhileIdle(_cancel.Token);
             if (_codex != null && Processing && _dangerDelivery.IsCompleted)
             {
                 var danger = AgentTools.Watches.Pending()["events"].AsArray().LastOrDefault(e =>
@@ -254,6 +252,8 @@ public class NativeAgent : ModSystem
                 else _dangerDelivery = AgentTools.NotifyExecution(_codex, _cancel.Token);
             }
         }
+        if (!Main.gameMenu && runtimeActive && AgentTools.Watches.HasScriptHandlers && _idleReaction.IsCompleted)
+            _idleReaction = AgentTools.ReactWhileIdle(_cancel.Token);
         if (Status == "后台动作执行中" && !AgentTools.Actions.HasActive) Status = "idle";
         if (PvpDuel.Active) PvpDuel.Update(Main.LocalPlayer);
         if (_running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false

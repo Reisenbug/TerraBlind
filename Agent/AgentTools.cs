@@ -40,6 +40,10 @@ public static partial class AgentTools
         }
     }
     static volatile TaskPolicyInstance taskPolicy;
+    sealed record CombatPreparation(string Key, CancellationTokenSource Lifetime, Task<JsonObject> Work);
+    static readonly object combatPreparationGate = new();
+    static CombatPreparation combatPreparation;
+    static long combatPreparationVersion;
     internal static readonly ScriptDecisionChannels DecisionChannels = new();
     static int taskPolicyRevision, taskPolicyEpoch;
 
@@ -63,6 +67,7 @@ public static partial class AgentTools
 
     internal static void ClearTaskPolicy(bool resetRevision = false)
     {
+        ClearCombatPreparation();
         if (resetRevision) AgentScript.ResetIntents();
         AgentNavigationIntent.Reset();
         CombatForecast.Reset();
@@ -73,6 +78,56 @@ public static partial class AgentTools
         if (previous != null) Watches.EndHandlers(previous.Id);
         Watches.SetPolicyWatch(null);
         previous?.Retire();
+    }
+
+    static void ClearCombatPreparation()
+    {
+        lock (combatPreparationGate)
+        {
+            var previous = combatPreparation; combatPreparation = null;
+            if (previous == null) return;
+            previous.Lifetime.Cancel();
+            _ = previous.Work.ContinueWith(_ => previous.Lifetime.Dispose(), TaskScheduler.Default);
+        }
+    }
+
+    internal static JsonObject PrepareCombatReaction(JsonObject args, CancellationToken root)
+    {
+        root.ThrowIfCancellationRequested();
+        string key = ActionTasks.NodeContext.Value + ":" + args["combat_candidate"]?["context"]
+            + ":" + args["combat_candidate"]?["plan_id"];
+        lock (combatPreparationGate)
+        {
+            var previous = combatPreparation;
+            if (previous != null)
+            {
+                if (!previous.Work.IsCompleted)
+                {
+                    if (previous.Key != key) previous.Lifetime.Cancel();
+                    return new JsonObject { ["status"] = "combat_preparing" };
+                }
+                combatPreparation = null;
+                try
+                {
+                    if (previous.Key == key)
+                    {
+                        var result = previous.Work.GetAwaiter().GetResult();
+                        DiagLog.Write($"[combat_preparation] status=ready key={key} error={result["error"]}");
+                        return result;
+                    }
+                }
+                catch (OperationCanceledException)
+                { return new JsonObject { ["error"] = "combat_forecast_replaced" }; }
+                finally { previous.Lifetime.Dispose(); }
+            }
+            var lifetime = CancellationTokenSource.CreateLinkedTokenSource(root, AgentScript.ReactionCancellation.Value);
+            var work = CombatForecast.Refresh(args.DeepClone().AsObject(), () => CombatAssessment(25), lifetime.Token);
+            combatPreparation = new CombatPreparation(key, lifetime, work);
+            DiagLog.Write($"[combat_preparation] status=pending key={key}");
+            _ = work.ContinueWith(_ => Interlocked.Increment(ref combatPreparationVersion),
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            return new JsonObject { ["status"] = "combat_preparing" };
+        }
     }
 
     static async Task RunTaskPolicy(TaskPolicyInstance policy)
@@ -624,6 +679,7 @@ public static partial class AgentTools
     public static void NewTask() { ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
+        ClearCombatPreparation();
         AgentScript.ResetIntents();
         AgentNavigationIntent.Reset();
         DecisionChannels.Reset();
@@ -1196,7 +1252,10 @@ public static partial class AgentTools
         if (name == "act" && args["combat_candidate"] != null)
         {
             var requested = args;
-            args = await CombatForecast.Refresh(args, () => CombatAssessment(25), token);
+            args = reactions?.Handling == true && reactions.Kind == "tick"
+                ? PrepareCombatReaction(args, ReferenceEquals(reactions, taskPolicy?.Reactions) ? taskPolicy.Lifetime.Token : root)
+                : await CombatForecast.Refresh(args, () => CombatAssessment(25), token);
+            if (Text(args, "status") == "combat_preparing") return args.ToJsonString();
             if (Text(args, "error") == "combat_candidate_no_handoff_prefix"
                 && reactions?.Handling == true && reactions.BeforeAction != null)
             {
@@ -1322,7 +1381,8 @@ public static partial class AgentTools
             {
                 var notices = await NativeAgent.OnMain(() => Watches.TakeForScript(kinds), token);
                 JsonObject notice = notices.FirstOrDefault()?.AsObject();
-                if (notice == null && kinds.Contains("tick") && reactions.TickDue(DecisionChannels.CompletionVersion + CombatForecast.CompletionVersion)) notice = new JsonObject { ["kind"] = "tick" };
+                if (notice == null && kinds.Contains("tick") && reactions.TickDue(DecisionChannels.CompletionVersion
+                    + CombatForecast.CompletionVersion + Interlocked.Read(ref combatPreparationVersion))) notice = new JsonObject { ["kind"] = "tick" };
                 if (notice != null)
                 {
                     notice["execution"] = context?.DeepClone();

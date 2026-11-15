@@ -375,9 +375,11 @@ public sealed class ScriptLibrary
               if(choice!=='continue'&&(!plan||memo.last_forecast===f.id)) return {...memo,status:'awaiting_current_maneuver'};
               let result={outcome:'continue'};
               if(choice!=='continue'){
+                const previousForecast=memo.last_forecast;
                 memo.last_forecast=f.id;
                 result=tool('act',{steps:[{keys:['right'],until:{frames:1}}],
                   combat_candidate:{context:input.context,forecast_id:f.id,plan_id:plan.plan_id}});
+                if(result.status==='combat_preparing'){memo.last_forecast=previousForecast;return {...memo,status:result.status};}
               }
               print({decision:'maneuver',request:intent.request,choice,movement:plan?.movement,weapon_type:plan?.weapon_type,
                 decision_forecast_id:intent.decision_forecast_id,current_forecast_id:f.id,execution_forecast_id:result.execution_forecast_id,
@@ -576,6 +578,7 @@ public sealed class ScriptLibrary
                 ?plans.find(p=>p.id===prior.choice&&p.movement!=='follow_route'&&p.movement_available):null;
               if(!continued)return {status:r.status,intent:null};
               const applied=move(continued,f.id);
+              if(applied.status==='combat_preparing')return {status:applied.status,request_id:input.last_request,intent:prior,applied:false};
               print({decision:'combat',request:input.last_request,choice:continued.id,retained:true,status:r.status,
                 action:applied.error??applied.outcome,execution_forecast_id:applied.execution_forecast_id});
               return {status:r.status,request_id:input.last_request,choice:continued.id,retained:true,
@@ -617,6 +620,7 @@ public sealed class ScriptLibrary
             else if(!plan?.movement_available) applied={error:'landing_unresolved'};
             else if(plan.movement==='follow_route') applied=plan.weapon_type>0?tool('set_combat',{weapon_type:plan.weapon_type}):{};
             else applied=move(plan,r.input_state.forecast_id);
+            if(applied.status==='combat_preparing')return {status:applied.status,request_id:r.request_id,intent,applied:false,agent_review:agentReview};
             print({...record,choice:r.result.answers.response.choice,action:applied.error??applied.outcome??'follow_route',
               reason:applied.reason,decision_forecast_id:applied.decision_forecast_id,execution_forecast_id:applied.execution_forecast_id});
             return {request_id:r.request_id,applied:!applied.error,choice,cover:cover?.id,outcome:applied.outcome,
