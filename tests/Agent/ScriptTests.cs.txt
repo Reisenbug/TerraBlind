@@ -34,6 +34,7 @@ static class ScriptTests
         await IntentPolicyIntegration();
         await IntentPolicyIntegration(overridePolicy: true);
         await IdlePolicyHandoff();
+        await CraftBatchContracts();
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();
@@ -76,7 +77,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=50 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=51 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -164,11 +165,11 @@ static class ScriptTests
 
     static async Task SurvivalCombatPolicy()
     {
-        foreach (string scenario in new[] { "navigation", "idle", "fight", "boss", "unchaseable_enemy", "projectile_only", "fall_only", "quiet", "equipment_review", "ranged_review", "progress_review", "progress_stale" })
+        foreach (string scenario in new[] { "navigation", "idle", "idle_after_place", "fight", "boss", "unchaseable_enemy", "projectile_only", "fall_only", "quiet", "equipment_review", "ranged_review", "progress_review", "progress_stale" })
         {
-            bool boss = scenario == "boss", idle = scenario is "idle" or "fight";
+            bool boss = scenario == "boss", idle = scenario is "idle" or "idle_after_place" or "fight";
             bool progress = scenario.StartsWith("progress_");
-            int decisions = 0, updates = 0, reviews = 0;
+            int decisions = 0, updates = 0, reviews = 0, phase = 0;
             var combat = JsonNode.Parse("""
                 {"tick":100,"boss_present":false,"player":{"hp":100,"max_hp":100,"pos":{"x":160,"y":320}},"projectiles":[],
                  "targets":[{"who":7,"type":42,"attackable":true,"contact_damage":20,"distance_tiles":6,"weapons":[]}],
@@ -189,9 +190,11 @@ static class ScriptTests
                     {
                         for (int i = 0; i < 3; i++)
                         {
+                            phase = i;
+                            if (scenario == "idle_after_place" && i == 1) combat["player"]["pos"]["x"] = 320;
                             var reaction = await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject {
                             ["goal"] = progress ? new JsonObject { ["status"] = "active", ["objective"] = "finish within 25 minutes", ["elapsed_seconds"] = 900 } : null,
-                            ["kind"] = "tick", ["execution"] = new JsonObject { ["tool"] = scenario == "fight" ? "fight" : idle ? "idle" : "nav_to",
+                            ["kind"] = "tick", ["execution"] = new JsonObject { ["tool"] = scenario == "idle_after_place" && i == 1 ? "place_at" : scenario == "fight" ? "fight" : idle ? "idle" : "nav_to",
                                 ["args"] = new JsonObject { ["x"] = 50, ["y"] = 20 } } }, token);
                             if (reaction?["agent_review"] != null) reviews++;
                         }
@@ -200,7 +203,8 @@ static class ScriptTests
                     if (name == "combat_assess")
                     {
                         if (args["forecast"]?.GetValue<bool>() == true)
-                            Check(args["destination"]?["x"]?.GetValue<int>() == (idle ? 10 : 50), "combat policy lost the current navigation or idle anchor");
+                            Check(args["destination"]?["x"]?.GetValue<int>() == (scenario == "idle_after_place" && phase == 2 ? 20 : idle ? 10 : 50),
+                                "combat policy lost the current navigation or retained an idle anchor across construction");
                         return combat.ToJsonString();
                     }
                     if (name == "get_state") return progress ? """
@@ -242,7 +246,7 @@ static class ScriptTests
                 }, _ => Task.CompletedTask, default,
                 programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-empty-skills-" + Guid.NewGuid())).Callable());
             bool inactive = boss || scenario == "quiet";
-            Check(result["ok"].GetValue<bool>() && decisions == (progress ? 3 : inactive ? 0 : 3) && updates == (inactive || progress ? 0 : 1)
+            Check(result["ok"].GetValue<bool>() && decisions == (progress ? 3 : inactive ? 0 : scenario == "idle_after_place" ? 2 : 3) && updates == (inactive || progress ? 0 : 1)
                 && reviews == (scenario is "equipment_review" or "ranged_review" or "progress_review" ? 1 : 0),
                 "default combat policy blocked pending navigation, repeated a response or touched boss movement: " + result);
         }
@@ -1305,6 +1309,66 @@ static class ScriptTests
             AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); agent.Unload();
         }
         Console.WriteLine("PASS: death observations remain readable after repeated failures and respawn; failed actions stay guarded");
+    }
+
+    static async Task CraftBatchContracts()
+    {
+        foreach (string scenario in new[] { "ready", "approach", "unavailable", "failed_nav", "false_success", "partial", "already" })
+        {
+            var stock = new Dictionary<string, int> { ["39"] = scenario == "already" ? 1 : 0, ["40"] = scenario == "already" ? 10 : 0 };
+            int moves = 0, crafts = 0, bows = 0;
+            bool atStation = scenario is "ready" or "false_success" or "partial" or "already", repaired = false;
+            Task<string> Execute(string name, JsonObject args, CancellationToken _)
+            {
+                JsonObject result;
+                if (name == "gather_observe") result = new JsonObject { ["counts"] = new JsonObject(stock.Select(v =>
+                    new KeyValuePair<string, JsonNode>(v.Key, JsonValue.Create(v.Value)))) };
+                else if (name == "game_catalog") result = new JsonObject { ["matches"] = new JsonArray(new JsonObject {
+                    ["type"] = int.Parse(args["name"].ToString()), ["internal"] = args["name"].ToString() == "39" ? "WoodenBow" : "WoodenArrow" }) };
+                else if (name == "recipe")
+                {
+                    Check(args["name"]?.ToString() is "WoodenBow" or "WoodenArrow", "recipe lookup received a numeric item ID instead of its resolved name");
+                    result = new JsonObject { ["recipes"] = new JsonArray(new JsonObject {
+                    ["can_craft_now"] = atStation && scenario != "unavailable", ["stations"] = new JsonArray("observed station") }) };
+                }
+                else if (name == "nav_to")
+                {
+                    Check(args["x"]?.GetValue<int>() == 10 && args["y"]?.GetValue<int>() == 20
+                        && args["mode"]?.ToString() == "stand", "craft batch guessed a new station or used interaction reach");
+                    moves++; atStation = true; result = new JsonObject { ["done"] = scenario != "failed_nav" };
+                }
+                else
+                {
+                    Check(name == "craft", "unexpected craft batch operation: " + name);
+                    crafts++;
+                    string type = args["name"].ToString() == "WoodenBow" ? "39" : "40";
+                    if (type == "39") bows++;
+                    int amount = args["amount"].GetValue<int>();
+                    bool partial = scenario == "partial" && !repaired && type == "40";
+                    if (scenario != "false_success") stock[type] += partial ? 3 : amount;
+                    result = new JsonObject { ["ok"] = !partial, ["crafted"] = partial ? 3 : amount };
+                }
+                return Task.FromResult(result.ToJsonString());
+            }
+            const string code = "return skill('craft_batch',0,{station:{x:10,y:20},items:[{item_type:39,count:1},{item_type:40,count:10}]});";
+            Task<JsonObject> Run() => AgentScript.Run(code, 5, (_, _) => { }, Execute, _ => Task.CompletedTask, default,
+                programs: new JsonArray(ScriptLibrary.Example("craft_batch")));
+            var report = await Run(); var value = report["value"];
+            bool success = scenario is "ready" or "approach" or "already";
+            Check(report["ok"]?.GetValue<bool>() == true && (value?["status"]?.ToString() == "completed") == success,
+                "craft batch hid unavailability or trusted reported crafting without inventory changes: " + scenario + " " + report);
+            Check(moves == (scenario is "approach" or "unavailable" or "failed_nav" ? 1 : 0)
+                && crafts == (scenario is "unavailable" or "failed_nav" or "already" ? 0 : scenario == "false_success" ? 1 : 2),
+                "craft batch waited for a model, retried a failed station or repeated owned items: " + scenario);
+            if (scenario == "partial")
+            {
+                repaired = true;
+                var resumed = await Run();
+                Check(resumed["value"]?["status"]?.ToString() == "completed" && stock["40"] == 10 && bows == 1,
+                    "partial batch did not use actual remaining stock on continuation");
+            }
+        }
+        Console.WriteLine("PASS: crafting batch refreshes station readiness, verifies inventory targets and resumes partial batches without repeating products");
     }
 
     static async Task IdlePolicyHandoff()
@@ -2402,6 +2466,7 @@ static class ScriptTests
         await IntentPolicyIntegration();
         await IntentPolicyIntegration(overridePolicy: true);
         await IdlePolicyHandoff();
+        await CraftBatchContracts();
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();

@@ -994,6 +994,7 @@ public sealed partial class BehaviorTrial : ModSystem
         }
         if (Environment.GetEnvironmentVariable("TB_TASK_POLICY_PROBE") == "1") { await TaskPolicyTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_COVER_PROBE") == "1") { await CoverTrial(); return; }
+        if (Environment.GetEnvironmentVariable("TB_CRAFT_BATCH_PROBE") == "1") { await CraftBatchTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_FALL_CATCH_PROBE") == "1") { await FallCatchTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_FALL_PLACEMENT_PROBE") == "1") { await FallPlacementTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_CONSUMABLE_HANDOFF_PROBE") == "1") { await ConsumableHandoffTrial(); return; }
@@ -3668,6 +3669,63 @@ public sealed partial class BehaviorTrial : ModSystem
             || after["inventory_slots"].AsArray().Where(i => i["type"]?.GetValue<int>() == ItemID.LifeCrystal).Sum(i => i["stack"].GetValue<int>()) != 1)
             throw new Exception("native atomic policy failed: " + report);
         Console.WriteLine("ATOMIC_POLICY_NATIVE_PASS " + report.ToJsonString());
+    }
+
+    async Task CraftBatchTrial()
+    {
+        int x = Main.spawnTileX, floor = Main.spawnTileY + 8;
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); AgentTools.NewTask(); Manual.On = false;
+            Concessions.Enabled = false; AgentPermissions.Reset(); Config.I.AgentEnabled = true;
+            Combat.Enabled = Dodge.Enabled = false;
+            foreach (var npc in Main.npc) npc.active = false;
+            foreach (var shot in Main.projectile) shot.active = false;
+            var p = Main.LocalPlayer;
+            foreach (var item in p.inventory) item.TurnToAir();
+            foreach (var item in p.armor) item.TurnToAir();
+            for (int tx = x - 16; tx <= x + 16; tx++)
+            for (int ty = floor - 10; ty <= floor + 2; ty++)
+            {
+                Main.tile[tx, ty].ClearEverything();
+                if (ty >= floor) Main.tile[tx, ty].ResetToType(TileID.Stone);
+            }
+            p.inventory[3].SetDefaults(ItemID.Wood); p.inventory[3].stack = 80;
+            p.inventory[4].SetDefaults(ItemID.StoneBlock); p.inventory[4].stack = 10;
+            p.inventory[5].SetDefaults(ItemID.WoodPlatform); p.inventory[5].stack = 150;
+            p.position = new Vector2(x * 16, floor * 16 - p.height); p.velocity = Vector2.Zero;
+            p.statLife = p.statLifeMax = p.statLifeMax2 = 100; p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            p.itemAnimation = p.itemTime = 0; p.selectedItem = 0;
+            return true;
+        });
+        await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
+            ["code"] = "skill('safety_reactions',0);" });
+        var input = new JsonObject { ["station"] = new JsonObject { ["x"] = x + 3, ["y"] = floor - 1 },
+            ["items"] = new JsonArray(new JsonObject { ["item_type"] = ItemID.WoodenBow, ["count"] = 1 },
+                new JsonObject { ["item_type"] = ItemID.WoodenArrow, ["count"] = 50 }) };
+        string script = "const input=" + input.ToJsonString() + ";\n" + """
+            const bench=tool('craft',{name:'WorkBench'});
+            if(bench.ok!==true)throw new Error(JSON.stringify(bench));
+            const placed=tool('place_at',{item:'36',...input.station,local:true});
+            if(placed.ok!==true)throw new Error(JSON.stringify(placed));
+            tool('act',{steps:[{keys:['left'],until:{frames:48}}]});
+            const away=tool('recipe',{name:'WoodenBow'}).recipes.some(r=>r.can_craft_now);
+            if(away)throw new Error('probe must begin outside crafting range');
+            const first=skill('craft_batch',0,input),second=skill('craft_batch',0,input);
+            return {first,second,counts:tool('gather_observe',{targets:input.items}).counts};
+            """;
+        var clock = Stopwatch.StartNew();
+        var result = await Call("run_script", new JsonObject { ["workflow"] = "native-craft-batch", ["code"] = script });
+        File.WriteAllText(Path.Combine(Main.SavePath, "craft-batch-native.json"), new JsonObject {
+            ["elapsed_ms"] = clock.ElapsedMilliseconds, ["input"] = input, ["result"] = result,
+            ["fixture_terrain"] = true, ["granted_wood"] = 80, ["granted_stone"] = 10, ["granted_platforms"] = 150,
+            ["slow_model_calls"] = 0, ["scope"] = "Native station approach, crafting, inventory verification and repeated invocation; combat survival remains separate." }.ToJsonString());
+        if (result["ok"]?.GetValue<bool>() != true || result["value"]?["first"]?["status"]?.ToString() != "completed"
+            || result["value"]?["second"]?["completed"]?.AsArray().Any(i => i["already_owned"]?.GetValue<bool>() != true) != false
+            || result["value"]?["counts"]?[ItemID.WoodenBow.ToString()]?.GetValue<int>() != 1
+            || result["value"]?["counts"]?[ItemID.WoodenArrow.ToString()]?.GetValue<int>() != 50)
+            throw new Exception("native crafting batch did not verify station approach and inventory targets: " + result);
+        Console.WriteLine($"CRAFT_BATCH_NATIVE_PASS elapsed_ms={clock.ElapsedMilliseconds} bow=1 arrows=50 repeated_crafts=0 model_calls=0");
     }
 
     async Task CoverTrial()

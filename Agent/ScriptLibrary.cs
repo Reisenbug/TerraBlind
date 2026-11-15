@@ -11,8 +11,8 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents" };
-    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch" };
+    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch" };
 
     static JsonObject Template(string name, string detail, string code) => new()
     {
@@ -23,6 +23,43 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "craft_batch") return Template(name,
+            "连续制作并核验库存。input.items为1..8项{item_type,count}，count是期望随身库存总数；可选station:{x,y}为Agent选定的实际制作站坐标。先检查原生可制作状态，需要时到站后刷新，接着连续制作；已有数量跳过，部分成果保留。站位、材料或制作结果受阻时返回needs_review和证据。仍执行整趟安全策略。",
+            """
+            if(!Array.isArray(input.items)||!input.items.length||input.items.length>8
+              ||input.items.some(i=>!Number.isInteger(i.item_type)||i.item_type<=0||!Number.isInteger(i.count)||i.count<=0))
+              throw new Error('craft_batch needs 1..8 items with positive integer item_type and inventory count');
+            if(input.station&&(!Number.isInteger(input.station.x)||!Number.isInteger(input.station.y)))
+              throw new Error('station needs observed integer tile coordinates');
+            const counts=()=>{
+              const observed=tool('gather_observe',{targets:input.items});
+              if(observed.error)throw new Error(JSON.stringify(observed));
+              return observed.counts;
+            };
+            const completed=[];
+            for(const item of input.items){
+              const before=counts()[item.item_type]??0;
+              if(before>=item.count){completed.push({item_type:item.item_type,actual:before,already_owned:true});continue;}
+              const catalog=tool('game_catalog',{kind:'item',name:String(item.item_type)});
+              const name=catalog.matches?.find(m=>m.type===item.item_type)?.internal;
+              if(!name)return {status:'needs_review',error:'item_name_unresolved',item,completed,evidence:catalog};
+              const query=()=>tool('recipe',{name});
+              let available=query();
+              if(available.error)return {status:'needs_review',error:available.error,item,completed,evidence:available};
+              if(!available.recipes?.some(r=>r.can_craft_now===true)&&input.station){
+                const arrival=tool('nav_to',{...input.station,mode:'stand'});
+                if(arrival.done!==true)return {status:'needs_review',error:'station_approach_failed',item,completed,evidence:arrival};
+                available=query();
+              }
+              if(!available.recipes?.some(r=>r.can_craft_now===true))
+                return {status:'needs_review',error:'recipe_not_available',item,completed,evidence:available};
+              const made=tool('craft',{name,amount:item.count-before});
+              const actual=counts()[item.item_type]??0;
+              if(actual<item.count)return {status:'needs_review',error:made.error??'craft_target_not_met',item,actual,completed,evidence:made};
+              completed.push({item_type:item.item_type,actual,gained:actual-before});
+            }
+            return {status:'completed',completed};
+            """);
         if (name == "resource_intents") return Template(name,
             "多目标采集的局部意图循环。input含已查证来源的targets（gather格式），可选destination、chests（已观察的x/y）、source_area、instruction和max_actions。后台Jev在赶路期间预选采集/拾取/开箱；临时处理后恢复原行动。每次采集以库存增长验证，目标数量按真实库存验收。返回blocked保留证据；来源耗尽需要Agent提供新目的地或策略。",
             """
@@ -148,7 +185,7 @@ public sealed class ScriptLibrary
               }
               let destination=event.execution?.tool==='nav_to'?event.execution.args:null;
               const idle=['idle','fight'].includes(event.execution?.tool);
-              if(destination) idleDestination=null;
+              if(!idle) idleDestination=null;
               if(!c.boss_present&&(destination||idle)&&(c.targets?.some(n=>n.contact_damage>0&&n.distance_tiles<12)
                   ||c.projectiles?.length||(c.fall_forecast?.damage??0)>0)){
                 if(idle) destination=idleDestination??={x:Math.floor(p.pos.x/16),y:Math.floor(p.pos.y/16)};
