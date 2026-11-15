@@ -9,6 +9,7 @@ namespace TerraBlind.JevariaCombat;
 public sealed class GameSensor : ICombatSensor
 {
     public const int WorldEdgeCells = 40;
+    public float MovementReserveScale { get; set; } = 1f;
     private readonly Dictionary<int, Queue<(ulong Tick, float Speed)>> _speedHistory = new();
 
     public bool Observe(Player player)
@@ -78,7 +79,7 @@ public sealed class GameSensor : ICombatSensor
 
         return CaptureScene(player, sequence, previous, previousDurationMs,
             Entity(boss.whoAmI, BossName(boss), boss.Center, boss.velocity, boss.width, boss.height, boss.damage),
-            bosses, motion, parts, false, 1f);
+            bosses, motion, parts, false, MovementReserveScale);
     }
 
     public CombatSnapshot CapturePlayer(Player player, Player target, ulong sequence, DodgeIntent previous, long durationMs)
@@ -138,7 +139,26 @@ public sealed class GameSensor : ICombatSensor
             hasHook, hasMount,
             shotSpeed, shotType, player.HeldItem.Name,
             GameMovement.AvailableActions(player, solid, world, hasHook, hasMount, reserveScale),
-            previous, previousDurationMs) { MountType = mountType, MovementReserveScale = reserveScale };
+            previous, previousDurationMs) { MountType = mountType, MovementReserveScale = reserveScale,
+                HoneyWet = player.honeyWet && !player.ignoreWater, HoneyBelowPixels = HoneyBelow(player) };
+    }
+
+    public static float? HoneyBelow(Player player)
+    {
+        if (player.ignoreWater) return null;
+        float? nearest = null;
+        int firstY = Math.Max(0, (int)(player.Bottom.Y / 16));
+        for (int x = Math.Max(0, player.Hitbox.Left / 16); x <= Math.Min(Main.maxTilesX - 1, (player.Hitbox.Right - 1) / 16); x++)
+        for (int y = firstY; y <= Math.Min(Main.maxTilesY - 1, firstY + 12); y++)
+        {
+            Tile tile = Main.tile[x, y];
+            if (tile.HasTile && !tile.IsActuated && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType]) break;
+            if (tile.LiquidType != LiquidID.Honey || tile.LiquidAmount == 0) continue;
+            float distance = Math.Max(0, (y + 1) * 16 - tile.LiquidAmount * 16f / 255 - player.Bottom.Y);
+            nearest = nearest.HasValue ? Math.Min(nearest.Value, distance) : distance;
+            break;
+        }
+        return nearest;
     }
 
     private static CombatEntity Entity(int id, string name, Vector2 center,

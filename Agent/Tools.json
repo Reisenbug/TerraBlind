@@ -1,21 +1,44 @@
 [
-  { "type":"function", "function": { "name":"watch", "description":"登记当前指令内的宿主事件观察；events可选nearby_chest/action_finished/low_health/player_died/inventory_full，空数组取消。nearby_chest半径默认25格最大60；health_below默认80。相同箱子/同次动作只唤醒一次，血量/死亡/满包每指令一次，每指令最多6个事件，重配不重置去重或预算。宿主会先暂停后台动作并带真实状态交回模型。新指令、停止、完成或离开世界清理。不能用它实时躲弹。", "parameters":{"type":"object","properties":{"events":{"type":"array","items":{"type":"string","enum":["nearby_chest","action_finished","low_health","player_died","inventory_full"]}},"radius":{"type":"integer","minimum":1,"maximum":60},"health_below":{"type":"integer","minimum":1,"maximum":500}},"required":["events"]} } },
-  { "type":"function", "function": { "name":"decision_point", "description":"脚本主动交回决策：立即结束本段并返回真实状态，后续语句不会执行；未完成step保留为uncertain。宿主先暂停仍在运行的动作，下一轮依据证据修改剩余代码，恢复同一handle。不用于空等或定时轮询。", "parameters":{"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"]} } },
+  {"type":"function","function":{"name":"open_item","description":"在背包slot(0..49)执行原版右键，打开草药袋、宝藏袋、匣子等可打开物品。inventory_review的can_open反映当前游戏与模组钩子的资格；物品用途、收获与钥匙条件需查证。expected精确匹配刚读到的type/prefix/stack。先暂停占用输入的动作。走原版ItemSlot右键及开袋、消耗钩子，钥匙与掉落遵循当前游戏；返回consumed和前后槽位，未消耗时outcome=not_consumed。打开后查真实背包和nearby_drops，再恢复原动作。","parameters":{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"maximum":49},"expected":{"type":"object","properties":{"type":{"type":"integer"},"prefix":{"type":"integer"},"stack":{"type":"integer"}},"required":["type","prefix","stack"]}},"required":["slot","expected"]}}},
+  {"type":"function","function":{"name":"hell_run","description":"复用既有地狱肉山流程。从当前地狱位置选施工路线，走到桥起点、建房、搭桥、等待NPC和夜晚、购买雷管、安排向导落入岩浆并用既有肉山战斗行为开打。先查现场、材料、NPC及资金；人物需落地且已到地狱，背包准备平台、木头和火把。消耗真实库存与资金，沿用当前辅助配置；返回原流程实际phase/start_error/wof_outcome/wof_reason。结束后核对hardmode、Boss与实际掉落确认结果。可在后台DAG脚本内执行，供Agent同时规划。","parameters":{"type":"object","properties":{}}}},
+  {"type":"function","function":{"name":"house_site","description":"复用既有建房选址器，检查人物附近能容纳原版住房施工的矩形。rooms为1或4，dir为施工方向；返回build_args可直接交给build_house。返回的矩形与施工参数已经换算方向，结合地形、危险和材料选择是否施工。这里只查位置，不移动或建造。","parameters":{"type":"object","properties":{"rooms":{"type":"integer","enum":[1,4],"default":1},"dir":{"type":"integer","enum":[-1,1],"default":1},"from_x":{"type":"integer","minimum":1},"from_y":{"type":"integer","minimum":1},"range":{"type":"integer","minimum":1,"maximum":300,"default":100}}}}},
+  {"type":"function","function":{"name":"build_house","description":"执行既有HouseBuilder建房行为：铺地板、屋顶、支柱，合成并摆放家具、墙和光源。rooms=1为单间，4为四间；x/y是施工起点底角，dir决定往右或左展开。先查house_site或核对现场，并准备木材、平台和火把。消耗真实库存，失败保留已经建成的部分；返回施工器实际outcome。成功后按现场墙、家具、光照与NPC入住验证用途。通过DAG脚本顺序执行，或在后台脚本内执行以便Agent同时规划。","parameters":{"type":"object","properties":{"rooms":{"type":"integer","enum":[1,4]},"dir":{"type":"integer","enum":[-1,1]},"x":{"type":"integer","minimum":1},"y":{"type":"integer","minimum":1}},"required":["rooms","dir","x","y"]}}},
+  {"type":"function","function":{"name":"terrain_map","description":"读取实时局部地形图片及世界格坐标。默认以人物为中心120x80格，原版地图配色加明暗前景/背景、坐标网格、人物P与可选标记。适合了解洞穴、水域、蜂巢、建筑位置及目标相对关系。x/y指定地图中心世界格；marks可用已有目标坐标加标记。直接调用本工具接收图片，导航保持运行。精确挖掘、放置、液体量与斜坡细节继续查原始方块。","parameters":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"width":{"type":"integer","minimum":20,"maximum":200,"default":120},"height":{"type":"integer","minimum":20,"maximum":160,"default":80},"marks":{"type":"array","maxItems":20,"items":{"type":"object","properties":{"label":{"type":"string","minLength":1,"maxLength":8},"x":{"type":"integer"},"y":{"type":"integer"}},"required":["label","x","y"]}}}}}},
+  {"type":"function","function":{"name":"action_queue","description":"在当前动作继续运行时，预提交下一段动作。after_handle是前置动作句柄；tool/args是已查证的下一动作，task_node是其所属未完成DAG节点。立即返回queued句柄；前置成功结束并释放输入后，宿主核验前置节点真实完成条件，自动启动下一段，无需再次调用模型。可用返回句柄继续串联动作。前置暂停则保留排队，失败或取消则后续blocked；action_control cancel可取消待执行句柄后重新提交。action_query/get_state可查看after_handle、status和handoff_ms。排队仅保存动作，不代表完成；后续依赖在启动时核验。","parameters":{"type":"object","properties":{"after_handle":{"type":"string"},"task_node":{"type":"string"},"tool":{"type":"string","enum":["gather","nav_to","mine_vein","chop_wood","collect_treasure"]},"args":{"type":"object"}},"required":["after_handle","task_node","tool","args"]}}},
+  {"type":"function","function":{"name":"inventory_trash","description":"把背包slot(0..49)整叠物品移入原版垃圾桶，不生成地面掉落；覆盖并删除旧垃圾桶物品，当前垃圾桶物品仍可在游戏界面取回。先用inventory_review查看trash，expected和expected_trash都必须精确匹配type/prefix/stack。拒绝收藏物品、过期状态或忙碌。先暂停原动作；根据任务、配方、弹药和玩家保留要求选择物品，完成后可恢复原handle。","parameters":{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"maximum":49},"expected":{"type":"object","properties":{"type":{"type":"integer"},"prefix":{"type":"integer"},"stack":{"type":"integer"}},"required":["type","prefix","stack"]},"expected_trash":{"type":"object","properties":{"type":{"type":"integer"},"prefix":{"type":"integer"},"stack":{"type":"integer"}},"required":["type","prefix","stack"]}},"required":["slot","expected","expected_trash"]}}},
+  {"type":"function","function":{"name":"inventory_review","description":"批量查看背包非空槽、空槽和身上功能装备：实际type/prefix/stack、收藏标记、防御、护甲部位、饰品、武器/工具/材料属性。基础属性不等于收益评分，特殊效果继续查item_info；根据当前任务、配方、弹药和玩家要求决定是否换装或丢弃。不会自动改动。","parameters":{"type":"object","properties":{}}}},
+  {"type":"function","function":{"name":"inventory_drop","description":"把自己背包slot(0..49)里的整叠物品按原版规则丢到地上，不销毁。expected须含刚查询的type/prefix/stack；拒绝过期、收藏物品、忙碌或鼠标持物。与其他动作互斥，先暂停原handle；完成后可恢复。返回before/after和实际世界掉落槽位；可能被重新拾取，不保证永久腾空。由Agent选择不要的物品，勿丢当前任务材料、弹药、装备和玩家要求保留的物品。","parameters":{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"maximum":49},"expected":{"type":"object","properties":{"type":{"type":"integer"},"prefix":{"type":"integer"},"stack":{"type":"integer"}},"required":["type","prefix","stack"]}},"required":["slot","expected"]}}},
+  {"type":"function","function":{"name":"npc_drop_sources","description":"按物品编号查询当前加载的NPC掉落规则，包括全局规则。返回候选npc_type、名称、报告概率、数量范围及条件。用来查证采集应指定哪些npc_types；条件未在现场求值，不证明当前能刷到、能掉落或已经取得。仅扫描正数NPC类型；不包含方块、开袋及未登记规则的特殊掉落。空结果不是物品无来源证明。limit限制返回规则条数，默认40，最多100；truncated为true时结果不完整。","parameters":{"type":"object","properties":{"item_type":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["item_type"]}}},
+  { "type":"function", "function": { "name":"game_api", "description":"读取指定游戏工具的完整说明和参数定义，只读、不执行动作。写脚本前查询本次需要但尚未确认的API；可以一次查询多个名字。", "parameters": { "type":"object", "properties": { "names": { "type":"array", "items": { "type":"string" }, "minItems":1 } }, "required":["names"] } } },
+  { "type":"function", "function": { "name":"npc_combat_observe", "description":"只读观察80格内指定普通敌怪的当前射界和附近站位候选。npc抄gather候选who，npc_type同时核对类型；槽位会复用，不能据此保证仍为同一实体。顶层clear_line表示当前直线射界，与terrain.direct_line.clear相同，不代表弹道必命中。默认站位数组在terrain.stance_probes，自选站位数组在顶层requested_stances。顶层target_pos及站位的x/y为像素中心，站位support_x/support_y为支撑方块坐标。可用stance_cells提交1..12个自己选的支撑格坐标，requested_stances逐点返回supported、body_fits、shot_line、支撑斜坡/半砖；超出人物60格或世界边界的点返回error，不替换成其他点。仅检查支撑列及身体空间，不做稳定落地推演。只验证支撑、身体空间和当前直线射界；不证明路径可达、无陷阱/液体或投射物必命中。选点前用opportunity_assess检查危险，移动后重新观察。用于受阻后的决策，不要连续轮询代替行动。", "parameters":{"type":"object","properties":{"npc":{"type":"integer"},"npc_type":{"type":"integer"},"stance_cells":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},"required":["x","y"]}}},"required":["npc","npc_type"]} } },
+  { "type":"function", "function": { "name":"opportunity_reconsider", "description":"任务需求或现场改变后，允许重新考虑一个此前已消费的机会事件。kind/key抄原事件，reason说明变化。下一次真实观察仍存在才重新发事件；不会重放旧证据或重置模型唤醒预算。已在待处理队列则返回already_pending。不应对未变化的失败目标循环调用。", "parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["nearby_tile","nearby_chest","nearby_drop"]},"key":{"type":"string"},"reason":{"type":"string","minLength":1,"maxLength":500}},"required":["kind","key","reason"]} } },
+{ "type":"function", "function": { "name":"opportunity_assess", "description":"快速检查附近60格内机会的真实地形和几何位置关系。x/y为事件或查询得到的目标格坐标，destination为原目的地。返回直线人物走廊内实心格；hazards报告走廊及目标周边4格的落沙/接触伤害/岩浆/机关；liquids单独报告水、蜂蜜、岩浆、微光的坐标及0..255水量，不把附近有水直接判为危险，也未评估溺水或液体对装备的影响。另返回直线绕行距离、是否在身后、距离原目标线段多远；附采样tick与耗时。超出60格返回error:target_out_of_observation_range、approach_direct_distance和observation_radius_tiles，sampled_cells为0、hazards和liquids为null，不能当作无危险；由调用者决定接近重查或跳过。不是导航规划：实心格数不是必挖格数，距离不是行走耗时，reachable为null不证明可达。依据这些事实由JS/Agent决定，不能见宝必拿；复杂绕路继续调用导航，出现新危险再观察。", "parameters":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"destination":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},"required":["x","y"]}},"required":["x","y"]} } },
+  { "type":"function", "function": { "name":"nearby_drops", "description":"读取半径内当前真实掉落。返回who槽位、item_type、name、stack、x/y世界格坐标、distance_tiles、速度、inventory_count及中心格液体种类/量(0水1岩浆2蜂蜜3微光，仅amount>0时有意义)。can_pickup由原版ItemSpace判断当前能否接收该掉落，包含叠加、弹药栏和可用虚空袋；库存数量仍单独核对。槽位会复用，行动前刷新并核对类型；未评估路径、陷阱或敌人风险，不能把可见当作安全可达。掉落消失不等于拾取，必须核对实际库存。", "parameters":{"type":"object","properties":{"radius":{"type":"integer","minimum":1,"maximum":60}}} } },
+  { "type":"function", "function": { "name":"script_events", "description":"run_script(event_delivery:script)内消费watch订阅的事件，可等待0..1000ms。有非被动事件时先暂停当前后台动作并等待清理，再返回events、paused_action句柄及action(暂停后的handle/status/observation等)。事件evidence是触发时历史快照，action.observation是暂停清理后的现场；不要用等待前的血量替代它。只有passive_events时返回事件但不暂停，paused_action/action为null；无事件返回空数组，原动作继续。action为null不证明动作仍运行，需要时action_query核对。决定插入行动时必须先用action_control暂停原handle。代码根据事件决定调用Jev、执行其他操作或用原handle恢复，必要时调用decision_point请求Agent审阅。事件不等于任务完成。", "parameters":{"type":"object","properties":{"wait_ms":{"type":"integer","minimum":0,"maximum":1000}}} } },
+  { "type":"function", "function": { "name":"jev_judge", "description":"在JS内调用Jev作快速判断。state给现场事实，questions为1..8个命名问题，每个含type(choice/noul)、instructions及criteria。choice的criteria是2..64个命名候选及描述；noul返回命题成立概率。同步模式返回answers和elapsed_ms。后台模式给channel与context，立即返回status(pending/ready/failed)、in_flight；ready/failed附request_id、input_state、request_age_ms及result。各通道独立运行，每通道只保留一个请求；context或问题改变时取消旧请求。context标识目标/战术场景，state包含持续更新的位置和地形。interval_ms默认500，max_age_ms默认2000，均100..30000；年龄从采样开始计，旧结果不会因刷新请求变新。后续tick继续调用取结果，按request_id避免重复实施，结合input_state与当前现场确认适用。整项任务最多8通道，新任务/停止/清除策略取消请求。脚本决定具体行为，模型失败保留error。已启动动作在判断期间继续。使用游戏TypeSafe Key。", "parameters":{"type":"object","properties":{"state":{"type":"object"},"questions":{"type":"object"},"channel":{"type":"string","maxLength":80},"context":{"type":"string","maxLength":512},"interval_ms":{"type":"integer","minimum":100,"maximum":30000},"max_age_ms":{"type":"integer","minimum":100,"maximum":30000}},"required":["state","questions"]} } },
+  {"type":"function","function":{"name":"script_program","description":"保存可复用JS技能。list列出名称、版本和当前版runtime统计；get读取源码及最近6版、每版4条真实执行记录。统计包含调用次数、耗时、返回审阅和工具失败，returned只表示函数返回，任务效果另按游戏状态验收。相同源码返回unchanged:true，保持原版本和执行记录。save保存整份代码；patch用old_text精确匹配唯一片段并替换为new_text(可为空)。save/patch均须expected_revision；新建save用0。只保存代码，不执行；修改在下一段生效。通过skill(name,revision,input,key)或run_script(program,expected_revision,workflow)运行，沿用同名workflow的已完成步骤，修改后核对uncertain步骤。源码和runtime跨会话保存，工作流进度只保留本世界。","parameters":{"type":"object","properties":{"operation":{"type":"string","enum":["list","get","save","patch"]},"name":{"type":"string"},"code":{"type":"string","minLength":1,"maxLength":16000},"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"},"expected_revision":{"type":"integer","minimum":0}},"required":["operation"]}}},
+  { "type":"function", "function": { "name":"control", "description":"控制权：status观察覆盖和执行者；claim暂停当前任务并接管movement/item_use，返回id，后续动作须携带control_claim:id；deny禁止指定行为，可附region限定世界方块矩形，仅支持navigation/mining/placement；release释放指定id，暂停动作按实际需要resume。scope=action绑定真实未结束action句柄，动作完成、失败或取消并清理输入后自动撤销，暂停期间保留；task持续到下一指令，persistent持续到明确释放或离开世界。临时压制攻击可deny behaviors:[attack]，临时保持站位可deny behaviors:[dodge]；思考期间的默认防身可deny behaviors:[survival]。依现场选择行为及作用域，release可提前释放对应id。ready表示完成交接，任务结果仍需验收。", "parameters":{"type":"object","properties":{"operation":{"type":"string","enum":["status","claim","deny","release"]},"channels":{"type":"array","items":{"type":"string","enum":["movement","item_use"]}},"behaviors":{"type":"array","items":{"type":"string","enum":["navigation","attack","dodge","survival","mining","placement","workflow","direct"]}},"region":{"type":"object","properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":1},"height":{"type":"integer","minimum":1}},"required":["x","y","width","height"]},"scope":{"type":"string","enum":["action","task","persistent"]},"action":{"type":"string"},"reason":{"type":"string"},"id":{"type":"string"}},"required":["operation"]} } },
+  { "type":"function", "function": { "name":"inspect_terrain", "description":"读取人物周围真实方块网格、人物占用的格范围及紧邻方块的精确坐标/type/实心/落沙/窒息/斜坡属性。shaped_tiles列整个观察范围内斜砖/半砖的坐标、type、原始slope值和half_block；网格#不保证是完整平顶，放家具前必须检查形状。默认半径6格，最大12。卡住、窒息、判断挖哪格或哪里可通行时调用；行列下标必须加origin才能得到世界格坐标。只观察，不挖掘，不执行寻路，也不预报落沙。", "parameters":{"type":"object","properties":{"radius":{"type":"integer","minimum":2,"maximum":12}}} } },
+  {"type":"function","function":{"name":"task_plan_patch","description":"安全纠正已有计划未完成条件中的物品/装备/存活NPC编号，不重建计划或丢弃进度。先查询真实编号，再抄task_plan.revision为expected_revision，changes每项给step、condition下标、expected_type旧值、type新值，reason写查证原因。多处相同错误应一批修正。仅允许item/equipped/npc_alive的type，数量与kind不变；完成步骤和npc_kills基线不可改。全部验证通过才原子应用，记录修正历史。修正不是游戏进展或完成，随后必须继续实际执行和task_step verify。 DAG还支持nodes数组修改未完成节点script/depends_on，保留workflow、完成进度和证据；与changes二选一，必填expected_revision和reason。导航中可新增或修改其他未执行节点，当前导航保持运行。执行中节点script可直接更新：当前片段继续使用已捕获的源码，下次续接读取新源码，保持原动作运行；修改该节点depends_on须先暂停。修改已排队节点须先取消待执行句柄，修改后重新排队；修改脚本不会清除已完成step缓存，变更尚未完成行为时保留其稳定step id，uncertain先核对。 用add_nodes新增机会或恢复节点，字段与DAG task_plan步骤一致。可与nodes同批调整依赖，整体校验后原子应用；共享既有前置，不重建、不删除原节点，已完成节点不改变。 chests_looted条件无需type，count为节点建立后新搜刮的不同箱子数；宿主核对箱内物品减少且对应物品入包，仅单人。空箱、仅到达、重复搜同一箱不计数；无需事先猜箱内物品。","parameters":{"type":"object","properties":{"expected_revision":{"type":"integer"},"reason":{"type":"string"},"changes":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object","properties":{"step":{"type":"string"},"condition":{"type":"integer","minimum":0},"expected_type":{"type":"integer","minimum":1},"type":{"type":"integer","minimum":1}},"required":["step","condition","expected_type","type"]}},"nodes":{"type":"array","minItems":1,"items":{"type":"object","properties":{"id":{"type":"string"},"script":{"type":"string","minLength":1,"maxLength":16000},"depends_on":{"type":"array","items":{"type":"string"}}},"required":["id"]}},"add_nodes":{"type":"array","minItems":1,"maxItems":20,"items":{"type":"object","properties":{"id":{"type":"string"},"description":{"type":"string"},"conditions":{"type":"array","minItems":1,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["permanent_health","item","equipped","npc_kills","npc_alive","position","chests_looted"]},"type":{"type":"integer","minimum":1},"count":{"type":"integer","minimum":1},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"radius":{"type":"integer","minimum":1,"maximum":60,"default":2}},"required":["kind","count"]}},"depends_on":{"type":"array","items":{"type":"string"}},"script":{"type":"string","minLength":1,"maxLength":16000}},"required":["id","description","conditions"]}}},"required":["expected_revision","reason"]}}},
+  {"type":"function","function":{"name":"watch","description":"定制当前指令的宿主观察。events订阅事件，空数组取消可选观察；长动作仍自动观察安全、目标收获和动作完成。nearby_tile按tile_types扫描方块，每250ms观察半径内格子，同类型同坐标去重；多格物体可能有多个事件，存在不等于可达、安全或已收获。passive_events仅记录，不暂停或额外唤醒模型；JS用script_events读取，也会随已在进行的模型轮次提供机会证据。background_events选择保持原动作运行、同时唤醒模型评估的类型，须在events订阅；后台机会按批评估。未显式配置watch时，附近箱子默认后台评估。普通未确认植物和材料可先记录，已确认值得模型即时判断的机会可后台评估。其余可中断事件先暂停并保留原句柄再交回模型，机会中断最多6次，重配不重置额度。low_health始终仅通知，默认阈值为当前最大生命30%，health_below可覆盖为绝对血量；死亡、窒息保持安全响应。target_acquired报告运行中gather的实际库存增量，部分收获可仅记录或后台评估，所得与目标数量仍按实际库存核对。nearby_drop/nearby_npc_killed也可订阅。boss_appeared默认观察200格内Boss，每次相遇通知一次，安全与Boss事件不受机会额度限制。event_delivery=script将机会交给JS，不消耗模型唤醒额度。结束后保留证据，新指令或离开世界清理。","parameters":{"type":"object","properties":{"events":{"type":"array","items":{"type":"string","enum":["nearby_chest","action_finished","target_acquired","low_health","suffocating","player_died","boss_appeared","inventory_full","nearby_tile","nearby_drop","nearby_npc_killed"]}},"radius":{"type":"integer","minimum":1,"maximum":60},"health_below":{"type":"integer","minimum":1,"maximum":500},"tile_types":{"type":"array","maxItems":64,"items":{"type":"integer","minimum":0,"maximum":65535}},"passive_events":{"type":"array","items":{"type":"string","enum":["nearby_chest","nearby_tile","nearby_drop","target_acquired","low_health"]}},"background_events":{"type":"array","items":{"type":"string","enum":["nearby_chest","nearby_tile","nearby_drop","target_acquired"]},"description":"行进继续，同时请求模型评估的事件类型；须同时在events订阅。与passive_events可重叠，background_events决定是否额外唤醒。"}},"required":["events"]}}},
+  { "type":"function", "function": { "name":"decision_point", "description":"脚本主动交回决策：立即结束本段，后续语句不会执行；未完成step保留为uncertain。默认暂停当前动作。可显式传continue_action为当前正在运行的动作句柄，使该动作在模型审阅时继续（例如有时限的防身）；不允许指定其他句柄，不免除权限与后续危险事件。下一轮先读取真实状态，切换动作前暂停或取消旧动作并等待释放输入。evidence可附关键观测、tick、原句柄及尝试结果，与整个工具参数共用32000字符上限，作为reported_evidence交给模型；这是脚本报告，不是宿主验收。不要丢弃刚查到的结果再要求重复观察。不用于空等或定时轮询。", "parameters":{"type":"object","properties":{"reason":{"type":"string"},"evidence":{"type":"object","additionalProperties":true},"continue_action":{"type":"string"}},"required":["reason"]} } },
   { "type":"function", "function": { "name":"equipment_list", "description":"读取原版功能装备槽0..9：0头、1身、2腿、3..9饰品。返回slot/kind/unlocked及type/prefix/stack/name；锁定槽不能穿戴。也见get_state.equipment_slots。暂不支持时装、染料、杂项及模组扩展槽。", "parameters":{"type":"object","properties":{}} } },
   { "type":"function", "function": { "name":"equip_item", "description":"交换随身inventory_slot(0..49)与功能equipment_slot(0..9)，实现穿戴、替换或脱下（背包目标槽为空）。expected_inventory和expected_equipment必须含刚查询的type/prefix/stack。使用游戏原有槽位、饰品兼容与模组穿戴检查，不直接改战斗属性；实际效果下一玩家帧刷新。鼠标持物、角色忙或数据过期会拒绝，不自动选替代槽。返回实际前后物品并同步装备。", "parameters":{"type":"object","properties":{"inventory_slot":{"type":"integer"},"equipment_slot":{"type":"integer"},"expected_inventory":{"type":"object"},"expected_equipment":{"type":"object"}},"required":["inventory_slot","equipment_slot","expected_inventory","expected_equipment"]} } },
   { "type":"function", "function": { "name":"npc_dialogue_status", "description":"只读当前NPC对话：npc/npc_type/text/buttons_ready/buttons（button与text）/shop_open。按钮来自当前游戏UI及模组钩子，不凭NPC类型猜。", "parameters":{"type":"object","properties":{}} } },
   { "type":"function", "function": { "name":"npc_chat", "description":"NPC对话：action=open给npc索引及npc_type，在原版交互距离内打开对话并读取实际按钮；不会替你导航。choose给相同npc/npc_type及刚读到的button(1或2)、expected_text，走游戏原有点击与模组钩子。按钮隐藏或变化会拒绝，不绕过白天/夜晚等原版条件。close关闭对话。点击仅证明已派发按钮，召唤/交易等效果必须另行查状态验证。", "parameters":{"type":"object","properties":{"action":{"type":"string","enum":["open","choose","close"]},"npc":{"type":"integer"},"npc_type":{"type":"integer"},"button":{"type":"integer"},"expected_text":{"type":"string"}},"required":["action"]} } },
-  { "type":"function", "function": { "name":"boss_status", "description":"只读查询既有Boss控制器：attack_enabled/movement_enabled是开关，attack_permitted/movement_permitted是许可；manual_control与pvp_active表示其他控制模式。active_bosses列实际活跃Boss，位置为像素，attack_state/movement_state为最近状态。该控制器用Jev实时走位并自动攻击，Boss出现后自动识别；不是普通fight或PvP接口。需要TypeSafe Key；config_key_present只检查模组配置，其他密钥来源未检查，false不能断言完全没有Key。未开启可在战前set_combat boss_control:true；开启不代表召唤成功或必胜。", "parameters":{"type":"object","properties":{}} } },
-  { "type":"function", "function": { "name":"action_start", "description":"启动可查询、暂停、取消、恢复的后台游戏动作，立即返回handle/status。tool仅支持gather/nav_to/fight；args使用对应游戏API参数。gather按目标总库存恢复，不重置已有收获；nav_to/fight恢复时重新读取现场，不恢复旧按键序列。一次只有一个任务持有输入，其他操作先暂停。句柄保留到离开世界，最多32个。动作绑定当前玩家指令，stop/新指令/离开世界会取消；脚本正常结束不会取消。", "parameters":{"type":"object","properties":{"tool":{"type":"string","enum":["gather","nav_to","fight"]},"args":{"type":"object"}},"required":["tool","args"]} } },
+  { "type":"function", "function": { "name":"boss_status", "description":"只读查询既有Boss控制器：attack_enabled/movement_enabled是开关，attack_permitted/movement_permitted是许可；manual_control与pvp_active表示其他控制模式。active_bosses列实际活跃Boss，位置为像素，attack_state/movement_state为最近状态。movement_snapshot按当前位置、装备、地形和movement_reserve_scale即时计算可选输入意图，source=live_preview；在场Boss为空时该预览为空。velocity_pixels_per_tick是采样速度；extra_jump_available、wing_time_available是当帧剩余机动资源，hook_equipped、vertical_mount_equipped表示对应装备。Up等方向表示输入意图，实际位移结合速度、机动资源和地形判断。方向选项随现场变化；movement_reserve_scale只调碰撞余量。该控制器用Jev实时走位并自动攻击，Boss出现后自动识别。需要TypeSafe Key；config_key_present只检查模组配置，其他密钥来源未检查。未开启可在战前set_combat boss_control:true。", "parameters":{"type":"object","properties":{}} } },
+  { "type":"function", "function": { "name":"action_start", "description":"启动后台gather/nav_to/fight/mine_vein/chop_wood/collect_treasure，成功才返回handle/status；args用对应API参数。输入冲突返回error:action_busy和active_handle，先观察该持有者并显式暂停/取消，失败响应没有新handle，不能继续action_query(undefined)。自动启用宿主观察，不需要额外watch。fight有独立攻击通道，可与一个主任务（如nav_to）同时运行；攻击不接管移动，挖掘/放置时让出物品使用权。同一通道已有动作时才需要先暂停或取消。恢复按实际现场和目标总量继续，不重放旧按键；开箱恢复后须核对实际库存，空箱不代表本次获得物品。最多32个句柄，当前指令结束或玩家stop取消；单段脚本正常返回不取消。", "parameters":{"type":"object","properties":{"tool":{"type":"string","enum":["gather","nav_to","fight","mine_vein","chop_wood","collect_treasure"]},"args":{"type":"object"}},"required":["tool","args"]} } },
   { "type":"function", "function": { "name":"action_query", "description":"读取后台动作handle的status/attempt/args/result和最新observation，可选wait_ms最多1000毫秒等待进展。status为running/paused/cancelled/completed/failed。completed只表示该工具执行结束，不保证整个目标完成，须看result和实际库存/位置/击杀证据。查询不会重启或重放动作。", "parameters":{"type":"object","properties":{"handle":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":1000}},"required":["handle"]} } },
   { "type":"function", "function": { "name":"action_control", "description":"控制后台任务：pause等待旧动作退出并释放输入后返回；cancel停止并保留证据；resume重新观察当前状态后启动同一高层意图，attempt递增，可选args整体替换原参数。已completed不可resume；paused/cancelled/failed可明确恢复。恢复不会重放调用它的整个脚本，gather继续补足目标总库存。先查询和处理危险，再决定恢复。", "parameters":{"type":"object","properties":{"handle":{"type":"string"},"command":{"type":"string","enum":["pause","cancel","resume"]},"args":{"type":"object"}},"required":["handle","command"]} } },
-  { "type":"function", "function": { "name":"run_script", "description":"提交JavaScript函数体；tool(name,args={})同步调用游戏API，支持循环、分支、return、print。可选workflow保存宿主进度；step(id,()=>{...;return result;})缓存完成步骤，续写同workflow时跳过同名完成步骤。每步用稳定id并检查真实结果；未完成步骤不会自动重放，先script_progress核对。返回workflow含步骤、最近调用和段落结果；脚本结束不等于目标完成，仍按任务条件验证。禁止嵌套run_script/ask、Promise、Shell、文件及任意网络。默认120秒、最大180秒、最多100次工具调用，已执行动作不回滚。", "parameters":{"type":"object","properties":{"code":{"type":"string","minLength":1,"maxLength":16000},"seconds":{"type":"integer","minimum":1,"maximum":180},"workflow":{"type":"string","minLength":1,"maxLength":80}},"required":["code"]} } },
+  {"type":"function","function":{"name":"run_script","description":"提交JavaScript函数体，tool(name,args)调用游戏API。无脚本墙钟截止：游戏动作可以长期执行，仍受玩家停止、语句、内存和100次工具调用限制。nav_to/gather/fight/mine_vein/chop_wood/collect_treasure自动托管观察，平时保持串行语义；发生事件会暂停动作并提前交回，后续语句不执行。读取action_tasks里的handle，核对uncertain步骤再续接，不能重跑原操作。workflow与step(id,fn)保存完成效果；脚本结束仍须task_step verify。禁止嵌套run_script/ask、Promise、文件和网络。seconds仅兼容旧调用，已不限制游戏耗时。 运行DAG节点用task_node:id，默认读取节点的script和稳定workflow。临时恢复可同时提供code和独立workflow。切换前暂停原主动作并保存句柄，独立防身攻击可继续。","parameters":{"type":"object","properties":{"code":{"type":"string","minLength":1,"maxLength":16000},"seconds":{"type":"integer","description":"兼容旧调用，不设墙钟截止"},"workflow":{"type":"string","minLength":1,"maxLength":80},"task_node":{"type":"string"}},"required":[]}}},
   { "type":"function", "function": { "name":"script_progress", "description":"读取宿主workflow进度。action=get返回revision/steps/last_segment/recent_calls。uncertain步骤需先get_state核对，再action=retry允许重新执行或complete保存核对后的value；两者必填step及expected_revision。宿主附实际背包和血量快照；complete仅表示执行步骤已核对，不替代task_step条件验证。不要对已经执行过的行为盲目retry。记录仅保留本世界，离开世界清空。", "parameters":{"type":"object","properties":{"workflow":{"type":"string"},"action":{"type":"string","enum":["get","retry","complete"]},"step":{"type":"string"},"expected_revision":{"type":"integer"},"value":{}},"required":["workflow"]} } },
-  { "type":"function", "function": { "name":"gather", "description":"按真实随身背包总数收集1..8种物品。targets每项给item_type/count，以及查证过的来源tile_names和/或npc_types；来源关系由Agent查配方/Wiki决定，代码不猜掉落。循环扫描来源、采集方块、攻击指定类型敌人和接近目标掉落物。会优先现成掉落物与附近目标敌人，材料齐了才ok=true；击杀或方块消失不算入包。默认120秒，最多180秒，每个候选最多两次；没有当前来源会返回source_unavailable，请换区域/来源。NPC追击与拾取依赖现有导航，不保证复杂地形或生成尚未出现的敌人。", "parameters":{"type":"object","properties":{"targets":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","properties":{"item_type":{"type":"integer","minimum":1},"count":{"type":"integer","minimum":1,"maximum":9999},"tile_names":{"type":"array","items":{"type":"string"}},"npc_types":{"type":"array","items":{"type":"integer","minimum":1}}},"required":["item_type","count"]}},"seconds":{"type":"integer","minimum":1,"maximum":180}},"required":["targets"]} } },
-  { "type":"function", "function": { "name":"npc_find", "description":"查询当前已生成且活跃的NPC，给type可按NPC类型过滤；不填返回全部。结果含idx/type/name/cell/life。只能证明当前存在，不会强制刷新或召唤。", "parameters":{"type":"object","properties":{"type":{"type":"integer","minimum":1}}} } },
+  {"type":"function","function":{"name":"script_report","description":"按run_script返回的report_id只读查询原始完整报告及trace，参数id填report_id。不会重跑脚本或动作。保留当前指令最近64份报告，新指令清空；不可用时返回script_report_unavailable。默认结果已保留实际返回值、失败证据和工具计数，仅需追查调用细节时查询。","parameters":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}}},
+  {"type":"function","function":{"name":"gather","description":"按真实背包总数收集1..8种物品。优先执行当前可处理来源，超出40格的敌怪保留在blocked_sources；reason和candidate.x/y/distance/combat_range_tiles提供站位决策依据。其他已知来源继续采集，候选每轮重新观察。全部剩余来源受阻时返回对应outcome，Agent/JS选择人物站位后恢复原采集handle。targets给item_type/count及查证的tile_names/npc_types。未填tile_names和npc_types时只搜索已有掉落物，不会按物品编号推断来源。source_rules回显每项实际配置和drops_only；没有掉落时应先查证并补充来源，不能当作已搜索方块或敌怪。优先目标掉落物与敌人，再采集方块，按实际入包验收。无默认墙钟截止；玩家可停止，每候选最多两次尝试；同一存活敌怪实际掉血可重置该计数、总动作次数有上限。没有当前来源返回source_unavailable，须换区域或来源，不代表世界没有。脚本内自动托管和观察，事件可能提前交回，届时恢复原handle。NPC追击依赖现有导航，不负责生成尚未出现的敌人。seconds仅兼容旧调用，不设截止。 source_area可限定来源格区域(x/y/width/height)，只选择区域内方块、掉落物或NPC；该处没有来源则返回source_unavailable，绝不回退到别处。用于执行Agent已选定的机会。它不是导航禁区，也不限制NPC后续运动。 同一TileID存在不同植物/家具变体，必要时以tile_frame_x/y精确限定；nearby_tile事件提供frame，不能把同类型所有植物当作同一种掉落。","parameters":{"type":"object","properties":{"targets":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","properties":{"item_type":{"type":"integer","minimum":1},"count":{"type":"integer","minimum":1,"maximum":9999},"tile_names":{"type":"array","items":{"type":"string"}},"npc_types":{"type":"array","items":{"type":"integer","minimum":1}},"tile_frame_x":{"type":"integer","minimum":0,"maximum":32767,"description":"可选：仅匹配实际观测到的方块frame_x。可选source_area限定区域；未填则在默认搜索半径内筛选。frame不是物品编号，必须查证变体与掉落关系。"},"tile_frame_y":{"type":"integer","minimum":0,"maximum":32767,"description":"可选：仅匹配实际观测到的方块frame_y。可选source_area限定区域；未填则在默认搜索半径内筛选。frame不是物品编号，必须查证变体与掉落关系。"}},"required":["item_type","count"]}},"seconds":{"type":"integer"},"source_area":{"type":"object","properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":1,"maximum":120},"height":{"type":"integer","minimum":1,"maximum":120}},"required":["x","y","width","height"]}},"required":["targets"]}}},
+  { "type":"function", "function": { "name":"gather_observe", "description":"只读查询采集来源与真实背包counts，不移动、不攻击、不启动或停止任务。参数与gather的targets/source_area一致。未填tile_names和npc_types时只搜索已有掉落物，不会按物品编号推断来源。source_rules回显每项实际配置和drops_only；没有掉落时应先查证并补充来源，不能当作已搜索方块或敌怪。返回candidates含kind、item_type、x/y格坐标、distance格距离；NPC额外含who/npc_type/hp/clear_line。item_space按目标物品类型返回原版容量判断，掉落候选的can_pickup以真实物品实例为准。gather遇到容量阻塞返回inventory_full并保留进度，整理后可续接。来源区域过滤适用于所有候选。没有候选仅表示当前扫描范围内没有来源；距离不是路径成本，候选不证明安全或可达，NPC候选不证明必定掉落。用来判断是否值得恢复原gather句柄，不要反复执行gather探测。", "parameters":{"type":"object","properties":{"targets":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","properties":{"item_type":{"type":"integer","minimum":1},"count":{"type":"integer","minimum":1,"maximum":9999},"tile_names":{"type":"array","items":{"type":"string"}},"npc_types":{"type":"array","items":{"type":"integer","minimum":1}},"tile_frame_x":{"type":"integer","minimum":0,"maximum":32767},"tile_frame_y":{"type":"integer","minimum":0,"maximum":32767}},"required":["item_type","count"]}},"source_area":{"type":"object","properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":1,"maximum":120},"height":{"type":"integer","minimum":1,"maximum":120}},"required":["x","y","width","height"]}},"required":["targets"]} } },
+  { "type":"function", "function": { "name":"npc_find", "description":"查询当前已生成且活跃的NPC，给type可按NPC类型过滤；不填返回全部。返回对象{npcs:[...]}，读取result.npcs.length，不能读取result.length；数组元素含idx/type/name/cell/life。空数组只表示未找到当前活跃NPC，不代表没有材料来源，地面可能已有掉落物；采集任务用原参数gather_observe同时检查掉落物和其他来源。不会强制刷新或召唤。", "parameters":{"type":"object","properties":{"type":{"type":"integer","minimum":1}}} } },
   { "type":"function", "function": { "name":"collect_treasure", "description":"接近指定箱子，再调用现有搜刮流程开箱、取物并验收。x/y为箱子任意一格，内部归一锚点；陷阱、锁定、占用和未能取空等原因以结果为准。返回got/lost，不能把导航到达当作已经拿到物品。", "parameters":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},"required":["x","y"]} } },
   { "type":"function", "function": { "name":"game_catalog", "description":"查询原版物品/NPC/方块编号。kind区分item/npc/tile；name用内部英文名、片段或数字编号。tile还匹配当前游戏语言的地图显示名称，display_names给出图例名，internal用于find_tiles。忽略大小写、空格、下划线，精确匹配优先，最多12条。item的places_tile来自游戏物品放置定义，不可放置为null，不证明反向挖掘掉落相同物品。查询不证明持有、掉落、召唤或击杀。仅原版常量。", "parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["item","npc","tile"]},"name":{"type":"string","minLength":1}},"required":["kind","name"]} } },
-  { "type":"function", "function": { "name":"task_plan", "description":"建立有序计划，由游戏状态验证。permanent_health=永久血上限，item=随身背包数量，equipped=原版已解锁功能装备槽0..9的实际穿戴数量（不含背包、时装、模组槽），npc_alive=活跃存活NPC数量，npc_kills=建计划后的本次击杀（仅单人）。equipped只确认穿戴，实际效果还须检查；npc_alive不证明由谁召唤，不作为击杀后的最终条件。最终步骤重复仍需满足的要求。未完成计划默认拒绝替换，replace=true会丢弃旧计划。", "parameters":{"type":"object","properties":{"goal":{"type":"string"},"replace":{"type":"boolean"},"steps":{"type":"array","minItems":1,"maxItems":20,"items":{"type":"object","properties":{"id":{"type":"string"},"description":{"type":"string"},"conditions":{"type":"array","minItems":1,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["permanent_health","item","equipped","npc_kills","npc_alive"]},"type":{"type":"integer","minimum":1},"count":{"type":"integer","minimum":1}},"required":["kind","count"]}}},"required":["id","description","conditions"]}}},"required":["goal","steps"]} } },
+  {"type":"function","function":{"name":"task_plan","description":"建立可验证任务计划。长任务用mode=dag：每个节点提供depends_on（根节点为空）、script（JS函数体）、conditions。共享前置只建一次；ready_steps列出可执行节点。run_script({task_node:id})执行保存脚本并自动使用稳定workflow，step缓存保留；脚本结束后仍须task_step verify。所有末端节点的条件在最终验收重新检查；仍需持有的物品等最终要求必须放在末端节点。不传mode兼容顺序计划。建立有序计划，由游戏状态验证。permanent_health=永久血上限，item=随身背包数量，equipped=原版已解锁功能装备槽0..9的实际穿戴数量（不含背包、时装、模组槽），position=人物活着且中心在目标格中心的radius格欧氏距离内（默认2格，最多60），需要x/y格坐标和count=1；到达必须用position，不能用物品数量代替。npc_alive=活跃存活NPC数量，npc_kills=建计划后的本次击杀（仅单人）。equipped只确认穿戴，实际效果还须检查；npc_alive不证明由谁召唤，不作为击杀后的最终条件。最终步骤重复仍需满足的要求。未完成计划默认拒绝替换，replace=true会丢弃旧计划。 chests_looted条件无需type，count为节点建立后新搜刮的不同箱子数；宿主核对箱内物品减少且对应物品入包，仅单人。空箱、仅到达、重复搜同一箱不计数；无需事先猜箱内物品。","parameters":{"type":"object","properties":{"goal":{"type":"string"},"replace":{"type":"boolean"},"steps":{"type":"array","minItems":1,"maxItems":20,"items":{"type":"object","properties":{"id":{"type":"string"},"description":{"type":"string"},"conditions":{"type":"array","minItems":1,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["permanent_health","item","equipped","npc_kills","npc_alive","position","chests_looted"]},"type":{"type":"integer","minimum":1},"count":{"type":"integer","minimum":1},"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"radius":{"type":"integer","minimum":1,"maximum":60,"default":2}},"required":["kind","count"]}},"depends_on":{"type":"array","items":{"type":"string"}},"script":{"type":"string","minLength":1,"maxLength":16000}},"required":["id","description","conditions"]}},"mode":{"type":"string","enum":["dag","sequential"]}},"required":["goal","steps"]}}},
   { "type":"function", "function": { "name":"task_step", "description":"操作当前计划步骤。verify 由游戏真实状态验证 conditions，失败会返回实际值且不推进游标；block 必须附实际 reason，保存阻塞原因和最后动作结果。不允许自行声明成功或跳步骤；死亡/导航失败后读取原计划，依据新状态改方案，再 verify。", "parameters":{"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["verify","block"]},"reason":{"type":"string"}},"required":["id","action"]} } },
   { "type":"function", "function": { "name":"combat_reposition", "description":"执行具体换位，临时接管Jev，最多导航8秒后恢复对战，返回实际位移、导航结果和最新combat_after_action。x/y照抄最近perception.terrain.stance_probes的像素坐标，不是格坐标。执行前重新检查512像素内的支撑及身体空间；失效时返回新探测点。探测点并非可达路径，不保证成功；失败应换方案。导航中地形权限仍受约束。", "parameters":{"type":"object","properties":{"session":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"}},"required":["session","x","y"]} } },
   { "type":"function", "function": { "name":"inventory_swap", "description":"交换自己背包/快捷栏两个槽(0..49)，包含快捷栏武器整理。暂停战斗输入并最多等2秒让动画结束。expected_src和expected_dst必须包含inventory_slots里刚查询的type/prefix/stack；不一致或仍忙则返回错误，不会悄悄换错物品。成功返回实际前后值并同步两个槽，再恢复战斗。", "parameters":{"type":"object","properties":{"src":{"type":"integer"},"dst":{"type":"integer"},"expected_src":{"type":"object"},"expected_dst":{"type":"object"}},"required":["src","dst","expected_src","expected_dst"]} } },
@@ -29,7 +52,7 @@
       "description": "获取当前游戏状态快照:自己血量/位置(像素,除以16得到格坐标)/背包装备，以及 other_players 的编号/名字/位置/血量/PvP/队伍。inventory_slots为随身背包0..49槽数组，每项含slot/type/prefix/stack/name；按物品type筛选并累加stack得到该物品随身总数，空槽type=0，不包含虚空袋。permanent_max_health是永久血上限。agent.instruction_player_id 是发指令的绑定玩家编号，agent.player_id 是自己。",
       "parameters": {
         "type": "object",
-        "properties": {}
+        "properties": { "fields": { "type":"array", "minItems":1, "items":{"type":"string"}, "description":"按需读取顶层字段，例如['player','permanent_max_health','inventory_slots']；返回所选字段及snapshot_tick。inventory_counts按物品type字符串汇总随身0..49槽数量，缺失type计0，适合循环检查材料。首次了解现场可省略，循环检查数量、血量和句柄时选择相关字段。" }, "include_tiles": { "type":"boolean", "description":"默认false：terrain提供近身6格地形、危险与精确方块信息；tiles仅保留大图边界并标记deferred，不代表区域为空。true额外返回原始大范围tiles.rows编码；只有需要分析大图时请求。箱子/物品/观察事件始终保留。" }, "include_watch_history": { "type":"boolean", "description":"默认false：watch.history仅最近12条历史索引，附总数与截断标记；watch.pending始终完整。true读取完整历史及原事件证据，不消费事件、不改变观察配置。" } }
       }
     }
   },
@@ -56,7 +79,7 @@
     "type": "function",
     "function": {
       "name": "wiki_page",
-      "description": "读 Terraria wiki 某个页面的正文(纯文本,含数据表如掉落率/伤害/配方)。title 用 wiki_search 返回的准确标题。",
+      "description": "读 Terraria wiki 某个页面的正文(纯文本,含数据表如掉落率/伤害/配方)。title 用 wiki_search 返回的准确标题。若页面明确列出Tile ID，同时返回nearby_listed_tiles：对应类型在玩家附近的坐标、变体及自身发光，便于辨认采集对象而非生长基底；不自动采集，不证明掉落。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -75,7 +98,7 @@
     "type": "function",
     "function": {
       "name": "item_info",
-      "description": "查背包里某个物品的详细信息(描述tooltip + 类型标志:武器伤害/镐力/放置物createTile/是否消耗品/回血等)。**同名或看不懂的物品别猜别反复问玩家,用这个查一眼就懂**(比如 BOMB 召唤妖精 vs 炸弹摧毁图格,靠 tooltip 分清)。给 slot(槽位号)或 name(物品名)。",
+      "description": "查背包里某个物品的详细信息(描述tooltip + 类型标志:武器伤害/镐力/放置物createTile/是否消耗品/回血等)。useAmmo为弹药类别，0表示无需弹药；hasAmmo是当前玩家的游戏弹药检查，无需弹药时为true，不证明有魔力、射界或可以立即攻击。shoot/shootSpeed为物品基础射弹类型/速度，useTime/useAnimation为基础帧间隔，不包含弹药、饰品、模组射击钩子的最终弹道。给slot(槽位号)或name(物品名)；同名或陌生物品先查询，不猜效果。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -95,7 +118,7 @@
     "type": "function",
     "function": {
       "name": "find_biome",
-      "description": "整张地图可读,所以'找丛林/雪地/地牢'不是探索问题,是查询问题。给一个 biome 名,返回它的中心可站坐标 {found,x,y,count}。支持:jungle/snow/desert/dungeon/corruption/crimson/hallow。找到坐标后直接 nav_to 过去。",
+      "description": "辨认群系的方向和大致位置，实际行进方案结合特殊知识、当前位置及现场环境决定。进入地下丛林优先查询find_descent/descent_route，选择高效的主道接入方式。jungle参考点经过露天、人物空间、岩浆和局部原版生态计数校验，附local_biome_tiles/threshold/elapsed_ms。found=false时保留查询失败原因。支持jungle/snow/desert/dungeon/corruption/crimson/hallow。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -114,7 +137,7 @@
     "type": "function",
     "function": {
       "name": "find_descent",
-      "description": "找某 biome '下地狱代价最低'的地表主入口(main entrance)。不是逐列扫——用多源 Dijkstra 从地狱层整体向上流,顺着真实洞穴形状算代价,S形洞口从顶部进也算得出来。返回 {found,x,y,cost}。要速降地狱时先用它拿入口,再 nav_to 过去。biome 名同 find_biome。",
+      "description": "找某群系既有下降代价最低道路的地表主入口，返回{found,x,y,cost}。多源Dijkstra从地狱层向上计算，考虑真实洞穴形状及移动、挖掘代价。进入地下丛林可利用主道的前段；结合当前位置选择代价较低的入口或途中接入点。具体主道用descent_route查询。biome名同find_biome。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -133,7 +156,7 @@
     "type": "function",
     "function": {
       "name": "descent_route",
-      "description": "在 find_descent 基础上,把'主入口→地狱'整条路线画进游戏画面(青色主线,持续2分钟),并列出绕路可及的箱子(金)和生命水晶(粉),真实支线路径相连。两档范围:挖<=dig_max且走<=walk_max → tier=main(顺手必捡);挖<=dig_max2且走<=walk_max2 → tier=optional(值不值你判断);再远不列。返回 {found,entrance,cost,line_len,treasures:[{x,y,kind,tier,line_x,line_y,dig,walk}]},dig/walk 是实际要挖/走的格数,line_x/line_y 是接驳点。规划'下地狱顺路搜刮'先调它。",
+      "description": "快速返回既有原始主道：entrance为入口，line从入口开始，line_kind=main_descent。主道是既有算法计算的高效下降道路，进入地下丛林可沿其前段，结合当前位置和现场选择接入点。沿洞穴前进，遇红木、神庙、蜂巢等阻挡时按效率和目标需要选择处理方式。line按offset/limit分页，line_len是总格数，next_offset非空时继续取后段。取得入口即可启动导航；宝藏支线在后台计算，treasures_status=running/busy时稍后用相同参数查询，ready后返回宝藏分页。宝藏坐标、支线接驳点line_x/line_y和dig/walk供Agent评估拾取收益，tier表示代价分类。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -141,6 +164,10 @@
             "type": "string",
             "description": "biome 名,如 'jungle'"
           },
+          "offset": { "type": "integer", "minimum": 0, "description": "主道格点偏移，默认0" },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 512, "description": "主道格点数量，默认256" },
+          "treasure_offset": { "type": "integer", "minimum": 0, "description": "后台宝藏列表偏移，默认0" },
+          "treasure_limit": { "type": "integer", "minimum": 1, "maximum": 32, "description": "宝藏列表数量，默认16" },
           "dig_max": {
             "type": "integer",
             "description": "main档挖掘格数上限,默认20"
@@ -184,10 +211,14 @@
     "type": "function",
     "function": {
       "name": "find_tiles",
-      "description": "整张地图可读,所以'这世界有没有钨矿/最近的铁在哪'不是探索问题,是查询问题。给一个 TileID 精确名(不确定先 tile_names 查),返回按距离排序的格坐标。**找矿把 max_dist 开大(2000 以上)**:一次就能知道这世界到底有没有这种矿。扫不到就是真没有(钨和银、铜和锡是二选一生成的,没扫到钨就去扫银),不用查 wiki 猜它在哪一层,也不用自己去找洞口。拿到坐标直接 nav_to,寻路会自己挖竖井下去。找 Containers(箱子)时每个结果带 kind 字段(如 Chest=普通木箱/Gold Chest/Ivy Chest 常春藤箱/Ice Chest 等)。**要特定种类的箱子时,把 n 设大(比如20),从返回列表里筛出 kind 匹配的那个再挑最近**:因为按距离排序时想要的种类可能排在很多其他箱子后面,n 太小会漏掉。找到后 nav_to 到旁边再 interact 开箱。",
+      "description": "整张地图可读,所以'这世界有没有钨矿/最近的铁在哪'不是探索问题,是查询问题。给一个 TileID 精确名(不确定先 tile_names 查),返回按距离排序的格坐标。**找矿把 max_dist 开大(2000 以上)**:一次就能知道这世界到底有没有这种矿。空结果只证明本次指定范围和筛选条件下未找到，不证明整个世界不存在；可扩大范围或分区查询。source_area模式同时支持frame_x/frame_y精确变体，并返回实际tile_type和frame。拿到坐标直接 nav_to,寻路会自己挖竖井下去。找 Containers(箱子)时每个结果带 kind 字段(如 Chest=普通木箱/Gold Chest/Ivy Chest 常春藤箱/Ice Chest 等)。**要特定种类的箱子时,把 n 设大(比如20),从返回列表里筛出 kind 匹配的那个再挑最近**:因为按距离排序时想要的种类可能排在很多其他箱子后面,n 太小会漏掉。找到后 nav_to 到旁边再 interact 开箱。",
       "parameters": {
         "type": "object",
         "properties": {
+          "source_area": {"type":"object","description":"可选：只查询该格区域，不截取全局最近结果后再过滤。支持局部材料来源检查。","properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":1,"maximum":120},"height":{"type":"integer","minimum":1,"maximum":120}},"required":["x","y","width","height"]},
+          "frame_x": {"type":"integer","minimum":0,"maximum":32767,"description":"可选：精确变体帧；支持max_dist半径搜索或source_area局部查询，不代表物品编号。"},
+          "frame_y": {"type":"integer","minimum":0,"maximum":32767,"description":"可选：精确变体帧；支持max_dist半径搜索或source_area局部查询。"},
+          "emits_light": {"type":"boolean","description":"需source_area。按当前方块自身是否发光筛选，在n截取前执行。所有结果的emission提供游戏发光计算的r/g/b及emits_light，不是周围照明，不证明掉落。可结合Wiki描述辨认发光植物等变体，不必猜frame。"},
           "name": {
             "type": "string",
             "description": "TileID 精确名,如 'Iron'"
@@ -211,23 +242,29 @@
     "type": "function",
     "function": {
       "name": "nav_to",
-      "description": "移动到目标方块坐标，等待到达、失败或超时。exact 用于矿石或实心目标，reach 用于开箱等交互目标。生命水晶、罐子等非实心物体即使传exact也会转换为reach，接近后还需use_item等工具实际采集，不能把导航到达当收集成功。返回真实状态和物品增减。",
+      "description": "移动到世界格坐标。mode选择目标语义：travel进入路点附近的交接范围，mine接近待挖实心目标，interact进入箱子或采集物的交互范围，stand搜索精确落脚位置。沿主道赶路使用travel；接近采集物后继续调用相应采集工具。返回真实状态和物品增减。",
       "parameters": {
         "type": "object",
         "properties": {
+          "accepted_traps": {
+            "type": "array",
+            "description": "仅本次导航接受指定已观察机关的风险，可用于绕行或离开附近机关。按inspect_terrain或navigation_near_trap返回填入坐标、type和frame；新机关或不同变体仍会停止。不证明路线安全，不改变其他安全检查。",
+            "items": { "type": "object", "properties": {
+              "x": { "type": "integer" }, "y": { "type": "integer" },
+              "type": { "type": "integer" }, "frame_x": { "type": "integer" }, "frame_y": { "type": "integer" }
+            }, "required": ["x", "y", "type", "frame_x", "frame_y"] }
+          },
           "x": {
             "type": "integer"
           },
           "y": {
             "type": "integer"
           },
-          "exact": {
-            "type": "boolean",
-            "description": "目标是矿石/实心块这种人站不上去的格子时传 true。寻路会切到挖矿模式:直接挖竖井过去,落点就在目标那一片里,不会贴到附近地面就说到了。挖矿几乎总该传 true"
-          },
-          "reach": {
-            "type": "boolean",
-            "description": "开箱子这种够得着就行的,传 true。不用挤到那一格上"
+          "mode": {
+            "type": "string",
+            "enum": ["travel", "mine", "interact", "stand"],
+            "default": "travel",
+            "description": "travel用于主道路点附近的交接；mine用于待挖实心物体；interact用于箱子、生命水晶等交互目标；stand用于精确落脚操作。"
           }
         },
         "required": [
@@ -256,7 +293,7 @@
     "type": "function",
     "function": {
       "name": "mine_vein",
-      "description": "【要攒够多少个矿就用这个,一次搞定】。给矿种和数量,它自己跑完整个循环:找最近的矿脉 → 挖竖井过去(落在矿脉中间) → 站着把射程内同种矿一次挖光 → 不够就去下一个矿脉,直到数量够或附近没了。**不要自己 find_tiles + nav_to + use_item 一颗颗挖**,那要十几轮还容易数错。返回两个数,别搞混:**tiles_removed=清掉了几格(不代表到手)**,**got=真正进背包的东西(这个才算数)**。两者对不上时会给 warn,通常是寻路挖竖井时把矿顺手清了、掉落物没吸到。停止原因:enough=够了/exhausted=附近没了/tool_weak=镐不够硬/interrupted=玩家打断。挖铁/铅/银/钨/铜/锡/金/铂金这些都走这个。",
+      "description": "按实际库存收集矿物，count是目标库存总数，与gather及DAG物品条件一致，续接时保留该目标。item_type可显式指定目标物品；省略时从该方块唯一的可放置物品推导候选，实际库存用于验收；无法唯一确定时返回item_type_required及item_candidates。复用gather循环：够得着就直接挖并拾取，需要接近时导航，导航停滞立即返回现场。ok=true/outcome=enough表示库存已达标；targets含inventory_before、inventory_delta、actual、remaining，last_result保留未完成动作。source_unavailable表示当前查询范围无候选，navigation_no_progress表示需要根据导航证据调整方案。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -264,9 +301,16 @@
             "type": "string",
             "description": "矿的 TileID 名,如 Iron/Lead/Silver/Tungsten(不确定先 tile_names 查)"
           },
+          "item_type": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "已查证的目标矿物物品type；省略时尝试唯一的可放置物品映射。"
+          },
           "count": {
             "type": "integer",
-            "description": "要挖到几个"
+            "minimum": 1,
+            "maximum": 9999,
+            "description": "目标库存总数"
           }
         },
         "required": [
@@ -312,7 +356,7 @@
     "type": "function",
     "function": {
       "name": "use_item",
-      "description": "对着一个格坐标使用背包里某个槽位的道具,**一步完成**:自动切槽位+瞄准+使用,并等到动作结束才返回。镐挖、斧砍树、剑砍、扔炸弹、用魔杖、喝药都走这个。**放东西不走这个,用 place_at**(它会自己挪脚和补锚点,这里不会)。slot 直接抄 get_state 里那个物品的 slot 字段。x,y 给大概位置即可:砍树/挖矿会自动吸附到最近的树干根部/可挖格,不用你算准。返回 outcome:removed=目标已消失(树倒了/矿挖掉了,成功);no_progress=一下都没啃动,看 reason:reason=tool_weak 是镐/斧不够硬(换更好的);reason=blocked 是上方压着树或箱子(原版不许抽走支撑,先清掉上方那格,换镐没用);**reason=out_of_reach 说明这一格得挖过去而不是站着挥,改用 mine**。挖【挖到为止】,不用你估时间。n/a=喝药/扔炸弹/召唤这种既不采集也不放置的。采集类务必先 find_tiles 拿真实坐标,别自己编。这个工具只挥够得着的一格(砍树、挖脚边的矿);要挖深处或挖穿地形用 mine。",
+      "description": "对着世界格坐标使用背包槽位中的道具，自动切槽、瞄准并等待动作结束。slot抄get_state.inventory_slots；x/y使用真实坐标。挖矿、砍树用removed表示目标消失；out_of_reach改用mine接近，tool_weak换工具。放置改用place_at。消耗品返回consumed数量及verified；item_use_not_observed表示数量未减少，不能声称喝药或召唤成功，reason=potion_sickness表示治疗受冷却限制。使用后的实际血量、位置及got/lost仍需核对；消费物品不代表整个任务完成。非消耗品的n/a只表示动作窗口结束，效果未验证。采集先find_tiles拿坐标，要挖深处或穿地形用mine。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -351,7 +395,7 @@
         "properties": {
           "item": {
             "type": "string",
-            "description": "物品名,如 '工作台' 或 'Wood'"
+            "description": "优先传get_state.inventory_slots的type转成字符串，如'36'；也支持背包里的实际显示名。不要把配方内部名当显示名，例如WorkBench的显示名可能为Work Bench或工作台。"
           },
           "x": {
             "type": "integer",
@@ -417,6 +461,7 @@
             "description": "锁敌半径(格),默认25"
           },
           "npc_types": {"type":"array","minItems":1,"items":{"type":"integer","minimum":1}},
+          "movement": {"type":"string","enum":["auto","left","right"],"description":"默认auto按威胁避让；left/right在有目标时持续向该方向移动并攻击，替代自动避让，仍受移动许可约束。建议短时使用后重新观察，不保证避坑或绕障。"},
           "seconds": {
             "type": "number",
             "description": "打多久(秒),默认10;还有敌人可以再调一次"
@@ -565,7 +610,7 @@
                   "items": {
                     "type": "integer"
                   },
-                  "description": "光标格[dx,dy],开始时算一次就钉死不动"
+                  "description": "步骤开始时相对origin_cell的格偏移[dx,dy]，执行期间固定。目标世界格减origin_cell：例如origin_cell=[100,50]、目标世界格=[103,49]，填at:[3,-1]。"
                 },
                 "slot": {
                   "type": "integer",
@@ -592,6 +637,10 @@
           "timeout_frames": {
             "type": "integer",
             "description": "总超时帧数,默认1800(30秒)"
+          },
+          "observe": {
+            "type": "boolean",
+            "description": "记录本次操作的真实输入、弹射物运动和原生伤害事件，返回observation。最多采样1800帧，完整逐帧记录保存于实验目录。适用于比较不同按键和瞄准方式；记录只陈述实际发生的结果。"
           }
         },
         "required": [
@@ -641,18 +690,29 @@
     "type": "function",
     "function": {
       "name": "set_combat",
-      "description": "设置战斗许可及既有Boss控制器。auto_dodge/auto_attack只修改许可，不会自己开启控制器。boss_control=true启用Jev Boss走位和自动攻击，false关闭；仍受许可、人工控制、PvP模式和Key是否可用约束。战前先暂停采集/移动，再启用；Boss出现后自动接管，不需fight轮询。不负责召唤或装备，不保证获胜。通过boss_status或返回boss_control读取实际状态。未指定字段保持不变；停止Agent或离开世界会恢复Agent修改前的控制器开关。",
+      "description": "设置战斗许可及既有Boss控制器。auto_dodge/auto_attack修改持续生效的许可。按单个动作临时屏蔽行为可用control deny scope=action绑定真实动作句柄，动作结束后自动撤销。boss_control=true关闭背包及箱子界面，启用Jev Boss走位和自动攻击，false关闭；仍受许可、人工控制、PvP模式和Key是否可用约束。战前先暂停采集/移动，再启用。movement_reserve_scale设置靠墙余量比例：默认1对应水平至少35格、上方至少18格、下方至少4格；紧凑场地可降低比例，实际碰撞遵循原版，control活动区域约束继续生效。返回的boss_control及boss_status会按当前位置和新比例立即预览空间与合法移动选项，source=live_preview，可据此调整；get_state保留Jev最近请求的采样。未指定字段保持不变；停止Agent恢复修改前的开关和余量比例。",
       "parameters": {
         "type": "object",
         "properties": {
           "boss_control": {
             "type": "boolean"
           },
+          "movement_reserve_scale": {
+            "type": "number",
+            "minimum": 0.05,
+            "maximum": 1,
+            "description": "Boss走位的靠墙余量比例；结合地图空间和boss_status中的合法选项选择。默认1，紧凑场地可用较小值。"
+          },
           "auto_dodge": {
             "type": "boolean"
           },
           "auto_attack": {
             "type": "boolean"
+          },
+          "weapon_type": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "指定随身快捷栏中的武器物品type，防身和fight持续使用该武器，不按槽位自动切回。0清除指定。须先看背包和item_info，按射程、地形、耗材选择。"
           }
         }
       }

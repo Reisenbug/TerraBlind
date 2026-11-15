@@ -33,7 +33,9 @@ public sealed class VanillaNavigationDemo : ModSystem
     public int PlanAccepted => regions?.Accepted ?? movement?.Accepted ?? 0;
     public int PlanRejected => regions?.Rejected ?? movement?.Rejected ?? 0;
     public bool PlannerReady => movement != null;
-    internal bool WorkerReady => worker?.Alive == true;
+    internal bool WorkerReady => worker?.Alive == true && workerWarmed;
+    bool workerWarmed;
+    Task<JsonObject> warmup;
     bool terrainPaused;
     bool running;
     long tick;
@@ -138,6 +140,7 @@ public sealed class VanillaNavigationDemo : ModSystem
     {
         if (worker?.Alive == true || startup != null) return;
         worker?.Dispose(); worker = null;
+        workerWarmed = false;
         cancellation?.Dispose();
         cancellation = new CancellationTokenSource();
         byte[] package = Mod.GetFileBytes("Assets/VanillaWorker.bin");
@@ -152,6 +155,27 @@ public sealed class VanillaNavigationDemo : ModSystem
         EnsureWorker();
         var connection = worker?.Alive == true ? worker : await startup.WaitAsync(token);
         return await Task.Run(() => connection.Send(request, token), token);
+    }
+
+    void WarmWorker()
+    {
+        try
+        {
+            var player = Main.LocalPlayer;
+            int x = (int)(player.Center.X / 16), y = (int)(player.Center.Y / 16);
+            var area = Rectangle.Intersect(new Rectangle(x - 10, y - 10, 21, 21),
+                new Rectangle(0, 0, Main.maxTilesX, Main.maxTilesY));
+            var request = new JsonObject { ["command"] = "replay", ["snapshot"] = VanillaFrame.Capture(player, area, true),
+                ["controls"] = new JsonArray(0, 2, 4), ["detailed"] = false, ["stop_on_damage"] = true };
+            var connection = worker;
+            var token = cancellation.Token;
+            warmup = Task.Run(() => connection.Send(request, token), token);
+        }
+        catch (Exception error)
+        {
+            workerWarmed = true;
+            DiagLog.Write("[engine-worker-warmup-skipped] " + DescribeError(error));
+        }
     }
 
     public override void OnWorldLoad()
@@ -170,6 +194,8 @@ public sealed class VanillaNavigationDemo : ModSystem
         if (closeWorker)
         {
             cancellation?.Cancel();
+            if (warmup != null) _ = warmup.ContinueWith(task => { _ = task.Exception; });
+            warmup = null; workerWarmed = false;
             worker?.Dispose(); worker = null;
             responseFrames = 0;
             if (startup != null)
@@ -243,7 +269,19 @@ public sealed class VanillaNavigationDemo : ModSystem
                 var completed = startup; startup = null;
                 worker = completed.GetAwaiter().GetResult();
                 DiagLog.Write("[engine-worker-ready] " + worker.StartupTiming.ToJsonString());
+                WarmWorker();
                 if (running && regions == null) movement = ConnectMovement(worker);
+            }
+            if (warmup?.IsCompleted == true)
+            {
+                var completed = warmup; warmup = null;
+                workerWarmed = true;
+                try
+                {
+                    var result = completed.GetAwaiter().GetResult();
+                    DiagLog.Write($"[engine-worker-warmup] compute_ms={result["elapsed_ms"]} roundtrip_ms={result["roundtrip_ms"]}");
+                }
+                catch (Exception error) { DiagLog.Write("[engine-worker-warmup-failed] " + DescribeError(error)); }
             }
             if (!running) return;
             var player = Main.LocalPlayer;

@@ -44,6 +44,8 @@ public sealed class ProjectileAim : IAttackDriver
     public bool TryAttack(Player player, CombatSnapshot snapshot, out Vector2 target)
     {
         target = snapshot.Boss.Center;
+        if (!FightCoordinator.CanHitTarget(player, player.HeldItem, target))
+        { player.controlUseItem = false; return false; }
         if (player.HeldItem.shoot == ProjectileID.None || snapshot.ShotSpeed <= 0f) return false;
         Vector2 origin = player.MountedCenter;
         if (player.HeldItem.type == ItemID.DartPistol)

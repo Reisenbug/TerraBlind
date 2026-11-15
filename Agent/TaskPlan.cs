@@ -11,11 +11,30 @@ public sealed class AgentTaskPlan
     string _goal;
     int _cursor;
     int _progress;
+    int _revision;
+    bool _dag;
     public int Cursor => _cursor;
     public int Progress => _progress;
-    public bool Incomplete => _steps.Count > _cursor;
+    internal int ExecutionRevision(string id) => (_steps.FirstOrDefault(step => step["id"]?.ToString() == id)?["revisions"] as JsonArray)?.Count ?? 0;
+    public bool RequiresNodeExecution => _dag && Incomplete;
+    public bool Incomplete => _steps.Any(s => s["status"]?.ToString() != "completed");
+    internal JsonArray PreparationNodes(string owner, Func<JsonObject, int> measure)
+    {
+        bool Unmet(JsonNode node)
+        {
+            var condition = node.AsObject();
+            int baseline = condition["kind"]?.ToString() is "npc_kills" or "chests_looted" ? condition["baseline"].GetValue<int>() : 0;
+            return measure(condition) - baseline < condition["count"].GetValue<int>();
+        }
+        var completed = _steps.Where(s => s["status"]?.ToString() == "completed").Select(s => s["id"].ToString()).ToHashSet();
+        return new JsonArray(_steps.Where(s => s["status"]?.ToString() != "completed" && s["preparation_only"]?.GetValue<bool>() == true
+            && s["conditions"].AsArray().Any(Unmet)
+            && (s["id"]?.ToString() == owner || s["depends_on"].AsArray().Any(d => d?.ToString() == owner)
+                && s["depends_on"].AsArray().All(d => d?.ToString() == owner || completed.Contains(d.ToString()))))
+            .Select(s => s["id"].DeepClone()).ToArray());
+    }
 
-    public void Reset() { _steps.Clear(); _goal = null; _cursor = _progress = 0; }
+    public void Reset() { _steps.Clear(); _goal = null; _cursor = _progress = 0; _dag = false; _revision++; }
 
     public JsonObject Create(JsonObject args, Func<JsonObject, int> measure)
     {
@@ -24,6 +43,18 @@ public sealed class AgentTaskPlan
         string goal = args["goal"]?.GetValue<string>();
         if (string.IsNullOrWhiteSpace(goal) || args["steps"] is not JsonArray steps || steps.Count == 0 || steps.Count > 20)
             throw new InvalidOperationException("计划需要 goal 和 1..20 个步骤。");
+        bool dag = args["mode"]?.ToString() == "dag";
+        var parsed = ParseSteps(steps, dag, measure);
+        ValidateDependencies(parsed);
+        _steps.Clear(); _steps.AddRange(parsed); _goal = goal; _cursor = _progress = 0;
+        _dag = dag;
+        SelectReady();
+        _revision++;
+        return Snapshot();
+    }
+
+    static List<JsonObject> ParseSteps(JsonArray steps, bool dag, Func<JsonObject, int> measure)
+    {
         var parsed = new List<JsonObject>();
         var ids = new HashSet<string>();
         foreach (var node in steps)
@@ -35,55 +66,243 @@ public sealed class AgentTaskPlan
                 throw new InvalidOperationException("步骤需要唯一 id、description 和非空 conditions。");
             var copy = new JsonObject { ["id"] = id, ["description"] = step["description"].DeepClone(),
                 ["status"] = "pending", ["conditions"] = new JsonArray(), ["best_actual"] = new JsonArray() };
+            if (dag && (step["depends_on"] is not JsonArray || string.IsNullOrWhiteSpace(step["script"]?.GetValue<string>())))
+                throw new InvalidOperationException("DAG节点需要depends_on数组和可执行script；根节点使用空依赖数组。");
+            copy["depends_on"] = dag ? step["depends_on"].DeepClone()
+                : new JsonArray(parsed.Count == 0 ? Array.Empty<JsonNode>() : new[] { JsonValue.Create(parsed[^1]["id"].ToString()) });
+            if (dag)
+            {
+                copy["script"] = step["script"].DeepClone();
+                copy["preparation_only"] = AgentScript.PreparationOnly(step["script"].ToString());
+                if (step["on_failure"] != null) copy["on_failure"] = step["on_failure"].GetValue<string>();
+                copy["workflow"] = "dag-" + Guid.NewGuid().ToString("N");
+            }
             foreach (var condition in conditions)
             {
                 var check = condition as JsonObject ?? throw new InvalidOperationException("条件必须是对象。");
                 string kind = check["kind"]?.GetValue<string>();
-                if (kind is not ("permanent_health" or "item" or "equipped" or "npc_kills" or "npc_alive") || check["count"]?.GetValue<int>() is not > 0
-                    || kind != "permanent_health" && check["type"]?.GetValue<int>() is not > 0)
-                    throw new InvalidOperationException("条件仅支持 permanent_health、item、equipped、npc_kills、npc_alive，count/type 必须为正数。");
+                if (kind is not ("permanent_health" or "position" or "biome" or "tiles" or "item" or "equipped" or "npc_kills" or "npc_alive" or "chests_looted") || check["count"]?.GetValue<int>() is not > 0
+                    || kind is not ("permanent_health" or "position" or "biome" or "tiles" or "chests_looted") && check["type"]?.GetValue<int>() is not > 0)
+                    throw new InvalidOperationException("条件支持 permanent_health、position、biome、tiles、item、equipped、npc_kills、npc_alive、chests_looted；count及物品/NPC的type必须为正数。");
                 var verified = new JsonObject { ["kind"] = kind, ["count"] = check["count"].DeepClone() };
-                if (kind != "permanent_health") verified["type"] = check["type"].DeepClone();
+                if (kind == "chests_looted" && check["initially_locked"] != null)
+                    verified["initially_locked"] = check["initially_locked"].GetValue<bool>();
+                if (kind == "position")
+                {
+                    int radius = check["radius"]?.GetValue<int>() ?? 2;
+                    if (check["count"].GetValue<int>() != 1 || check["x"]?.GetValue<int>() is not >= 0
+                        || check["y"]?.GetValue<int>() is not >= 0 || radius is < 1 or > 60)
+                        throw new InvalidOperationException("position需要count=1、非负格坐标x/y、radius为1..60格（默认2）。");
+                    verified["x"] = check["x"].DeepClone();
+                    verified["y"] = check["y"].DeepClone();
+                    verified["radius"] = radius;
+                }
+                else if (kind == "biome")
+                {
+                    string depth = check["depth"]?.ToString() ?? "any";
+                    if (check["count"].GetValue<int>() != 1 || string.IsNullOrWhiteSpace(check["name"]?.ToString())
+                        || depth is not ("any" or "sky" or "surface" or "below_surface" or "underground" or "cavern" or "underworld"))
+                        throw new InvalidOperationException("biome需要count=1、name及合法depth。");
+                    verified["name"] = check["name"].DeepClone();
+                    verified["depth"] = depth;
+                }
+                else if (kind == "tiles")
+                {
+                    if (check["type"]?.GetValue<int>() is not >= -1 || check["x"]?.GetValue<int>() is not >= 0
+                        || check["y"]?.GetValue<int>() is not >= 0 || check["width"]?.GetValue<int>() is not > 0
+                        || check["height"]?.GetValue<int>() is not > 0
+                        || (long)check["width"].GetValue<int>() * check["height"].GetValue<int>() is not (> 0 and <= 4096)
+                        || check["count"].GetValue<int>() != (long)check["width"].GetValue<int>() * check["height"].GetValue<int>())
+                        throw new InvalidOperationException("tiles需要非负x/y、正数width/height、面积<=4096、count=面积；type为方块编号，-1表示空格。");
+                    foreach (string field in new[] { "x", "y", "width", "height", "type" }) verified[field] = check[field].DeepClone();
+                }
+                else if (kind is not ("permanent_health" or "chests_looted")) verified["type"] = check["type"].DeepClone();
                 int value = measure(verified);
-                if (kind == "npc_kills") verified["baseline"] = value;
+                if (kind is "npc_kills" or "chests_looted") verified["baseline"] = value;
                 copy["conditions"].AsArray().Add(verified);
-                copy["best_actual"].AsArray().Add(Math.Min(kind == "npc_kills" ? 0 : value, check["count"].GetValue<int>()));
+                copy["best_actual"].AsArray().Add(Math.Min(kind is "npc_kills" or "chests_looted" ? 0 : value, check["count"].GetValue<int>()));
             }
             parsed.Add(copy);
         }
-        _steps.Clear(); _steps.AddRange(parsed); _goal = goal; _cursor = _progress = 0;
-        _steps[0]["status"] = "active";
+        return parsed;
+    }
+
+    static void ValidateDependencies(List<JsonObject> steps)
+    {
+        var byId = steps.ToDictionary(s => s["id"].GetValue<string>());
+        var visiting = new HashSet<string>();
+        var visited = new HashSet<string>();
+        void Visit(string id)
+        {
+            if (visited.Contains(id)) return;
+            if (!visiting.Add(id)) throw new InvalidOperationException("任务依赖存在环。");
+            var seen = new HashSet<string>();
+            foreach (var dependency in byId[id]["depends_on"].AsArray())
+            {
+                string parent = dependency?.GetValue<string>();
+                if (parent == null || !byId.ContainsKey(parent) || !seen.Add(parent))
+                    throw new InvalidOperationException("依赖必须引用存在且不重复的节点。");
+                Visit(parent);
+            }
+            visiting.Remove(id); visited.Add(id);
+        }
+        foreach (string id in byId.Keys) Visit(id);
+    }
+
+    bool Ready(JsonObject step) => step["status"]?.ToString() != "completed"
+        && step["depends_on"].AsArray().All(id => _steps.Any(s => s["id"]?.ToString() == id.ToString()
+            && s["status"]?.ToString() == "completed"));
+
+    void SelectReady()
+    {
+        _cursor = _steps.FindIndex(Ready);
+        if (_cursor < 0) _cursor = _steps.Count;
+        else if (_steps[_cursor]["status"]?.ToString() == "pending") _steps[_cursor]["status"] = "active";
+    }
+
+    public JsonObject Select(string id)
+    {
+        int index = _steps.FindIndex(s => s["id"]?.ToString() == id);
+        if (index < 0 || !Ready(_steps[index])) throw new InvalidOperationException("节点不存在、已完成或前置尚未验收。");
+        if (index == _cursor && _steps[index]["status"]?.ToString() == "active") return Snapshot();
+        if (Incomplete && _steps[_cursor]["status"]?.ToString() == "active") _steps[_cursor]["status"] = "pending";
+        _cursor = index;
+        if (_steps[index]["status"]?.ToString() == "pending") _steps[index]["status"] = "active";
+        _revision++;
         return Snapshot();
+    }
+
+    public JsonObject Script(string id)
+    {
+        var step = _steps.FirstOrDefault(s => s["id"]?.ToString() == id);
+        if (!_dag || step == null || !Ready(step)) throw new InvalidOperationException("需要前置已验收的DAG节点。");
+        return new JsonObject { ["code"] = step["script"].DeepClone(), ["workflow"] = step["workflow"].DeepClone() };
+    }
+
+    public JsonObject Revise(JsonObject args, Func<JsonObject, int> measure)
+    {
+        if (!_dag || !Incomplete || args["expected_revision"]?.GetValue<int>() != _revision)
+            throw new InvalidOperationException("需要当前未完成DAG的revision。");
+        string reason = args["reason"]?.GetValue<string>();
+        var changes = args["nodes"] as JsonArray ?? new JsonArray();
+        var additions = args["add_nodes"] as JsonArray ?? new JsonArray();
+        if (string.IsNullOrWhiteSpace(reason) || changes.Count + additions.Count == 0 || additions.Count + _steps.Count > 20)
+            throw new ArgumentException("需要reason及nodes/add_nodes；计划总节点数不能超过20。");
+        var revised = _steps.Select(s => (JsonObject)s.DeepClone()).ToList();
+        var added = ParseSteps(additions, true, measure);
+        if (added.Any(a => revised.Any(s => s["id"]?.ToString() == a["id"]?.ToString())))
+            throw new InvalidOperationException("新增节点id已存在；修改已有节点请用nodes。");
+        foreach (var step in added)
+        {
+            step["added_reason"] = reason;
+            step["added_revision"] = _revision;
+        }
+        var seen = new HashSet<string>();
+        foreach (var change in changes)
+        {
+            string id = change["id"]?.GetValue<string>();
+            var step = revised.FirstOrDefault(s => s["id"]?.ToString() == id);
+            if (step == null || !seen.Add(id) || step["status"]?.ToString() == "completed")
+                throw new InvalidOperationException("只能修改已有未完成节点，不得重复修改。");
+            if (change["script"] == null && change["depends_on"] == null && change["on_failure"] == null)
+                throw new ArgumentException("需要script、depends_on或on_failure修改。");
+            if (change["script"] != null)
+            {
+                if (string.IsNullOrWhiteSpace(change["script"].GetValue<string>())) throw new ArgumentException("script不能为空。");
+                step["script"] = change["script"].DeepClone();
+                step["preparation_only"] = AgentScript.PreparationOnly(change["script"].ToString());
+            }
+            if (change["on_failure"] != null) step["on_failure"] = change["on_failure"].GetValue<string>();
+            if (change["depends_on"] != null)
+                step["depends_on"] = (change["depends_on"] as JsonArray ?? throw new ArgumentException("depends_on需要数组。")).DeepClone();
+            var history = step["revisions"] as JsonArray;
+            if (history == null) step["revisions"] = history = new JsonArray();
+            history.Add(new JsonObject { ["reason"] = reason, ["revision"] = _revision,
+                ["before_script"] = _steps.First(s => s["id"]?.ToString() == id)["script"].DeepClone(),
+                ["before_on_failure"] = _steps.First(s => s["id"]?.ToString() == id)["on_failure"]?.DeepClone(),
+                ["before_dependencies"] = _steps.First(s => s["id"]?.ToString() == id)["depends_on"].DeepClone() });
+        }
+        revised.AddRange(added);
+        ValidateDependencies(revised);
+        _steps.Clear(); _steps.AddRange(revised);
+        if (!Ready(_steps[_cursor]))
+        {
+            if (_steps[_cursor]["status"]?.ToString() == "active") _steps[_cursor]["status"] = "pending";
+            SelectReady();
+        }
+        _revision++;
+        return Snapshot();
+    }
+
+    public JsonObject Patch(JsonObject args, Func<JsonObject, int> measure)
+    {
+        if (!Incomplete || args["expected_revision"]?.GetValue<int>() != _revision)
+            throw new InvalidOperationException("计划已改变或已完成，请重新读取task_plan.revision。");
+        string reason = args["reason"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(reason) || args["changes"] is not JsonArray changes || changes.Count is < 1 or > 32)
+            throw new ArgumentException("修正需要reason与1..32项changes。");
+        var edits = new List<(JsonObject Step, int Index, JsonObject Before, JsonObject After, int Actual)>();
+        var seen = new HashSet<string>();
+        foreach (var node in changes)
+        {
+            string id = node["step"]?.GetValue<string>();
+            int index = node["condition"]?.GetValue<int>() ?? -1;
+            var step = _steps.FirstOrDefault(s => s["id"]?.ToString() == id);
+            if (step == null || step["status"]?.ToString() == "completed" || !seen.Add(id + ":" + index)
+                || index < 0 || index >= step["conditions"].AsArray().Count)
+                throw new InvalidOperationException("只能修正未完成步骤的有效且不重复条件。");
+            var before = step["conditions"][index].AsObject();
+            int type = node["type"]?.GetValue<int>() ?? 0;
+            if (before["kind"]?.ToString() is not ("item" or "equipped" or "npc_alive") || type <= 0
+                || before["type"]?.GetValue<int>() != node["expected_type"]?.GetValue<int>() || before["type"].GetValue<int>() == type)
+                throw new InvalidOperationException("仅允许纠正item/equipped/npc_alive的type；不得修改数量、完成步骤或击杀基线。");
+            var after = (JsonObject)before.DeepClone(); after["type"] = type;
+            edits.Add((step, index, (JsonObject)before.DeepClone(), after, measure(after)));
+        }
+        foreach (var edit in edits)
+        {
+            edit.Step["conditions"][edit.Index] = edit.After;
+            edit.Step["best_actual"][edit.Index] = Math.Min(edit.Actual, edit.After["count"].GetValue<int>());
+            edit.Step.Remove("evidence");
+            var history = edit.Step["condition_corrections"] as JsonArray;
+            if (history == null) edit.Step["condition_corrections"] = history = new JsonArray();
+            history.Add(new JsonObject { ["before"] = edit.Before, ["after"] = edit.After.DeepClone(), ["reason"] = reason });
+        }
+        _revision++;
+        var result = Snapshot(); result["corrected"] = true; result["verified"] = false;
+        return result;
     }
 
     public void Observe(Func<JsonObject, int> measure)
     {
-        if (!Incomplete) return;
-        var conditions = _steps[_cursor]["conditions"].AsArray();
-        var best = _steps[_cursor]["best_actual"].AsArray();
-        for (int i = 0; i < conditions.Count; i++)
+        foreach (var step in _steps.Where(Ready))
         {
-            var condition = conditions[i].AsObject();
-            int actual = measure(condition) - (condition["kind"]?.ToString() == "npc_kills" ? condition["baseline"].GetValue<int>() : 0);
-            int capped = Math.Min(actual, condition["count"].GetValue<int>());
-            if (capped <= best[i].GetValue<int>()) continue;
-            best[i] = capped;
-            _progress++;
+            var conditions = step["conditions"].AsArray();
+            var best = step["best_actual"].AsArray();
+            for (int i = 0; i < conditions.Count; i++)
+            {
+                var condition = conditions[i].AsObject();
+                int actual = measure(condition) - (condition["kind"]?.ToString() is "npc_kills" or "chests_looted" ? condition["baseline"].GetValue<int>() : 0);
+                int capped = Math.Min(actual, condition["count"].GetValue<int>());
+                if (capped <= best[i].GetValue<int>()) continue;
+                best[i] = capped;
+                _progress++;
+            }
         }
     }
 
     public JsonObject Advance(string id, Func<JsonObject, int> measure)
     {
-        if (!Incomplete || _steps[_cursor]["id"]?.GetValue<string>() != id)
-            throw new InvalidOperationException("只能验证当前步骤，不能跳过步骤。");
+        var step = _steps.FirstOrDefault(s => s["id"]?.ToString() == id);
+        if (step == null || !Ready(step))
+            throw new InvalidOperationException("只能验证前置已完成的未完成节点。");
         Observe(measure);
-        var step = _steps[_cursor];
         var evidence = new JsonArray();
         bool passed = true;
         foreach (var node in step["conditions"].AsArray())
         {
             var condition = node.AsObject();
-            int actual = measure(condition) - (condition["kind"]?.GetValue<string>() == "npc_kills"
+            int actual = measure(condition) - (condition["kind"]?.GetValue<string>() is "npc_kills" or "chests_looted"
                 ? condition["baseline"].GetValue<int>() : 0);
             bool met = actual >= condition["count"].GetValue<int>();
             passed &= met;
@@ -94,16 +313,20 @@ public sealed class AgentTaskPlan
         {
             step["status"] = "completed";
             _progress++;
-            if (++_cursor < _steps.Count) _steps[_cursor]["status"] = "active";
+            if (_steps[_cursor] == step) SelectReady();
+            _revision++;
         }
         var result = Snapshot();
         result["verified"] = passed;
         return result;
     }
 
-    public void Record(string tool, string output, bool action = false)
+    public void Record(string tool, string output, bool action = false, string nodeId = null)
     {
         if (!Incomplete) return;
+        var step = nodeId == null ? (_dag ? null : _steps[_cursor])
+            : _steps.FirstOrDefault(s => s["id"]?.ToString() == nodeId && s["status"]?.ToString() != "completed");
+        if (step == null) return;
         JsonObject facts = null;
         try
         {
@@ -115,7 +338,7 @@ public sealed class AgentTaskPlan
             }
         }
         catch (System.Text.Json.JsonException) { }
-        _steps[_cursor]["last_action"] = new JsonObject
+        step["last_action"] = new JsonObject
         {
             ["tool"] = tool, ["result"] = output.Length <= 6000 ? output : output[..6000],
             ["utc"] = DateTime.UtcNow.ToString("O")
@@ -125,17 +348,17 @@ public sealed class AgentTaskPlan
              || facts["done"]?.ToString() == "false" || facts["status"]?.ToString() is "failed" or "stopped_short"
              || facts["outcome"]?.ToString() is "timeout" or "no_progress" or "stalled" or "unbreakable" or "out_of_reach"
                  or "no_tiles" or "stuck" or "partial" or "not_placed" or "interrupted_by_death"));
-        if (failed) _steps[_cursor]["blocking_evidence"] = _steps[_cursor]["last_action"].DeepClone();
-        else if (facts != null && facts["error"] == null && (action || _steps[_cursor]["blocking_evidence"]?["tool"]?.ToString() == tool))
+        if (failed) step["blocking_evidence"] = step["last_action"].DeepClone();
+        else if (facts != null && facts["error"] == null && (action || step["blocking_evidence"]?["tool"]?.ToString() == tool))
         {
-            if (_steps[_cursor]["status"]?.ToString() == "blocked")
+            if (step["status"]?.ToString() == "blocked")
             {
-                _steps[_cursor]["previous_failure"] = new JsonObject { ["reason"] = _steps[_cursor]["failure"]?.DeepClone(),
-                    ["evidence"] = _steps[_cursor]["blocking_evidence"]?.DeepClone() };
-                _steps[_cursor].Remove("failure");
-                _steps[_cursor]["status"] = "active";
+                step["previous_failure"] = new JsonObject { ["reason"] = step["failure"]?.DeepClone(),
+                    ["evidence"] = step["blocking_evidence"]?.DeepClone() };
+                step.Remove("failure");
+                step["status"] = _steps[_cursor] == step ? "active" : "pending";
             }
-            _steps[_cursor].Remove("blocking_evidence");
+            step.Remove("blocking_evidence");
         }
     }
 
@@ -154,22 +377,52 @@ public sealed class AgentTaskPlan
     {
         var evidence = new JsonArray();
         bool passed = _steps.Count > 0 && !Incomplete;
-        if (_steps.Count > 0)
-            foreach (var node in _steps[^1]["conditions"].AsArray())
+        foreach (var terminal in _steps.Where(s => !_steps.Any(other => other["depends_on"].AsArray()
+            .Any(id => id.ToString() == s["id"].ToString()))))
+            foreach (var node in terminal["conditions"].AsArray())
             {
                 var condition = node.AsObject();
-                int actual = measure(condition) - (condition["kind"]?.ToString() == "npc_kills" ? condition["baseline"].GetValue<int>() : 0);
+                int actual = measure(condition) - (condition["kind"]?.ToString() is "npc_kills" or "chests_looted" ? condition["baseline"].GetValue<int>() : 0);
                 bool met = actual >= condition["count"].GetValue<int>();
                 passed &= met;
-                evidence.Add(new JsonObject { ["condition"] = condition.DeepClone(), ["actual"] = actual, ["met"] = met });
+                evidence.Add(new JsonObject { ["step"] = terminal["id"].DeepClone(),
+                    ["condition"] = condition.DeepClone(), ["actual"] = actual, ["met"] = met });
             }
-        return new JsonObject { ["verified"] = passed, ["plan"] = Snapshot(), ["final_evidence"] = evidence };
+        return new JsonObject { ["verified"] = passed,
+            ["reason"] = _steps.Count == 0 ? "plan_required" : Incomplete ? "steps_pending" : passed ? "verified" : "final_conditions_changed",
+            ["plan"] = Snapshot(), ["final_evidence"] = evidence };
+    }
+
+    public JsonObject Summary()
+    {
+        var result = Snapshot();
+        foreach (var step in result["steps"].AsArray().OfType<JsonObject>())
+        {
+            step.Remove("last_action"); step.Remove("previous_failure");
+            step["on_failure_present"] = !string.IsNullOrWhiteSpace(step["on_failure"]?.ToString());
+            step.Remove("on_failure");
+            if (step["revisions"] is JsonArray revisions)
+            {
+                step["revision_count"] = revisions.Count;
+                step.Remove("revisions");
+            }
+            if (step["blocking_evidence"] is JsonObject evidence)
+            {
+                string text = evidence["result"]?.ToString() ?? "";
+                step["blocking_evidence"] = new JsonObject { ["tool"] = evidence["tool"]?.DeepClone(),
+                    ["utc"] = evidence["utc"]?.DeepClone(), ["result_excerpt"] = text[..Math.Min(512, text.Length)] };
+            }
+        }
+        return result;
     }
 
     public JsonObject Snapshot() => new()
     {
         ["goal"] = _goal, ["status"] = _steps.Count == 0 ? "none" : Incomplete ? _steps[_cursor]["status"]?.DeepClone() : JsonValue.Create("completed"),
-        ["cursor"] = _cursor, ["progress_revision"] = _progress, ["current_step"] = Incomplete ? _steps[_cursor]["id"]?.DeepClone() : null,
+        ["cursor"] = _cursor, ["progress_revision"] = _progress, ["revision"] = _revision,
+        ["mode"] = _dag ? "dag" : "sequential",
+        ["ready_steps"] = new JsonArray(_steps.Where(Ready).Select(s => s["id"].DeepClone()).ToArray()),
+        ["current_step"] = Incomplete ? _steps[_cursor]["id"]?.DeepClone() : null,
         ["steps"] = new JsonArray(_steps.Select(step => step.DeepClone()).ToArray())
     };
 }

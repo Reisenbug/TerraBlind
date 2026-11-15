@@ -28,6 +28,7 @@ namespace TerraBlind
 		static readonly List<Frame> _stack = new();
 		public static string LastAction = "";
 		public static string FailChain = "";   // 失败时整条链条,给日志和上报用
+		public static uint FailureRevision { get; private set; }
 
 		public static bool Busy => _stack.Count > 0;
 		public static int Depth => _stack.Count;
@@ -83,6 +84,7 @@ namespace TerraBlind
 			foreach (var f in _stack) sb.Append(f).Append(" <- ");
 			sb.Append($"{who}:{b}");
 			FailChain = sb.ToString();
+			FailureRevision++;
 			DiagLog.Write($"[unstick] 放弃({why}) 链条: {FailChain}");
 			_stack.Clear();
 		}

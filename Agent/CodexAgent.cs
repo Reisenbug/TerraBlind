@@ -13,6 +13,23 @@ using System.Threading.Tasks;
 
 namespace TerraBlind;
 
+internal static class AgentImages
+{
+    static readonly ConcurrentDictionary<string, byte[]> images = new();
+    static readonly ConcurrentQueue<string> order = new();
+    internal static string Register(byte[] png)
+    {
+        if (png.Length is < 8 or > 4_000_000 || !png.AsSpan(0, 8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }))
+            throw new ArgumentException("地图图片需要4MB以内的PNG。");
+        string id = Guid.NewGuid().ToString("N"); images[id] = png; order.Enqueue(id);
+        while (order.Count > 16 && order.TryDequeue(out string old)) images.TryRemove(old, out _);
+        return id;
+    }
+    internal static string Take(JsonNode result)
+        => result?["image_id"]?.ToString() is string id && images.TryRemove(id, out var png)
+            ? "data:image/png;base64," + Convert.ToBase64String(png) : null;
+}
+
 public sealed class CodexConnection : IDisposable
 {
     readonly TextReader _reader;
@@ -98,10 +115,14 @@ public sealed class CodexAgent : IDisposable
     readonly Func<string, string, CodexConnection> _connect;
     CodexConnection _rpc;
     string _thread, _signature;
+    volatile string _activeTurn;
+    internal bool HasActiveTurn => _activeTurn != null;
     JsonObject _usage;
     JsonObject _goal;
     readonly object _goalGate = new();
     string _goalRequest;
+    string _deliveredGoal;
+    int _deliveredGoalRevision = -1;
     long _goalTokenBaseline;
     readonly JsonArray _goalHistory = new();
     public JsonObject GoalState
@@ -110,6 +131,8 @@ public sealed class CodexAgent : IDisposable
         {
             lock (_goalGate) return _goal == null ? null : new JsonObject { ["native"] = _goal.DeepClone(),
                 ["host_tokens_used"] = GoalTokens, ["history"] = _goalHistory.DeepClone(),
+                ["host_wall_elapsed_seconds"] = _goal["createdAt"] is JsonValue created && created.TryGetValue<long>(out var unix)
+                    ? Math.Max(0, DateTimeOffset.UtcNow.ToUnixTimeSeconds() - unix) : null,
                 ["scheduler"] = "game_host", ["completion_authority"] = "verified_game_state" };
         }
     }
@@ -117,6 +140,131 @@ public sealed class CodexAgent : IDisposable
     public JsonObject TokenUsage => (JsonObject)_usage?.DeepClone();
     public int UsageUpdates { get; private set; }
     public int TurnsStarted { get; private set; }
+    public int ContextRevision { get; private set; }
+    internal const int ContextTokenLimit = 64000;
+    int compactAtInput = ContextTokenLimit;
+    bool measureAfterCompaction;
+    internal int Compactions { get; private set; }
+    internal string LastCompactionError { get; private set; }
+
+    string GoalNotice()
+    {
+        if (_goal == null) return "";
+        var brief = new JsonObject();
+        foreach (string key in new[] { "threadId", "objective", "status", "tokenBudget" })
+            if (_goal.ContainsKey(key)) brief[key] = _goal[key]?.DeepClone();
+        string value = brief.ToJsonString();
+        if (_deliveredGoal == value && _deliveredGoalRevision == ContextRevision) return "";
+        _deliveredGoal = value; _deliveredGoalRevision = ContextRevision;
+        return "\n宿主目标：" + value + "\n宿主按task_plan最终条件验收完成。";
+    }
+
+    void RecordUsage(JsonObject usage)
+    {
+        if (usage["total"]?["totalTokens"]?.ToString() != _usage?["total"]?["totalTokens"]?.ToString()) UsageUpdates++;
+        _usage = (JsonObject)usage.DeepClone();
+        if (measureAfterCompaction && _usage["last"]?["inputTokens"] is JsonValue input)
+        {
+            compactAtInput = Math.Max(ContextTokenLimit, input.GetValue<int>() + ContextTokenLimit / 2);
+            measureAfterCompaction = false;
+        }
+        DiagLog.Write("[agent-usage] " + usage.ToJsonString());
+    }
+
+    internal async Task PrepareContext(string executable, string cwd, string model, string system, JsonArray tools,
+        bool managedGoal, CancellationToken token, bool compact = true, Func<Task<bool>> keepExecuting = null)
+    {
+        if (HasActiveTurn) return;
+        await Ensure(executable, cwd, model, system, tools, token, managedGoal);
+        if (compact) await CompactContext(token, keepExecuting: keepExecuting);
+    }
+
+    internal async Task<bool> CompactContext(CancellationToken token, bool force = false, Func<Task<bool>> keepExecuting = null)
+    {
+        int input = _usage?["last"]?["inputTokens"]?.GetValue<int>() ?? 0;
+        if (_rpc == null || HasActiveTurn || !force && input < compactAtInput) return false;
+        var elapsed = Stopwatch.StartNew();
+        string turn = null;
+        bool observed = false;
+        LastCompactionError = null;
+        DiagLog.Write($"[agent_context_compaction] status=started input_tokens={input} threshold={compactAtInput}");
+        try
+        {
+            await _rpc.Request("thread/compact/start", new JsonObject { ["threadId"] = _thread }, token);
+            while (true)
+            {
+                JsonObject message;
+                using (var polling = CancellationTokenSource.CreateLinkedTokenSource(token))
+                {
+                    if (keepExecuting != null && turn != null && !observed) polling.CancelAfter(100);
+                    try { message = await _rpc.Next(polling.Token); }
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                    {
+                        if (await keepExecuting()) continue;
+                        await Interrupt(turn);
+                        compactAtInput = input + ContextTokenLimit / 2;
+                        LastCompactionError = "background_action_ended";
+                        DiagLog.Write($"[agent_context_compaction] status=deferred reason=background_action_ended elapsed_ms={elapsed.ElapsedMilliseconds}");
+                        return false;
+                    }
+                }
+                var args = message["params"] as JsonObject;
+                string method = message["method"]?.ToString();
+                if (message["id"] != null)
+                {
+                    await _rpc.Send(new JsonObject { ["id"] = message["id"].DeepClone(),
+                        ["error"] = new JsonObject { ["code"] = -32601, ["message"] = "历史整理期间只接收状态通知。" } }, token);
+                    continue;
+                }
+                if (args?["threadId"]?.ToString() != _thread) continue;
+                if (method == "turn/started") turn = args["turn"]?["id"]?.ToString();
+                if (method == "item/completed" && args["item"]?["type"]?.ToString() == "contextCompaction") observed = true;
+                if (method == "thread/tokenUsage/updated" && args["tokenUsage"] is JsonObject usage)
+                {
+                    RecordUsage(usage);
+                    if (_goal?["tokenBudget"] is JsonValue limit && GoalTokens >= limit.GetValue<long>())
+                    {
+                        await Interrupt(turn);
+                        await SuspendGoal("budgetLimited", token);
+                        throw new GoalBudgetExceededException();
+                    }
+                }
+                if (method != "turn/completed" || turn == null || args["turn"]?["id"]?.ToString() != turn) continue;
+                if (!observed || args["turn"]?["status"]?.ToString() != "completed")
+                    throw new IOException("Codex历史整理未完成：" + args["turn"]?.ToJsonString());
+                ContextRevision++; Compactions++; measureAfterCompaction = true;
+                DiagLog.Write($"[agent_context_compaction] status=completed elapsed_ms={elapsed.ElapsedMilliseconds} revision={ContextRevision}");
+                return true;
+            }
+        }
+        catch (OperationCanceledException) { await Interrupt(turn); throw; }
+        catch (Exception error) when (error is IOException or InvalidOperationException)
+        {
+            if (observed) ContextRevision++;
+            compactAtInput = input + ContextTokenLimit / 2;
+            LastCompactionError = error.Message;
+            DiagLog.Write($"[agent_context_compaction] status=failed elapsed_ms={elapsed.ElapsedMilliseconds} error={error.Message}");
+            return false;
+        }
+    }
+
+    internal async Task<bool> Steer(string observation, CancellationToken token)
+    {
+        var rpc = _rpc;
+        string turn = _activeTurn, thread = _thread;
+        if (turn == null || rpc == null || rpc.Closed || token.IsCancellationRequested) return false;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(3));
+        try
+        {
+            await rpc.Request("turn/steer", new JsonObject { ["threadId"] = thread, ["expectedTurnId"] = turn,
+                ["input"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = observation }) }, deadline.Token);
+            DiagLog.Write("[agent_danger] steering accepted turn=" + turn);
+            return true;
+        }
+        catch (Exception error) when (error is IOException or InvalidOperationException or OperationCanceledException)
+        { DiagLog.Write("[agent_danger] steering not accepted: " + error.Message); return false; }
+    }
 
     public CodexAgent(Func<string, string, CodexConnection> connect = null) => _connect = connect ?? Launch;
 
@@ -127,13 +275,24 @@ public sealed class CodexAgent : IDisposable
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         string[] known = { Environment.GetEnvironmentVariable("CODEX_HUD_CODEX_BIN"),
             Path.Combine(home, ".npm-global", "bin", "codex"), "/opt/homebrew/bin/codex", "/usr/local/bin/codex" };
-        foreach (string path in known) if (!string.IsNullOrEmpty(path) && File.Exists(path)) return path;
+        foreach (string path in known) if (!string.IsNullOrEmpty(path) && File.Exists(path)) return NpmNativeExecutable(path);
         foreach (string directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
         {
             string path = Path.Combine(directory, OperatingSystem.IsWindows() ? "codex.exe" : "codex");
-            if (File.Exists(path)) return path;
+            if (File.Exists(path)) return NpmNativeExecutable(path);
         }
         throw new InvalidOperationException("未找到 Codex。请先安装并执行 codex login，或填写 Codex 可执行文件路径。");
+    }
+
+    internal static string NpmNativeExecutable(string launcher)
+    {
+        string target = File.ResolveLinkTarget(launcher, true)?.FullName ?? launcher;
+        if (Path.GetFileName(target) != "codex.js") return launcher;
+        string packages = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(target)), "node_modules", "@openai");
+        if (!Directory.Exists(packages)) return launcher;
+        string[] natives = Directory.GetFiles(packages, "codex", SearchOption.AllDirectories)
+            .Where(path => Path.GetFileName(Path.GetDirectoryName(path)) == "bin").ToArray();
+        return natives.Length == 1 ? natives[0] : launcher;
     }
 
     static CodexConnection Launch(string executable, string cwd)
@@ -151,12 +310,21 @@ public sealed class CodexAgent : IDisposable
             "memory_tool", "code_mode", "view_image", "skill_search" })
         { start.ArgumentList.Add("-c"); start.ArgumentList.Add($"features.{feature}=false"); }
         start.ArgumentList.Add("-c"); start.ArgumentList.Add("features.skip_host_skill_discovery=true");
+        start.ArgumentList.Add("-c"); start.ArgumentList.Add("skills.include_instructions=false");
         start.ArgumentList.Add("-c"); start.ArgumentList.Add("project_doc_max_bytes=0");
         start.ArgumentList.Add("-c"); start.ArgumentList.Add("web_search=\"disabled\"");
         if (!OperatingSystem.IsWindows()) start.Environment["PATH"] = (start.Environment["PATH"] ?? "") + ":/usr/local/bin:/opt/homebrew/bin";
         ApplySystemProxy(start, HttpClient.DefaultProxy);
         var process = Process.Start(start) ?? throw new IOException("无法启动 Codex。");
-        _ = process.StandardError.ReadToEndAsync();
+        _ = process.StandardError.ReadToEndAsync().ContinueWith(errors =>
+        {
+            if (!errors.IsCompletedSuccessfully) return;
+            string message = errors.Result.Trim(), code = "unavailable";
+            try { if (process.HasExited) code = process.ExitCode.ToString(); } catch (InvalidOperationException) { }
+            string key = Config.I.AgentApiKey;
+            if (!string.IsNullOrEmpty(key)) message = message.Replace(key, "[redacted]");
+            DiagLog.Write($"[agent_codex_exit] code={code} stderr={message[..Math.Min(4000, message.Length)]}");
+        }, TaskContinuationOptions.ExecuteSynchronously);
         return new CodexConnection(process.StandardOutput, process.StandardInput, () =>
         {
             try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
@@ -184,8 +352,10 @@ public sealed class CodexAgent : IDisposable
         if (_rpc?.Closed == false && _thread != null && _signature == signature) return;
         Dispose();
         _signature = signature;
-        _usage = null; UsageUpdates = TurnsStarted = 0;
+        _usage = null; UsageUpdates = TurnsStarted = ContextRevision = 0;
+        compactAtInput = ContextTokenLimit; measureAfterCompaction = false; Compactions = 0; LastCompactionError = null;
         lock (_goalGate) { _goal = null; _goalRequest = null; _goalHistory.Clear(); }
+        _deliveredGoal = null; _deliveredGoalRevision = -1;
         _rpc = _connect(executable, cwd);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
@@ -202,26 +372,35 @@ public sealed class CodexAgent : IDisposable
             var config = await _rpc.Request("config/read", new JsonObject { ["includeLayers"] = false }, deadline.Token);
             var overrides = new JsonObject();
             overrides["features.goals"] = false;
+            overrides["features.fast_mode"] = true;
             if (config["config"]?["mcp_servers"] is JsonObject servers)
                 foreach (var server in servers) overrides[$"mcp_servers.{server.Key}.enabled"] = false;
             var dynamicTools = new JsonArray();
             foreach (var tool in tools)
             {
                 var function = tool["function"];
+                string description = function["description"]?.ToString() ?? "";
+                if (function["name"]?.ToString() is "get_state" or "game_api" or "run_script" or "ask")
+                    description = "返回JSON文本(string)；外层访问字段先JSON.parse。\n" + description;
+                if (function["name"]?.ToString() == "terrain_map")
+                    description = "Codex exec返回字符串：JSON元数据后换行接data:image/图片URI。显示方式：const r=await tools.terrain_map(参数); const i=r.indexOf('\\ndata:image/'); if(i>=0){text(r.slice(0,i));image(r.slice(i+1).trim());}else text(r);\n" + description;
                 dynamicTools.Add(new JsonObject { ["type"] = "function", ["name"] = function["name"].DeepClone(),
-                    ["description"] = function["description"]?.DeepClone() ?? JsonValue.Create(""),
+                    ["description"] = description,
                     ["inputSchema"] = function["parameters"].DeepClone() });
             }
             var args = new JsonObject
             {
                 ["cwd"] = cwd, ["ephemeral"] = !managedGoal, ["environments"] = new JsonArray(),
-                ["approvalPolicy"] = "never", ["sandbox"] = "read-only", ["baseInstructions"] = system,
-                ["developerInstructions"] = "这是 Terraria 游戏会话。只用宿主提供的游戏工具完成任务，通过 ask 向玩家提问。不要开发代码、读写文件或使用终端。",
+                ["approvalPolicy"] = "never", ["sandbox"] = "read-only", ["serviceTier"] = "fast", ["baseInstructions"] = system,
+                ["developerInstructions"] = "这是 Terraria 游戏会话。只用宿主提供的游戏工具完成任务，通过 ask 向玩家提问。允许通过 script_program 编写和修改游戏行为 JavaScript，通过 run_script 执行；遵守宿主提供的脚本接口和当前任务授权。不要修改模组源码、直接读写文件或使用终端。"
+                    + "外层Codex exec与游戏run_script是两个执行环境：外层只有注册的tools函数，get_state/game_api/run_script返回JSON字符串。例：const s=JSON.parse(await tools.get_state({})); text(s.player.hp); 不要把字符串当对象。"
+                    + "game_api列出的其余函数仅能在run_script代码里用tool(name,args)调用；不能写tools.inspect_terrain等未注册函数。游戏脚本内的tool已经返回解析后的对象，无需JSON.parse。",
                 ["dynamicTools"] = dynamicTools, ["config"] = overrides
             };
             if (!string.IsNullOrWhiteSpace(model)) args["model"] = model;
             var thread = await _rpc.Request("thread/start", args, deadline.Token);
             _thread = thread["thread"]?["id"]?.GetValue<string>() ?? throw new IOException("Codex 没有返回会话编号。");
+            DiagLog.Write($"[agent-thread] id={_thread} model={thread["model"]} service_tier={thread["serviceTier"]} instruction_sources={thread["instructionSources"]?.AsArray().Count ?? 0}");
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { Dispose(); throw new TimeoutException("Codex 初始化超时。"); }
@@ -230,12 +409,15 @@ public sealed class CodexAgent : IDisposable
 
     public async Task RunAsync(string input, string executable, string cwd, string model, string system, JsonArray tools,
         Func<string, JsonObject, CancellationToken, Task<string>> execute, Action<string> say, CancellationToken token,
-        JsonObject goalOptions = null)
+        JsonObject goalOptions = null, Func<Task<string>> refreshContext = null, Func<Task<bool>> canCompact = null)
     {
         string turn = null;
+        var elapsed = Stopwatch.StartNew();
+        long lastToolFinished = 0;
         try
         {
             await Ensure(executable, cwd, model, system, tools, token, goalOptions != null);
+            DiagLog.Write($"[agent-timing] phase=connection_ready elapsed_ms={elapsed.ElapsedMilliseconds}");
             if (goalOptions != null)
             {
                 if (_goalRequest != goalOptions["request"]?.ToString())
@@ -250,16 +432,18 @@ public sealed class CodexAgent : IDisposable
                 }
                 await ReadGoal(token);
                 if (_goal?["status"]?.ToString() != "active") throw new InvalidOperationException("Codex目标当前不是active：" + _goal?["status"]);
-                input += "\n游戏宿主持有的Codex goal：" + GoalState.ToJsonString()
-                    + "\n继续同一目标；完成只能由宿主按真实task_plan最终条件验收。不要另建或自行标完成目标。";
+                input += GoalNotice();
             }
             var started = await _rpc.Request("turn/start", new JsonObject
             {
-                ["threadId"] = _thread, ["effort"] = "low",
+                ["threadId"] = _thread, ["effort"] = goalOptions == null ? "low" : "medium",
                 ["input"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = input })
             }, token);
             turn = started["turn"]?["id"]?.GetValue<string>() ?? throw new IOException("Codex 没有返回执行编号。");
+            _activeTurn = turn;
             TurnsStarted++;
+            lastToolFinished = elapsed.ElapsedMilliseconds;
+            DiagLog.Write($"[agent-timing] phase=turn_started turn={turn} elapsed_ms={lastToolFinished}");
             int toolCalls = 0;
             var delivered = new System.Collections.Generic.HashSet<string>();
             while (true)
@@ -271,24 +455,49 @@ public sealed class CodexAgent : IDisposable
                 {
                     if (method == "item/tool/call" && args?["threadId"]?.ToString() == _thread && args?["turnId"]?.ToString() == turn)
                     {
-                        if (++toolCalls > 32) throw new InvalidOperationException("本轮达到32次游戏工具调用上限；进度保留，目标未完成。");
+                        long toolStarted = elapsed.ElapsedMilliseconds;
+                        DiagLog.Write($"[agent-timing] phase=tool_received turn={turn} tool={args["tool"]} elapsed_ms={toolStarted} response_gap_ms={toolStarted - lastToolFinished}");
+                        if (++toolCalls > 32)
+                        {
+                            if (goalOptions == null) throw new InvalidOperationException("本轮达到32次游戏工具调用上限；进度保留，目标未完成。");
+                            await Tool(message, tools, (_, _, _) => Task.FromResult("{\"error\":\"host_turn_limit\",\"not_executed\":true,\"detail\":\"本轮工具预算已用完；目标保持active，由宿主继续下一轮，不重建计划。\"}"), token);
+                            await Interrupt(turn);
+                            if (_rpc == null) throw new IOException("Codex轮次交接连接已关闭。");
+                            return;
+                        }
                         await Tool(message, tools, execute, token);
+                        lastToolFinished = elapsed.ElapsedMilliseconds;
+                        DiagLog.Write($"[agent-timing] phase=tool_returned turn={turn} tool={args["tool"]} elapsed_ms={lastToolFinished} tool_ms={lastToolFinished - toolStarted}");
                     }
                     else await _rpc.Send(new JsonObject { ["id"] = message["id"].DeepClone(),
                         ["error"] = new JsonObject { ["code"] = -32601, ["message"] = "该游戏会话不支持此请求。" } }, token);
                     continue;
                 }
                 if (args?["threadId"]?.ToString() != _thread) continue;
+                if (method == "item/completed" && args["item"]?["type"]?.ToString() == "contextCompaction")
+                {
+                    ContextRevision++; Compactions++; measureAfterCompaction = true;
+                    if (refreshContext != null && !await Steer("宿主当前工作状态：" + await refreshContext() + GoalNotice(), token)) ContextRevision++;
+                }
                 if (args["turnId"] != null && args["turnId"].ToString() != turn) continue;
                 if (method == "thread/tokenUsage/updated" && args["tokenUsage"] is JsonObject usage)
                 {
-                    if (usage["total"]?["totalTokens"]?.ToString() != _usage?["total"]?["totalTokens"]?.ToString()) UsageUpdates++;
-                    _usage = (JsonObject)usage.DeepClone();
+                    RecordUsage(usage);
                     if (_goal?["tokenBudget"] is JsonValue limit && GoalTokens >= limit.GetValue<long>())
                     {
                         await Interrupt(turn);
                         await SuspendGoal("budgetLimited", token);
                         throw new GoalBudgetExceededException();
+                    }
+                    if (goalOptions != null && canCompact != null
+                        && usage["last"]?["inputTokens"]?.GetValue<int>() >= compactAtInput && await canCompact())
+                    {
+                        DiagLog.Write("[agent_context_compaction] status=handoff background_action=true");
+                        await Interrupt(turn);
+                        if (_rpc == null) throw new IOException("Codex历史交接连接已关闭。");
+                        _activeTurn = null;
+                        await CompactContext(token, keepExecuting: canCompact);
+                        return;
                     }
                 }
                 if (method == "error" && args["willRetry"]?.GetValue<bool>() == true)
@@ -321,6 +530,7 @@ public sealed class CodexAgent : IDisposable
             try { await SuspendGoal("blocked", deadline.Token); } catch { }
             Dispose(); throw;
         }
+        finally { if (_activeTurn == turn) _activeTurn = null; }
     }
 
     async Task<JsonObject> ReadGoal(CancellationToken token)
@@ -365,6 +575,7 @@ public sealed class CodexAgent : IDisposable
     async Task Tool(JsonObject request, JsonArray tools, Func<string, JsonObject, CancellationToken, Task<string>> execute, CancellationToken token)
     {
         string output;
+        string image = null;
         bool success = true;
         try
         {
@@ -375,13 +586,23 @@ public sealed class CodexAgent : IDisposable
             foreach (var field in schema["function"]?["parameters"]?["required"]?.AsArray() ?? new JsonArray())
                 if (args[field.ToString()] == null) throw new InvalidOperationException("缺少参数：" + field);
             output = await execute(name, args, token);
-            try { success = !AgentTools.Rejected(JsonNode.Parse(output) as JsonObject); } catch (System.Text.Json.JsonException) { }
+            try
+            {
+                var result = JsonNode.Parse(output);
+                success = !AgentTools.Rejected(result as JsonObject);
+                if (success && name == "terrain_map") image = AgentImages.Take(result);
+                output = AgentModelOutput.Project(name, result)?.ToJsonString(AgentTools.ModelJson) ?? "null";
+            }
+            catch (System.Text.Json.JsonException) { }
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { success = false; output = new JsonObject { ["error"] = ex.Message }.ToJsonString(); }
+        catch (Exception ex) { success = false; output = new JsonObject { ["error"] = ex.Message }.ToJsonString(AgentTools.ModelJson); }
+        DiagLog.Write($"[agent-model-output] tool={request["params"]?["tool"]} chars={output.Length} success={success}");
+        var content = new JsonArray(new JsonObject { ["type"] = "inputText", ["text"] = output });
+        if (image != null) content.Add(new JsonObject { ["type"] = "inputImage", ["imageUrl"] = image });
         await _rpc.Send(new JsonObject { ["id"] = request["id"].DeepClone(), ["result"] = new JsonObject
         {
-            ["success"] = success, ["contentItems"] = new JsonArray(new JsonObject { ["type"] = "inputText", ["text"] = output })
+            ["success"] = success, ["contentItems"] = content
         } }, token);
     }
 
@@ -400,6 +621,8 @@ public sealed class CodexAgent : IDisposable
                     ["error"] = new JsonObject { ["code"] = -32800, ["message"] = "任务已取消。" } }, timeout.Token);
             }
         }
+        catch (InvalidOperationException error) when (error.Message == "Codex: no active turn to interrupt")
+        { DiagLog.Write("[agent_interrupt] already_completed turn=" + turn); }
         catch { Dispose(); }
     }
 

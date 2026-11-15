@@ -38,6 +38,8 @@ namespace TerraBlind
 		static readonly Port.GameMovement _movement = new();
 		static readonly Port.ProjectileAim _attack = new();
 		static Port.CombatSnapshot _snapshot;
+		public static Port.CombatSnapshot Snapshot => _snapshot;
+		public static float MovementReserveScale { get => _sensor.MovementReserveScale; set => _sensor.MovementReserveScale = value; }
 		static string _movementReason = "";
 		public static string Last = "idle";
 		public static DodgeAction Action = DodgeAction.Idle;
@@ -115,15 +117,16 @@ namespace TerraBlind
 			var p = Main.LocalPlayer;
 			if (p != null && p.active && p.dead) FightEnd("死亡");
 			if (p == null || !p.active || p.dead) { Release(); return; }
+			if (FightCoordinator.HoldingFallProtection(p)) { Gate("fall protection"); return; }
 			if (Manual.On) { Gate("人工"); Release(); return; }
-			if (Main.gameMenu || Main.playerInventory) { Gate("paused"); _movement.Release(p); return; }
+			if (Main.gameMenu || Main.playerInventory && !NativeAgent.Processing) { Gate("paused"); _movement.Release(p); return; }
 			bool manualInput = p.controlLeft || p.controlRight || p.controlUp || p.controlDown
 				|| p.controlJump || p.controlHook || p.controlMount;
 
 			var boss = Boss(p, out int dist);
 			if (boss == null) { FightEnd("boss 没了(击败或离场)"); Gate("no boss"); Release(); return; }
 			if (!_inFight) FightStart();
-			_attack.SelectFirstWeapon(p);
+			SelectWeapon(p);
 			_sensor.Observe(p);
 
 			var done = _pending;
@@ -230,12 +233,22 @@ namespace TerraBlind
 			Last = $"{_lastApplied} boss {dist}格 {result.Reason}";
 		}
 
+		static bool SelectWeapon(Player p)
+		{
+			if (FightCoordinator.HoldingFallProtection(p)) return false;
+			if (CombatLoadout.PreferredType <= 0) { _attack.SelectFirstWeapon(p); return true; }
+			int slot = CombatLoadout.Select(p);
+			if (slot < 0) return false;
+			p.selectedItem = slot;
+			return true;
+		}
+
 		public static bool TryAttackBoss(Player p, out Vector2 target)
 		{
 			target = p.Center;
-			if (Main.gameMenu || Main.playerInventory) return false;
+			if (Main.gameMenu || Main.playerInventory && !NativeAgent.Processing) return false;
 			if (p.statLife < p.statLifeMax2 * 0.5f || p.lavaWet) p.QuickHeal();
-			_attack.SelectFirstWeapon(p);
+			if (!SelectWeapon(p)) return false;
 			_sensor.Observe(p);
 			var live = _sensor.Capture(p, (ulong)_appliedSequence, ToIntent(_appliedAction), 0);
 			if (live == null) return false;
@@ -408,6 +421,8 @@ namespace TerraBlind
 			return 40;
 		}
 
+		public static void Stop() { _pending = null; Release(); Last = "stopped"; }
+
 		static void Release()
 		{
 			_releasedAtMs = _clock.ElapsedMilliseconds;
@@ -420,7 +435,7 @@ namespace TerraBlind
 			AxisLock.Release(Owner);
 		}
 
-		static string Facts(Player p, NPC boss) => Port.DecisionFacts.State(_snapshot, FieldBooks(boss));
+		static string Facts(Player p, NPC boss) => Port.DecisionFacts.State(_snapshot, FieldBooks(boss), AgentTools.Control.Snapshot());
 
 		static string ActionCriteria(Player p)
 		{

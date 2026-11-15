@@ -17,6 +17,11 @@ internal static class LegacyNativePrediction
     static long requestedAt;
     static bool searchingPlacement;
     static int fieldGoalX, fieldGoalY;
+    static StateSpacePlanner.SSResult deferred;
+    static Vector2 deferredPosition;
+    static long deferredTick;
+    static bool deferredItemCooldown;
+    internal static bool Rejected { get; private set; }
 
     internal static void Reset()
     {
@@ -26,7 +31,16 @@ internal static class LegacyNativePrediction
             _ = pending.ContinueWith(task => { _ = task.Exception; source?.Dispose(); }, TaskScheduler.Default);
         else source?.Dispose();
         pending = null; cancellation = null; plan = null; snapshot = anchor = null;
-        searchingPlacement = false;
+        searchingPlacement = false; deferred = null;
+    }
+
+    static bool DeferCapture(Player player, StateSpacePlanner.SSResult candidate, int goalX, int goalY, bool allowItemCooldown)
+    {
+        if (deferred != null || player.fallStart == (int)(player.position.Y / 16f)) return false;
+        deferred = candidate; deferredPosition = player.position; deferredTick = Main.GameUpdateCount;
+        deferredItemCooldown = allowItemCooldown; fieldGoalX = goalX; fieldGoalY = goalY;
+        DiagLog.Write($"[legacy-native-defer] reason=landing_refresh fall_start={player.fallStart} y={player.position.Y:0.###} tick={deferredTick}");
+        return true;
     }
 
     internal static bool Start(Player player, StateSpacePlanner.SSResult candidate, int goalX, int goalY, bool allowItemCooldown = false)
@@ -34,13 +48,18 @@ internal static class LegacyNativePrediction
         if (Main.netMode != 0 || player.velocity != Vector2.Zero
             || !allowItemCooldown && (player.itemAnimation > 0 || player.itemTime > 0)
             || !player.releaseJump || candidate.Steps.Count != 1) return false;
+        if (!VanillaNavigationDemo.Instance.WorkerReady)
+        {
+            DiagLog.Write("[legacy-native-skip] worker_starting; execute_existing_candidate");
+            return false;
+        }
         var step = candidate.Steps[0];
         if (player.AnyExtraJumpUsable() && candidate.GoalWy < ActExecutor.OriginCy(player)
             && step.Frames?.Exists(frame => frame.Jump) == true)
-            return StartPillar(player, candidate, goalX, goalY);
+            return StartPillar(player, candidate, goalX, goalY, allowItemCooldown);
         if (step.Pillar && step.MineTiles?.Count is not > 0
             && step.TargetCy < ActExecutor.OriginCy(player))
-            return StartPillar(player, candidate, goalX, goalY);
+            return StartPillar(player, candidate, goalX, goalY, allowItemCooldown);
         var frames = step.Frames;
         if (step.Dig || step.Pillar || step.Bridge || frames == null || frames.Count is < 1 or > 240) return false;
         var placements = frames.Where(frame => frame.Place).Select(frame => new Point(frame.PlaceCx, frame.PlaceCy)).Distinct().ToArray();
@@ -48,6 +67,7 @@ internal static class LegacyNativePrediction
         if (placements.Length == 1 && frames[0].Place) return false;
         int placeSlot = placements.Length == 0 ? -1 : NavCoordinator.FindPlatformSlot(player);
         if (placements.Length > 0 && placeSlot < 0) return false;
+        if (DeferCapture(player, candidate, goalX, goalY, allowItemCooldown)) return true;
         try
         {
             requestedAt = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -87,10 +107,11 @@ internal static class LegacyNativePrediction
         }
     }
 
-    static bool StartPillar(Player player, StateSpacePlanner.SSResult candidate, int goalX, int goalY)
+    static bool StartPillar(Player player, StateSpacePlanner.SSResult candidate, int goalX, int goalY, bool allowItemCooldown)
     {
         int slot = NavCoordinator.FindPlatformSlot(player);
         if (slot < 0 && !player.AnyExtraJumpUsable() || !VanillaTerrainPlan.HasSupport(player)) return false;
+        if (DeferCapture(player, candidate, goalX, goalY, allowItemCooldown)) return true;
         try
         {
             requestedAt = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -207,16 +228,43 @@ internal static class LegacyNativePrediction
     internal static bool Poll(Player player, out StateSpacePlanner.SSResult ready)
     {
         ready = null;
+        Rejected = false;
+        if (deferred != null)
+        {
+            if (deferredTick == Main.GameUpdateCount) return true;
+            try
+            {
+                if (player.position != deferredPosition)
+                {
+                    DiagLog.Write($"[legacy-native-defer-cancel] reason=position_changed from={deferredPosition} actual={player.position}");
+                    return false;
+                }
+                return Start(player, deferred, fieldGoalX, fieldGoalY, deferredItemCooldown);
+            }
+            finally { deferred = null; }
+        }
         if (pending == null) return false;
-        if (!pending.IsCompleted) return true;
+        if (!pending.IsCompleted && !cancellation.IsCancellationRequested) return true;
         try
         {
-            if (!VanillaAsyncMovement.StateMatches(player, anchor, true, out _, out _)
-                || !VanillaFrame.ContextMatches(snapshot, player))
+            bool stateMatches = VanillaAsyncMovement.StateMatches(player, anchor, true, out var reason, out var mismatch);
+            JsonArray trajectory = null;
+            if (!searchingPlacement && plan.Steps.Count == 1 && plan.Steps[0].Frames is { Count: > 0 } controls
+                && !controls.Exists(frame => frame.Place))
             {
-                DiagLog.Write("[legacy-native-discard] start_or_terrain_changed");
+                trajectory = new JsonArray(new JsonObject { ["x"] = plan.StartPx, ["y"] = plan.StartPy });
+                foreach (var frame in controls)
+                    trajectory.Add(new JsonObject { ["x"] = frame.Px, ["y"] = frame.Py });
+                if (pending.IsCompletedSuccessfully && pending.Result["frames"] is JsonArray nativeFrames)
+                    foreach (var frame in nativeFrames) trajectory.Add(frame.DeepClone());
+            }
+            bool terrainMatches = VanillaFrame.ContextMatches(snapshot, player, out var terrainDifference, trajectory);
+            if (!stateMatches || !terrainMatches)
+            {
+                DiagLog.Write($"[legacy-native-discard] state={reason} detail={mismatch} terrain={(terrainMatches ? "unchanged" : terrainDifference)} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###}");
                 return true;
             }
+            cancellation.Token.ThrowIfCancellationRequested();
             var result = pending.GetAwaiter().GetResult();
             if (searchingPlacement)
             {
@@ -256,6 +304,7 @@ internal static class LegacyNativePrediction
                 && Math.Abs(last["y"].GetValue<float>() - frames[^1].Py) <= 16;
             if (!valid)
             {
+                Rejected = true;
                 var from = StateSpacePlanner.StandCell(player.position.X, player.position.Y);
                 StateSpacePlanner.PenalizeEdges(new[] { (from.Item1, from.Item2, plan.GoalWx, plan.GoalWy) }, 200f);
                 int minHp = samples.Count > 0 ? samples.Min(frame => frame["hp"].GetValue<int>()) : -1;
@@ -273,11 +322,11 @@ internal static class LegacyNativePrediction
             plan.NativeVerified = true;
             plan.Steps[0].LandPx = frames[^1].Px; plan.Steps[0].LandPy = frames[^1].Py;
             ready = plan;
-            DiagLog.Write($"[legacy-native-accepted] frames={frames.Count} compute_ms={result["elapsed_ms"]} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###}");
+            DiagLog.Write($"[legacy-native-accepted] frames={frames.Count} compute_ms={result["elapsed_ms"]} queue_ms={result["queue_ms"]} write_ms={result["write_ms"]} response_wait_ms={result["response_wait_ms"]} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###}");
         }
         catch (Exception error)
         {
-            DiagLog.Write("[legacy-native-fallback] " + error.Message);
+            DiagLog.Write($"[legacy-native-fallback] total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###} worker_ready={VanillaNavigationDemo.Instance.WorkerReady} error={error.Message}");
             ready = plan;
         }
         finally { Reset(); }

@@ -250,7 +250,11 @@ namespace TerraBlind
         // goalWx/Wy 是 A* 搜的格,fieldGoal 是缓存罗盘场的键(最终目标) -- 分开才不会每段重建百万格场。
         // fCutoffMul:f=g+h 单调不减,取出的 f > f0*倍数就是连最乐观的路都贵到不可能
         public static SSResult Plan(int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue, float fCutoffMul = 0f, bool coarseStates = false)
+            => PlanWithCancellation(default, goalWx, goalWy, startOverride, fieldGoalWx, fieldGoalWy, maxExp, goalSnapCap, fCutoffMul, coarseStates);
+
+        internal static SSResult PlanWithCancellation(System.Threading.CancellationToken cancellation, int goalWx, int goalWy, (float px, float py, float vx)? startOverride = null, int fieldGoalWx = -1, int fieldGoalWy = -1, int maxExp = MaxExpansions, int goalSnapCap = int.MaxValue, float fCutoffMul = 0f, bool coarseStates = false)
         {
+            cancellation.ThrowIfCancellationRequested();
             var ctx = new PlanCtx { Coarse = coarseStates };
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var res = new SSResult();
@@ -288,12 +292,39 @@ namespace TerraBlind
             float startVx = startOverride?.vx ?? p.velocity.X;
             res.StartPx = startPx; res.StartPy = startPy;
             var (spx, spy) = StandCell(startPx, startPy);
+            var walkGoal = new Microsoft.Xna.Framework.Vector2(goalCx - p.width / 2f, goalFeetY - p.height);
+            if (!startOverride.HasValue && p.width == PhysicsSimulator.PlayerW && p.height == PhysicsSimulator.PlayerH
+                && MathF.Abs(walkGoal.X - startPx) <= WalkStridePx
+                && VanillaContactRegion.TryWalk(p, walkGoal, out _)
+                && VanillaContactRegion.ConnectedSupport(p.position, walkGoal, p.width, p.height))
+            {
+                var from = new SSNode { Px = startPx, Py = startPy, Vx = startVx, Grounded = true };
+                var walk = SimulateSegment(from, Math.Sign(walkGoal.X - startPx), 0, ph, walkStopPx: walkGoal.X);
+                if (walk.HasValue && StandCell(walk.Value.node.Px, walk.Value.node.Py) == (goalWx, goalWy)
+                    && walk.Value.frames.TrueForAll(frame => MathF.Abs(frame.Py - startPy) < .01f))
+                {
+                    res.Found = true;
+                    res.Steps = EdgeToSteps(from, walk.Value.node, walk.Value.frames, false, null);
+                    res.ExecFrames = walk.Value.frames;
+                    res.CostFrames = walk.Value.frames.Count;
+                    res.Path.Add((startPx, startPy));
+                    res.Path.Add((walk.Value.node.Px, walk.Value.node.Py));
+                    res.Millis = sw.Elapsed.TotalMilliseconds;
+                    DiagLog.Write($"[ss-direct-walk] goal=({goalWx},{goalWy}) frames={res.ExecFrames.Count} compute_ms={res.Millis:0.###}");
+                    return res;
+                }
+            }
             // 滚动:复用按最终目标缓存的大罗盘,建一次全段共享。单点(navwand):在 start↔goal 周围建小盒场,几十 ms。
             // 单点绝不能走大场。那是 1.4s 的构建,近距离导航会卡死。
             if (fieldGoalWx >= 0 && fieldGoalWy >= 0)
                 ctx.DistField = MazeWand.GetField(fieldGoalWx, fieldGoalWy);
             else
-                ctx.DistField = MazeWand.BuildField(goalWx, goalWy, spx, spy);
+            {
+                var cached = MazeWand.PeekFieldOrNull(goalWx, goalWy);
+                bool reusable = cached != null && cached.ContainsKey((spx, spy)) && !MazeWand.FieldPickStale();
+                ctx.DistField = reusable ? cached : MazeWand.BuildField(goalWx, goalWy, spx, spy);
+                DiagLog.Write($"[ss-field-reuse] reused={reusable} goal=({goalWx},{goalWy}) start=({spx},{spy})");
+            }
             ctx.BlockH = null;
             ctx.Laid = new Dictionary<SSNode, List<(int, int)>>();
 
@@ -334,6 +365,7 @@ namespace TerraBlind
             var closedCoarse = new Dictionary<CellKey, float>();
             while (open.Count > 0 && expansions < maxExp)
             {
+                cancellation.ThrowIfCancellationRequested();
                 if (!open.TryDequeue(out var cur, out float curF)) break;
                 // 最乐观的候选都超过阈值了 = 没路。死胡同在这里几十次展开就停,不用烧满预算
                 if (curF > fCut)
@@ -693,7 +725,12 @@ namespace TerraBlind
             foreach (var e in ExpandRaw(ctx, cur, ph, goalCx, goalFeetY, holdOptions, platformTile, hasPickaxe))
             {
                 var (ex, ey) = StandCell(e.next.Px, e.next.Py);
+                if (AgentTools.Control.ForbiddenAt(ControlBehavior.Navigation, ex, ey)
+                    || e.digTiles?.Exists(tile => AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, tile.Item1, tile.Item2)) == true)
+                    continue;
                 if (Predicates.IsLava(ex, ey)) continue;                      // 落点本身就是岩浆
+                if (e.frames != null && !FallSafety.SafeTrajectory(Main.LocalPlayer,
+                    new Microsoft.Xna.Framework.Vector2(cur.Px, cur.Py), e.frames)) continue;
                 // 自造落脚点的边(pillar/长bridge)不受限,拦的是指望那儿本来就有地的 walk/jump/fall。
                 // 长 bridge 的标记是"没帧、不挖、不是柱"(EdgeToSteps 同一组合),别借 pillar 表示
                 bool selfBuilt = e.pillar || (e.frames == null && e.digTiles == null);
@@ -1118,7 +1155,14 @@ namespace TerraBlind
                     if (!r.HasValue) continue;
                     // 走过去那几格的帧数要算进价里,不然"挪 6 格再挖"会白白便宜过"就地挖"
                     var seg = SimulateSegment(cur, sdir, 0, ph: PhysicsSimulator.Params.FromPlayer(Main.LocalPlayer));
-                    float walkCost = seg.HasValue ? seg.Value.frames.Count : off * 8f;
+                    if (!seg.HasValue) continue;
+                    int reached = RawCell(seg.Value.node.Px, seg.Value.node.Py).cx;
+                    if (sdir > 0 ? reached < scx : reached > scx)
+                    {
+                        if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: shift ({ccx},{ccy})->{scx} walk_stops={reached}");
+                        continue;
+                    }
+                    float walkCost = seg.Value.frames.Count;
                     if (SegDiag) DiagLog.Write($"[ss-digdown] 原地挖不动,挪到({scx},{ccy})可以挖 走{walkCost:0}帧");
                     return (r.Value.node, r.Value.tiles, r.Value.cost + walkCost);
                 }
@@ -1131,40 +1175,49 @@ namespace TerraBlind
         {
             // 【身体压哪几列就查哪几列】。原来是 ccx + 中心偏向的邻列,写死两列。而 20px 的身子
             // 跨 3 列是常态,漏掉的那一列照样撑着人,挖完两列人掉不下去。用 TouchCols 问真话。
-            int y = ccy + 1;   // the single row directly under the feet
+            int y = ccy + 1;
             var (footL, footR) = Predicates.TouchCols(px, PhysicsSimulator.PlayerW);
             var tiles = new List<(int, int)>();
             float cost = 0f;
+            for (int row = ccy; row <= y; row++)
             for (int c = footL; c <= footR; c++)
-                if (DigSolid(c, y))
+                if (DigSolid(c, row))
                 {
-                    int fc = DigTable.CostFrames(c, y);
+                    int fc = DigTable.CostFrames(c, row);
                     if (fc >= DigTable.Unmineable)
                     {
                         // 【报出去,不是烂在这儿】。身体压的每一列都空了才掉得下去,一列黑曜石整条边就没了
                         //。而旁边挪一格,压的那几列常常都挖得动。记下来,TRAP 时 Unstick 会来换站位。
-                        Trap.FootBlockCol = c; Trap.FootBlockRow = y;
-                        if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: unmineable ({c},{y})");
+                        Trap.FootBlockCol = c; Trap.FootBlockRow = row;
+                        if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: unmineable ({c},{row})");
                         return null;   // unbreakable (attached object / pick too weak) → route around
                     }
                     cost += fc;
-                    tiles.Add((c, y));
+                    tiles.Add((c, row));
                 }
             if (tiles.Count == 0) { if (SegDiag) DiagLog.Write("[ss-digdown] NULL: nothing solid underfoot"); return null; }   // free fall / walk handles it
             // 挖开脚下之后人会掉到哪。出口那道岩浆门槛问的是"落点现在有没有地",而这一格现在【就是】
             // 实心岩石,门槛必然短路放行。挖开才是竖井盖子的情况只能在这儿自己模拟。
+            int landing = int.MaxValue;
             for (int c = footL; c <= footR; c++)
             {
                 int land = FallLanding(c, y, tiles);
                 if (land == LandLava) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: 挖开({c},{y})会掉进岩浆"); return null; }
                 if (land == LandVoid) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: 挖开({c},{y})下方{FallProbe}行探不到底"); return null; }
+                landing = Math.Min(landing, land);
             }
-            // landing = standing in the just-dug cell; the row below (ccy+2, still undug rock) is the floor. Only worth
-            // it if that cell is lower H (toward goal). If ccy+2 is ALSO open, the next cycle's free-fall/dig continues.
-            bool hasH = ctx.DistField.TryGetValue((ccx, y), out int lh);
+            var player = Main.LocalPlayer;
+            int fallStart = (int)(((ccy + 1) * 16f - player.height) / 16);
+            for (int row = y; row <= landing; row++)
+                fallStart = FallSafety.ResetDistance(player,
+                    new Microsoft.Xna.Framework.Vector2(px, (row + 1) * 16f - player.height), fallStart, 1, int.MaxValue);
+            var landingPosition = new Microsoft.Xna.Framework.Vector2(px, (landing + 1) * 16f - player.height);
+            if (FallSafety.LandingDamage(player, landingPosition, fallStart) > 0)
+            { SegLog($"[ss-digdown] NULL: fall_damage landing=({ccx},{landing}) fall_start={fallStart}"); return null; }
+            bool hasH = ctx.DistField.TryGetValue((ccx, landing), out int lh);
             if (!(hasH && lh < curH)) { if (SegDiag) DiagLog.Write($"[ss-digdown] NULL: landing H {(hasH ? lh.ToString() : "off-field")} !< {curH}"); return null; }
             float npx = ccx * 16f + 8f - PhysicsSimulator.PlayerW / 2f;
-            float npy = (y + 1) * 16f - PhysicsSimulator.PlayerH;
+            float npy = (landing + 1) * 16f - PhysicsSimulator.PlayerH;
             var node = new SSNode { Px = npx, Py = npy, Vx = 0f, Vy = 0f, Grounded = true };
             return (node, tiles, cost);
         }
@@ -1791,7 +1844,7 @@ namespace TerraBlind
         // 不能走默认关着的 Trc。上一次 EXPAND-EMPTY 只留下一句"一条边都没生成",理由全被开关吞了。
         static void SegLog(string msg) { if (SegDiag) EventLog.W(Ev.Fail, msg); }
         static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? SimulateSegment(
-            SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, float? landingPx = null)
+            SSNode cur, int dir, int hold, PhysicsSimulator.Params ph, float? landingPx = null, float? walkStopPx = null)
         {
             var s = new PhysicsSimulator.State
             {
@@ -1841,6 +1894,7 @@ namespace TerraBlind
                     // 在这儿结束会产出被拒的假站位,把"走下崖"这条边杀掉。继续模拟,让人真的落到下面的地板。
                     var (wcx, wcy) = StandCell(s.Px, s.Py);
                     bool footSupported = PathPlanner.IsFloorPublic(wcx, wcy + 1);
+                    if (footSupported && walkStopPx.HasValue && dir * (s.Px - walkStopPx.Value) >= 0) break;
                     // 走满一个完整步幅再结束,不是 24px。24px 时边死在加速斜坡里(0.08/帧,要 37 帧才到 maxRun),
                     // 于是每条走路边平均 ~1px/帧,看起来比跳慢得多,A* 在平地上就一路跳。步幅取一次跳的射程,两者才可比。
                     if (footSupported && MathF.Abs(s.Px - startPx) >= WalkStridePx) break;
@@ -2164,7 +2218,28 @@ namespace TerraBlind
         const int StallReport = 20;   // 1/3 秒推不动一帧 = 有问题,比 sentinel 的 30 tick 早发现
         const int PlaceStallMax = 60;
 
-        public static bool IsActive => (_execFrames != null && _execIdx < _execFrames.Count) || _walkActive;
+        public static bool IsActive => _execFrames != null || _walkActive;
+        public static bool ReservesItemUse => _airPlace.HasValue || _execFrames?.Exists(frame => frame.Place) == true;
+
+        internal static (int Direction, float TargetX, float ArrivalPixels)? PeekWalkIntent()
+            => _walkActive ? (_walkDir, _walkTargetCx * 16f + 8f, WalkArrivePx) : null;
+
+        internal static int[] PeekMovementControls(int maxFrames)
+        {
+            if (_walkActive || _execFrames == null || _airPlace.HasValue || _placeStall > 0 || _jpWaitFrames > 0)
+                return Array.Empty<int>();
+            var controls = new List<int>();
+            for (int i = _execIdx; i < _execFrames.Count && controls.Count < maxFrames; i++)
+            {
+                var frame = _execFrames[i];
+                if (frame.Place) break;
+                controls.Add((int)((frame.Left ? VanillaKeys.Left : VanillaKeys.None)
+                    | (frame.Right ? VanillaKeys.Right : VanillaKeys.None)
+                    | (frame.Jump ? VanillaKeys.Jump : VanillaKeys.None)
+                    | (frame.Down ? VanillaKeys.Down : VanillaKeys.None)));
+            }
+            return controls.ToArray();
+        }
 
         // 闭环走路:不开环重放计划帧(起点偏了会平移整条边),而是朝目标 X 按键、到位即止,自我纠正。
         // 到位【不】刹车:vx 要带进下一条边(跳跃需要助跑速度,别归零)。
@@ -2180,7 +2255,7 @@ namespace TerraBlind
 
         // full stop of the step/rolling executor (J pause, or any external cancel): kill the current leg's frames,
         // the step list, and the rolling loop so it doesn't auto-plan another leg.
-        public static void StopNav() { _rolling = false; _rollBgResult = null; _replanPending = false; _replanSeq++; StopSteps(); StopExec(); DiagLog.EndRun(); }
+        public static void StopNav() { _rolling = false; _rollBgResult = null; _replanPending = false; _replanSeq++; _asyncSeq++; _asyncPending = false; _asyncRes = null; StopGreedy(); StopSteps(); StopExec(); DiagLog.EndRun(); }
 
         // 执行状态机(和 NavCoordinator.Done/IsActive/FailCode 对齐),这样 HTTP /nav 能用同一套方式驱动新规划器。
         static bool _execDone;
@@ -2191,12 +2266,16 @@ namespace TerraBlind
         public static SSResult LastExecResult => _lastExecResult;   // the plan the current/last leg dispatched (for lookahead landing prediction)
         // running iff a route is dispatched and not yet ended (steps drive edges; _execFrames is one edge's replay).
         public static bool ExecRunning => StepsActive || IsActive || _greedyActive || _replanPending || _asyncPending;
+        internal static bool ReplayAtHandoff => _execFrames != null && _execIdx == _execFrames.Count
+            && !_airPlace.HasValue && _ssSteps?.Count == 1 && _ssDispatched;
 
         // 逐边执行:帧步重放自己模拟出的帧(规划即执行),pillar 步交给 SkillExecutor 的宏。
         // 每一步都要等上一个执行器空闲、人落地站稳(干净静止态)才开始。
         static List<ExecStep> _ssSteps;
         static int _ssStepIdx;
         static bool _ssDispatched;
+        enum StepPhase { Executing, Aligning, Mining, ClearingHeadroom, HeadroomReady }
+        static StepPhase _stepPhase;
         static uint _stepStartTick;        // watchdog soft clock: start of the current NO-MOTION window (slides while moving)
         static uint _stepDispatchTick;     // watchdog hard clock: when the step was dispatched (never slides)
         static long _stepTimeoutTicks;     // soft deadline (est × 1.75 + 60, capped 1min), frozen position
@@ -2207,12 +2286,21 @@ namespace TerraBlind
         static int _lastExecFrameCount;    // how many frames ApplyControls replayed for the current edge
         public static bool StepsActive => _ssSteps != null && _ssStepIdx < _ssSteps.Count;
 
-        public static void StopSteps() { _ssSteps = null; _ssStepIdx = 0; _ssDispatched = false; }
+        public static void StopSteps()
+        {
+            if (_stepPhase == StepPhase.Aligning) SettleAt.Stop();
+            _ssSteps = null; _ssStepIdx = 0; _ssDispatched = false; _stepPhase = StepPhase.Executing;
+        }
 
         public static bool PreserveTerrain;
 
         static void StartSteps(List<ExecStep> steps)
         {
+            if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+            { _execFailCode = "agent_navigation_forbidden"; StopNav(); return; }
+            if (steps.Exists(step => AgentTools.Control.CheckAt(ControlBehavior.Navigation, step.TargetCx, step.TargetCy) != null
+                || step.MineTiles?.Exists(tile => AgentTools.Control.CheckAt(ControlBehavior.Mining, tile.wx, tile.wy) != null) == true))
+            { RecedingNav.LastStop = "agent_region_forbidden"; RecedingNav.Stop(); return; }
             if (PreserveTerrain && steps.Exists(step => step.Dig || step.Pillar || step.Bridge
                 || step.MineTiles?.Count > 0 || step.Frames?.Exists(frame => frame.Place) == true))
             {
@@ -2221,7 +2309,7 @@ namespace TerraBlind
                 return;
             }
             StopExec();
-            _ssSteps = steps; _ssStepIdx = 0; _ssDispatched = false;
+            _ssSteps = steps; _ssStepIdx = 0; _ssDispatched = false; _stepPhase = StepPhase.Executing;
             DiagLog.Write($"[ss-steps] start n={steps.Count}");
         }
 
@@ -2230,7 +2318,7 @@ namespace TerraBlind
             if (!StepsActive) return;
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { StopSteps(); return; }
-            bool busy = IsActive || SkillExecutor.IsActive || MineCoordinator.IsActive || BridgeBuilder.IsRunning;
+            bool busy = IsActive || SkillExecutor.IsActive || MineCoordinator.IsActive || BridgeBuilder.IsRunning || SettleAt.IsRunning;
 
             // 看门狗:每个动作都有死线。所有计划层的免疫机制(miss/revisit/shock/循环检测)都活在重规划周期里,而重规划要等 ExecRunning 清零
             //。一个永不终止的执行器(77s 的 PillarWait)就能饿死整套免疫系统。软钟(动就续)防误杀,硬钟(绝对)防步内自嗨死循环。
@@ -2258,15 +2346,36 @@ namespace TerraBlind
             if (_ssDispatched)
             {
                 if (busy) return;
-                if (_ssPrevStep?.Dig == true && MineCoordinator.Outcome == "lava_risk")
+                if (_stepPhase == StepPhase.Aligning)
                 {
-                    var from = StandCell(p.position.X, p.position.Y);
-                    PenalizeEdges(new[] { (from.cx, from.cy, _ssPrevStep.TargetCx, _ssPrevStep.TargetCy) }, ResimMissPenalty);
-                    _execFailCode = "lava_risk";
-                    DiagLog.Write("[ss-steps] mining refused lava release; reselect route");
+                    if (SettleAt.Outcome != "done")
+                    {
+                        _execFailCode = "mining_alignment_" + SettleAt.Outcome;
+                        DiagLog.Write($"[ss-steps] alignment failed outcome={SettleAt.Outcome} position={p.position}; reselect route");
+                        StopSteps(); DiagLog.EndRun(); return;
+                    }
+                    _stepPhase = StepPhase.Executing; _ssDispatched = false;
+                }
+                if (_stepPhase is StepPhase.Mining or StepPhase.ClearingHeadroom && MineCoordinator.Outcome != "done")
+                {
+                    string outcome = MineCoordinator.Outcome;
+                    if (outcome == "lava_risk")
+                    {
+                        var from = StandCell(p.position.X, p.position.Y);
+                        PenalizeEdges(new[] { (from.cx, from.cy, _ssPrevStep.TargetCx, _ssPrevStep.TargetCy) }, ResimMissPenalty);
+                    }
+                    _execFailCode = outcome == "lava_risk" ? outcome : "mining_" + outcome;
+                    DiagLog.Write($"[ss-steps] mining failed outcome={outcome} reason={MineCoordinator.Reason} position={p.position} velocity={p.velocity}; reselect route");
                     StopSteps(); DiagLog.EndRun();
                     return;
                 }
+                if (_stepPhase == StepPhase.ClearingHeadroom)
+                {
+                    _stepPhase = StepPhase.HeadroomReady; _ssDispatched = false;
+                }
+            }
+            if (_ssDispatched)
+            {
                 if (p.velocity.Y != 0f) return;     // wait until landed + settled before advancing
                 // 诊断:计划帧数 vs 执行实际重放了多少帧。差 ~1 说明落地/推进的时机差一帧(= 那 ~3px = vx*1帧 的接缝漂移)。
                 if (_ssPrevStep != null && _ssPrevStep.Frames != null && _ssPrevStep.Frames.Count > 0)
@@ -2275,7 +2384,7 @@ namespace TerraBlind
                     DiagLog.Trc($"[ss-framecmp] kind={EdgeKind(_ssPrevStep)} planFrames={_ssPrevStep.Frames.Count} execFrames={_lastExecFrameCount} planLand=({lf.Px:0.##},{lf.Py:0.##}) execLand=({p.position.X:0.##},{p.position.Y:0.##}) d(px={(p.position.X - lf.Px):0.##} py={(p.position.Y - lf.Py):0.##}) planVx={lf.Vx:0.###} execVx={p.velocity.X:0.###} dVx={(p.velocity.X - lf.Vx):0.###}");
                 }
                 _ssStepIdx++;
-                _ssDispatched = false;
+                _ssDispatched = false; _stepPhase = StepPhase.Executing;
                 if (!StepsActive)
                 {
                     DiagLog.Write("[ss-steps] done");
@@ -2320,16 +2429,20 @@ namespace TerraBlind
             else if (st.Pillar)
             {
                 // 带 MineTiles 的 pillar 边(DigUp):头顶还堵着就先挖,挖完这一步重新派发才砌。
-                bool blocked = st.MineTiles != null && st.MineTiles.Exists(t => Predicates.IsWall(t.wx, t.wy));
+                bool blocked = _stepPhase != StepPhase.HeadroomReady && st.MineTiles != null && st.MineTiles.Exists(t => Predicates.IsWall(t.wx, t.wy));
                 if (blocked)
                 {
                     int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
                     DiagLog.Write($"[ss-pillar-dig] 头顶还堵着 {st.MineTiles.Count} 格,先挖再砌柱到 {st.TargetCy}");
+                    _stepPhase = StepPhase.ClearingHeadroom;
                     MineCoordinator.Start(new MineRequest { Dir = MineDir.Up, StartWx = ccx, StartWy = sfeet,
                         TargetWx = st.TargetCx, TargetWy = st.TargetCy, MineTiles = st.MineTiles });
                 }
                 else
+                {
+                    _stepPhase = StepPhase.Executing;
                     SkillExecutor.StartPillarJump(st.TargetCx >= ccx, st.TargetCy + 1, true, st.TargetCx);
+                }
             }
             else if (st.Dig)
             {
@@ -2339,11 +2452,15 @@ namespace TerraBlind
                 {
                     if (SettleAt.IsRunning) return;
                     if (SettleAt.Start(st.DigStandCx, out string sw))
-                    { DiagLog.Write($"[ss-dig] 先挪到列{st.DigStandCx}(现在{ccx})再挖"); return; }
-                    DiagLog.Write($"[ss-dig] 挪不到列{st.DigStandCx}:{sw} —— 就地挖");
+                    { _stepPhase = StepPhase.Aligning; DiagLog.Write($"[ss-dig] 先挪到列{st.DigStandCx}(现在{ccx})再挖"); return; }
+                    _execFailCode = "mining_alignment_unavailable";
+                    DiagLog.Write($"[ss-dig] 挪不到列{st.DigStandCx}:{sw}; reselect route");
+                    StopSteps(); return;
                 }
                 int sfeet = (int)((p.position.Y + p.height) / 16f) - 1;
-                MineCoordinator.Start(new MineRequest { Dir = st.DigDir, StartWx = ccx, StartWy = sfeet, TargetWx = st.TargetCx, TargetWy = st.TargetCy, MineTiles = st.MineTiles });
+                _stepPhase = StepPhase.Mining;
+                MineCoordinator.Start(new MineRequest { Dir = st.DigDir, StartWx = ccx, StartWy = sfeet, TargetWx = st.TargetCx, TargetWy = st.TargetCy,
+                    MineTiles = st.MineTiles, OnlyPlannedTiles = st.DigDir == MineDir.Down && st.MineTiles?.Count > 0 });
             }
             // 同列的边也排除:WalkTick 只比 x,目标列就是脚下这列时 dx=0,第一帧自称到达,那几行垂直位移一步没做。
             // 同列纵向边 271 条错 114 条(42%),是其他边的 2.3 倍。排除 Down 同理。闭环不会按下键。
@@ -2813,6 +2930,21 @@ namespace TerraBlind
                     best = push.edge; bestCell = push.cell; bestTotal = push.total;
                 }
             }
+            if (best != null && AgentNavigationIntent.RevisionFor(goalWx, goalWy) != 0)
+            {
+                var tactical = new List<AgentNavigationIntent.Candidate>();
+                int baseline = -1;
+                for (int i = 0; i < jigglePool.Count; i++)
+                {
+                    var c = jigglePool[i];
+                    float cost = c.total + (RiskLayer.Enabled ? RiskLayer.Penalty(p, curCx, curCy, c.cell.Item1, c.cell.Item2) : 0);
+                    tactical.Add(new(c.edge.node.Px, c.edge.node.Py, c.edge.frames?.Count ?? 0, cost));
+                    if (c.cell == bestCell && c.edge.Equals(best.Value)) baseline = i;
+                }
+                int chosen = AgentNavigationIntent.Select(goalWx, goalWy, tactical, baseline);
+                if (chosen >= 0)
+                { var c = jigglePool[chosen]; best = c.edge; bestCell = c.cell; bestTotal = c.total; }
+            }
             if (_visited.Add((curCx, curCy))) _visitedQ.Enqueue((curCx, curCy));
             while (_visitedQ.Count > VisitedLen) _visited.Remove(_visitedQ.Dequeue());
             _lastCands = cands; _lastAt = (curCx, curCy, curH); _lastGoal = (goalWx, goalWy);
@@ -2971,7 +3103,8 @@ namespace TerraBlind
             else if (dig != null)
             {
                 MineDir d = tcy > fcy ? MineDir.Down : tcx > fcx ? MineDir.Right : MineDir.Left;
-                steps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = tcx, TargetCy = tcy, MineTiles = dig });
+                steps.Add(new ExecStep { Dig = true, DigDir = d, TargetCx = tcx, TargetCy = tcy, MineTiles = dig,
+                    DigStandCx = d == MineDir.Down && tcx != fcx ? tcx : -1 });
             }
             else if (frames != null)
                 steps.Add(new ExecStep { Pillar = false, TargetCx = tcx, TargetCy = tcy, Frames = TrimFrozenTail(frames), LandPx = to.Px, LandPy = to.Py });
@@ -3234,6 +3367,8 @@ namespace TerraBlind
         static int _asyncGoalWx, _asyncGoalWy, _asyncSeq;
         public static void ExecuteAsync(int goalWx, int goalWy)
         {
+            if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+            { _execFailCode = "agent_navigation_forbidden"; StopNav(); return; }
             StopGreedy(); StopSteps();
             _execDone = false; _execFailCode = null;
             _rolling = false; _rollFinalWx = goalWx; _rollFinalWy = goalWy;
@@ -3651,6 +3786,8 @@ namespace TerraBlind
 
         public static void ApplyControls()
         {
+            if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+            { _execFailCode = "agent_navigation_forbidden"; StopNav(); return; }
             if (_walkActive) { WatchUnplannedFall(); WalkTick(); return; }
             if (_execFrames == null) { WatchUnplannedFall(); return; }
             var p = Main.LocalPlayer;
@@ -3658,6 +3795,7 @@ namespace TerraBlind
             if (_airPlace.HasValue && !AirPlaceTick(p)) return;
             if (_execIdx >= _execFrames.Count)
             {
+                if (_airPlace.HasValue) return;
                 float cx = p.position.X + p.width / 2f, fy = p.position.Y + p.height;
                 float gx = _execGoalWx * 16f + 8f, gy = (_execGoalWy + 1) * 16f;
                 DiagLog.Write($"[ss-land] goal=({_execGoalWx},{_execGoalWy}) actual_px=({cx:0.#},{fy:0.#}) dx={(cx-gx):0.#} dy={(fy-gy):0.#}");

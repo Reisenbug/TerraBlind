@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,6 +14,42 @@ static class GatherTests
 
     public static async Task Run()
     {
+        foreach (bool emittedFirst in new[] { false, true })
+        {
+            var verifiedWatch = new AgentWatch(); verifiedWatch.EnsureDefaults();
+            var done = new JsonObject { ["handle"] = "route", ["attempt"] = 2, ["status"] = "completed" };
+            if (emittedFirst) verifiedWatch.Emit("action_finished", "route:2", done);
+            verifiedWatch.AcknowledgeCompletion(done);
+            if (!emittedFirst) verifiedWatch.Emit("action_finished", "route:2", done);
+            Check(verifiedWatch.HasPending && !verifiedWatch.HasInterrupting, "verified node completion interrupted its successor or lost evidence");
+            var failed = new JsonObject { ["handle"] = "next", ["attempt"] = 1, ["status"] = "failed" };
+            verifiedWatch.AcknowledgeCompletion(failed);
+            verifiedWatch.Emit("action_finished", "next:1", failed);
+            Check(!verifiedWatch.HasInterrupting && verifiedWatch.HasAdvisories,
+                "node verification suppressed a different failure review or stopped unrelated control");
+            verifiedWatch.Take();
+            verifiedWatch.Emit("low_health", "danger", new JsonObject { ["hp"] = 20 });
+            Check(!verifiedWatch.HasInterrupting && verifiedWatch.HasHealthNotice, "node verification lost the informational health notice");
+        }
+        foreach (bool explicitAcquisition in new[] { false, true })
+        {
+            var watch = new AgentWatch();
+            if (explicitAcquisition) watch.Configure(new JsonObject { ["events"] = new JsonArray("target_acquired") });
+            watch.EnsureDefaults(); watch.EnsureDefaults();
+            watch.Emit("target_acquired", "gain", new JsonObject { ["handle"] = "collect", ["attempt"] = 1, ["gained"] = 2 });
+            Check(watch.HasPending && !watch.HasInterrupting && watch.HasAdvisories == explicitAcquisition,
+                "default collection progress interrupted gathering or explicit parallel observation was ignored");
+            watch.Emit("action_finished", "collect:1", new JsonObject { ["handle"] = "collect", ["attempt"] = 1, ["status"] = "failed" });
+            watch.Resumed("collect", 2);
+            Check(watch.PendingCount == 2 && !watch.HasInterrupting,
+                "resumption erased evidence or an obsolete attempt still interrupted the new attempt");
+            watch.Emit("action_finished", "collect:2", new JsonObject { ["handle"] = "collect", ["attempt"] = 2, ["status"] = "failed" });
+            Check(!watch.HasInterrupting && watch.HasAdvisories, "the current attempt failure review was incorrectly deferred");
+            watch.Take();
+            watch.Emit("low_health", "danger", new JsonObject { ["hp"] = 20 });
+            watch.Resumed("collect", 3);
+            Check(!watch.HasInterrupting && watch.HasHealthNotice, "resumption lost the health notice or paused the route");
+        }
         var world = new World();
         var result = await Gather.Run(Targets, 5, world, default);
         Check(result["ok"].GetValue<bool>() && world.Actions.Count == 2 && world.Actions[0] == "npc" && world.Stops == 1,
@@ -21,15 +58,177 @@ static class GatherTests
         result = await Gather.Run(Targets, 5, world, default);
         Check(world.Actions[0] == "drop" && result["ok"].GetValue<bool>(), "existing wanted drop was ignored");
         Console.WriteLine("PASS: multi-resource gathering prioritizes wanted drops and nearby target enemies and stops on actual inventory");
+        world = new World { FarEnemy = true };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(world.Actions.SequenceEqual(new[] { "tile" }) && result["outcome"]?.ToString() == "combat_out_of_range"
+            && result["targets"][0]["actual"]?.GetValue<int>() == 1
+            && result["blocked_sources"][0]["candidate"]["kind"]?.ToString() == "npc"
+            && result["blocked_sources"][0]["attempts"]?.GetValue<int>() == 0
+            && result["recovery_skill"]["name"].ToString() == "combat_approach"
+            && result["recovery_skill"]["input"]["npc_type"].ToString() == result["blocked_sources"][0]["candidate"]["npc_type"].ToString(),
+            "out-of-range enemy stopped executable collection or lost its observed blocker");
+        world.FarEnemy = false;
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(result["ok"].GetValue<bool>() && world.Actions.SequenceEqual(new[] { "tile", "npc" }),
+            "a newly reachable enemy stayed excluded or completed collection was replayed");
+        world = new World { FarEnemy = true, EnemyApproaches = true };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(result["ok"].GetValue<bool>() && world.Actions.SequenceEqual(new[] { "tile", "npc" }),
+            "candidate reachability was not refreshed while other collection continued");
+        Console.WriteLine("PASS: unreachable sources retain evidence while executable targets continue and reachability is reobserved");
+        var largeCollection = new ProbeWorld { GainEvery = 1 };
+        var largeResult = await Gather.Run(new[] { new GatherTarget(10, 65, new[] { "test tile" }, Array.Empty<int>()) },
+            5, largeCollection, default);
+        Check(largeResult["ok"].GetValue<bool>() && largeCollection.Actions == 65,
+            "successful inventory progress hit a lifetime thirty-two-action limit");
+        var stalledSource = new World { NavigationStalled = true };
+        var stalledResult = await Gather.Run(Targets, 5, stalledSource, default);
+        Check(!stalledResult["ok"].GetValue<bool>() && stalledSource.Actions.Count == 2
+            && stalledResult["outcome"].ToString() == "navigation_no_progress"
+            && stalledResult["blocked_sources"].AsArray().Count == 2
+            && stalledResult["last_result"]["result"]["navigation"]["reason"].ToString() == "local_oscillation",
+            "gather failed to try distinct sources once or lost their navigation blockers");
+        var alternateSource = new World { FirstNavigationStalled = true };
+        var alternateResult = await Gather.Run(Targets, 5, alternateSource, default);
+        Check(alternateSource.Actions.SequenceEqual(new[] { "npc", "tile" })
+            && alternateResult["targets"][0]["actual"].GetValue<int>() == 1
+            && alternateResult["blocked_sources"].AsArray().Count == 1,
+            "one blocked source prevented another executable source from making inventory progress");
+        alternateSource.FirstNavigationStalled = false;
+        alternateResult = await Gather.Run(Targets, 5, alternateSource, default);
+        Check(alternateResult["ok"].GetValue<bool>() && alternateSource.Actions.Count == 3,
+            "a later collection inherited a permanent source blacklist or repeated completed collection");
+        var weakTool = new World { CollectionStalled = true };
+        var weakResult = await Gather.Run(Targets, 5, weakTool, default);
+        Check(weakTool.Actions.Count == 1 && weakResult["outcome"].ToString() == "collection_no_progress"
+            && weakResult["last_result"]["result"]["reason"].ToString() == "tool_weak",
+            "collection failure was retried or mislabeled as a navigation failure");
+        foreach (var (damage, recovers, expectedActions) in new[] { (70, true, 2), (70, false, 2), (0, true, 2), (0, false, 2) })
+        {
+            var displaced = new World { LostMiningReach = true, RecoverOnRetry = recovers, MiningDamage = damage };
+            var retried = await Gather.Run(new[] { Targets[0] }, 5, displaced, default);
+            Check(displaced.Actions.Count == expectedActions && retried["ok"].GetValue<bool>() == recovers,
+                "partial mining range loss did not reobserve and retry once, or hid persistent failure: " + retried);
+        }
+        var outsideMiningRange = new World { OutsideMiningRange = true };
+        var outsideRangeResult = await Gather.Run(new[] { Targets[0] }, 5, outsideMiningRange, default);
+        Check(outsideMiningRange.Actions.Count == 1 && outsideRangeResult["outcome"].ToString() == "collection_out_of_range"
+            && outsideRangeResult["last_result"]["result"]["error"].ToString() == "collect_target_out_of_mining_range"
+            && outsideRangeResult["targets"][0]["actual"].GetValue<int>() == 0,
+            "gather repeated a completed approach outside tool reach instead of returning its actual failure");
+        var combatTarget = new[] { new GatherTarget(20, 1, Array.Empty<string>(), new[] { 2 }) };
+        var combatWorld = new CombatProgressWorld { Hp = 3, Damage = 1 };
+        result = await Gather.Run(combatTarget, 5, combatWorld, default);
+        Check(result["ok"].GetValue<bool>() && combatWorld.Actions == 3,
+            "measured damage exhausted candidate attempts before a kill and actual pickup");
+        combatWorld = new CombatProgressWorld { Hp = 3, Damage = 0 };
+        result = await Gather.Run(combatTarget, 5, combatWorld, default);
+        Check(!result["ok"].GetValue<bool>() && combatWorld.Actions == 2 && result["outcome"].ToString() == "attempt_limit",
+            "unchanged enemy health bypassed bounded failed attempts");
+        combatWorld = new CombatProgressWorld { Hp = 100, Damage = 1 };
+        result = await Gather.Run(combatTarget, 5, combatWorld, default);
+        Check(!result["ok"].GetValue<bool>() && combatWorld.Actions == 32 && result["targets"][0]["actual"].GetValue<int>() == 0,
+            "damage removed the overall action bound or counted as inventory gain");
+
+        world = new World();
+        result = await Gather.Run(Targets, 5, world, default, new GatherArea(10, 0, 1, 1));
+        Check(world.Actions.Count == 1 && world.Actions[0] == "tile" && !result["ok"].GetValue<bool>()
+            && result["outcome"].ToString() == "source_area_exhausted" && result["targets"][0]["actual"].GetValue<int>() == 1,
+            "gather ignored source area to chase an outside NPC or counted incomplete target as success");
+        Check(result["targets"][0]["inventory_before"].GetValue<int>() == 0
+            && result["targets"][0]["inventory_delta"].GetValue<int>() == 1
+            && result["targets"][1]["remaining"].GetValue<int>() == 1 && result["detail"] != null,
+            "partial collection lost verified gain or the remaining goal when the selected source area emptied");
+        result = await Gather.Run(Targets, 5, world, default, new GatherArea(20, 0, 1, 1));
+        Check(result["ok"].GetValue<bool>() && world.Actions.SequenceEqual(new[] { "tile", "npc" })
+            && result["targets"][0]["inventory_before"].GetValue<int>() == 1
+            && result["targets"][0]["inventory_delta"].GetValue<int>() == 0
+            && result["targets"][1]["remaining"].GetValue<int>() == 0,
+            "continuing in the next source area restarted a fulfilled target or lost retained inventory progress");
+        world = new World { Drop = true };
+        result = await Gather.Run(Targets, 5, world, default, new GatherArea(30, 0, 1, 1));
+        Check(world.Actions.Count == 0 && result["outcome"].ToString() == "source_unavailable",
+            "empty selected source silently fell back to a nearby rejected drop");
+        Console.WriteLine("PASS: selected source area overrides default candidate priorities without fallback or false success");
 
         world = new World { Gain = false };
         result = await Gather.Run(Targets, 5, world, default);
         Check(!result["ok"].GetValue<bool>() && world.Actions.Count == 4 && result["last_result"] != null,
             "removed targets were counted as acquired items or failed targets retried without bound");
+        Check(result["outcome"].ToString() == "attempt_limit" && result["blocked_sources"].AsArray().Count == 2
+            && result["blocked_sources"][0]["attempts"].GetValue<int>() == 2,
+            "visible exhausted sources were reported absent or lost their retry evidence");
         world = new World { Empty = true };
         result = await Gather.Run(Targets, 5, world, default);
         Check(result["outcome"].ToString() == "source_unavailable" && world.Actions.Count == 0, "missing sources appeared successful");
+        Check(!result["source_rules"][0]["drops_only"].GetValue<bool>()
+            && result["source_rules"][0]["tile_names"][0].ToString() == "test tile"
+            && result["source_rules"][1]["npc_types"][0].GetValue<int>() == 2,
+            "source absence lost the actual configured search rules");
+        var dropsOnly = new[] { new GatherTarget(10, 1, Array.Empty<string>(), Array.Empty<int>()) };
+        result = await Gather.Run(dropsOnly, 5, world, default);
+        Check(result["source_rules"][0]["drops_only"].GetValue<bool>()
+            && result["source_rules"][0]["detail"].ToString().Contains("tile_names") && world.Actions.Count == 0,
+            "drop-only search implied that tile or NPC sources had been searched");
+        result = await Gather.Run(dropsOnly, 5, new World { Drop = true }, default);
+        Check(result["ok"].GetValue<bool>() && result["source_rules"][0]["drops_only"].GetValue<bool>(),
+            "source diagnostics rejected legitimate collection of existing drops");
         Console.WriteLine("PASS: missing drops and absent sources retain evidence without false collection success or unbounded retries");
+
+        var probe = new ProbeWorld();
+        var probeTargets = new[] { new GatherTarget(10, 2, new[] { "unverified plant" }, Array.Empty<int>()) };
+        result = await Gather.Run(probeTargets, 5, probe, default);
+        Check(!result["ok"].GetValue<bool>() && result["outcome"].ToString() == "source_needs_review"
+            && probe.Actions == 3 && probe.Stops == 1 && result["source_error"]["observations"].AsArray().Count == 3
+            && result["source_error"]["observations"][2]["count_after"].GetValue<int>() == 0,
+            "unproductive tile harvesting continued across new coordinates or lost inventory evidence");
+        string reviewResult = result.ToJsonString();
+        var sourceReview = result["source_error"]["recovery"];
+        var lookupArgs = sourceReview["identify_item"]["args"].AsObject();
+        Check(lookupArgs["kind"].ToString() == "item" && lookupArgs["name"].ToString() == "10"
+            && sourceReview["observe"] == null
+            && sourceReview["example"]["args"]["name"].ToString() == "sample_tile_variants"
+            && sourceReview["wanted"].GetValue<int>() == 2,
+            "source recovery hid alternative variants, lost the goal, or omitted the editable sampling entry");
+        var recovery = new AgentRecovery();
+        recovery.Record("gather", new JsonObject(), reviewResult);
+        Check(JsonNode.DeepEquals(recovery.Snapshot()["latest"]["evidence"]["source_error"], result["source_error"]),
+            "recovery discarded measured source variants and inventory observations");
+        var progress = new ScriptProgress();
+        var handoff = await AgentScript.Run("tool('gather');", 5, (_, _) => { },
+            (_, _, _) => Task.FromResult(reviewResult), _ => Task.CompletedTask, default, progress);
+        Check(handoff["error"]?.ToString() == "tool_failed"
+            && progress.Summary()["last_execution"]["failure"]["evidence"]["source_error"]["observations"].AsArray().Count == 3,
+            "script continuation lost measured source review evidence");
+        probe = new ProbeWorld { GainEvery = 2 };
+        result = await Gather.Run(probeTargets, 5, probe, default);
+        Check(result["ok"].GetValue<bool>() && probe.Actions == 4,
+            "actual inventory gains did not reset the unproductive source streak");
+        probe = new ProbeWorld { DropAfterThree = true };
+        result = await Gather.Run(probeTargets, 5, probe, default);
+        Check(result["ok"].GetValue<bool>() && probe.Actions == 4,
+            "source review prevented collecting a target drop already visible after harvesting");
+        Console.WriteLine("PASS: unproductive tile sources yield with evidence; real gains reset review and visible drops remain collectible");
+
+        world = new World { Unsafe = true };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(!result["ok"].GetValue<bool>() && result["outcome"].ToString() == "unsafe"
+            && world.Actions.Count == 1 && world.Stops == 1
+            && result["last_result"]["result"]["navigation"]["trap_tiles"][0]["x"].GetValue<int>() == 12,
+            "dangerous navigation was retried on other sources or lost trap evidence");
+        Console.WriteLine("PASS: unsafe nested navigation ends gathering immediately and preserves exact hazard evidence");
+        world = new World { Obstructed = true };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(!result["ok"].GetValue<bool>() && result["outcome"].ToString() == "combat_obstructed"
+            && world.Actions.Count == 1 && world.Stops == 1
+            && result["last_result"]["result"]["target_x"].GetValue<int>() == 30,
+            "obstructed combat was silently repeated or lost its repositioning evidence");
+        world = new World { Ambiguous = true };
+        result = await Gather.Run(Targets, 5, world, default);
+        Check(world.Actions.Count == 0 && result["outcome"].ToString() == "ambiguous_tile_name"
+            && result["source_error"]["name_candidates"][0]["internal"].ToString() == "ActualTile",
+            "source lookup error lost correction candidates after final inventory observation");
+        Console.WriteLine("PASS: gathering preserves source lookup correction evidence across cleanup");
 
         world = new World { Dead = true };
         result = await Gather.Run(Targets, 5, world, default);
@@ -42,13 +241,426 @@ static class GatherTests
         Console.WriteLine("PASS: death prevents collection and cancelled gathering never dispatches follow-up actions");
 
         world = new World { WaitForever = true };
-        result = await Gather.Run(Targets, 1, world, default);
-        Check(result["outcome"].ToString() == "timeout" && world.Stops == 1 && result["last_result"]?["candidate"] != null,
-            "gather budget did not stop action and preserve timed-out target");
-        Console.WriteLine("PASS: gathering deadline cancels a blocked action, stops owned control and preserves target evidence");
+        using var stopWaiting = new CancellationTokenSource();
+        var waiting = Gather.Run(Targets, 1, world, stopWaiting.Token);
+        await Task.Delay(1200);
+        Check(!waiting.IsCompleted, "gather retained an implicit wall-clock deadline");
+        stopWaiting.Cancel();
+        try { await waiting; throw new Exception("gather ignored explicit stop"); } catch (OperationCanceledException) { }
+        Check(world.Actions.Count == 1 && world.Stops == 0, "cancelled gather ran follow-up actions or performed unowned late cleanup");
+        Console.WriteLine("PASS: long gathering has no implicit deadline; explicit cancellation propagates without follow-up actions or stale cleanup");
         FightFiltering();
+        IdleDefense();
+        MiningAttackTurns();
         Evasion();
         FiringLane();
+        TempleTargets();
+        WeaponSuitability();
+        await PickupCapacity();
+    }
+
+    static void TempleTargets()
+    {
+        var p = Main.LocalPlayer;
+        var oldInventory = p.inventory; var oldNpcs = Main.npc;
+        bool oldTemple = p.ZoneLihzhardTemple, oldManual = Manual.On;
+        int oldSlot = p.selectedItem;
+        try
+        {
+            Manual.On = false;
+            p.inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
+            p.inventory[0] = new Item { stack = 1, damage = 20, shoot = 1 }; p.selectedItem = 0;
+            Main.npc = Enumerable.Range(0, Main.maxNPCs).Select(_ => new NPC()).ToArray();
+            var enemy = Main.npc[0]; enemy.active = true; enemy.position = new(p.position.X + 80, p.position.Y);
+            foreach (int type in new[] { Terraria.ID.NPCID.Lihzahrd, Terraria.ID.NPCID.LihzahrdCrawler, Terraria.ID.NPCID.FlyingSnake })
+            {
+                enemy.type = type;
+                foreach (bool idle in new[] { false, true })
+                {
+                    FightCoordinator.Stop(); p.ZoneLihzhardTemple = false;
+                    if (!idle) FightCoordinator.Start(40);
+                    FightCoordinator.Tick(p, true);
+                    Check(!p.controlUseItem && !FightCoordinator.AimTarget.HasValue,
+                        "temple enemy targeted while player was outside: " + type);
+                    p.ZoneLihzhardTemple = true;
+                    FightCoordinator.Tick(p, true);
+                    Check(p.controlUseItem, $"temple guard suppressed an enemy inside the temple: type={type} idle={idle}");
+                    p.itemAnimation = 3; p.ZoneLihzhardTemple = false;
+                    FightCoordinator.Tick(p, true);
+                    Check(!p.controlUseItem && !FightCoordinator.AimTarget.HasValue && p.selectedItem == 0,
+                        "leaving temple retained target tracking or switched an unfinished animation");
+                    p.itemAnimation = 0;
+                }
+            }
+            FightCoordinator.Stop(); enemy.type = 42; p.ZoneLihzhardTemple = false;
+            FightCoordinator.Start(40); FightCoordinator.Tick(p, true);
+            Check(p.controlUseItem, "temple filter suppressed an ordinary enemy outside");
+        }
+        finally
+        {
+            FightCoordinator.Stop(); p.inventory = oldInventory; Main.npc = oldNpcs;
+            p.ZoneLihzhardTemple = oldTemple; p.selectedItem = oldSlot; p.itemAnimation = 0;
+            Manual.On = oldManual;
+        }
+        Console.WriteLine("PASS: temple targets are skipped outside in explicit/idle combat and released without switching unfinished animations");
+    }
+
+    static void WeaponSuitability()
+    {
+        var p = Main.LocalPlayer;
+        var inventory = p.inventory; var npcs = Main.npc; var damage = AgentTools.LastDamage;
+        var position = p.position; var tick = Main.GameUpdateCount;
+        int preferred = CombatLoadout.PreferredType, selected = p.selectedItem;
+        bool manual = Manual.On, dodge = AgentPermissions.Dodge;
+        bool hadSample = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(77, out var sample);
+        bool hadPassing = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(78, out var passing);
+        try
+        {
+            FightCoordinator.Stop(); Manual.On = false; AgentPermissions.Dodge = false;
+            CombatLoadout.PreferredType = 0; p.position = new(160, 160);
+            p.itemAnimation = p.itemTime = 0;
+            p.inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
+            p.inventory[0] = new Item { type = 50, stack = 1, damage = 100, width = 30, height = 30 };
+            p.inventory[1] = new Item { type = 51, stack = 1, damage = 20, shoot = 77 };
+            p.inventory[2] = new Item { type = 52, stack = 1, damage = 15, shoot = 78 };
+            Terraria.ID.ContentSamples.ProjectilesByType[77] = new Projectile { tileCollide = true };
+            Terraria.ID.ContentSamples.ProjectilesByType[78] = new Projectile { tileCollide = false };
+            var target = new NPC { type = 42, active = true, position = new(360, 160) };
+            Collision.LineTest = (_, _) => true;
+            Check(CombatLoadout.Select(p, target) == 1, "out-of-reach sword displaced a usable ranged weapon");
+            target.position.X = 180;
+            Check(CombatLoadout.Select(p, target) == 0, "nearby target lost an in-range melee weapon");
+            Collision.LineTest = (_, _) => false;
+            Check(CombatLoadout.Select(p, target) == 2, "blocked weapons displaced the wall-passing projectile");
+            var wallPassing = Terraria.ID.ContentSamples.ProjectilesByType[78];
+            wallPassing.ownerHitCheck = true;
+            Check(CombatLoadout.Select(p, target) == -1, "owner-hit-check melee projectile was treated as wall-passing");
+            wallPassing.ownerHitCheck = false;
+            wallPassing.aiStyle = Terraria.ID.ProjAIStyleID.ShortSword;
+            p.inventory[2].shootSpeed = 2.1f; target.position.X = 360;
+            Collision.LineTest = (_, _) => true;
+            p.inventory[2].damage = 200;
+            Check(CombatLoadout.Select(p, target) == 1, "projectile shortsword was treated as a ranged weapon");
+            wallPassing.aiStyle = 0; p.inventory[2].damage = 15;
+            Collision.LineTest = (_, _) => false;
+            CombatLoadout.PreferredType = 51;
+            Check(CombatLoadout.Select(p, target) == -1, "target filtering ignored the agent's explicit weapon choice");
+            CombatLoadout.PreferredType = 0; Collision.LineTest = (_, _) => true;
+            Main.npc = Enumerable.Range(0, Main.maxNPCs).Select(_ => new NPC()).ToArray();
+            Main.npc[0] = new NPC { type = 42, active = true, position = new(240, 160) };
+            Main.npc[1] = new NPC { type = 204, active = true, position = new(360, 160) };
+            Main.GameUpdateCount = 1000;
+            AgentTools.LastDamage = new JsonObject { ["tick"] = 999L,
+                ["attacker"] = new JsonObject { ["npc_index"] = 1, ["npc_type"] = 204, ["via"] = "projectile" } };
+            void AimAt(int index, string reason, int[] types = null)
+            {
+                FightCoordinator.Stop(); p.itemAnimation = p.itemTime = 0;
+                FightCoordinator.Start(40, types); FightCoordinator.Tick(p, true);
+                Check(FightCoordinator.AimTarget == Main.npc[index].Center, reason);
+            }
+            AimAt(1, "recent projectile attacker lost priority to an uninvolved closer NPC");
+            AimAt(0, "retaliation ignored explicit target types", new[] { 42 });
+            Main.GameUpdateCount = 1301;
+            AimAt(0, "stale damage permanently monopolized defense");
+            Main.GameUpdateCount = 1000; Main.npc[1].type = 205;
+            AimAt(0, "reused NPC slot inherited another monster's attack evidence");
+        }
+        finally
+        {
+            FightCoordinator.Stop(); p.inventory = inventory; Main.npc = npcs; AgentTools.LastDamage = damage;
+            p.position = position; p.selectedItem = selected; Main.GameUpdateCount = tick;
+            CombatLoadout.PreferredType = preferred; Manual.On = manual; AgentPermissions.Dodge = dodge;
+            Collision.LineTest = null;
+            if (hadSample) Terraria.ID.ContentSamples.ProjectilesByType[77] = sample;
+            else Terraria.ID.ContentSamples.ProjectilesByType.Remove(77);
+            if (hadPassing) Terraria.ID.ContentSamples.ProjectilesByType[78] = passing;
+            else Terraria.ID.ContentSamples.ProjectilesByType.Remove(78);
+        }
+        Console.WriteLine("PASS: target-aware melee reach, projectile obstruction and recent attacker priority preserve agent filters");
+    }
+
+    static async Task PickupCapacity()
+    {
+        var blocked = new World { Drop = true, PickupBlocked = true };
+        var result = await Gather.Run(Targets, 5, blocked, default);
+        Check(result["outcome"]?.ToString() == "inventory_full" && !result["ok"].GetValue<bool>()
+            && blocked.Actions.SequenceEqual(new[] { "npc" }) && result["blocked_sources"].AsArray().Count == 1,
+            "full inventory repeatedly chased a blocked drop or prevented collecting a fitting target");
+        var race = new World { Drop = true, FullDuringAction = true };
+        result = await Gather.Run(Targets, 5, race, default);
+        Check(result["outcome"]?.ToString() == "inventory_full" && race.Actions.Count == 1,
+            "capacity loss during approach retried the pickup instead of returning inventory evidence");
+        blocked.PickupBlocked = false;
+        result = await Gather.Run(Targets, 5, blocked, default);
+        Check(result["ok"].GetValue<bool>() && blocked.Actions.SequenceEqual(new[] { "npc", "drop" }),
+            "resuming after inventory management lost progress or retained a capacity rejection");
+        var tileBlocked = new World { TypeSpaceBlocked = true };
+        result = await Gather.Run(Targets, 5, tileBlocked, default);
+        Check(result["outcome"]?.ToString() == "inventory_full" && tileBlocked.Actions.SequenceEqual(new[] { "npc" }),
+            "collection mined more material while the native type capacity was blocked");
+        var fittingDrop = new World { Drop = true, TypeSpaceBlocked = true };
+        result = await Gather.Run(Targets, 5, fittingDrop, default);
+        Check(result["ok"].GetValue<bool>() && fittingDrop.Actions.Contains("drop"),
+            "actual drop capacity was overridden by a generic item sample rejection");
+
+        var watch = new AgentWatch(); watch.EnsureDefaults();
+        watch.Observe(new JsonObject { ["inventory_full"] = true });
+        Check(watch.Take().Count == 1, "first full inventory was not reported");
+        watch.Observe(new JsonObject { ["inventory_full"] = true });
+        Check(!watch.HasPending, "unchanged full inventory repeatedly woke the model");
+        watch.Observe(new JsonObject { ["inventory_full"] = false });
+        watch.Observe(new JsonObject { ["inventory_full"] = true });
+        Check(watch.Take().Count == 1, "refilling the inventory after cleanup failed to notify again");
+
+        var p = Main.LocalPlayer; var oldItems = Main.item; var oldNpcs = Main.npc;
+        var oldSpace = p.ItemSpaceHandler; bool oldTemple = p.ZoneLihzhardTemple;
+        var oldHandler = HttpServerSystem.Handler;
+        try
+        {
+            Main.item = Enumerable.Range(0, Main.maxItems).Select(_ => new Item()).ToArray();
+            Main.npc = Enumerable.Range(0, Main.maxNPCs).Select(_ => new NPC()).ToArray();
+            var drop = new Item { active = true, type = 191, stack = 2, position = p.Center };
+            Main.item[0] = drop;
+            var targets = new[] { new GatherTarget(191, 100, Array.Empty<string>(), Array.Empty<int>()) };
+            var world = new GameGather(targets);
+            p.ItemSpaceHandler = _ => false;
+            var agent = new NativeAgent();
+            async Task<JsonObject> Pump(Task<JsonObject> task)
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                while (!task.IsCompleted) { timeout.Token.ThrowIfCancellationRequested(); agent.PostUpdateEverything(); await Task.Delay(1); }
+                return await task;
+            }
+            var scene = await Pump(world.Observe(default));
+            Check(scene["candidates"][0]["can_pickup"]?.GetValue<bool>() == false,
+                "actual drop capacity was absent from gather observation");
+            var action = await Pump(world.Act(scene["candidates"][0].AsObject(), default));
+            Check(action["outcome"]?.ToString() == "inventory_full" && action["item_type"]?.GetValue<int>() == 191,
+                "blocked drop waited for settling/navigation instead of immediately reporting capacity");
+            p.ItemSpaceHandler = item => ReferenceEquals(item, drop);
+            scene = await Pump(world.Observe(default));
+            Check(scene["candidates"][0]["can_pickup"]?.GetValue<bool>() == true,
+                "type-level rejection hid a drop the native capacity check can accept");
+            var drops = NearbyDrops.Read(60);
+            Check(drops[0]["can_pickup"]?.GetValue<bool>() == true, "agent drop query omitted actual pickup capacity");
+            int navStarts = 0, navStops = 0;
+            drop.position = p.Center + new Microsoft.Xna.Framework.Vector2(200, 0);
+            p.ItemSpaceHandler = _ => navStarts == 0;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/nav_recede") navStarts++;
+                if (path == "/nav_recede_stop") navStops++;
+                return (200, path == "/nav_recede_done" ? "{\"done\":false,\"status\":\"running\"}" : "{}");
+            };
+            scene = await Pump(world.Observe(default));
+            action = await Pump(world.Act(scene["candidates"][0].AsObject(), default));
+            Check(action["outcome"]?.ToString() == "inventory_full" && navStarts == 1 && navStops == 1,
+                "capacity loss during navigation did not release the pickup route immediately");
+            Main.npc[0] = new NPC { active = true, type = Terraria.ID.NPCID.Lihzahrd, position = p.Center };
+            var templeWorld = new GameGather(new[] { targets[0] with { Npcs = new[] { Terraria.ID.NPCID.Lihzahrd } } });
+            p.ZoneLihzhardTemple = false;
+            scene = await Pump(templeWorld.Observe(default));
+            Check(!scene["candidates"].AsArray().Any(c => c["kind"]?.ToString() == "npc"),
+                "gather offered a temple enemy outside as a material source");
+            p.ZoneLihzhardTemple = true;
+            scene = await Pump(templeWorld.Observe(default));
+            var npc = scene["candidates"].AsArray().OfType<JsonObject>().Single(c => c["kind"]?.ToString() == "npc");
+            p.ZoneLihzhardTemple = false;
+            action = await Pump(templeWorld.Act(npc, default));
+            Check(action["error"]?.ToString() == "target_changed", "gather attacked a stale temple candidate after leaving");
+        }
+        finally
+        {
+            Main.item = oldItems; Main.npc = oldNpcs; p.ItemSpaceHandler = oldSpace;
+            p.ZoneLihzhardTemple = oldTemple; HttpServerSystem.Handler = oldHandler;
+        }
+        Console.WriteLine("PASS: per-item capacity gates pickup, preserves fitting targets/progress and rearms inventory warnings after cleanup (native capacity stubbed)");
+    }
+
+    public static void MiningAttackTurns()
+    {
+        var p = Main.LocalPlayer;
+        var oldInventory = p.inventory;
+        var oldNpcs = Main.npc;
+        int preferred = CombatLoadout.PreferredType;
+        bool oldManual = Manual.On;
+        try
+        {
+            FightCoordinator.Stop(); AgentPermissions.Reset(); CombatLoadout.PreferredType = 0;
+            Manual.On = false;
+            p.inventory = new Item[58];
+            for (int i = 0; i < 58; i++) p.inventory[i] = new Item();
+            p.inventory[0] = new Item { stack = 1, pick = 35, damage = 5 };
+            p.inventory[1] = new Item { stack = 1, damage = 20, shoot = 1, shootSpeed = 12 };
+            Main.npc = new NPC[Main.maxNPCs];
+            for (int i = 0; i < Main.maxNPCs; i++) Main.npc[i] = new NPC();
+            Main.npc[0] = new NPC { active = true, lifeMax = 100, damage = 10,
+                position = new(p.position.X + 100, p.position.Y), velocity = new(2, 0) };
+            int aimCalls = 0;
+            Combat.AimHandler = (_, target, weapon) =>
+            {
+                Check(weapon == p.inventory[1], "existing NPC aimer received the wrong weapon");
+                aimCalls++;
+                return target.Center + new Microsoft.Xna.Framework.Vector2(20, 0);
+            };
+            p.inventory[1].mana = p.statMana + 100;
+            Check(CombatLoadout.Select(p) == -1, "weapon without enough mana was selected for an attack turn");
+            p.inventory[1].mana = 0;
+            FightCoordinator.Start(40);
+            p.itemAnimation = p.itemTime = 0; p.selectedItem = 0; p.controlUseItem = true;
+            Cursor.AimPx(20, 30);
+            FightCoordinator.Tick(p, true, true);
+            Check(p.selectedItem == 0, "attack stole the first mining animation");
+            p.itemAnimation = 3; p.selectedItem = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, true);
+            Check(p.selectedItem == 0 && p.controlUseItem && Cursor.X == 20 && Cursor.Y == 30,
+                "locked mining animation released the continuing tool input");
+            p.controlUseItem = false;
+            FightCoordinator.Tick(p, true, false);
+            Check(!p.controlUseItem, "canceled primary action continued using its tool");
+            p.itemAnimation = 3; p.selectedItem = 1; Cursor.AimPx(90, 90);
+            FightCoordinator.Tick(p, true, true);
+            Check(p.selectedItem == 0 && !p.controlUseItem && Cursor.X == 20 && Cursor.Y == 30,
+                $"mining animation lost its item or aim: slot={p.selectedItem} cursor={Cursor.X},{Cursor.Y} anim={p.itemAnimation} dead={p.dead} manual={Manual.On}");
+            p.itemAnimation = p.itemTime = 0; p.selectedItem = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, true);
+            Check(p.selectedItem == 1 && p.controlUseItem && FightCoordinator.AimTarget.HasValue,
+                "completed mining animation did not yield an attack turn");
+            var attackAim = FightCoordinator.AimTarget.Value;
+            Check(aimCalls == 1 && attackAim.X == Main.npc[0].Center.X + 20,
+                "attack bypassed the existing NPC aimer");
+            Main.npc[0].position.X += 10;
+            p.itemAnimation = 3; p.selectedItem = 0; Cursor.AimPx(20, 30);
+            FightCoordinator.Tick(p, true, true);
+            Check(p.selectedItem == 1 && aimCalls == 2 && System.Math.Abs(Cursor.X - attackAim.X - 10) < 1,
+                "unfinished attack lost its weapon or stopped tracking the moving NPC");
+            p.itemAnimation = p.itemTime = 0; p.selectedItem = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, true);
+            Check(p.selectedItem == 0 && !FightCoordinator.AimTarget.HasValue,
+                "completed attack animation did not restore mining");
+            FightCoordinator.Stop(); FightCoordinator.Start(40);
+            Main.npc[0].position = new(p.position.X + 24, p.position.Y);
+            p.selectedItem = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Check(p.selectedItem == 1 && p.controlUseItem, "immediate threat waited for another mining swing");
+            p.itemAnimation = 3; p.selectedItem = 0;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Check(p.selectedItem == 1, "immediate defense interrupted an unfinished attack");
+            p.itemAnimation = p.itemTime = 0; p.selectedItem = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Check(p.selectedItem == 1 && p.controlUseItem, "immediate threat yielded back to mining before clearance");
+            p.itemAnimation = 3;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Main.npc[0].active = false;
+            p.itemAnimation = p.itemTime = 0; p.selectedItem = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Check(p.selectedItem == 0 && p.controlUseItem, "cleared immediate threat did not restore mining");
+            Main.npc[0].active = true; Main.npc[0].position.X = p.position.X + 100;
+            p.inventory[2] = new Item { stack = 1, createTile = 19 };
+            p.selectedItem = 2; p.itemAnimation = 0; p.itemTime = 3; p.controlUseItem = false;
+            FightCoordinator.Tick(p, true);
+            Check(p.selectedItem == 2 && !p.controlUseItem,
+                "attack restarted while placement was waiting for the previous item cooldown");
+            p.itemTime = 0; p.controlUseItem = true;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Check(p.selectedItem == 2 && p.controlUseItem, "ready placement lost its priority");
+            p.controlUseItem = false;
+            FightCoordinator.Tick(p, true);
+            Check(p.selectedItem == 1 && p.controlUseItem,
+                "holding an idle building item indefinitely suppressed defense");
+            foreach (string tool in new[] { "mine", "mine_vein", "chop_wood" })
+            {
+                FightCoordinator.Stop(); FightCoordinator.Start(40);
+                Check(AgentTools.ControlSession.Begin(tool, null, out long ticket) == null,
+                    "mining action could not acquire controls");
+                try
+                {
+                    p.selectedItem = 0; p.itemAnimation = p.itemTime = 0; p.controlUseItem = false;
+                    FightCoordinator.Tick(p, true);
+                    Check(p.selectedItem == 1 && p.controlUseItem,
+                        tool + " blocked defense while approaching between tool animations");
+                }
+                finally { AgentTools.ControlSession.End(ticket); }
+            }
+            FightCoordinator.Stop(); FightCoordinator.Start(40);
+            FightCoordinator.NavigationSnapshotPending = true;
+            try
+            {
+                p.selectedItem = 0; p.controlUseItem = false; p.itemAnimation = p.itemTime = 0;
+                FightCoordinator.Tick(p, true);
+                Check(p.selectedItem == 0 && !p.controlUseItem,
+                    "defense started a new attack while navigation needed an animation-free snapshot");
+            }
+            finally { FightCoordinator.NavigationSnapshotPending = false; }
+            FightCoordinator.Tick(p, true);
+            Check(p.selectedItem == 1 && p.controlUseItem, "snapshot completion did not restore defense");
+            bool wasNavigating = RecedingNav.Active, wasNative = VanillaNavBridge.Enabled;
+            string previousStage = VanillaNavBridge.Stage;
+            try
+            {
+                RecedingNav.Active = true;
+                foreach (bool enabled in new[] { false, true })
+                foreach (string stage in new[] { "Moving", "Approaching", "Braking", "Preparing", "Excavating" })
+                {
+                    VanillaNavBridge.Enabled = enabled;
+                    FightCoordinator.Stop(); FightCoordinator.Start(40); VanillaNavBridge.Stage = stage;
+                    p.selectedItem = 0; p.itemAnimation = p.itemTime = 0; p.controlUseItem = false;
+                    FightCoordinator.Tick(p, true);
+                    Check(p.controlUseItem == (stage is "Moving" or "Excavating"),
+                        "native snapshot reservation affected the wrong navigation stage: " + enabled + "/" + stage);
+                }
+            }
+            finally
+            {
+                RecedingNav.Active = wasNavigating; VanillaNavBridge.Enabled = wasNative; VanillaNavBridge.Stage = previousStage;
+            }
+            var oldVelocity = p.velocity;
+            try
+            {
+                p.inventory[2] = new Item { type = Terraria.ID.ItemID.Umbrella, stack = 1 };
+                p.velocity = new(0, 10); p.selectedItem = 2; p.controlDown = true; p.controlUseItem = false;
+                FightCoordinator.Tick(p, true);
+                Check(p.selectedItem == 2 && p.controlDown && !p.controlUseItem,
+                    "automatic defense replaced the umbrella or its falling controls");
+                p.velocity = default; p.itemAnimation = p.itemTime = 0;
+                FightCoordinator.Tick(p, true);
+                Check(p.selectedItem == 1 && p.controlUseItem, "defense did not resume after landing");
+            }
+            finally { p.velocity = oldVelocity; p.controlDown = false; }
+            bool oldNavigation = RecedingNav.Active, oldJump = p.ExtraJump;
+            int oldFallDamage = FallSafety.Damage;
+            try
+            {
+                RecedingNav.Active = true; p.ExtraJump = false;
+                p.velocity = new(0, 10); FallSafety.Damage = 200;
+                p.inventory[2] = new Item { type = 150, stack = 28, createTile = 51 };
+                p.selectedItem = 2; p.itemAnimation = 3; p.itemTime = 23; p.controlUseItem = true;
+                FightCoordinator.Tick(p, true);
+                Check(p.selectedItem == 2 && p.itemAnimation == 3 && p.itemTime == 23 && p.controlUseItem,
+                    "combat replaced pending fall protection or artificially cancelled its remaining animation/cooldown");
+                p.itemAnimation = p.itemTime = 0; FallSafety.Damage = 0;
+                p.selectedItem = 0; p.controlUseItem = false;
+                FightCoordinator.Tick(p, true);
+                Check(p.selectedItem == 1 && p.controlUseItem, "zero fall damage suppressed ordinary combat");
+                FallSafety.Damage = 200; p.ExtraJump = true; p.itemAnimation = p.itemTime = 0;
+                p.selectedItem = 0; p.controlUseItem = false;
+                FightCoordinator.Tick(p, true);
+                Check(p.selectedItem == 1 && p.controlUseItem, "available extra jump unnecessarily reserved item use");
+            }
+            finally
+            {
+                RecedingNav.Active = oldNavigation; p.ExtraJump = oldJump;
+                FallSafety.Damage = oldFallDamage; p.velocity = oldVelocity;
+            }
+        }
+        finally
+        {
+            FightCoordinator.Stop(); p.itemAnimation = p.itemTime = 0;
+            p.inventory = oldInventory; Main.npc = oldNpcs; CombatLoadout.PreferredType = preferred;
+            Manual.On = oldManual;
+            Combat.AimHandler = null;
+        }
+        Console.WriteLine("PASS: mining and attack alternate whole animations and route per-frame tracking through the existing NPC aimer (aimer stubbed)");
     }
 
     static void FiringLane()
@@ -72,6 +684,13 @@ static class GatherTests
             Collision.LineTest = (from, to) => false;
             FightCoordinator.Start(40, new[] { 9 }); FightCoordinator.Tick(p);
             Check(!p.controlUseItem, "blocked projectile weapon continued firing into terrain");
+            Check(FightCoordinator.AimTarget == null, "blocked enemy still occupied automatic targeting");
+            var visible = new NPC { type = 9, active = true, damage = 10, position = new(p.Center.X + 300, p.Center.Y - 10) };
+            Main.npc[1] = visible;
+            Collision.LineTest = (from, to) => to.X > p.Center.X + 250;
+            FightCoordinator.Tick(p);
+            Check(p.controlUseItem && Cursor.X == visible.Center.X, "blocked nearest enemy hid a farther visible target");
+            Main.npc[1].active = false; Collision.LineTest = (_, _) => false;
             Terraria.ID.ContentSamples.ProjectilesByType[77].tileCollide = false;
             FightCoordinator.Tick(p);
             Check(p.controlUseItem, "wall-passing projectile was incorrectly blocked by line-of-sight guard");
@@ -91,30 +710,191 @@ static class GatherTests
     {
         var p = Main.LocalPlayer;
         var oldShots = Main.projectile; var oldNpcs = Main.npc;
-        var oldVelocity = p.velocity; float oldGravity = p.gravity;
+        var oldVelocity = p.velocity; var oldPosition = p.position; float oldGravity = p.gravity;
+        bool oldManual = Manual.On, oldDodge = Dodge.Enabled;
         try
         {
-            p.velocity = default; p.gravity = 0;
+            p.position = new(160, 160); p.velocity = default; p.gravity = 0; Manual.On = false;
+            p.controlLeft = p.controlRight = p.controlJump = false;
             Main.npc = Array.Empty<NPC>();
             var shot = new Projectile { active = true, hostile = true, damage = 10,
                 Center = p.Center + new Microsoft.Xna.Framework.Vector2(0, -120), velocity = new(0, 5) };
             Main.projectile = new[] { shot };
             Check(FightCoordinator.Evade(p).Direction != 0, "incoming vertical projectile did not trigger lateral evasion");
+            Collision.HurtTest = (position, _, _, _) => position.X < p.position.X - 1;
+            Check(FightCoordinator.Evade(p).Direction > 0, "evasion selected terrain that deals contact damage");
+            Collision.HurtTest = (position, _, _, _) => position.X >= p.position.X - 1;
+            Check(FightCoordinator.Evade(p).Direction < 0, "contact hazard prevented choosing an escape out of existing damage");
+            Collision.HurtTest = null;
+            string boundary = AgentTools.Control.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null,
+                "stay inside arena", ((int)MathF.Floor(p.position.X / 16), 0, 20, 1000), outside: true);
+            try
+            {
+                Check(FightCoordinator.Evade(p).Direction > 0, "projectile reflex escaped through the agent's left boundary");
+            }
+            finally { AgentTools.Control.Release(boundary); }
+            Main.npc = new NPC[Main.maxNPCs];
+            for (int i = 0; i < Main.npc.Length; i++) Main.npc[i] = new NPC();
+            FightCoordinator.Tick(p, true);
+            Check((p.controlLeft || p.controlRight) && !p.controlUseItem,
+                $"thinking defense ignored projectile: dead={p.dead} manual={Manual.On} enabled={Config.I.AgentEnabled} automate={AgentNetwork.CanAutomate} attack={AgentPermissions.CanAttack(delegated: true)} dodge={AgentPermissions.CanDodge(delegated: true)} left={p.controlLeft} right={p.controlRight} idle={FightCoordinator.IsIdleDefending}");
+            string noDodge = AgentTools.Control.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null, "hold still");
+            try
+            {
+                p.controlLeft = p.controlRight = p.controlJump = false;
+                FightCoordinator.Tick(p, true);
+                Check(!p.controlLeft && !p.controlRight && !p.controlJump,
+                    "projectile-only defense ignored agent movement veto");
+            }
+            finally { AgentTools.Control.Release(noDodge); }
+            FightCoordinator.Start(20);
+            FightCoordinator.Tick(p, true);
+            Check((p.controlLeft || p.controlRight) && !p.controlUseItem,
+                "explicit attack did not evade incoming projectile");
+            p.controlLeft = p.controlRight = p.controlJump = false;
+            FightCoordinator.Tick(p, true, primaryItemUse: true);
+            Check(p.controlLeft || p.controlRight, "item use suppressed emergency projectile evasion");
+            FightCoordinator.Stop();
             float wall = p.position.X - 1;
             Collision.SolidTest = (position, width, height) => position.X < wall;
             Check(FightCoordinator.Evade(p).Direction > 0, "evasion selected the blocked side");
             Collision.SolidTest = null;
             shot.hostile = false;
-            Check(FightCoordinator.Evade(p) == (0, false), "friendly projectile triggered evasion");
+            Check(!FightCoordinator.Evade(p).Apply, "friendly projectile triggered evasion");
             shot.hostile = true; shot.Center += new Microsoft.Xna.Framework.Vector2(500, 0);
-            Check(FightCoordinator.Evade(p) == (0, false), "non-intersecting projectile caused idle movement");
+            Check(!FightCoordinator.Evade(p).Apply, "non-intersecting projectile caused idle movement");
+            Main.projectile = Array.Empty<Projectile>();
+            var enemy = Main.npc[0]; enemy.active = true; enemy.damage = 20;
+            enemy.position = p.Center + new Microsoft.Xna.Framework.Vector2(80 - enemy.width / 2f, -enemy.height / 2f);
+            enemy.velocity = new(-5, 0);
+            p.controlLeft = p.controlRight = p.controlJump = false;
+            FightCoordinator.Tick(p, true);
+            Check(p.controlLeft || p.controlRight || p.controlJump,
+                "thinking defense ignored a monster predicted to collide with the player");
+            p.controlLeft = p.controlRight = p.controlJump = false;
+            enemy.boss = true; Dodge.Enabled = true;
+            enemy.velocity = new(-1, 0);
+            FightCoordinator.Tick(p, true);
+            Check(!p.controlLeft && !p.controlRight && !p.controlJump,
+                "ordinary contact reflex replaced active Boss movement");
+            enemy.velocity = new(-5, 0);
+            FightCoordinator.Tick(p, true);
+            Check(p.controlLeft || p.controlRight || p.controlJump,
+                "imminent Boss collision waited for the next Jev decision");
+            enemy.boss = false; Dodge.Enabled = oldDodge;
+            enemy.velocity = default; enemy.position += new Microsoft.Xna.Framework.Vector2(240, 0);
+            p.controlLeft = p.controlJump = false; p.controlRight = true;
+            FightCoordinator.Tick(p, true);
+            Check(p.controlRight && !p.controlLeft && !p.controlJump,
+                "a distant monster interrupted safe forward movement");
         }
         finally
         {
+            FightCoordinator.Stop();
             Main.projectile = oldShots; Main.npc = oldNpcs;
-            p.velocity = oldVelocity; p.gravity = oldGravity; Collision.SolidTest = null;
+            p.position = oldPosition; p.velocity = oldVelocity; p.gravity = oldGravity; Manual.On = oldManual;
+            Dodge.Enabled = oldDodge; Collision.SolidTest = null; Collision.HurtTest = null;
         }
         Console.WriteLine("PASS: NPC evasion reacts to hostile trajectories, avoids blocked movement and ignores friendly or distant shots");
+    }
+
+    public static void DecisionMovement() => IdleDefense();
+
+    static void IdleDefense()
+    {
+        var p = Main.LocalPlayer;
+        var oldWeapon = p.inventory[0]; var oldNpcs = Main.npc;
+        bool oldDead = p.dead, oldManual = Manual.On;
+        try
+        {
+            FightCoordinator.Stop(); AgentPermissions.Reset(); p.dead = false; Manual.On = false;
+            p.inventory[0] = new Item { stack = 1, damage = 20, shoot = 1 };
+            Main.npc = new NPC[Main.maxNPCs];
+            for (int i = 0; i < Main.npc.Length; i++) Main.npc[i] = new NPC();
+            Main.npc[0] = new NPC { type = 42, active = true, damage = 20, position = new(p.position.X + 80, p.position.Y) };
+            p.controlUseItem = false;
+            FightCoordinator.Tick(p, false);
+            Check(!p.controlUseItem, "idle agent attacked without an active task");
+            p.delayUseItem = p.mouseInterface = true;
+            FightCoordinator.Tick(p, true);
+            Check(p.controlUseItem && !FightCoordinator.IsActive, "thinking defense failed or became a managed fight");
+            Check(!p.delayUseItem && !p.mouseInterface, "UI suppression blocked thinking defense");
+            FightCoordinator.Start(40);
+            p.delayUseItem = p.mouseInterface = true;
+            FightCoordinator.Tick(p, true);
+            Check(p.controlUseItem && !p.delayUseItem && !p.mouseInterface, "open inventory blocked an explicit fight");
+            FightCoordinator.Stop(); FightCoordinator.Tick(p, true);
+            AgentPermissions.Attack = false;
+            FightCoordinator.Tick(p, true);
+            Check(!p.controlUseItem, "attack denial retained thinking defense");
+            AgentPermissions.Attack = true;
+            FightCoordinator.Tick(p, true);
+            FightCoordinator.StopIdleDefense();
+            Check(!p.controlUseItem, "handoff retained defense item input");
+            var denied = AgentTools.ControlSession.Begin("nav_to", null, out long ticket);
+            Check(denied == null, "idle defense reserved the action slot");
+            FightCoordinator.Tick(p, true);
+            Check(p.controlUseItem, "navigation incorrectly blocked concurrent defense");
+            PlaceAction.IsRunning = true;
+            p.controlUseItem = false;
+            FightCoordinator.Tick(p, true);
+            Check(!p.controlUseItem && !FightCoordinator.IsIdleDefending,
+                "attack reclaimed placement's release frame");
+            PlaceAction.IsRunning = false;
+            FightCoordinator.Tick(p, true);
+            Check(p.controlUseItem, "attack did not resume after placement finished");
+            AgentTools.ControlSession.End(ticket);
+            foreach (var channels in new[] { ControlChannels.Movement, ControlChannels.ItemUse, ControlChannels.All })
+            {
+                Check(AgentTools.ControlSession.Begin("act", null, out long direct, channels) == null,
+                    "direct movement could not acquire its requested channels");
+                try
+                {
+                    FightCoordinator.Stop(); p.itemAnimation = p.itemTime = 0; p.controlUseItem = false;
+                    FightCoordinator.Tick(p, true);
+                    Check(p.controlUseItem == (channels == ControlChannels.Movement),
+                        "direct input reserved the wrong attack channel: " + channels);
+                }
+                finally { AgentTools.ControlSession.End(direct); }
+            }
+            string claim = AgentTools.Control.Claim(ControlChannels.All, ControlLifetime.Task, null, "test ownership");
+            FightCoordinator.Tick(p, true);
+            Check(!p.controlUseItem, "thinking defense overrode agent claim");
+            AgentTools.Control.Release(claim);
+            string rest = AgentTools.Control.Deny(new[] { ControlBehavior.Survival }, ControlLifetime.Task, null, "rest instead of automatic defense");
+            try
+            {
+                for (int frame = 0; frame < 120; frame++)
+                {
+                    FightCoordinator.Tick(p, true);
+                    Check(!FightCoordinator.IsIdleDefending && !p.controlUseItem && !p.controlLeft && !p.controlRight && !p.controlJump,
+                        "automatic defense reclaimed inputs during an agent rest veto");
+                }
+            }
+            finally { AgentTools.Control.Release(rest); }
+            FightCoordinator.Tick(p, true);
+            Check(FightCoordinator.IsIdleDefending && p.controlUseItem, "released rest veto did not permit default defense");
+            string holdPosition = AgentTools.Control.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null, "defend without leaving the recovery position");
+            try
+            {
+                for (int frame = 0; frame < 120; frame++)
+                {
+                    FightCoordinator.Tick(p, true);
+                    Check(p.controlUseItem && !p.controlLeft && !p.controlRight && !p.controlJump,
+                        "holding position either disabled firing or allowed autonomous movement");
+                }
+            }
+            finally { AgentTools.Control.Release(holdPosition); }
+            FightCoordinator.Tick(p, false);
+            Check(!p.controlUseItem && !p.controlLeft && !p.controlRight, "task completion retained defense inputs");
+        }
+        finally
+        {
+            FightCoordinator.Stop(); AgentPermissions.Reset();
+            Main.npc = oldNpcs; p.inventory[0] = oldWeapon; p.dead = oldDead; Manual.On = oldManual;
+            PlaceAction.IsRunning = false;
+        }
+        Console.WriteLine("PASS: thinking defense yields to task end, action ownership, attack denial and control claims without reserving a task");
     }
 
     static void FightFiltering()
@@ -123,13 +903,39 @@ static class GatherTests
         var oldWeapon = p.inventory[0]; var oldA = Main.npc[0]; var oldB = Main.npc[1];
         try
         {
-            p.inventory[0] = new Item { stack = 1, damage = 20 };
+            p.inventory[0] = new Item { stack = 1, damage = 20, shoot = 1 };
             Main.npc[0] = new NPC { type = 1, active = true, position = new(10, 0) };
             Main.npc[1] = new NPC { type = 2, active = true, position = new(80, 0) };
             FightCoordinator.Start(40, new[] { 2 }); FightCoordinator.Tick(p);
             Check(Cursor.X == Main.npc[1].Center.X, "targeted fight attacked closer unrelated enemy");
+            FightCoordinator.Stop(); FightCoordinator.Start(40, new[] { 2 }, "left"); FightCoordinator.Tick(p);
+            Check(!p.controlLeft && !p.controlRight && p.controlUseItem, "attack changed movement for a legacy strafe argument");
+            FightCoordinator.Stop();
+            Check(!p.controlLeft && !p.controlRight, "stopped strafe retained movement");
             FightCoordinator.Stop(); FightCoordinator.Start(40); FightCoordinator.Tick(p);
             Check(Cursor.X == Main.npc[0].Center.X, "target filter leaked into ordinary fight");
+            foreach (string immunity in new[] { "dontTakeDamage", "immortal", "unchaseable" })
+            {
+                FightCoordinator.Stop();
+                Main.npc[0].dontTakeDamage = immunity == "dontTakeDamage";
+                Main.npc[0].immortal = immunity == "immortal";
+                Main.npc[0].chaseable = immunity != "unchaseable";
+                FightCoordinator.Start(40); FightCoordinator.Tick(p);
+                Check(Cursor.X == Main.npc[1].Center.X, "automatic attack selected " + immunity + " NPC");
+            }
+            Main.npc[0].dontTakeDamage = Main.npc[0].immortal = false; Main.npc[0].chaseable = true;
+            p.controlRight = p.controlJump = true;
+            FightCoordinator.Tick(p);
+            Check(p.controlRight && p.controlJump && p.controlUseItem, "attack overwrote navigation controls");
+            ItemUseCoordinator.IsActive = true;
+            p.selectedItem = 2; p.controlUseItem = true;
+            FightCoordinator.Tick(p);
+            Check(p.selectedItem == 2 && p.controlUseItem && p.controlRight && p.controlJump,
+                "attack stole active mining or placement inputs");
+            ItemUseCoordinator.IsActive = false;
+            FightCoordinator.Stop();
+            Check(p.controlRight && p.controlJump, "stopping attack released navigation controls");
+            p.controlRight = p.controlJump = false; p.selectedItem = 0;
             Main.npc[1].friendly = true; p.controlUseItem = false;
             FightCoordinator.Start(40, new[] { 2 }); FightCoordinator.Tick(p);
             Check(!p.controlUseItem, "target filter bypassed friendly NPC protection");
@@ -138,9 +944,52 @@ static class GatherTests
         Console.WriteLine("PASS: production NPC attack filters target types, preserves ordinary selection and refuses friendly targets");
     }
 
+    sealed class CombatProgressWorld : IGatherWorld
+    {
+        public int Hp, Damage, Actions;
+        public Task<JsonObject> Observe(CancellationToken token) => Task.FromResult(new JsonObject
+        {
+            ["counts"] = new JsonObject { ["20"] = Hp == 0 ? 1 : 0 },
+            ["candidates"] = new JsonArray(new JsonObject { ["id"] = "npc:0:1", ["item_type"] = 20,
+                ["kind"] = "npc", ["distance"] = 1f })
+        });
+        public Task<JsonObject> Act(JsonObject candidate, CancellationToken token)
+        {
+            int before = Hp;
+            Hp = Math.Max(0, Hp - Damage); Actions++;
+            return Task.FromResult(new JsonObject { ["target_present"] = Hp > 0, ["self_dead"] = false,
+                ["hp_before"] = before, ["hp_after"] = Hp });
+        }
+        public Task Stop(CancellationToken token) => Task.CompletedTask;
+    }
+
+    sealed class ProbeWorld : IGatherWorld
+    {
+        public int Actions, Stops, GainEvery, Count;
+        public bool DropAfterThree;
+        public Task<JsonObject> Observe(CancellationToken token) => Task.FromResult(new JsonObject
+        {
+            ["counts"] = new JsonObject { ["10"] = Count },
+            ["candidates"] = new JsonArray(new JsonObject { ["id"] = "source:" + Actions,
+                ["item_type"] = 10, ["kind"] = DropAfterThree && Actions >= 3 ? "drop" : "tile",
+                ["x"] = Actions, ["y"] = 10, ["distance"] = 1f })
+        });
+        public Task<JsonObject> Act(JsonObject candidate, CancellationToken token)
+        {
+            Actions++;
+            if (candidate["kind"].ToString() == "drop") Count += 2;
+            else if (GainEvery > 0 && Actions % GainEvery == 0) Count++;
+            return Task.FromResult(new JsonObject { ["outcome"] = "removed" });
+        }
+        public Task Stop(CancellationToken token) { Stops++; return Task.CompletedTask; }
+    }
+
     sealed class World : IGatherWorld
     {
-        public bool Gain = true, Drop, Empty, Dead, WaitForever;
+        public bool Gain = true, Drop, Empty, Dead, WaitForever, Unsafe, Ambiguous, Obstructed, NavigationStalled, CollectionStalled, OutsideMiningRange;
+        public bool LostMiningReach, RecoverOnRetry, PickupBlocked, FullDuringAction, TypeSpaceBlocked;
+        public bool FarEnemy, EnemyApproaches, FirstNavigationStalled;
+        public int MiningDamage;
         public CancellationTokenSource Cancel;
         public int Stops;
         readonly Dictionary<int, int> counts = new() { [10] = 0, [20] = 0 };
@@ -148,16 +997,36 @@ static class GatherTests
         public Task<JsonObject> Observe(CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
-            JsonObject Candidate(int type, string kind) => new() { ["id"] = type.ToString(), ["item_type"] = type, ["kind"] = kind, ["distance"] = 2f };
+            JsonObject Candidate(int type, string kind) => new() { ["id"] = type.ToString(), ["item_type"] = type, ["kind"] = kind, ["distance"] = 2f,
+                ["who"] = kind == "npc" ? 7 : null, ["npc_type"] = kind == "npc" ? 42 : null,
+                ["x"] = type, ["y"] = 0, ["can_pickup"] = Drop && type == 10 ? JsonValue.Create(!PickupBlocked) : null,
+                ["blocked_reason"] = kind == "npc" && FarEnemy && !(EnemyApproaches && Actions.Contains("tile"))
+                    ? "combat_out_of_range" : null };
             return Task.FromResult(new JsonObject { ["counts"] = new JsonObject { ["10"] = counts[10], ["20"] = counts[20] },
+                ["item_space"] = new JsonObject { ["10"] = !TypeSpaceBlocked, ["20"] = true },
                 ["candidates"] = Empty ? new JsonArray() : new JsonArray(Candidate(10, Drop ? "drop" : "tile"), Candidate(20, "npc")),
-                ["error"] = Dead ? "interrupted_by_death" : null });
+                ["error"] = Dead ? "interrupted_by_death" : Ambiguous && Stops == 0 ? "ambiguous_tile_name" : null,
+                ["source_error"] = Ambiguous && Stops == 0 ? new JsonObject { ["error"] = "ambiguous_tile_name",
+                    ["name_candidates"] = new JsonArray(new JsonObject { ["internal"] = "ActualTile" }) } : null });
         }
         public async Task<JsonObject> Act(JsonObject candidate, CancellationToken token)
         {
             Actions.Add(candidate["kind"].ToString());
+            if (FullDuringAction) return new JsonObject { ["outcome"] = "inventory_full", ["item_type"] = candidate["item_type"].DeepClone() };
             Cancel?.Cancel(); token.ThrowIfCancellationRequested();
             if (WaitForever) await Task.Delay(Timeout.Infinite, token);
+            if (NavigationStalled || FirstNavigationStalled && Actions.Count == 1) return new JsonObject { ["error"] = "cannot_reach_collect_target",
+                ["navigation"] = new JsonObject { ["outcome"] = "no_progress", ["reason"] = "local_oscillation" } };
+            if (CollectionStalled) return new JsonObject { ["outcome"] = "no_progress", ["reason"] = "tool_weak" };
+            if (LostMiningReach && (Actions.Count == 1 || !RecoverOnRetry))
+                return new JsonObject { ["outcome"] = "no_progress", ["reason"] = "out_of_reach",
+                    ["target"] = new JsonObject { ["has_tile"] = true, ["damage"] = MiningDamage } };
+            if (OutsideMiningRange) return new JsonObject { ["error"] = "collect_target_out_of_mining_range",
+                ["x"] = 10, ["y"] = 0, ["navigation"] = new JsonObject { ["done"] = true, ["status"] = "done" } };
+            if (Obstructed) return new JsonObject { ["outcome"] = "combat_obstructed", ["target_x"] = 30, ["target_y"] = 20 };
+            if (Unsafe) return new JsonObject { ["error"] = "cannot_reach_collect_target",
+                ["navigation"] = new JsonObject { ["outcome"] = "unsafe", ["error"] = "navigation_near_trap",
+                    ["trap_tiles"] = new JsonArray(new JsonObject { ["x"] = 12, ["y"] = 34 }) } };
             if (Gain) counts[candidate["item_type"].GetValue<int>()]++;
             return new JsonObject { ["outcome"] = "removed" };
         }

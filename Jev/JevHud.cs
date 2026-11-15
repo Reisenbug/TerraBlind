@@ -15,7 +15,7 @@ namespace TerraBlind
 		{
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) return;
-			if (Combat.Enabled && Combat.AimTarget is Vector2 target)
+			if ((FightCoordinator.AimTarget ?? (Combat.Enabled ? Combat.AimTarget : null)) is Vector2 target)
 			{
 				Vector2 screen = target - Main.screenPosition;
 				var pixel = Terraria.GameContent.TextureAssets.MagicPixel.Value;

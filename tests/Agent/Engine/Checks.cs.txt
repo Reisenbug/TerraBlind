@@ -19,6 +19,1253 @@ namespace Engine;
 
 public sealed class Engine : Mod { }
 
+public sealed partial class BehaviorTrial
+{
+    int[] learningTargets = Array.Empty<int>();
+    readonly Vector2 learningOrigin = new(3200, 3158);
+
+    async Task WorkstationReplay()
+    {
+        bool checkpoint = Environment.GetEnvironmentVariable("TB_WORKSTATION_CHECKPOINT") == "1";
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false;
+            VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+            AgentTools.NewTask(); AgentPermissions.Reset();
+            Combat.Enabled = Dodge.Enabled = false;
+            var p = Main.LocalPlayer;
+            p.Teleport(checkpoint ? new Vector2(44767.805f, 4582) : new Vector2(19502, 3558));
+            p.velocity = Vector2.Zero;
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            p.inventory[1].SetDefaults(ItemID.Wood); p.inventory[1].stack = 9999;
+            p.inventory[2].SetDefaults(ItemID.WorkBench);
+            return true;
+        });
+        var before = await Call("inspect_terrain", new JsonObject { ["radius"] = 8 });
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var placed = await Call("place_at", new JsonObject { ["item"] = "36" });
+        var crafted = await Call("craft", new JsonObject { ["name"] = "WoodenSword" });
+        File.WriteAllText(Path.Combine(Main.SavePath, "workstation-replay.json"), new JsonObject {
+            ["elapsed_ms"] = clock.ElapsedMilliseconds, ["before"] = before, ["placed"] = placed, ["crafted"] = crafted }.ToJsonString());
+        if (placed["outcome"]?.ToString() != "done" || crafted["ok"]?.GetValue<bool>() != true)
+            throw new Exception("native workstation replay failed: " + placed);
+        Console.WriteLine("WORKSTATION_REPLAY_PASS elapsed_ms=" + clock.ElapsedMilliseconds);
+    }
+
+    async Task QueenMiningReplay()
+    {
+        if (Environment.GetEnvironmentVariable("TB_QUEEN_CONTACT_REPLAY") == "1") { await QueenContactReplay(); return; }
+        bool tunnel = Environment.GetEnvironmentVariable("TB_QUEEN_TUNNEL_REPLAY") == "1";
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false;
+            VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+            AgentTools.NewTask(); AgentPermissions.Reset();
+            Combat.Enabled = Dodge.Enabled = false;
+            var player = Main.LocalPlayer;
+            player.Teleport(tunnel ? new Vector2(21662.479f, 8326) : new Vector2(24198.145f, 5094)); player.velocity = Vector2.Zero;
+            player.fallStart = player.fallStart2 = (int)(player.position.Y / 16);
+            if (tunnel) VanillaNavBridge.Enabled = false;
+            foreach (var item in player.inventory) item.TurnToAir();
+            player.inventory[0].SetDefaults(ItemID.CopperShortsword);
+            player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+            player.inventory[2].SetDefaults(ItemID.CopperAxe);
+            player.inventory[3].SetDefaults(ItemID.Wood); player.inventory[3].stack = 9999;
+            player.selectedItem = 1;
+            for (int x = 1512; !tunnel && x <= 1513; x++)
+            for (int y = 318; y <= 320; y++)
+                if (Main.tile[x, y].TileType != TileID.SmallPiles) Main.tile[x, y].ClearTile();
+            miningMeasurement = new JsonObject { ["x"] = 1512, ["y"] = 321 };
+            return true;
+        });
+        if (tunnel)
+        {
+            var policy = await Call("task_policy", new JsonObject { ["operation"] = "get" });
+            await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = policy["revision"].DeepClone(),
+                ["code"] = ScriptLibrary.Example("safety_reactions")["code"].DeepClone() });
+        }
+        var before = await Call("inspect_terrain", new JsonObject { ["radius"] = 8 });
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var mining = new JsonObject { ["dir"] = tunnel ? "left" : "down",
+            ["target_x"] = tunnel ? 1290 : 1513, ["target_y"] = tunnel ? 521 : 340 };
+        var pending = tunnel ? Call("run_script", new JsonObject { ["code"] = "return tool('mine'," + mining.ToJsonString() + ");" })
+            : Call("mine", mining);
+        var samples = new JsonArray();
+        while (!pending.IsCompleted)
+        {
+            samples.Add(await OnMain(() => new JsonObject { ["tick"] = Main.GameUpdateCount,
+                ["x"] = Main.LocalPlayer.position.X, ["y"] = Main.LocalPlayer.position.Y,
+                ["vx"] = Main.LocalPlayer.velocity.X, ["vy"] = Main.LocalPlayer.velocity.Y,
+                ["mine"] = JsonNode.Parse(MineCoordinator.StatusJson()), ["nav"] = RecedingNav.Active }));
+            await Task.Delay(100);
+        }
+        var completed = await pending;
+        var result = tunnel && completed["value"] is JsonObject value ? (JsonObject)value.DeepClone() : completed;
+        var after = await Call("get_state", new JsonObject());
+        File.WriteAllText(Path.Combine(Main.SavePath, "mining-replay.json"), new JsonObject {
+            ["elapsed_ms"] = clock.ElapsedMilliseconds, ["before"] = before,
+            ["result"] = result, ["after"] = after, ["samples"] = samples,
+            ["measurement"] = miningMeasurement.DeepClone() }.ToJsonString());
+        if (result["outcome"]?.ToString() != "done") throw new Exception("native mining replay failed: " + result);
+        Console.WriteLine("MINING_REPLAY_PASS elapsed_ms=" + clock.ElapsedMilliseconds);
+    }
+
+    async Task QueenContactReplay()
+    {
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false;
+            VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+            AgentTools.NewTask(); AgentPermissions.Reset(); VanillaNavBridge.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false;
+            var player = Main.LocalPlayer;
+            player.Teleport(new Vector2(49439.37f, 11174.107f)); player.velocity = new Vector2(0, 9.6f);
+            player.fallStart = player.fallStart2 = (int)(player.position.Y / 16);
+            foreach (var item in player.inventory) item.TurnToAir();
+            player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+            player.inventory[3].SetDefaults(ItemID.Wood); player.inventory[3].stack = 9999;
+            player.inventory[5].SetDefaults(ItemID.IronBow); player.selectedItem = 5;
+            player.statLife = 93; player.statLifeMax = player.statLifeMax2 = 160;
+            return true;
+        });
+        var before = await Call("inspect_terrain", new JsonObject { ["radius"] = 8 });
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await Call("watch", new JsonObject { ["events"] = new JsonArray("nearby_tile"), ["tile_types"] = new JsonArray(69), ["radius"] = 8 });
+        var result = await (Task<JsonObject>)typeof(AgentTools).GetMethod("Navigate", BindingFlags.Static | BindingFlags.NonPublic)
+            .Invoke(null, new object[] { new JsonObject { ["x"] = 3092, ["y"] = 741 }, default(CancellationToken), 20, null });
+        var after = await Call("get_state", new JsonObject());
+        File.WriteAllText(Path.Combine(Main.SavePath, "contact-replay.json"), new JsonObject {
+            ["elapsed_ms"] = clock.ElapsedMilliseconds, ["before"] = before, ["result"] = result, ["after"] = after }.ToJsonString());
+        if (result["done"]?.GetValue<bool>() != true || result["verified_clearances"] is not JsonArray { Count: > 0 }
+            || after["player"]["hp"].GetValue<int>() < 93)
+            throw new Exception("native contact replay did not reach its target without losing health: " + result);
+        Console.WriteLine("CONTACT_REPLAY_PASS elapsed_ms=" + clock.ElapsedMilliseconds);
+    }
+
+    async Task LearningScene(bool transfer = false)
+    {
+        await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false;
+            VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+            AgentTools.NewTask();
+            Config.I.AgentEnabled = true;
+            Combat.Enabled = Dodge.Enabled = Concessions.Enabled = false;
+            Main.GameMode = 0; Main.dayTime = true; Main.time = 18000;
+            for (int x = 160; x <= 240; x++)
+            for (int y = 170; y <= 205; y++)
+            {
+                var tile = Main.tile[x, y]; tile.ClearEverything();
+                if (y >= 200) tile.ResetToType(TileID.Dirt);
+            }
+            var player = Main.LocalPlayer;
+            player.Teleport(learningOrigin); player.velocity = Vector2.Zero;
+            player.fallStart = player.fallStart2 = (int)(player.position.Y / 16);
+            player.statLife = player.statLifeMax = player.statLifeMax2 = 100;
+            player.itemAnimation = player.itemTime = 0; player.channel = false;
+            player.releaseUseItem = player.releaseJump = true;
+            foreach (var item in player.inventory) item.TurnToAir();
+            foreach (var item in player.armor) item.TurnToAir();
+            player.inventory[0].SetDefaults(ItemID.Mace); player.selectedItem = 0;
+            foreach (var shot in Main.projectile) if (shot.active && shot.owner == player.whoAmI) shot.Kill();
+            foreach (var npc in Main.npc) npc.active = false;
+            learningTargets = new int[2];
+            for (int i = 0; i < 2; i++)
+            {
+                float distance = i == 0 ? 44 : transfer ? 112 : 128;
+                var position = player.Center + new Vector2((transfer ? -1 : 1) * distance, -12);
+                int index = NPC.NewNPC(player.GetSource_FromThis(), (int)position.X, (int)position.Y, NPCID.BlueSlime);
+                var npc = Main.npc[index];
+                npc.position = position - new Vector2(npc.width / 2f, 0);
+                npc.velocity = Vector2.Zero; npc.aiStyle = -1; npc.noGravity = true;
+                npc.damage = npc.defense = 0; npc.knockBackResist = 0;
+                npc.life = npc.lifeMax = 10000; npc.timeLeft = 36000;
+                learningTargets[i] = index;
+            }
+            return true;
+        });
+        await Call("set_combat", new JsonObject { ["auto_attack"] = false, ["auto_dodge"] = false,
+            ["boss_control"] = false });
+    }
+
+    static IEnumerable<JsonObject> LearningReceipts(JsonNode value)
+    {
+        if (value is JsonObject obj)
+        {
+            if (obj["observation"] is JsonObject receipt) yield return receipt;
+            foreach (var pair in obj)
+                foreach (var nested in LearningReceipts(pair.Value)) yield return nested;
+        }
+        if (value is JsonArray array)
+            foreach (var entry in array)
+                foreach (var nested in LearningReceipts(entry)) yield return nested;
+    }
+
+    static JsonNode LearningView(JsonNode value)
+    {
+        if (value is JsonObject obj)
+        {
+            if (obj["slot"]?.ToString() == "0" && obj["name"] != null)
+            {
+                obj["name"] = "Experimental weapon"; obj.Remove("id"); obj.Remove("type");
+            }
+            if (obj["held_item"] is JsonObject held)
+            {
+                held["name"] = "Experimental weapon"; held.Remove("id"); held.Remove("type");
+            }
+            if (obj["identity"] != null && obj["transitions"] != null) obj.Remove("type");
+            foreach (var pair in obj) LearningView(pair.Value);
+        }
+        else if (value is JsonArray array) foreach (var entry in array) LearningView(entry);
+        return value;
+    }
+
+    async Task SkillLearningRun()
+    {
+        await LearningScene();
+        string directory = Path.Combine(Main.SavePath, "skill-learning"); Directory.CreateDirectory(directory);
+        if (Environment.GetEnvironmentVariable("TB_SKILL_LEARNING_CALIBRATE") == "1")
+        {
+            var check = await Call("act", JsonNode.Parse("""
+                {"observe":true,"steps":[
+                  {"slot":0,"rel":[8,-1],"use":true,"until":{"frames":60}},
+                  {"rel":[8,-1],"use":false,"until":{"frames":7}},
+                  {"rel":[8,-1],"use":true,"until":{"frames":45}},
+                  {"use":false,"until":{"frames":90}}]}
+                """).AsObject());
+            File.WriteAllText(Path.Combine(directory, "calibration.json"), check.ToJsonString());
+            var observed = check["observation"];
+            if (observed == null || observed["sampled_frames"].GetValue<int>() < 100)
+                throw new Exception("native action observation did not cover the calibration frames");
+            Console.WriteLine("SKILL_LEARNING_CALIBRATION " + observed.ToJsonString());
+            return;
+        }
+        if (!ModLoader.TryGetMod("TerraBlind", out var production)) throw new Exception("production mod missing");
+        var all = JsonNode.Parse(System.Text.Encoding.UTF8.GetString(production.GetFileBytes("Agent/Tools.json"))).AsArray();
+        AgentControlSession.DescribeClaims(all); AgentScript.DescribePrograms(all);
+        string[] allowed = { "get_state", "act", "script_program", "run_script", "inspect_terrain", "game_api" };
+        var schemas = new JsonArray(all.Where(schema => allowed.Contains(schema["function"]["name"].ToString()))
+            .Select(schema => schema.DeepClone()).ToArray());
+        schemas.First(schema => schema["function"]["name"].ToString() == "run_script")["function"]["parameters"] = new JsonObject {
+            ["type"] = "object", ["properties"] = new JsonObject { ["code"] = new JsonObject { ["type"] = "string" } },
+            ["required"] = new JsonArray("code") };
+        var calls = new JsonArray(); var replies = new JsonArray();
+        var trialIds = new HashSet<string>();
+        var library = new ScriptLibrary(Path.Combine(Main.SavePath, "TerraBlindAgent", "programs"));
+        async Task<string> ExecuteLearning(string name, JsonObject args, CancellationToken token)
+        {
+            if (!allowed.Contains(name) || calls.Count >= 80) throw new InvalidOperationException("learning tool budget exceeded");
+            var entry = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() }; calls.Add(entry);
+            JsonNode value;
+            if (name == "run_script")
+                value = await AgentScript.Run(args["code"].ToString(), 30,
+                    (tool, _) => { if (!allowed.Contains(tool)) throw new ArgumentException("tool unavailable in this experiment: " + tool); },
+                    ExecuteLearning, _ => Task.CompletedTask, token, programs: library.Callable(),
+                    onResult: report => library.RecordCalls(report["skill_calls"].AsArray(), Main.worldName));
+            else
+            {
+                if (name == "act") args["observe"] = true;
+                value = JsonNode.Parse(await AgentTools.Execute(name, args, token));
+            }
+            foreach (var receipt in LearningReceipts(value)) trialIds.Add(receipt["id"].ToString());
+            entry["result"] = value.DeepClone();
+            File.WriteAllText(Path.Combine(directory, "calls.json"), calls.ToJsonString());
+            if (name == "get_state" && value is JsonObject state)
+            {
+                var compact = new JsonObject();
+                foreach (string key in new[] { "player", "equipment", "enemies", "inventory_slots" })
+                    if (state[key] != null) compact[key] = state[key].DeepClone();
+                value = compact;
+            }
+            return LearningView(value).ToJsonString();
+        }
+        using var session = new CodexAgent();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(8));
+        const string prompt = """
+            Investigate the unlabeled weapon in inventory slot 0 through real game experiments. Discover its distinct control methods.
+            The two passive targets have different distances. Keep the player at the starting position. Damage is native engine damage.
+            Use act(observe:true) for experiments. Compare input timing, cursor direction and observed projectile motion and damage.
+            Form and revise hypotheses using observations; substantiate every claimed method with experiment IDs.
+            Save a reusable JS skill named learned_weapon with script_program. Its function body receives input.
+            input.report=true must return {methods:[{id,description,evidence:[experiment_id,...]}]} without performing actions.
+            Otherwise input.method selects one of your method IDs and input.target_id selects an observed NPC.
+            Read current game state to aim at that target and execute the method with observed act; return the action result.
+            The same source will be tested on targets moved to the other side at different distances, with no further model help.
+            Finish by reporting the discoveries and evidence. Prefer few informative experiments. No files, shell, source lookup or wiki.
+            """;
+        File.WriteAllText(Path.Combine(directory, "prompt.txt"), prompt);
+        var learningClock = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await session.RunAsync(prompt, "", Path.Combine(Main.SavePath, "TerraBlindAgent"), "gpt-6.1-sol",
+                "You learn game controls experimentally and save executable JavaScript skills. The item name is deliberately hidden.\n"
+                    + AgentScript.RuntimeInstructions,
+                schemas, ExecuteLearning,
+                text => { replies.Add(text); File.WriteAllText(Path.Combine(directory, "replies.json"), replies.ToJsonString()); }, deadline.Token);
+        }
+        finally { File.WriteAllText(Path.Combine(directory, "calls.json"), calls.ToJsonString()); }
+        long learningMs = learningClock.ElapsedMilliseconds;
+        var saved = library.Get("learned_weapon");
+        if (saved["found"]?.GetValue<bool>() != true || trialIds.Count < 2)
+            throw new Exception("learning did not produce a saved skill and multiple native trials");
+        int revision = saved["revision"].GetValue<int>();
+        string Invoke(JsonObject input) => "return skill('learned_weapon'," + revision + "," + input.ToJsonString() + ", 'acceptance');";
+        var description = await Call("run_script", new JsonObject { ["code"] = Invoke(new JsonObject { ["report"] = true }) });
+        var methods = description["value"]?["methods"]?.AsArray() ?? throw new Exception("saved skill does not describe its methods");
+        if (methods.Count < 2 || methods.Any(method => method?["evidence"] is not JsonArray evidence
+            || evidence.Count == 0 || evidence.Any(id => !trialIds.Contains(id.ToString()))))
+            throw new Exception("learned methods lack actual experiment evidence");
+        var transfer = new JsonArray();
+        var states = new HashSet<int>(); var hitDistances = new HashSet<int>(); int hits = 0;
+        foreach (var method in methods)
+        foreach (int targetIndex in new[] { 0, 1 })
+        {
+            await LearningScene(transfer: true);
+            var result = await Call("run_script", new JsonObject { ["code"] = Invoke(new JsonObject {
+                ["method"] = method["id"].DeepClone(), ["target_id"] = learningTargets[targetIndex] }) });
+            foreach (var receipt in LearningReceipts(result))
+            {
+                int targetHits = receipt["hits"].AsArray().Count(hit => hit["npc"].GetValue<int>() == learningTargets[targetIndex]);
+                hits += targetHits;
+                if (targetHits > 0) hitDistances.Add(targetIndex);
+                foreach (var shot in receipt["projectiles"].AsArray())
+                foreach (var change in shot["transitions"].AsArray()) states.Add((int)change["ai"][0].GetValue<float>());
+            }
+            transfer.Add(new JsonObject { ["method"] = method["id"].DeepClone(), ["target"] = learningTargets[targetIndex], ["result"] = result });
+            File.WriteAllText(Path.Combine(directory, "transfer.json"), transfer.ToJsonString());
+        }
+        var report = new JsonObject { ["model"] = "gpt-6.1-sol", ["model_trials"] = trialIds.Count,
+            ["skill"] = saved, ["methods"] = methods.DeepClone(), ["transfer_hits"] = hits,
+            ["learning_elapsed_ms"] = learningMs, ["transfer_hit_distances"] = hitDistances.Count,
+            ["source_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(saved["code"].ToString()))).ToLowerInvariant(),
+            ["transfer_source_unchanged"] = library.Get("learned_weapon")["code"].ToString() == saved["code"].ToString(),
+            ["native_states"] = new JsonArray(states.Select(value => JsonValue.Create(value)).ToArray()),
+            ["transfer_model_calls"] = 0, ["transfer"] = transfer };
+        File.WriteAllText(Path.Combine(directory, "result.json"), report.ToJsonString());
+        if (hits < 2 || hitDistances.Count != 2 || !states.Contains(0) || !states.Contains(1) || !states.Contains(6)
+            || report["transfer_source_unchanged"].GetValue<bool>() != true)
+            throw new Exception("learned skill did not demonstrate the native weapon control methods in transfer");
+        Console.WriteLine("SKILL_LEARNING_COMPLETE trials=" + trialIds.Count + " transfer_hits=" + hits + " transfer_model_calls=0");
+    }
+}
+
+public static class NavigationExecutionChecks
+{
+    public static void VerifyChannelInput()
+    {
+        var player = Main.LocalPlayer;
+        var item = player.inventory[0]; int slot = player.selectedItem, animation = player.itemAnimation;
+        bool use = player.controlUseItem;
+        if (ActExecutor.IsActive) throw new InvalidOperationException("channel input contract requires idle controls");
+        try
+        {
+            player.selectedItem = 0;
+            foreach (var fixture in new[] { (Channel: true, Animation: 4, Press: true, Expected: true),
+                (Channel: false, Animation: 4, Press: true, Expected: false),
+                (Channel: true, Animation: 4, Press: false, Expected: false),
+                (Channel: true, Animation: 0, Press: true, Expected: true) })
+            {
+                player.inventory[0] = new Item { type = 5011, stack = 1, channel = fixture.Channel };
+                player.itemAnimation = fixture.Animation; player.controlUseItem = false;
+                ActExecutor.Start(new List<ActStep> { new() { UseItem = fixture.Press, UntilKind = "frames", UntilN = 2 } }, 4);
+                ActExecutor.ApplyControls();
+                Console.WriteLine($"CHANNEL_INPUT channel={fixture.Channel} animation={fixture.Animation} press={fixture.Press} actual={player.controlUseItem}");
+                if (player.controlUseItem != fixture.Expected) throw new InvalidOperationException("act changed the requested channel input");
+                ActExecutor.Stop();
+            }
+            Console.WriteLine("CHANNEL_INPUT_CONTRACTS_COMPLETE checks=4 native_act=true gameplay_loop=false");
+        }
+        finally
+        {
+            ActExecutor.Stop(); player.inventory[0] = item; player.selectedItem = slot;
+            player.itemAnimation = animation; player.controlUseItem = use;
+        }
+    }
+
+    public static void VerifyNativeCaptureTiming()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var type = typeof(RecedingNav).Assembly.GetType("TerraBlind.LegacyNativePrediction");
+        var start = type.GetMethod("Start", hidden); var poll = type.GetMethod("Poll", hidden); var reset = type.GetMethod("Reset", hidden);
+        var clock = typeof(Main).GetField("_gameUpdateCount", hidden); var oldClock = clock.GetValue(null);
+        var oldPlayer = Main.LocalPlayer; int netMode = Main.netMode;
+        var scene = Main.SceneMetrics;
+        bool solid = Main.tileSolid[TileID.Dirt];
+        var jumps = typeof(ExtraJumpLoader).GetField("orderedJumps", hidden); var oldJumps = jumps.GetValue(null);
+        var backend = new VanillaNavigationDemo();
+        var requests = new List<JsonObject>();
+        var replies = new List<TaskCompletionSource<JsonObject>>();
+        Task<JsonObject> Observe(VanillaNavigationDemo _, JsonObject request, CancellationToken token)
+        {
+            requests.Add(request.DeepClone().AsObject());
+            var reply = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+            replies.Add(reply); return reply.Task;
+        }
+        using var instanceHook = new MonoMod.RuntimeDetour.Hook(typeof(VanillaNavigationDemo).GetProperty("Instance").GetMethod,
+            (Func<VanillaNavigationDemo>)(() => backend));
+        using var readyHook = new MonoMod.RuntimeDetour.Hook(typeof(VanillaNavigationDemo).GetProperty("WorkerReady", BindingFlags.Instance | BindingFlags.NonPublic).GetMethod,
+            (Func<VanillaNavigationDemo, bool>)(_ => true));
+        using var requestHook = new MonoMod.RuntimeDetour.Hook(typeof(VanillaNavigationDemo).GetMethod("Observe", BindingFlags.Instance | BindingFlags.NonPublic),
+            (Func<VanillaNavigationDemo, JsonObject, CancellationToken, Task<JsonObject>>)Observe);
+        bool Poll(Player player, out StateSpacePlanner.SSResult result)
+        {
+            object[] args = { player, null }; bool waiting = (bool)poll.Invoke(null, args);
+            result = (StateSpacePlanner.SSResult)args[1]; return waiting;
+        }
+        void AdvanceTick() => clock.SetValue(null, Convert.ChangeType(Convert.ToUInt64(clock.GetValue(null)) + 1, clock.FieldType));
+        if (Main.tile[20, 20].HasTile || Main.tile[21, 20].HasTile)
+            throw new InvalidOperationException("native capture contract requires empty fixture cells");
+        try
+        {
+            if (oldJumps == null) typeof(ExtraJumpLoader).GetMethod("ResizeArrays", hidden).Invoke(null, null);
+            Main.SceneMetrics ??= new SceneMetrics();
+            Main.netMode = 0; Main.tileSolid[TileID.Dirt] = true;
+            Main.tile[20, 20].ResetToType(TileID.Dirt); Main.tile[21, 20].ResetToType(TileID.Dirt);
+            foreach (string mode in new[] { "stable", "landing", "reset", "displaced", "knocked_back", "unrefreshed", "changed_after_capture", "damaged_result", "cooldown", "pillar", "unsupported" })
+            {
+                reset.Invoke(null, null); requests.Clear();
+                var player = new Player { active = true, width = 20, height = 42, position = new Vector2(320, 278),
+                    releaseJump = true, statLife = 100, fallStart = mode == "stable" ? 17 : 16 };
+                Main.player[Main.myPlayer] = player;
+                var frames = new List<PhysicsSimulator.ControlInput> { new() { Right = true, Px = 320, Py = 278 } };
+                var candidate = new StateSpacePlanner.SSResult { Found = true, StartPx = 320, StartPy = 278,
+                    GoalWx = 20, GoalWy = 19, ExecFrames = frames };
+                candidate.Steps.Add(new StateSpacePlanner.ExecStep { TargetCx = 20, TargetCy = 19, Frames = frames });
+                if (mode == "cooldown")
+                {
+                    player.inventory[0] = new Item { type = ItemID.CopperPickaxe, stack = 1, pick = 35 };
+                    player.itemAnimation = player.itemTime = 3;
+                }
+                if (mode == "pillar")
+                {
+                    player.inventory[0] = new Item { type = ItemID.WoodPlatform, stack = 99, createTile = TileID.Platforms };
+                    candidate.GoalWy = candidate.Steps[0].TargetCy = 17; candidate.Steps[0].Pillar = true;
+                }
+                candidate.Steps[0].Dig = mode == "unsupported";
+                bool started = (bool)start.Invoke(null, new object[] { player, candidate, 25, 19, mode == "cooldown" });
+                int expectedRequests = mode == "stable" ? 1 : 0;
+                Console.WriteLine($"NATIVE_CAPTURE mode={mode} initial_requests={requests.Count} expected={expectedRequests} fall_start={player.fallStart}");
+                if (started == (mode == "unsupported") || requests.Count != expectedRequests)
+                    throw new InvalidOperationException("native request captured the pre-refresh landing state: " + mode);
+                if (mode == "unsupported")
+                {
+                    if (Poll(player, out _)) throw new InvalidOperationException("unsupported mining entered deferred prediction");
+                    continue;
+                }
+                if (mode == "stable") continue;
+                if (!Poll(player, out var sameTick) || sameTick != null || requests.Count != 0)
+                    throw new InvalidOperationException("deferred capture ran in the same control frame");
+                if (mode == "reset") reset.Invoke(null, null);
+                if (mode == "displaced") player.position.X += 32;
+                if (mode == "knocked_back") player.velocity.X = 2;
+                if (mode != "unrefreshed") player.fallStart = 17;
+                AdvanceTick();
+                bool running = Poll(player, out var ready);
+                bool abandoned = mode is "reset" or "displaced" or "knocked_back";
+                if (running == abandoned || ready != null || requests.Count != (abandoned ? 0 : 1))
+                    throw new InvalidOperationException("deferred request lost its one-frame bound or used a displaced start: " + mode);
+                if (abandoned) continue;
+                int captured = requests[0]["snapshot"]["player"]["Terraria.Player:fallStart"].GetValue<int>();
+                if (captured != player.fallStart) throw new InvalidOperationException("snapshot did not use the refreshed actual fall start");
+                Console.WriteLine($"NATIVE_CAPTURE_RESUME mode={mode} requests={requests.Count} captured_fall_start={captured} deferred_ticks=1");
+                if (mode is "cooldown" or "pillar") continue;
+                if (mode == "changed_after_capture") player.fallStart++;
+                var sample = VanillaPrediction.Observe(player, false);
+                bool damaged = mode == "damaged_result";
+                if (damaged) sample["hp"] = 99;
+                replies[^1].SetResult(new JsonObject { ["outcome"] = damaged ? "damaged" : "complete", ["frames"] = new JsonArray(sample) });
+                if (mode is "landing" or "unrefreshed")
+                {
+                    if (!Poll(player, out ready) || ready != candidate || !ready.NativeVerified)
+                        throw new InvalidOperationException("fresh snapshot did not hand off its verified candidate: " + mode);
+                    continue;
+                }
+                if (!Poll(player, out ready) || ready != null
+                    || mode == "damaged_result" && !(bool)type.GetProperty("Rejected", hidden).GetValue(null))
+                    throw new InvalidOperationException("deferred capture bypassed a state or damage rejection: " + mode);
+            }
+            Console.WriteLine("NATIVE_CAPTURE_CONTRACTS_COMPLETE checks=11 worker_transport=stubbed native_snapshot=true state_damage_gates=true model_calls=0");
+        }
+        finally
+        {
+            reset.Invoke(null, null);
+            foreach (var reply in replies) reply.TrySetCanceled();
+            Main.player[Main.myPlayer] = oldPlayer; Main.netMode = netMode; clock.SetValue(null, oldClock);
+            Main.SceneMetrics = scene;
+            jumps.SetValue(null, oldJumps);
+            Main.tile[20, 20].ClearEverything(); Main.tile[21, 20].ClearEverything(); Main.tileSolid[TileID.Dirt] = solid;
+        }
+    }
+
+    public static void VerifyEscapeTraps()
+    {
+        var player = Main.LocalPlayer; var position = player.position;
+        bool solid = Main.tileSolid[TileID.Dirt];
+        var cells = (from x in Enumerable.Range(4, 14) from y in Enumerable.Range(11, 6) select new Point(x, y)).ToArray();
+        if (cells.Any(point => Main.tile[point].HasTile || Main.tile[point].LiquidAmount != 0))
+            throw new InvalidOperationException("escape trap contract requires empty fixture cells");
+        var side = typeof(AgentContactEscape).GetMethod("SafeSide", BindingFlags.Static | BindingFlags.NonPublic);
+        try
+        {
+            player.position = new Vector2(160, 182); Main.tileSolid[TileID.Dirt] = true;
+            foreach (int x in Enumerable.Range(4, 14)) Main.tile[x, 14].ResetToType(TileID.Dirt);
+            foreach (string mode in new[] { "clear", "red", "blue", "green", "yellow", "weighted", "unwired", "actuated", "removed", "leaving" })
+            {
+                Main.tile[10, 13].ClearEverything(); Main.tile[13, 13].ClearEverything();
+                var plate = Main.tile[mode == "leaving" ? 10 : 13, 13];
+                if (mode != "clear") plate.ResetToType(mode == "weighted" ? TileID.WeightedPressurePlate : TileID.PressurePlates);
+                plate.RedWire = mode is "red" or "weighted" or "actuated" or "removed" or "leaving";
+                plate.BlueWire = mode == "blue"; plate.GreenWire = mode == "green"; plate.YellowWire = mode == "yellow";
+                plate.IsActuated = mode == "actuated";
+                if (mode == "removed") plate.HasTile = false;
+                bool safe = (bool)side.Invoke(null, new object[] { player, 1 });
+                bool expected = mode is "clear" or "unwired" or "actuated" or "removed" or "leaving";
+                Console.WriteLine($"ESCAPE_TRAP mode={mode} right_safe={safe} expected={expected}");
+                if (safe != expected || !(bool)side.Invoke(null, new object[] { player, -1 }))
+                    throw new InvalidOperationException("contact escape selected an armed pressure plate or rejected the clear side: " + mode);
+                if ((bool)typeof(AgentContactEscape).GetMethod("Harmful", BindingFlags.Static | BindingFlags.NonPublic)
+                    .Invoke(null, new object[] { player.position, player, false, false, false }))
+                    throw new InvalidOperationException("escape route screening changed the current contact damage check: " + mode);
+            }
+            Console.WriteLine("ESCAPE_TRAP_CONTRACTS_COMPLETE checks=10 native_collision=true model_calls=0");
+        }
+        finally
+        {
+            foreach (var point in cells) Main.tile[point].ClearEverything();
+            player.position = position; Main.tileSolid[TileID.Dirt] = solid;
+        }
+    }
+
+    public static void VerifyOpportunityContact()
+    {
+        var player = Main.LocalPlayer; var position = player.position;
+        int damage = TileID.Sets.TouchDamageImmediate[TileID.Spikes];
+        var cells = (from x in Enumerable.Range(39, 11) from y in Enumerable.Range(36, 9) select new Point(x, y)).ToArray();
+        if (cells.Any(point => Main.tile[point].HasTile || Main.tile[point].LiquidAmount != 0))
+            throw new InvalidOperationException("opportunity contact contract requires empty fixture cells");
+        try
+        {
+            player.position = new Vector2(640, 640); TileID.Sets.TouchDamageImmediate[TileID.Spikes] = 20;
+            foreach (string mode in new[] { "near_target", "at_target", "actuated" })
+            {
+                Main.tile[44, 40].ClearEverything(); Main.tile[45, 40].ClearEverything();
+                int x = mode == "near_target" ? 44 : 45;
+                var tile = Main.tile[x, 40]; tile.ResetToType(TileID.Spikes); tile.IsActuated = mode == "actuated";
+                var hazards = TerrainInspection.Opportunity(45, 40, null)["hazards"].AsArray()
+                    .Where(hazard => hazard["kind"].ToString() == "contact_damage").ToArray();
+                Console.WriteLine($"OPPORTUNITY_CONTACT mode={mode} reported={hazards.Length} tile=({x},40)");
+                if (hazards.Length != (mode == "actuated" ? 0 : 1)
+                    || hazards.Any(hazard => hazard["x"].GetValue<int>() != x || hazard["y"].GetValue<int>() != 40))
+                    throw new InvalidOperationException("opportunity contact hazards do not match the sampled cells: " + mode);
+            }
+            Console.WriteLine("OPPORTUNITY_CONTACT_CONTRACTS_COMPLETE checks=3 native_contact_rules=true model_calls=0");
+        }
+        finally
+        {
+            foreach (var point in cells) Main.tile[point].ClearEverything();
+            player.position = position; TileID.Sets.TouchDamageImmediate[TileID.Spikes] = damage;
+        }
+    }
+
+    delegate void MiningHitProbe(Player player, Item item, out bool canHitWalls, int x, int y);
+
+    public static void VerifyMiningAnimation()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var oldPlayer = Main.LocalPlayer;
+        var fields = typeof(FightCoordinator).GetFields(hidden).Where(field => !field.IsLiteral && !field.IsInitOnly)
+            .ToDictionary(field => field, field => field.GetValue(null));
+        int targetX = Player.tileTargetX, targetY = Player.tileTargetY;
+        int mouseX = Main.mouseX, mouseY = Main.mouseY;
+        bool manual = Manual.On, smart = Main.SmartCursorWanted_Mouse;
+        if (Main.tile[12, 12].HasTile)
+            throw new InvalidOperationException("mining animation contract requires an empty fixture cell");
+        var tick = typeof(FightCoordinator).GetMethod("Tick", hidden);
+        var mining = typeof(Player).GetMethod("ItemCheck_UseMiningTools", BindingFlags.Instance | BindingFlags.NonPublic);
+        var hit = typeof(Player).GetMethod("ItemCheck_UseMiningTools_ActuallyUseMiningTool", BindingFlags.Instance | BindingFlags.NonPublic);
+        int hits = 0;
+        MiningHitProbe probe = (Player player, Item item, out bool walls, int x, int y) => { walls = false; hits++; };
+        using var hook = new MonoMod.RuntimeDetour.Hook(hit, probe);
+        try
+        {
+            var player = new Player { active = true, width = 20, height = 42, position = new Vector2(160, 182) };
+            Main.player[Main.myPlayer] = player;
+            Manual.On = false;
+            Main.tile[12, 12].ResetToType(TileID.Dirt);
+            player.inventory[0] = new Item { type = ItemID.Starfury, stack = 1 };
+            player.inventory[1] = new Item { type = ItemID.CopperPickaxe, stack = 1, pick = 35, tileBoost = -1 };
+            foreach (string mode in new[] { "continuing", "retarget", "canceled", "different_slot", "attack" })
+            {
+                FightCoordinator.Stop();
+                typeof(FightCoordinator).GetField("_animationSlot", hidden).SetValue(null, mode == "attack" ? 0 : 1);
+                typeof(FightCoordinator).GetField("_animationAttack", hidden).SetValue(null, mode == "attack");
+                typeof(FightCoordinator).GetField("_animationAim", hidden).SetValue(null, new Vector2(200, 200));
+                player.selectedItem = mode == "different_slot" ? 0 : 1;
+                player.itemAnimation = 3; player.itemTime = player.toolTime = 0;
+                player.controlUseItem = mode != "canceled";
+                if (mode == "retarget") Cursor.AimTile(13, 12);
+                tick.Invoke(null, new object[] { player, false, mode != "canceled" });
+                if (mode == "retarget" && Main.mouseX + Main.screenPosition.X != 13 * 16 + 8)
+                    throw new InvalidOperationException("continuous primary animation restored the removed tile aim");
+                Player.tileTargetX = Player.tileTargetY = 12;
+                hits = 0;
+                mining.Invoke(player, new object[] { player.HeldItem });
+                bool continuing = mode is "continuing" or "retarget";
+                Console.WriteLine($"MINING_ANIMATION mode={mode} use={player.controlUseItem} native_hits={hits} slot={player.selectedItem}");
+                if (player.controlUseItem != continuing || hits != (continuing ? 1 : 0)
+                    || player.itemAnimation != 3 || player.selectedItem != (mode == "attack" ? 0 : 1))
+                    throw new InvalidOperationException("animation lock violated native mining input requirements: " + mode);
+            }
+            Console.WriteLine("NAVIGATION_MINING_ANIMATION_CONTRACTS_COMPLETE checks=5 native_mining_gate=true model_calls=0");
+        }
+        finally
+        {
+            Main.player[Main.myPlayer] = oldPlayer;
+            foreach (var pair in fields) pair.Key.SetValue(null, pair.Value);
+            Manual.On = manual; Main.tile[12, 12].ClearEverything();
+            Player.tileTargetX = targetX; Player.tileTargetY = targetY;
+            Main.mouseX = mouseX; Main.mouseY = mouseY; Main.SmartCursorWanted_Mouse = smart;
+        }
+    }
+
+    public static void VerifyMiningReach()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var player = Main.LocalPlayer;
+        var position = player.position; var velocity = player.velocity;
+        var weapon = player.inventory[0]; var pick = player.inventory[1]; int selected = player.selectedItem;
+        bool solid = Main.tileSolid[TileID.Dirt], use = player.controlUseItem, left = player.controlLeft, right = player.controlRight;
+        int rangeX = Player.tileRangeX, rangeY = Player.tileRangeY, mouseX = Main.mouseX, mouseY = Main.mouseY;
+        bool smart = Main.SmartCursorWanted_Mouse;
+        var hooks = typeof(TileLoader).GetField("HookCanKillTile", hidden); var oldHooks = hooks.GetValue(null);
+        if (MineCoordinator.IsActive || Enumerable.Range(14, 3).Any(x => Main.tile[x, 12].HasTile))
+            throw new InvalidOperationException("mining reach contract requires an idle executor and empty fixture cells");
+        try
+        {
+            Main.tileSolid[TileID.Dirt] = true; Player.tileRangeX = 5; Player.tileRangeY = 4;
+            if (oldHooks == null) hooks.SetValue(null, Array.CreateInstance(hooks.FieldType.GetElementType(), 0));
+            player.position = new Vector2(160, 182); player.velocity = Vector2.Zero;
+            player.inventory[0] = new Item { type = ItemID.Starfury, stack = 1, tileBoost = 0 };
+            foreach (var fixture in new[] { (Target: 15, Boost: -1, Reachable: false), (Target: 16, Boost: 1, Reachable: true), (Target: 14, Boost: -1, Reachable: true) })
+            {
+                foreach (int x in Enumerable.Range(14, 3)) Main.tile[x, 12].ClearEverything();
+                Main.tile[fixture.Target, 12].ResetToType(TileID.Dirt);
+                player.inventory[1] = new Item { type = ItemID.CopperPickaxe, stack = 1, pick = 35, tileBoost = fixture.Boost };
+                player.selectedItem = 0; player.controlUseItem = player.controlLeft = player.controlRight = false;
+                MineCoordinator.Start(new MineRequest { Dir = MineDir.Right, StartWx = 10, StartWy = 13,
+                    TargetWx = fixture.Target, TargetWy = 13, MineTiles = new List<(int, int)> { (fixture.Target, 12) } });
+                MineCoordinator.ApplyControls();
+                Console.WriteLine($"MINING_REACH target_x={fixture.Target} pick_boost={fixture.Boost} use={player.controlUseItem} outcome={MineCoordinator.Outcome}");
+                if (player.controlUseItem != fixture.Reachable || MineCoordinator.IsActive != fixture.Reachable
+                    || !fixture.Reachable && (MineCoordinator.Outcome != "out_of_reach" || player.selectedItem != 0))
+                    throw new InvalidOperationException("mining reach used the held weapon instead of the chosen pick: " + fixture);
+                MineCoordinator.Stop();
+            }
+            Console.WriteLine("NAVIGATION_MINING_REACH_CONTRACTS_COMPLETE checks=3 actual_pick_reach=true model_calls=0");
+        }
+        finally
+        {
+            MineCoordinator.Stop();
+            foreach (int x in Enumerable.Range(14, 3)) Main.tile[x, 12].ClearEverything();
+            player.position = position; player.velocity = velocity; player.inventory[0] = weapon; player.inventory[1] = pick; player.selectedItem = selected;
+            player.controlUseItem = use; player.controlLeft = left; player.controlRight = right; Main.tileSolid[TileID.Dirt] = solid;
+            Player.tileRangeX = rangeX; Player.tileRangeY = rangeY; Main.mouseX = mouseX; Main.mouseY = mouseY; Main.SmartCursorWanted_Mouse = smart;
+            hooks.SetValue(null, oldHooks);
+        }
+    }
+
+    public static void VerifyDigDownSupport()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var player = Main.LocalPlayer;
+        var position = player.position; var velocity = player.velocity; var pick = player.inventory[1];
+        float speed = player.pickSpeed; bool noFall = player.noFallDmg, solid = Main.tileSolid[TileID.Dirt];
+        bool templeSolid = Main.tileSolid[TileID.LihzahrdBrick];
+        int blockedColumn = Trap.FootBlockCol, blockedRow = Trap.FootBlockRow;
+        var killHooks = typeof(TileLoader).GetField("HookCanKillTile", hidden);
+        var previousHooks = killHooks.GetValue(null);
+        var cells = (from x in Enumerable.Range(10, 3) from y in Enumerable.Range(13, 3) select new Point(x, y)).ToArray();
+        if (cells.Any(point => Main.tile[point].HasTile || Main.tile[point].LiquidAmount != 0 || Main.tile[point].WallType != 0))
+            throw new InvalidOperationException("dig support contract requires empty fixture cells");
+        try
+        {
+            Main.tileSolid[TileID.Dirt] = true;
+            Main.tileSolid[TileID.LihzahrdBrick] = true;
+            if (previousHooks == null) killHooks.SetValue(null, Array.CreateInstance(killHooks.FieldType.GetElementType(), 0));
+            player.inventory[1] = new Item { type = ItemID.CopperPickaxe, stack = 1, pick = 35, useTime = 15, tileBoost = -1 };
+            player.pickSpeed = 1; player.noFallDmg = true; player.velocity = Vector2.Zero;
+            foreach (string shape in new[] { "half", "full", "slope_right", "slope_left", "half_only", "triple_columns", "unmineable" })
+            {
+                foreach (var point in cells) Main.tile[point].ClearEverything();
+                int columns = shape == "triple_columns" ? 3 : 2;
+                for (int x = 10; x < 10 + columns; x++)
+                    for (int y = shape == "half_only" ? 15 : 14; y <= 15; y++) Main.tile[x, y].ResetToType(TileID.Dirt);
+                player.position = new Vector2(shape == "triple_columns" ? 175 : 165.643f, shape == "full" ? 182 : 174);
+                if (shape != "full")
+                {
+                    var support = Main.tile[10, 13]; support.ResetToType(shape == "unmineable" ? TileID.LihzahrdBrick : TileID.Dirt);
+                    support.IsHalfBlock = !shape.StartsWith("slope");
+                    if (shape.StartsWith("slope")) support.Slope = shape == "slope_right" ? SlopeType.SlopeDownRight : SlopeType.SlopeDownLeft;
+                }
+                int center = (int)(player.Center.X / 16);
+                var context = new StateSpacePlanner.PlanCtx { DistField = new Dictionary<(int, int), int> { [(center, 14)] = 1 } };
+                var raw = typeof(StateSpacePlanner).GetMethod("DigDownFrom", hidden).Invoke(null,
+                    new object[] { context, player.position.X, center, 13, 100 });
+                if (shape == "unmineable")
+                {
+                    if (raw != null || Trap.FootBlockCol != 10 || Trap.FootBlockRow != 13)
+                        throw new InvalidOperationException("unmineable support was skipped while digging deeper");
+                    Console.WriteLine("DIG_SUPPORT shape=unmineable accepted=false blocking_tile=(10,13)");
+                    continue;
+                }
+                if (raw == null) throw new InvalidOperationException("valid support fixture produced no digging edge: " + shape);
+                var result = ((StateSpacePlanner.SSNode node, List<(int wx, int wy)> tiles, float cost))raw;
+                Console.WriteLine($"DIG_SUPPORT shape={shape} tiles={string.Join(';', result.tiles)} cost_frames={result.cost}");
+                int expected = shape == "half_only" ? 1 : columns + (shape == "full" ? 0 : 1);
+                if (result.tiles.Contains((10, 13)) != (shape != "full") || result.tiles.Count != expected)
+                    throw new InvalidOperationException("digging edge omitted its actual support or changed the full-block footprint: " + shape);
+                foreach (var (x, y) in result.tiles) Main.tile[x, y].ClearEverything();
+                if (!shape.StartsWith("slope"))
+                {
+                    var movement = Collision.TileCollision(player.position, new Vector2(0, 1), player.width, player.height);
+                    if (movement.Y <= 0) throw new InvalidOperationException("planned excavation left the native player supported: " + shape);
+                }
+            }
+            Console.WriteLine("NAVIGATION_DIG_SUPPORT_CONTRACTS_COMPLETE checks=7 native_collision=true model_calls=0");
+        }
+        finally
+        {
+            foreach (var point in cells) Main.tile[point].ClearEverything();
+            player.position = position; player.velocity = velocity; player.inventory[1] = pick;
+            player.pickSpeed = speed; player.noFallDmg = noFall; Main.tileSolid[TileID.Dirt] = solid;
+            Main.tileSolid[TileID.LihzahrdBrick] = templeSolid;
+            Trap.FootBlockCol = blockedColumn; Trap.FootBlockRow = blockedRow;
+            killHooks.SetValue(null, previousHooks);
+        }
+    }
+
+    public static void VerifyNudgeHandoff()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var nav = typeof(RecedingNav); var sentinel = typeof(StuckSentinel);
+        string[] fields = { "_goalWx", "_goalWy", "_haveLast", "_failureRecoveryPending", "_noProgressSteps", "_failureRecoveryTried" };
+        var saved = fields.ToDictionary(name => name, name => nav.GetField(name, hidden).GetValue(null));
+        var savedSentinel = sentinel.GetFields(hidden).Where(field => !field.IsLiteral).ToDictionary(field => field, field => field.GetValue(null));
+        var player = Main.LocalPlayer;
+        bool left = player.controlLeft, right = player.controlRight, jump = player.controlJump;
+        int animation = player.itemAnimation, itemTime = player.itemTime;
+        string mineOutcome = MineCoordinator.Outcome, itemOutcome = ItemUseCoordinator.Outcome;
+        try
+        {
+            if (RecedingNav.Active || StateSpacePlanner.ExecRunning || MineCoordinator.IsActive || SkillExecutor.IsActive || ItemUseCoordinator.IsActive)
+                throw new InvalidOperationException("nudge contract requires idle navigation");
+            RecedingNav.Active = true;
+            nav.GetField("_goalWx", hidden).SetValue(null, 234); nav.GetField("_goalWy", hidden).SetValue(null, 567);
+            nav.GetField("_haveLast", hidden).SetValue(null, true);
+            sentinel.GetField("_anomalies", hidden).SetValue(null, 2);
+            sentinel.GetField("_nudgeLeft", hidden).SetValue(null, 18);
+            sentinel.GetField("_nudgeDir", hidden).SetValue(null, 1);
+            MineCoordinator.Start(new MineRequest()); SkillExecutor.StartDigRight();
+            ItemUseCoordinator.Start(new ItemUseRequest { DurationTicks = 30 });
+            player.itemAnimation = 3; player.itemTime = 8;
+            nav.GetMethod("InterruptForRecovery", hidden).Invoke(null, null);
+            if (MineCoordinator.IsActive || SkillExecutor.IsActive || ItemUseCoordinator.IsActive || StateSpacePlanner.ExecRunning)
+                throw new InvalidOperationException("local recovery retained a competing old executor");
+            if (!RecedingNav.Active || (int)nav.GetField("_goalWx", hidden).GetValue(null) != 234
+                || (int)nav.GetField("_goalWy", hidden).GetValue(null) != 567 || (bool)nav.GetField("_haveLast", hidden).GetValue(null)
+                || (int)sentinel.GetField("_anomalies", hidden).GetValue(null) != 2)
+                throw new InvalidOperationException("local recovery lost its goal, retained a stale landing or erased its recovery episode");
+            player.controlJump = false;
+            StuckSentinel.Tick(player, 234, 567);
+            if (!player.controlJump || !player.controlRight || MineCoordinator.IsActive)
+                throw new InvalidOperationException("nudge failed to take movement after the old mining action released it");
+            if (player.itemAnimation != 3 || player.itemTime != 8)
+                throw new InvalidOperationException("recovery cut an unfinished item animation");
+            Console.WriteLine("NAVIGATION_NUDGE_CONTRACTS_COMPLETE checks=4 old_mining=false goal_retained=true episode_retained=true animation_preserved=true model_calls=0");
+        }
+        finally
+        {
+            MineCoordinator.Stop(); SkillExecutor.Stop(); ItemUseCoordinator.Stop();
+            MineCoordinator.Outcome = mineOutcome; ItemUseCoordinator.Outcome = itemOutcome;
+            RecedingNav.Active = false;
+            foreach (var entry in saved) nav.GetField(entry.Key, hidden).SetValue(null, entry.Value);
+            foreach (var entry in savedSentinel) entry.Key.SetValue(null, entry.Value);
+            player.controlLeft = left; player.controlRight = right; player.controlJump = jump;
+            player.itemAnimation = animation; player.itemTime = itemTime;
+        }
+    }
+
+    public static void VerifySearchReset()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var type = typeof(TrapEscape);
+        if (TrapEscape.Busy) throw new InvalidOperationException("search reset contract requires idle navigation");
+        string[] names = { "_search", "_searchCancellation", "_generation", "_searchGeneration", "_fails", "_lastH" };
+        var saved = names.ToDictionary(name => name, name => type.GetField(name, hidden).GetValue(null));
+        var pending = new TaskCompletionSource<StateSpacePlanner.SSResult>();
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            type.GetField("_search", hidden).SetValue(null, pending.Task);
+            type.GetField("_searchCancellation", hidden).SetValue(null, cancellation);
+            TrapEscape.Reset();
+            if (TrapEscape.Busy || !cancellation.IsCancellationRequested)
+                throw new InvalidOperationException("reset retained its stale search or failed to cancel it");
+            pending.SetResult(new StateSpacePlanner.SSResult { Found = true });
+            if (TrapEscape.Poll()) throw new InvalidOperationException("stale search dispatched after reset");
+            using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+            try
+            {
+                typeof(StateSpacePlanner).GetMethod("PlanWithCancellation", hidden).Invoke(null,
+                    new object[] { cancelled.Token, 20, 20, null, -1, -1, 20000, 0, 0f, true });
+                throw new InvalidOperationException("cancelled planning still entered the world search");
+            }
+            catch (TargetInvocationException error) when (error.InnerException is OperationCanceledException) { }
+            Console.WriteLine("NAVIGATION_RESET_CONTRACTS_COMPLETE checks=3 busy=false stale_dispatch=false cancellation_observed=true model_calls=0");
+        }
+        finally
+        {
+            pending.TrySetResult(new StateSpacePlanner.SSResult());
+            foreach (var entry in saved) type.GetField(entry.Key, hidden).SetValue(null, entry.Value);
+        }
+    }
+
+    public static void VerifyMining()
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        var type = typeof(StateSpacePlanner);
+        string[] names = { "_ssSteps", "_ssStepIdx", "_ssDispatched", "_ssPrevStep", "_stepTimeoutTicks",
+            "_stepHardTicks", "_stepStartTick", "_stepLastPx", "_stepLastPy", "_execDone", "_execFailCode", "_rolling", "_stepPhase" };
+        var saved = names.ToDictionary(name => name, name => type.GetField(name, hidden).GetValue(null));
+        var player = Main.LocalPlayer;
+        var velocity = player.velocity;
+        string previousOutcome = MineCoordinator.Outcome;
+        string previousSettle = SettleAt.Outcome;
+        void Set(string name, object value) => type.GetField(name, hidden).SetValue(null, value);
+        void Phase(string phase) => Set("_stepPhase", Enum.Parse(type.GetField("_stepPhase", hidden).FieldType, phase));
+        void Setup(StateSpacePlanner.ExecStep step, string phase)
+        {
+            MineCoordinator.Stop(); SettleAt.Stop();
+            Set("_ssSteps", new List<StateSpacePlanner.ExecStep> { step });
+            Set("_ssStepIdx", 0); Set("_ssDispatched", true); Set("_ssPrevStep", step);
+            Set("_stepTimeoutTicks", long.MaxValue); Set("_stepHardTicks", long.MaxValue);
+            Set("_execDone", false); Set("_execFailCode", null); Phase(phase);
+        }
+        void Tick() => type.GetMethod("TickSteps", hidden).Invoke(null, null);
+        try
+        {
+            if (StateSpacePlanner.ExecRunning || MineCoordinator.IsActive || SkillExecutor.IsActive || BridgeBuilder.IsRunning || SettleAt.IsRunning)
+                throw new InvalidOperationException("navigation contract requires idle executors");
+            Set("_rolling", false);
+            foreach (string outcome in new[] { "out_of_box", "out_of_reach", "stalled", "unbreakable", "no_tiles", "done" })
+            {
+                var dig = new StateSpacePlanner.ExecStep { Dig = true, TargetCx = 20, TargetCy = 20 };
+                Setup(dig, "Mining");
+                player.velocity = new Vector2(0, outcome == "done" ? 0 : -3);
+                MineCoordinator.Outcome = outcome;
+                Tick();
+                Console.WriteLine($"MINING_CONTRACT outcome={outcome} steps_active={StateSpacePlanner.StepsActive} done={StateSpacePlanner.ExecDone} fail={StateSpacePlanner.ExecFailCode}");
+                if (StateSpacePlanner.StepsActive || (outcome == "done") != StateSpacePlanner.ExecDone
+                    || outcome != "done" && StateSpacePlanner.ExecFailCode != "mining_" + outcome)
+                    throw new InvalidOperationException("failed mining retained or advanced its stale plan: " + outcome);
+            }
+            Setup(new StateSpacePlanner.ExecStep { Dig = true }, "Mining");
+            player.velocity = new Vector2(0, -3); MineCoordinator.Outcome = "done"; Tick();
+            if (!StateSpacePlanner.StepsActive || StateSpacePlanner.ExecDone)
+                throw new InvalidOperationException("successful excavation advanced before actual landing");
+            foreach (string outcome in new[] { "running", "timeout", "done" })
+            {
+                Setup(new StateSpacePlanner.ExecStep { Dig = true, TargetCx = 20, TargetCy = 20 }, "Aligning");
+                player.velocity = Vector2.Zero; MineCoordinator.Outcome = "out_of_box"; SettleAt.Outcome = outcome;
+                typeof(SettleAt).GetField("_running", hidden).SetValue(null, outcome == "running");
+                Tick();
+                if (StateSpacePlanner.ExecDone || StateSpacePlanner.StepsActive != (outcome != "timeout")
+                    || MineCoordinator.IsActive != (outcome == "done")
+                    || outcome != "timeout" && (int)type.GetField("_ssStepIdx", hidden).GetValue(null) != 0)
+                    throw new InvalidOperationException("alignment phase advanced or read stale mining outcome: " + outcome);
+                Console.WriteLine($"ALIGNMENT_CONTRACT outcome={outcome} mine_started={MineCoordinator.IsActive} steps_active={StateSpacePlanner.StepsActive}");
+            }
+            foreach (string outcome in new[] { "out_of_reach", "done" })
+            {
+                Setup(new StateSpacePlanner.ExecStep { Pillar = true }, "ClearingHeadroom");
+                player.velocity = new Vector2(0, -3); MineCoordinator.Outcome = outcome; Tick();
+                if (StateSpacePlanner.ExecDone || StateSpacePlanner.StepsActive != (outcome == "done")
+                    || outcome == "done" && type.GetField("_stepPhase", hidden).GetValue(null).ToString() != "HeadroomReady")
+                    throw new InvalidOperationException("headroom excavation was mistaken for a completed pillar: " + outcome);
+                Console.WriteLine($"HEADROOM_CONTRACT outcome={outcome} steps_active={StateSpacePlanner.StepsActive}");
+            }
+            Console.WriteLine("NAVIGATION_MINING_CONTRACTS_COMPLETE checks=12 gameplay_loop=false model_calls=0");
+        }
+        finally
+        {
+            MineCoordinator.Stop(); SettleAt.Stop();
+            foreach (var entry in saved) Set(entry.Key, entry.Value);
+            player.velocity = velocity; MineCoordinator.Outcome = previousOutcome; SettleAt.Outcome = previousSettle;
+        }
+    }
+}
+
+public sealed class FallExecutionProbe : ModSystem
+{
+    const BindingFlags Hidden = BindingFlags.Static | BindingFlags.NonPublic;
+    public override void OnWorldLoad()
+    {
+        bool plan = Terraria.Program.LaunchParameters.ContainsKey("-fallplancheck");
+        if (!plan && !Terraria.Program.LaunchParameters.ContainsKey("-fallhandoffcheck")) return;
+        try
+        {
+            Main.myPlayer = 0;
+            Main.player[0] = new Player { active = true, width = 20, height = 42, position = new Vector2(13272, 4334),
+                velocity = new Vector2(3, 0), maxRunSpeed = 3, accRunSpeed = 3, runAcceleration = .08f,
+                runSlowdown = .2f, gravity = .4f, maxFallSpeed = 10 };
+            var player = Main.player[0];
+            player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+            player.inventory[3].SetDefaults(ItemID.Wood); player.inventory[3].stack = 9999;
+            player.inventory[4].SetDefaults(ItemID.Starfury);
+            player.inventory[5].SetDefaults(ItemID.WoodPlatform); player.inventory[5].stack = 138;
+            var policy = (AgentControlPolicy)typeof(AgentTools).GetField("Control", Hidden).GetValue(null);
+            policy.Reset();
+            var report = new JsonObject();
+            if (plan)
+            {
+                var result = StateSpacePlanner.StepAlongField(812, 318);
+                var frames = result?.Steps.FirstOrDefault()?.Frames;
+                if (frames == null) throw new Exception("original fall scene produced no replay frames");
+                int fallStart = (int)(player.position.Y / 16);
+                var resets = new JsonArray();
+                for (int i = 0; i < frames.Count; i++)
+                {
+                    var frame = frames[i]; var position = new Vector2(frame.Px, frame.Py);
+                    int damage = frame.Vy == 0 ? FallSafety.LandingDamage(player, position, fallStart) : 0;
+                    int next = FallSafety.ResetDistance(player, position, fallStart, frame.Vy, i + 1);
+                    if (next != fallStart || damage > 0) resets.Add(new JsonObject { ["frame"] = i, ["y"] = frame.Py,
+                        ["vy"] = frame.Vy, ["damage"] = damage, ["before"] = fallStart, ["after"] = next });
+                    fallStart = next;
+                }
+                report = new JsonObject { ["goal"] = new JsonArray(result.GoalWx, result.GoalWy), ["frames"] = frames.Count,
+                    ["place_frame"] = frames.FindIndex(f => f.Place), ["last_vy"] = frames[^1].Vy,
+                    ["safe"] = FallSafety.SafeTrajectory(player, player.position, frames), ["immune"] = FallSafety.Immune(player),
+                    ["terminal_damage"] = FallSafety.LandingDamage(player, new Vector2(frames[^1].Px, frames[^1].Py), fallStart),
+                    ["resets"] = resets };
+                var unfinished = new List<PhysicsSimulator.ControlInput>
+                    { new() { Px = player.position.X, Py = player.position.Y + 43 * 16, Vy = 10 } };
+                if (FallSafety.SafeTrajectory(player, player.position, unfinished)) throw new Exception("lethal unfinished fall was accepted");
+                player.noFallDmg = true;
+                if (!FallSafety.SafeTrajectory(player, player.position, unfinished)) throw new Exception("fall immunity was incorrectly rejected");
+                player.noFallDmg = false; player.slowFall = true;
+                if (!FallSafety.SafeTrajectory(player, player.position, unfinished)) throw new Exception("slow-fall reset was incorrectly rejected");
+                player.slowFall = false;
+                report["lethal_tail_rejected"] = true; report["immune_and_slow_fall_preserved"] = true;
+            }
+            else
+            {
+                player.position = new Vector2(848 * 16, 310 * 16);
+                player.velocity = new Vector2(0, 10); player.itemTime = 5; player.selectedItem = 4;
+                var frames = new List<PhysicsSimulator.ControlInput> { new() { Px = player.position.X, Py = player.position.Y,
+                    Vx = 0, Vy = 10, Place = true, PlaceCx = 848, PlaceCy = 314 } };
+                typeof(StateSpacePlanner).GetField("_execFrames", Hidden).SetValue(null, frames);
+                typeof(StateSpacePlanner).GetField("_execIdx", Hidden).SetValue(null, 0);
+                typeof(StateSpacePlanner).GetField("_ssSteps", Hidden).SetValue(null,
+                    new List<StateSpacePlanner.ExecStep> { new() { Frames = frames } });
+                typeof(StateSpacePlanner).GetField("_ssDispatched", Hidden).SetValue(null, true);
+                Manual.On = false; AgentPermissions.Reset();
+                NPC.NewNPC(new EntitySource_Misc("fall-handoff-defense"), (int)player.Center.X + 80, (int)player.Center.Y, NPCID.BlueSlime);
+                FightCoordinator.Start(40); player.controlUseItem = false;
+                FightCoordinator.Tick(player);
+                if (player.controlUseItem) throw new Exception("defense fired during a reserved placement replay");
+                typeof(FightCoordinator).GetField("_animationSlot", Hidden).SetValue(null, 4);
+                typeof(FightCoordinator).GetField("_animationAttack", Hidden).SetValue(null, true);
+                player.itemAnimation = 3;
+                FightCoordinator.Tick(player);
+                if (player.selectedItem != 4) throw new Exception("placement reservation interrupted an unfinished attack animation");
+                player.itemAnimation = 0;
+                FightCoordinator.Tick(player);
+                if (player.controlUseItem) throw new Exception("defense restarted after animation instead of yielding to placement");
+                FightCoordinator.Stop();
+                StateSpacePlanner.ApplyControls();
+                if (!StateSpacePlanner.IsActive) throw new Exception("last-frame placement lost activity while itemTime=5 and tile was absent");
+                if ((bool)typeof(StateSpacePlanner).GetProperty("ReplayAtHandoff", Hidden).GetValue(null))
+                    throw new Exception("prepared successor could overwrite an unverified placement");
+                player.itemTime = 0; player.controlUseItem = false;
+                StateSpacePlanner.ApplyControls();
+                if (!StateSpacePlanner.IsActive || !player.controlUseItem || player.selectedItem != 5)
+                    throw new Exception("pending placement was cleared before retry after cooldown");
+                FightCoordinator.Start(40); FightCoordinator.Tick(player);
+                if (!player.controlUseItem || player.selectedItem != 5) throw new Exception("defense stole the retried placement input");
+                FightCoordinator.Stop();
+                var tile = Main.tile[848, 314]; tile.ResetToType(TileID.Platforms);
+                StateSpacePlanner.ApplyControls();
+                if (StateSpacePlanner.IsActive) throw new Exception("verified placement did not release the exhausted replay");
+                report = new JsonObject { ["pending_survived"] = true, ["retried_after_cooldown"] = true,
+                    ["verified_before_release"] = true, ["new_attack_withheld"] = true, ["unfinished_attack_preserved"] = true };
+            }
+            File.WriteAllText(Path.Combine(Main.SavePath, plan ? "fall-plan.json" : "fall-handoff.json"), report.ToJsonString());
+            Console.WriteLine(plan ? "FALL_PLAN_COMPLETE native_world=true model_calls=0" : "FALL_HANDOFF_COMPLETE native_world=true model_calls=0");
+            Environment.Exit(0);
+        }
+        catch (Exception error)
+        {
+            File.WriteAllText(Path.Combine(Main.SavePath, "fall-probe-error.txt"), error.ToString());
+            Environment.Exit(1);
+        }
+    }
+}
+
+public sealed class NavigationStartupProbe : ModSystem
+{
+    public override void OnWorldLoad()
+    {
+        if (!Terraria.Program.LaunchParameters.ContainsKey("-navstartupcheck")) return;
+        try
+        {
+            Main.myPlayer = 0;
+            Main.player[0] = new Player { active = true, width = 20, height = 42,
+                position = new Vector2(33566, 3844), maxRunSpeed = 3, runSlowdown = .2f };
+            var player = Main.player[0];
+            player.position += Collision.TileCollision(player.position, new Vector2(0, 16), player.width, player.height);
+            player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+            player.inventory[3].SetDefaults(ItemID.Wood); player.inventory[3].stack = 9999;
+            var policy = (AgentControlPolicy)typeof(AgentTools).GetField("Control", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+            policy.Reset();
+            var support = new JsonArray();
+            for (int ahead = 0; ahead <= 54; ahead += 2)
+                support.Add(new JsonObject { ["ahead"] = ahead,
+                    ["supported"] = VanillaContactRegion.Supported(player.position - new Vector2(ahead, 0), player.width, player.height) });
+            bool localWalk = VanillaContactRegion.TryWalk(player, new Vector2(816 * 16 - 2, player.position.Y), out var localKeys);
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            RecedingNav.Start(816, 259, RecedingNav.Mode.Reach);
+            RecedingNav.Tick();
+            double firstInput = timer.Elapsed.TotalMilliseconds;
+            bool originalInput = player.controlLeft && !player.controlRight;
+            if (localWalk && !originalInput) throw new Exception("safe local walk did not start during field construction");
+            File.WriteAllText(Path.Combine(Main.SavePath, "nav-startup-input.json"), new JsonObject
+                { ["local_walk"] = localWalk, ["local_keys"] = localKeys.ToString(), ["left"] = player.controlLeft,
+                    ["grav_dir"] = player.gravDir, ["grap_count"] = player.grapCount, ["dash_delay"] = player.dashDelay,
+                    ["collision_y"] = Collision.TileCollision(player.position, Vector2.UnitY, player.width, player.height).Y,
+                    ["support"] = support }.ToJsonString());
+            var ready = typeof(RecedingNav).GetProperty("FieldReady", BindingFlags.Static | BindingFlags.NonPublic);
+            while (!(bool)ready.GetValue(null) && timer.Elapsed.TotalSeconds < 10) Thread.Sleep(1);
+            if (!(bool)ready.GetValue(null)) throw new Exception("cold field exceeded ten seconds");
+            var field = MazeWand.PeekFieldOrNull(816, 259);
+            if (field == null || !field.ContainsKey((2098, 242)) || !field.ContainsKey((816, 259)))
+                throw new Exception("bounded field failed to connect original start and goal");
+            double fieldMs = timer.Elapsed.TotalMilliseconds;
+            RecedingNav.Stop();
+            for (int x = 2088; x <= 2102; x++)
+            {
+                for (int y = 238; y < 243; y++) Main.tile[x, y].ClearEverything();
+                Main.tile[x, 243].ResetToType(TileID.Stone);
+            }
+            player.position = new Vector2(33566, 243 * 16 - player.height);
+            player.controlLeft = player.controlRight = false;
+            MazeWand.InvalidateField();
+            var flatTimer = System.Diagnostics.Stopwatch.StartNew();
+            RecedingNav.Start(816, 259, RecedingNav.Mode.Reach);
+            RecedingNav.Tick();
+            double flatInputMs = flatTimer.Elapsed.TotalMilliseconds;
+            if (!player.controlLeft || player.controlRight) throw new Exception("supported flat Reach startup did not set left input");
+            File.WriteAllText(Path.Combine(Main.SavePath, "nav-startup.json"), new JsonObject
+                { ["seed"] = Main.ActiveWorldFileData.SeedText, ["original_local_walk"] = localWalk,
+                    ["original_first_input_ms"] = originalInput ? JsonValue.Create(firstInput) : null,
+                    ["field_ms"] = fieldMs, ["field_cells"] = field.Count, ["flat_fixture_first_input_ms"] = flatInputMs,
+                    ["start_cost"] = field[(2098, 242)],
+                    ["start_connected"] = true, ["goal_connected"] = true }.ToJsonString());
+            RecedingNav.Stop();
+            Console.WriteLine("NAV_STARTUP_COMPLETE native_world=true model_calls=0");
+            Environment.Exit(0);
+        }
+        catch (Exception error)
+        {
+            File.WriteAllText(Path.Combine(Main.SavePath, "nav-startup-error.txt"), error.ToString());
+            Environment.Exit(1);
+        }
+    }
+}
+
+public sealed class CombatEvidenceProbe : ModSystem
+{
+    public override void OnWorldLoad()
+    {
+        if (!Terraria.Program.LaunchParameters.ContainsKey("-combatevidencecheck")) return;
+        try
+        {
+            Main.myPlayer = 0;
+            Main.player[0] = new Player { active = true, width = 20, height = 42,
+                position = new Vector2(300 * 16, 200 * 16), statLife = 100 };
+            var player = Main.player[0];
+            int index = NPC.NewNPC(new EntitySource_Misc("combat-evidence"), 310 * 16, 200 * 16, NPCID.SpikedJungleSlime);
+            var npc = Main.npc[index];
+            int shot = Projectile.NewProjectile(npc.GetSource_FromAI(), player.Center, Vector2.Zero, ProjectileID.JungleSpike, 20, 0);
+            int child = Projectile.NewProjectile(Main.projectile[shot].GetSource_FromThis(), player.Center, Vector2.Zero, ProjectileID.JungleSpike, 20, 0);
+            if (!ReferenceEquals(Main.projectile[child].GetGlobalProjectile<AgentProjectileEvidence>().SourceNpc, npc))
+                throw new Exception("child projectile lost its NPC source");
+            player.GetModPlayer<AgentDamageEvidence>().OnHurt(new Player.HurtInfo
+                { Damage = 20, DamageSource = PlayerDeathReason.ByProjectile(255, child) });
+            var damage = (JsonObject)typeof(AgentTools).GetField("LastDamage", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+            if (damage["attacker"]?["npc_index"]?.GetValue<int>() != index
+                || damage["attacker"]?["npc_type"]?.GetValue<int>() != NPCID.SpikedJungleSlime
+                || damage["attacker"]?["via"]?.ToString() != "projectile")
+                throw new Exception("production damage hook lost the actual projectile attacker: " + damage);
+            int unknown = Projectile.NewProjectile(new EntitySource_Misc("unknown-source"), player.Center, Vector2.Zero, ProjectileID.JungleSpike, 20, 0);
+            if (Main.projectile[unknown].GetGlobalProjectile<AgentProjectileEvidence>().SourceNpc != null)
+                throw new Exception("unknown projectile invented an attacker");
+            var canHit = typeof(FightCoordinator).GetMethod("CanHitTarget", BindingFlags.Static | BindingFlags.NonPublic);
+            bool CheckHit(Item weapon, Vector2 target) => (bool)canHit.Invoke(null, new object[] { player, weapon, target, 10f });
+            for (int x = 298; x <= 316; x++)
+            for (int y = 198; y <= 205; y++) Main.tile[x, y].ClearTile();
+            var sword = new Item(ItemID.CopperShortsword);
+            var knife = new Item(ItemID.ThrowingKnife);
+            var star = new Item(ItemID.Starfury);
+            var far = player.Center + new Vector2(160, 0);
+            var profiles = new JsonArray();
+            foreach (var weapon in new[] { sword, knife, star })
+            {
+                ContentSamples.ProjectilesByType.TryGetValue(weapon.shoot, out var projectile);
+                profiles.Add(new JsonObject { ["item"] = weapon.type, ["shoot"] = weapon.shoot,
+                    ["no_melee"] = weapon.noMelee, ["width"] = weapon.width, ["height"] = weapon.height,
+                    ["shoot_speed"] = weapon.shootSpeed, ["ai_style"] = projectile?.aiStyle,
+                    ["time_left"] = projectile?.timeLeft, ["tile_collide"] = projectile?.tileCollide,
+                    ["far"] = CheckHit(weapon, far), ["near"] = CheckHit(weapon, player.Center + new Vector2(20, 0)) });
+            }
+            File.WriteAllText(Path.Combine(Main.SavePath, "combat-profiles.json"), profiles.ToJsonString());
+            if (CheckHit(sword, far) || !CheckHit(knife, far) || !CheckHit(sword, player.Center + new Vector2(20, 0)))
+                throw new Exception("actual melee/projectile defaults failed reach checks");
+            for (int y = 198; y <= 205; y++)
+            { var tile = Main.tile[305, y]; tile.HasTile = true; tile.TileType = TileID.Stone; }
+            if (CheckHit(knife, far) || !CheckHit(star, far))
+                throw new Exception("actual projectile defaults failed obstruction checks");
+            for (int y = 198; y <= 205; y++) Main.tile[305, y].ClearTile();
+            foreach (var other in Main.npc) if (other != npc) other.active = false;
+            npc.position = player.Center + new Vector2(200, 0);
+            int bystander = NPC.NewNPC(new EntitySource_Misc("combat-bystander"), 302 * 16, 200 * 16, NPCID.BlueSlime);
+            Main.npc[bystander].position = player.Center + new Vector2(80, 0);
+            foreach (var item in player.inventory) item.TurnToAir();
+            player.inventory[0] = sword; sword.damage = 100;
+            player.inventory[1] = knife; player.inventory[2] = star;
+            CombatLoadout.PreferredType = 0;
+            FightCoordinator.Start(40);
+            var select = typeof(FightCoordinator).GetMethod("FindNearest", BindingFlags.Static | BindingFlags.NonPublic);
+            object[] selection = { player, false, -1 };
+            var selected = (NPC)select.Invoke(null, selection);
+            if (selected != npc || (int)selection[2] != 2)
+                throw new Exception($"actual target/weapon selection failed: npc={selected?.whoAmI} slot={selection[2]}");
+            damage["tick"] = -301L;
+            var afterExpiry = (NPC)select.Invoke(null, new object[] { player, false, -1 });
+            if (afterExpiry != Main.npc[bystander]) throw new Exception("expired attacker retained target priority");
+            damage["tick"] = (long)Main.GameUpdateCount;
+            FightCoordinator.Stop();
+            File.WriteAllText(Path.Combine(Main.SavePath, "combat-evidence.json"), new JsonObject
+                { ["damage"] = damage.DeepClone(), ["child_source_preserved"] = true, ["unknown_source_ignored"] = true,
+                    ["melee_reach_checked"] = true, ["projectile_obstruction_checked"] = true,
+                    ["selected_attacker"] = selected.whoAmI, ["selected_weapon"] = player.inventory[(int)selection[2]].type,
+                    ["expired_attacker_released"] = true }.ToJsonString());
+            Console.WriteLine("COMBAT_EVIDENCE_COMPLETE native_hooks=true model_calls=0");
+            Environment.Exit(0);
+        }
+        catch (Exception error)
+        {
+            File.WriteAllText(Path.Combine(Main.SavePath, "combat-evidence-error.txt"), error.ToString());
+            Environment.Exit(1);
+        }
+    }
+}
+
+public sealed class NavigationFieldProbe : ModSystem
+{
+    bool finished;
+    public override void OnWorldLoad() => PostUpdateWorld();
+    public override void PostUpdateWorld()
+    {
+        if (finished || !Terraria.Program.LaunchParameters.ContainsKey("-navfieldcheck")) return;
+        finished = true;
+        try
+        {
+            Main.myPlayer = 0;
+            Main.player[0] = new Player { active = true, width = 20, height = 42 };
+            var player = Main.player[0];
+            player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
+            player.inventory[3].SetDefaults(ItemID.Wood); player.inventory[3].stack = 9999;
+            var policy = (AgentControlPolicy)typeof(AgentTools).GetField("Control", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+            policy.Reset();
+            var results = new JsonArray();
+            foreach (var scene in new[] { (1100, 252, 1180, 450), (1058, 695, 1480, 870), (1100, 252, 1130, 326) })
+            {
+                var (sx, sy, gx, gy) = scene;
+                player.position = new Vector2(sx * 16, (sy + 1) * 16 - player.height);
+                var field = MazeWand.BuildField(gx, gy, sx, sy, bigMargin: true);
+                var cells = new JsonArray();
+                for (int x = gx - 1; x <= gx + 1; x++)
+                for (int y = gy - 3; y <= gy + 1; y++)
+                {
+                    var tile = Main.tile[x, y];
+                    cells.Add(new JsonObject { ["x"] = x, ["y"] = y, ["has_tile"] = tile.HasTile,
+                        ["type"] = tile.TileType, ["wall"] = tile.WallType, ["liquid"] = tile.LiquidAmount,
+                        ["liquid_type"] = tile.LiquidType, ["solid"] = tile.HasTile && Main.tileSolid[tile.TileType],
+                        ["can_mine"] = DigTable.MineableWith(x, y, 35), ["lava_safe"] = LavaSafety.CanMine(x, y),
+                        ["navigation_forbidden"] = policy.ForbiddenAt(ControlBehavior.Navigation, x, y) });
+                }
+                var costs = new JsonArray();
+                foreach (var direction in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+                    costs.Add(MazeWand.StepCostPublic(gx, gy, gx + direction.Item1, gy + direction.Item2));
+                var mainQueue = (System.Collections.Concurrent.ConcurrentQueue<Action>)typeof(NativeAgent)
+                    .GetField("MainQueue", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+                var frameQueue = (System.Collections.Concurrent.ConcurrentQueue<Action>)typeof(NativeAgent)
+                    .GetField("FrameQueue", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+                void Pump()
+                {
+                    int frames = frameQueue.Count;
+                    for (int i = 0; i < frames && frameQueue.TryDequeue(out var frame); i++) frame();
+                    while (mainQueue.TryDequeue(out var action)) action();
+                    Thread.Sleep(1);
+                }
+                using var cancel = new CancellationTokenSource();
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                var navigation = (Task<JsonObject>)typeof(AgentTools).GetMethod("Navigate", BindingFlags.Static | BindingFlags.NonPublic)
+                    .Invoke(null, new object[] { new JsonObject { ["x"] = gx, ["y"] = gy }, cancel.Token, 0 });
+                while (!navigation.IsCompleted && timer.Elapsed.TotalSeconds < 10)
+                {
+                    Pump();
+                    if (field.Count > 1 && RecedingNav.Active && MazeWand.PeekFieldOrNull(gx, gy) != null
+                        && timer.ElapsedMilliseconds >= 100)
+                        break;
+                }
+                JsonObject outcome;
+                if (field.Count == 1)
+                {
+                    if (!navigation.IsCompleted) throw new Exception("isolated target did not return within ten seconds");
+                    outcome = navigation.GetAwaiter().GetResult();
+                    if (outcome["error"]?.ToString() != "navigation_goal_isolated" || RecedingNav.Active)
+                        throw new Exception("isolated target failed to stop through the real navigation API: " + outcome);
+                }
+                else
+                {
+                    if (navigation.IsCompleted || !RecedingNav.Active) throw new Exception("connected route was prematurely stopped");
+                    outcome = new JsonObject { ["connected_route_running"] = true };
+                }
+                double elapsed = timer.Elapsed.TotalMilliseconds;
+                cancel.Cancel();
+                while (!navigation.IsCompleted && timer.Elapsed.TotalSeconds < 12) Pump();
+                if (!navigation.IsCompleted) throw new Exception("navigation did not finish cancellation");
+                RecedingNav.Stop();
+                results.Add(new JsonObject { ["start"] = new JsonArray(sx, sy), ["goal"] = new JsonArray(gx, gy),
+                    ["pick_power"] = MazeWand.BestPickPower(), ["field_cells"] = field.Count,
+                    ["start_in_field"] = field.ContainsKey((sx, sy)), ["goal_step_costs"] = costs, ["goal_tiles"] = cells,
+                    ["navigation_api"] = outcome, ["navigation_api_ms"] = elapsed });
+            }
+            File.WriteAllText(Path.Combine(Main.SavePath, "nav-field-probe.json"), results.ToJsonString());
+            Console.WriteLine("NAV_FIELD_PROBE_COMPLETE native_world=true model_calls=0 scenes=" + results.Count);
+            Environment.Exit(0);
+        }
+        catch (Exception error)
+        {
+            File.WriteAllText(Path.Combine(Main.SavePath, "nav-field-error.txt"), error.ToString());
+            Environment.Exit(1);
+        }
+    }
+}
+
 public sealed class ChatHookProbe : GlobalNPC
 {
     public static int PreCalls, PostCalls;
@@ -167,6 +1414,8 @@ public sealed class Driver : ModSystem
     bool WorkflowLive => Terraria.Program.LaunchParameters.ContainsKey("-agentworkflowcheck");
     bool WatchLive => Terraria.Program.LaunchParameters.ContainsKey("-agentwatchcheck");
     bool DecisionLive => Terraria.Program.LaunchParameters.ContainsKey("-agentdecisioncheck");
+    bool BiomeCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentbiomecheck");
+    bool AutomaticLive => Terraria.Program.LaunchParameters.ContainsKey("-agentautomaticcheck");
     int eventChest = -1;
     bool PlanningReadOnly => Terraria.Program.LaunchParameters.ContainsKey("-agentplanningcheck");
     bool InteractionCheck => Terraria.Program.LaunchParameters.ContainsKey("-agentinteractioncheck");
@@ -306,7 +1555,8 @@ public sealed class Driver : ModSystem
                         var actions = state["action_tasks"].AsArray();
                         bool resumed = actions.Count == 1 && actions[0]["attempt"]?.GetValue<int>() == 2
                             && actions[0]["previous_attempt"]?["status"]?.ToString() == "paused"
-                            && actions[0]["args"]?["targets"]?[0]?["count"]?.GetValue<int>() == 10;
+                            && (actions[0]["args"]?["targets"]?[0]?["count"]?.GetValue<int>() == 10
+                                || AutomaticLive && actions[0]["args"]?["count"]?.GetValue<int>() == 10);
                         bool woke = state["watch"]?["history"]?.AsArray().Any(e => e["kind"]?.ToString() == "nearby_chest") == true;
                         bool goalComplete = state["codex_goal"]?["native"]?["status"]?.ToString() == "complete";
                         bool explicitWake = state["watch"]?["history"]?.AsArray().Any(e => e["kind"]?.ToString() == "decision_point") == true;
@@ -366,6 +1616,11 @@ public sealed class Driver : ModSystem
             {
                 case 0:
                     Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                    if (BiomeCheck)
+                    {
+                        Concessions.Enabled = false; Combat.Enabled = Dodge.Enabled = false;
+                        Call("find_biome", new JsonObject { ["name"] = "jungle" }); phase = 48; break;
+                    }
                     if (InteractionCheck)
                     {
                         Concessions.Enabled = false; Combat.Enabled = Dodge.Enabled = false;
@@ -487,13 +1742,16 @@ public sealed class Driver : ModSystem
                         if (WatchLive)
                         {
                             PrepareResources(player);
+                            Concessions.Enabled = false;
                             heartX = (int)player.Center.X / 16; heartY = (int)player.Bottom.Y / 16;
                             foreach (var chest in Main.chest)
                                 if (chest != null && Math.Abs(chest.x - heartX) + Math.Abs(chest.y - heartY) <= 60)
                                     foreach (var item in chest.item) item.TurnToAir();
-                            Config.I.AgentCodexModel = "gpt-6-astra";
+                            Config.I.AgentCodexModel = AutomaticLive ? "gpt-6-luna" : "gpt-6-astra";
                             string activeDecision = DecisionLive ? "箱子实际取物成功并单独step保存后，必须先在step之外调用decision_point，说明需要根据新收获重新决策。本段不得恢复采集；下一轮才把原handle目标改成10并恢复，不重复搜刮箱子。" : "";
-                            NativeAgent.Submit("/goal 受控事件测试：先启动一个目标库存5颗生命水晶的后台采集，不使用水晶；物品编号29，来源Heart。登记nearby_chest和action_finished宿主观察后结束本轮，不要自己轮询、yield空等或提前改成10颗。采集中测试场会出现附近箱子；被宿主事件唤醒后，检查暂停的同一handle，实际collect_treasure搜刮事件箱子，再将该handle的采集目标临时改成10颗并恢复。" + activeDecision + "建立真实任务计划，最终验收背包10颗水晶。保存workflow中的句柄，不新建第二个采集任务。箱子收获与采集各用独立step，遇到uncertain先核对真实库存。处理完事件后继续到目标验证完成，不只说准备行动。");
+                            NativeAgent.Submit(AutomaticLive
+                                ? "/goal 收集10颗生命水晶，先别使用；途中搜刮附近箱子。已查证水晶物品29，来源方块Heart。"
+                                : "/goal 受控事件测试：先启动一个目标库存5颗生命水晶的后台采集，不使用水晶；物品编号29，来源Heart。登记nearby_chest和action_finished宿主观察后结束本轮，不要自己轮询、yield空等或提前改成10颗。采集中测试场会出现附近箱子；被宿主事件唤醒后，检查暂停的同一handle，实际collect_treasure搜刮事件箱子，再将该handle的采集目标临时改成10颗并恢复。" + activeDecision + "建立真实任务计划，最终验收背包10颗水晶。保存workflow中的句柄，不新建第二个采集任务。箱子收获与采集各用独立step，遇到uncertain先核对真实库存。处理完事件后继续到目标验证完成，不只说准备行动。");
                         }
                         else if (WorkflowLive)
                         {
@@ -683,13 +1941,30 @@ public sealed class Driver : ModSystem
                     Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["verified"]?.GetValue<bool>() == true
                         && player.statLifeMax == 300, "script_health_not_verified");
                     Call("run_script", new JsonObject { ["seconds"] = 1,
-                        ["code"] = "tool('act',{steps:[{keys:['right'],until:{frames:600}}]}); return {unexpected:true};" });
+                        ["code"] = "tool('act',{steps:[{keys:['right'],until:{frames:90}}]}); return {completed:true};" });
                     break;
                 case 23:
-                    Check(result["error"]?.ToString() == "script_timeout" && !ActExecutor.IsActive
-                        && result["tool_calls"]?.GetValue<int>() == 1, "script_timeout_left_action_running");
+                    Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["completed"]?.GetValue<bool>() == true
+                        && !ActExecutor.IsActive && result["elapsed_ms"]?.GetValue<long>() > 1000, "long_action_was_cancelled_by_script_deadline");
                     Finish(true, "AGENT_SCRIPT_COMPLETE checks=2 model_calls=0 hp=300 verified=true navigation=teleport_stub");
                     break;
+                case 48:
+                    Check(result["found"]?.GetValue<bool>() == true && result["local_biome_tiles"].GetValue<int>() >= SceneMetrics.JungleTileThreshold,
+                        "no_verified_jungle_surface");
+                    heartX = result["x"].GetValue<int>(); heartY = result["y"].GetValue<int>();
+                    for (int sy = 0; sy <= heartY; sy++)
+                    {
+                        var sky = Main.tile[heartX, sy];
+                        Check(!sky.HasUnactuatedTile || !Main.tileSolid[sky.TileType] || Main.tileSolidTop[sky.TileType], "entrance_is_a_covered_pocket");
+                    }
+                    player.Teleport(new Vector2(heartX * 16 + 8 - player.width / 2f, (heartY + 1) * 16 - player.height));
+                    player.velocity = Vector2.Zero; player.fallStart = player.fallStart2 = (int)(player.position.Y / 16);
+                    interactionWait = ticks + 90; break;
+                case 49:
+                    if (ticks < interactionWait) { phase = 49; break; }
+                    Check(player.ZoneJungle, "native_player_did_not_recognize_selected_jungle");
+                    results.Add(new JsonObject { ["native_zone_jungle"] = player.ZoneJungle, ["x"] = heartX, ["y"] = heartY });
+                    Finish(true, "AGENT_BIOME_COMPLETE sky_exposed=true native_zone_jungle=true model_calls=0"); break;
                 case 29:
                     Check(result["ok"]?.GetValue<bool>() == true && player.armor[0].type == ItemID.WoodHelmet && player.inventory[0].IsAir,
                         "helmet_not_equipped");

@@ -22,6 +22,7 @@ namespace TerraBlind
 		private static int _frames, _cellFrames;
 		private static readonly HashSet<(int, int)> _bad = new();
 		private static int _rebuilds;
+		private static uint _failureRevision;
 		private static int _lastPx = int.MinValue;   // 上一帧人在哪一列,判"推了却没挪窝"
 		private static int _blockedFrames;
 
@@ -52,9 +53,10 @@ namespace TerraBlind
 			if (p == null) { why = "no_player"; return false; }
 			_item = itemName; _tx = tx; _ty = ty;
 			_frames = 0; _cellFrames = 0; _idx = 0; _rebuilds = 0; _bad.Clear();
+			_failureRevision = Unstick.FailureRevision;
 			_lastPx = int.MinValue; _blockedFrames = 0; _asideNav = false; _where = ""; _heartbeat = 0;
 			Outcome = "running"; Reason = "";
-			if (Occupied(tx, ty))
+			if (Occupied(tx, ty) && (!IsMultiCell(out _) || PlaceSpot.Blocks(tx, ty)))
 			{ Outcome = "done"; _ph = Ph.Done; DiagLog.Write($"[placeany] ({tx},{ty})已经有东西"); return true; }
 			// 【先问有没有货,再谈放哪儿】。Build() 只做几何搜索,它不知道背包里有没有这件东西,
 			// 所以手上没料时报出来的是"接不到任何有锚的地方" -- 一句几何措辞,把调用方指向
@@ -103,15 +105,14 @@ namespace TerraBlind
 		static bool HasAnchor(int x, int y)
 			=> PlacingPlatform() ? MazeWand.PlatformAnchor(x, y) : MazeWand.BlockAnchor(x, y);
 
-		// 手上这件是不是【多格家具】(工作台/熔炉/铁砧/桌椅)。判据问 vanilla 的 TileObjectData:
-		// 有 data 就是多格对象,没有就是方块/平台这种单格的。不硬编尺寸表。
+		// 平台虽有 1x1 TileObjectData,仍走接锚点链的流程。
 		static bool IsMultiCell(out int itemId)
 		{
 			itemId = -1;
 			int slot = PlaceAction.ResolveSlot(_item);
 			if (slot < 0) return false;
 			var it = Main.LocalPlayer?.inventory[slot];
-			if (it == null || it.IsAir || it.createTile < 0) return false;
+			if (it == null || it.IsAir || it.createTile < 0 || Terraria.ID.TileID.Sets.Platforms[it.createTile]) return false;
 			itemId = it.type;
 			return Terraria.ObjectData.TileObjectData.GetTileData(it.createTile, it.placeStyle) != null;
 		}
@@ -224,6 +225,9 @@ namespace TerraBlind
 					for (int row = y - AsideRows; row <= y + AsideRows; row++)
 					{
 						if (!Predicates.IsSolid(col, row + 1)) continue;   // 脚下要有地
+						var position = new Microsoft.Xna.Framework.Vector2(col * 16f + 8f - p.width / 2f,
+							(row + 1) * 16f - p.height);
+						if (Collision.SolidCollision(position, p.width, p.height)) continue;
 						if (WouldOverlap(p, col, row, x, y)) continue;     // 站上去还压着目标就白搭
 						if (!ReachesFrom(p, col, row, x, y)) continue;     // 站上去够不着也白搭
 						int d = System.Math.Abs(col - cx) + System.Math.Abs(row - y);
@@ -314,6 +318,12 @@ namespace TerraBlind
 		public static void Tick()
 		{
 			if (_ph != Ph.Step && _ph != Ph.Move) return;
+			if (_failureRevision != Unstick.FailureRevision)
+			{
+				_failureRevision = Unstick.FailureRevision;
+				if (Unstick.FailChain.Contains("placeany:") || Unstick.FailChain.Contains("placeany-furn:"))
+				{ Fail("helper_failed:" + Unstick.FailChain); return; }
+			}
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Fail("no_player"); return; }
 			if (++_frames > MaxFrames) { Fail($"超时 接到第{_idx}/{_chain.Count}格"); return; }
@@ -335,7 +345,7 @@ namespace TerraBlind
 				return;
 			}
 
-			if (Occupied(_tx, _ty))
+			if (Occupied(_tx, _ty) && (!IsMultiCell(out _) || PlaceSpot.Blocks(_tx, _ty)))
 			{
 				Outcome = "done"; _ph = Ph.Done;
 				DiagLog.Write($"[placeany] DONE ({_tx},{_ty}) 接了{_idx}格");
@@ -361,7 +371,8 @@ namespace TerraBlind
 					return;
 				}
 				// 合格了:人别压着,够得着就挥
-				if (InBody(p, _tx, _ty)) { if (StepAside(p, _tx, _ty, out _)) { _ph = Ph.Move; } return; }
+				if (Main.tileSolid[p.inventory[PlaceAction.ResolveSlot(_item)].createTile] && InBody(p, _tx, _ty))
+				{ if (StepAside(p, _tx, _ty, out _)) { _ph = Ph.Move; } return; }
 				if (!Reach.CanPlace(p, _tx, _ty))
 				{
 					if (Unstick.Handle("placeany-furn", new Blocker(BlockKind.OutOfReach, _tx, _ty, "放家具够不着")))

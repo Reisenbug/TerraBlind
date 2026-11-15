@@ -14,7 +14,7 @@ public sealed class AgentConversation
 {
     readonly HttpClient _http;
     readonly List<JsonObject> _history = new();
-    static readonly HashSet<string> Bulky = new() { "get_state", "find_tiles", "wiki_page", "item_info", "combat_observe", "combat_start", "duel_player", "combat_update" };
+    static readonly HashSet<string> Bulky = new() { "get_state", "terrain_map", "find_tiles", "wiki_page", "item_info", "combat_observe", "combat_start", "duel_player", "combat_update" };
 
     public AgentConversation(HttpClient http) => _http = http;
 
@@ -59,15 +59,17 @@ public sealed class AgentConversation
                 if (!spokeViaTool && message["content"] is JsonValue content && content.TryGetValue<string>(out string spoken)
                     && !string.IsNullOrWhiteSpace(VisibleText(spoken))) say(VisibleText(spoken));
                 if (calls == null || calls.Count == 0) return;
+                var mapImages = new JsonArray();
                 foreach (var call in calls)
                 {
                     token.ThrowIfCancellationRequested();
                     string id = call?["id"]?.GetValue<string>()
                         ?? throw new InvalidOperationException("工具调用缺少 id。");
                     string result;
+                    string name = null;
                     try
                     {
-                        string name = call["function"]?["name"]?.GetValue<string>();
+                        name = call["function"]?["name"]?.GetValue<string>();
                         var schema = tools.FirstOrDefault(tool => tool?["function"]?["name"]?.GetValue<string>() == name);
                         if (schema == null) throw new InvalidOperationException($"未知工具: {name}");
                         var args = JsonNode.Parse(call["function"]?["arguments"]?.GetValue<string>() ?? "{}") as JsonObject
@@ -75,11 +77,18 @@ public sealed class AgentConversation
                         foreach (var field in schema["function"]?["parameters"]?["required"]?.AsArray() ?? new JsonArray())
                             if (args[field.GetValue<string>()] == null)
                                 throw new InvalidOperationException($"缺少参数: {field.GetValue<string>()}");
-                        result = await execute(name, args, token).ConfigureAwait(false);
+                        result = AgentModelOutput.Format(name, await execute(name, args, token).ConfigureAwait(false));
                     }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex) { result = new JsonObject { ["error"] = ex.Message }.ToJsonString(); }
                     _history.Add(ToolResult(id, result));
+                    if (name == "terrain_map" && AgentImages.Take(JsonNode.Parse(result)) is string image)
+                        mapImages.Add(new JsonObject { ["type"] = "image_url", ["image_url"] = new JsonObject { ["url"] = image } });
+                }
+                if (mapImages.Count > 0)
+                {
+                    mapImages.Insert(0, new JsonObject { ["type"] = "text", ["text"] = "地图图片对应本轮terrain_map结果，世界格坐标换算见工具返回。" });
+                    _history.Add(new JsonObject { ["role"] = "user", ["content"] = mapImages });
                 }
             }
             throw new AgentBudgetExceededException();
@@ -123,9 +132,11 @@ public sealed class AgentConversation
         var messages = new JsonArray(new JsonObject { ["role"] = "system", ["content"] = system });
         var names = new Dictionary<string, string>();
         var latest = new Dictionary<string, int>();
+        int latestImage = -1;
         for (int i = 0; i < _history.Count; i++)
         {
             var message = _history[i];
+            if (message["role"]?.ToString() == "user" && message["content"] is JsonArray) latestImage = i;
             if (message["tool_calls"] is JsonArray calls)
                 foreach (var call in calls)
                     names[call["id"].GetValue<string>()] = call["function"]["name"].GetValue<string>();
@@ -136,6 +147,8 @@ public sealed class AgentConversation
         for (int i = 0; i < _history.Count; i++)
         {
             var message = (JsonObject)_history[i].DeepClone();
+            if (message["role"]?.ToString() == "user" && message["content"] is JsonArray && i != latestImage)
+                message["content"] = "较早的地图图片已由后续快照更新，坐标信息保留在对应工具记录中。";
             if (message["role"]?.GetValue<string>() == "tool" &&
                 names.TryGetValue(message["tool_call_id"].GetValue<string>(), out string name) &&
                 latest.TryGetValue(name, out int last) && i != last)
@@ -149,4 +162,64 @@ public sealed class AgentConversation
 public sealed class AgentBudgetExceededException : InvalidOperationException
 {
     public AgentBudgetExceededException() : base("本轮已达到 40 次判断上限，目标尚未验证完成。请检查当前进度后继续。") { }
+}
+
+internal static class AgentModelOutput
+{
+    static readonly Dictionary<string, JsonNode> reports = new();
+    static readonly Queue<string> order = new();
+    static readonly object gate = new();
+
+    internal static string Format(string tool, string text)
+    {
+        try { return Project(tool, JsonNode.Parse(text))?.ToJsonString(AgentTools.ModelJson) ?? "null"; }
+        catch (System.Text.Json.JsonException) { return text; }
+    }
+
+    internal static JsonNode Project(string tool, JsonNode result)
+    {
+        if (tool != "run_script" || result is not JsonObject report
+            || report["trace"] is not JsonArray && report["task_plan"] is not JsonObject) return result;
+        string id = Guid.NewGuid().ToString("N");
+        lock (gate)
+        {
+            reports[id] = report.DeepClone(); order.Enqueue(id);
+            if (order.Count > 64) reports.Remove(order.Dequeue());
+        }
+        var brief = (JsonObject)report.DeepClone();
+        brief.Remove("trace");
+        FoldPlanSources(brief["task_plan"]);
+        if (report["tool_counts"] is JsonObject counts && counts["get_state"] == null
+            && (counts["task_plan"] != null || counts["task_plan_patch"] != null))
+            FoldPlanSources(brief["value"]);
+        brief["report_id"] = id;
+        return brief;
+    }
+
+    static void FoldPlanSources(JsonNode value)
+    {
+        if (value is JsonObject obj)
+        {
+            if (obj["mode"]?.ToString() is "dag" or "sequential" && obj["revision"] != null
+                && obj["steps"] is JsonArray steps)
+                foreach (var step in steps.OfType<JsonObject>())
+                    foreach (string field in new[] { "script", "on_failure" })
+                        if (step[field] != null)
+                        {
+                            step[field + "_present"] = !string.IsNullOrWhiteSpace(step[field].ToString());
+                            step.Remove(field);
+                        }
+            foreach (var field in obj) FoldPlanSources(field.Value);
+        }
+        else if (value is JsonArray array)
+            foreach (var child in array) FoldPlanSources(child);
+    }
+
+    internal static JsonNode Read(string id)
+    {
+        lock (gate) return reports.TryGetValue(id, out var result) ? result.DeepClone()
+            : new JsonObject { ["error"] = "script_report_unavailable", ["id"] = id };
+    }
+
+    internal static void Clear() { lock (gate) { reports.Clear(); order.Clear(); } }
 }

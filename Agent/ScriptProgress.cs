@@ -14,17 +14,34 @@ public sealed class ScriptProgress
     readonly Queue<JsonObject> calls = new();
     int revision, segment;
     bool running;
+    public bool Running { get { lock (gate) return running; } }
     JsonObject last;
+    JsonObject watchPolicy;
+    string executedSource;
+    int stepCalls;
+    JsonObject navigationFailure;
     static readonly JsonSerializerOptions JsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     public int Completed { get { lock (gate) return steps.Values.Count(s => s["status"].ToString() == "completed"); } }
     public int Segment { get { lock (gate) return segment; } }
-    public bool Yielded { get { lock (gate) return !running && last?["value"] is JsonObject value && value["status"]?.ToString() == "yield"; } }
+    public bool Yielded { get { lock (gate) return !running && last?["value"] is JsonObject value && value["status"]?.ToString() is "yield" or "needs_review"; } }
+    public bool ReviewRequested { get { lock (gate) return !running && last?["value"] is JsonObject value && value["wake"] is JsonObject; } }
 
-    public void Begin()
+    internal static bool Failed(JsonObject result) => result["error"] != null || result["ok"]?.ToString() == "false"
+        || result["outcome"]?.ToString() is "interrupted" or "interrupted_by_death" or "no_progress";
+
+    internal bool HasPreparedContinuation(string source)
+    {
+        lock (gate) return !running && executedSource != null && source != executedSource
+            && last?["error"] == null && last?["failure"] == null
+            && last?["value"] is JsonObject value && value["status"]?.ToString() == "yield" && value["wake"] == null;
+    }
+
+    public void Begin(string source = null)
     {
         lock (gate)
         {
             if (running) throw new InvalidOperationException("workflow正在执行，不能并发续接。");
+            executedSource = source;
             running = true; segment++; revision++;
         }
     }
@@ -36,6 +53,14 @@ public sealed class ScriptProgress
             if (string.IsNullOrWhiteSpace(id) || id.Length > 80) throw new ArgumentException("step id需要1..80字符。");
             if (steps.TryGetValue(id, out var saved))
             {
+                if (saved["status"].ToString() == "uncertain" && saved["repeatable_navigation"]?.GetValue<bool>() == true)
+                {
+                    saved["previous_failure"] = saved["failure"]?.DeepClone();
+                    saved.Remove("repeatable_navigation"); saved.Remove("failure");
+                    saved["status"] = "running"; saved["segment"] = segment;
+                    stepCalls = 0; navigationFailure = null; revision++;
+                    return new JsonObject { ["execute"] = true };
+                }
                 if (saved["status"].ToString() != "completed")
                     throw new InvalidOperationException("step_requires_reconciliation: " + id);
                 return new JsonObject { ["execute"] = false, ["value"] = saved["value"]?.DeepClone() };
@@ -44,6 +69,7 @@ public sealed class ScriptProgress
             if (steps.Values.Any(s => s["status"].ToString() == "running"))
                 throw new InvalidOperationException("step不支持嵌套。");
             steps[id] = new JsonObject { ["id"] = id, ["status"] = "running", ["segment"] = segment };
+            stepCalls = 0; navigationFailure = null;
             revision++;
             return new JsonObject { ["execute"] = true };
         }
@@ -56,7 +82,7 @@ public sealed class ScriptProgress
             if (!steps.TryGetValue(id, out var step) || step["status"].ToString() != "running")
                 throw new InvalidOperationException("step不是当前运行步骤。");
             if ((value?.ToJsonString(JsonOptions).Length ?? 0) > 8000) throw new ArgumentException("step返回值超过8000字符。");
-            if (value is JsonObject result && (result["error"] != null || result["ok"]?.ToString() == "false"))
+            if (value is JsonObject result && Failed(result))
                 throw new InvalidOperationException("step返回失败；保留证据，不能标为完成。");
             step["status"] = "completed"; step["value"] = value?.DeepClone(); revision++;
         }
@@ -66,6 +92,16 @@ public sealed class ScriptProgress
     {
         lock (gate)
         {
+            if (steps.Values.Any(s => s["status"]?.ToString() == "running"))
+            {
+                navigationFailure = null;
+                if (++stepCalls == 1 && name == "nav_to" && JsonNode.Parse(result) is JsonObject navigation
+                    && navigation["outcome"]?.ToString() == "no_progress")
+                    navigationFailure = navigation;
+            }
+            if (name == "watch" && JsonNode.Parse(result) is JsonObject observed
+                && observed["error"] == null && observed["events"] is JsonArray)
+                watchPolicy = (JsonObject)args.DeepClone();
             static string Clip(string text) => text.Length > 1000 ? text[..1000] + "…" : text;
             calls.Enqueue(new JsonObject { ["tool"] = name, ["args"] = Clip(args.ToJsonString()),
                 ["result"] = Clip(result), ["segment"] = segment });
@@ -77,9 +113,20 @@ public sealed class ScriptProgress
     {
         lock (gate)
         {
-            foreach (var step in steps.Values.Where(s => s["status"].ToString() == "running")) step["status"] = "uncertain";
+            foreach (var step in steps.Values.Where(s => s["status"].ToString() == "running"))
+            {
+                step["status"] = "uncertain";
+                if (navigationFailure != null && result["error"]?.ToString() == "script_failed")
+                {
+                    step["repeatable_navigation"] = true;
+                    step["failure"] = navigationFailure.DeepClone();
+                }
+            }
             last = new JsonObject { ["error"] = result["error"]?.DeepClone(), ["detail"] = result["detail"]?.DeepClone(),
-                ["value"] = result["value"]?.DeepClone() };
+                ["value"] = result["value"]?.DeepClone(), ["tool_counts"] = result["tool_counts"]?.DeepClone(),
+                ["tool_calls"] = result["tool_calls"]?.DeepClone(), ["elapsed_ms"] = result["elapsed_ms"]?.DeepClone(),
+                ["skill_calls"] = result["skill_calls"]?.DeepClone(),
+                ["failure"] = result["failure"]?.DeepClone(), ["output_limit"] = result["output_limit"]?.DeepClone() };
             running = false; revision++;
         }
     }
@@ -91,7 +138,7 @@ public sealed class ScriptProgress
             if (steps.Values.Any(s => s["status"].ToString() == "running") || revision != expectedRevision)
                 throw new InvalidOperationException("workflow状态已改变，请重新读取。");
             if (!steps.TryGetValue(id, out var step) || step["status"].ToString() != "uncertain")
-                throw new InvalidOperationException("只能核对uncertain步骤。");
+                throw new InvalidOperationException("只能核对已有uncertain步骤，complete不能创建记录。保存新的决定或理由，请在run_script指定同一workflow，使用step('稳定步骤id',()=>({decision:'skip',reason:'实际依据'}))；step是JS函数，不是tool。已完成步骤无需complete。");
             if ((value?.ToJsonString(JsonOptions).Length ?? 0) > 8000) throw new ArgumentException("核对结果超过8000字符。");
             if (completed)
             {
@@ -104,9 +151,49 @@ public sealed class ScriptProgress
         }
     }
 
+    public JsonObject Summary()
+    {
+        lock (gate)
+        {
+            var saved = new JsonArray();
+            foreach (var step in steps.Values)
+            {
+                var brief = (JsonObject)step.DeepClone();
+                if (brief["value"] is JsonObject value && value["handle"] is JsonValue handle
+                    && value["tool"] is JsonValue && value["status"] is JsonValue)
+                {
+                    brief["value"] = new JsonObject { ["handle"] = handle.DeepClone(), ["tool"] = value["tool"].DeepClone() };
+                    brief["value_omitted"] = true;
+                    brief["current_state_tool"] = "action_query";
+                }
+                else if ((brief["value"]?.ToJsonString(JsonOptions).Length ?? 0) > 512)
+                { brief.Remove("value"); brief["value_omitted"] = true; }
+                saved.Add(brief);
+            }
+            JsonObject execution = null;
+            if (last != null)
+            {
+                execution = new JsonObject();
+                foreach (string field in new[] { "error", "tool_counts", "tool_calls", "elapsed_ms", "failure", "output_limit", "skill_calls" })
+                    execution[field] = last[field]?.DeepClone();
+                if (last["detail"] is JsonValue detail)
+                {
+                    string text = detail.ToString();
+                    execution["detail"] = text.Length > 1000 ? text[..1000] + "…" : text;
+                }
+            }
+            return new JsonObject { ["revision"] = revision, ["segment"] = segment, ["running"] = running,
+                ["steps"] = saved, ["last_error"] = last?["error"]?.DeepClone(),
+                ["last_execution"] = execution,
+                ["watch_policy"] = watchPolicy?.DeepClone(),
+                ["detail_tool"] = "script_progress" };
+        }
+    }
+
     public JsonObject Snapshot()
     {
         lock (gate) return new JsonObject { ["revision"] = revision, ["segment"] = segment, ["running"] = running,
+            ["watch_policy"] = watchPolicy?.DeepClone(),
             ["steps"] = new JsonArray(steps.Values.Select(s => s.DeepClone()).ToArray()),
             ["last_segment"] = last?.DeepClone(), ["recent_calls"] = new JsonArray(calls.Select(c => c.DeepClone()).ToArray()) };
     }

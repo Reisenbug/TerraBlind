@@ -44,6 +44,9 @@ namespace TerraBlind
 		public override void ProcessTriggers(Terraria.GameInput.TriggersSet triggersSet)
 		{
 			if (!AgentNetwork.CanAutomate) return;
+			if (TerraBlind.ToggleManual != null && TerraBlind.ToggleManual.JustPressed)
+				Manual.Toggle();
+			if (AgentTools.Control.HasClaims) return;
 			if (_pendingHouse.HasValue && !RecedingNav.Active && !HouseBuilder.IsRunning)
 			{
 				var (hx, hy) = _pendingHouse.Value;
@@ -142,8 +145,6 @@ namespace TerraBlind
 					Chatter.Say($"[TerraBlind] 附近没有 {HW}x{HH} 的空位(扫了{site.Scanned}格)。画的是你脚下这个框,红的{blocked}格挡着。", 255, 120, 120);
 				}
 			}
-			if (TerraBlind.ToggleManual != null && TerraBlind.ToggleManual.JustPressed)
-				Manual.Toggle();
 			if (TerraBlind.ToggleMazeNav != null && TerraBlind.ToggleMazeNav.JustPressed)
 				MazeWand.ToggleNav();
 			if (TerraBlind.ToggleRecedingNav != null && TerraBlind.ToggleRecedingNav.JustPressed)
@@ -439,7 +440,25 @@ namespace TerraBlind
 
 		public override void SetControls()
 		{
+			ApplyPrimaryControls();
+			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On)
+				FightCoordinator.Tick(Player, NativeAgent.Processing, Player.controlUseItem);
+		}
+
+		void ApplyPrimaryControls()
+		{
 			MazeWand.MarkMainThread();
+			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && AgentTools.Control.HasClaims)
+			{
+				if (Manual.On) return;
+				if (!AgentTools.ControlSession.Active) return;
+				if (AgentTools.ControlSession.Tool == "act")
+				{
+					Player.delayUseItem = Player.mouseInterface = false;
+					ActExecutor.ApplyControls();
+					return;
+				}
+			}
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && NavigationSurvival.Apply(Player)) return;
 			if (VanillaNavigationDemo.Active)
 			{
@@ -469,9 +488,9 @@ namespace TerraBlind
 
 			// 打肉山:方向键和 controlUseItem 都要在 SetControls 这条线上发才算数。
 			// 【必须在清拦截之后】。delayUseItem 会自锁,先发 controlUseItem 就再也清不掉了
-			WofFight.Tick();
+			if (AgentTools.ControlAllows(ControlBehavior.Workflow, ControlChannels.All)) WofFight.Tick();
 
-			if (JumpPlaceEnabled)
+			if (JumpPlaceEnabled && AgentTools.ControlAllows(ControlBehavior.Placement, ControlChannels.ItemUse))
 			{
 				bool atPeak = _prevVy < 0f && Player.velocity.Y >= 0f;
 				if (atPeak && !_jumpPlaceFired)
@@ -780,7 +799,6 @@ namespace TerraBlind
 			bool jumpFromAuto = false, jumpFromCi = false;
 			bool walking = false, blocked = false;
 
-			FightCoordinator.Tick(Player);
 			if (WalkTraceEnabled && (System.Math.Abs(Player.velocity.X) > 0.02f || System.Math.Abs(Player.velocity.Y) > 0.02f))
 				DiagLog.Write($"[jump-trace] py={Player.position.Y:0.##} vy={Player.velocity.Y:0.###} jump={Player.jump} feetCy={(int)((Player.position.Y + Player.height) / 16f)} wet={Player.wet} jumpH={Player.jumpHeight}");
 			if (ci == null)

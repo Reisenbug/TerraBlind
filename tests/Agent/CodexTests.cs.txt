@@ -19,8 +19,17 @@ static class CodexTests
 
     public static async Task Run()
     {
+        await InputOptimizations();
+        await InTurnCompaction();
+        PreparationContexts();
         await GoalProtocol();
         await NativeGoalProtocol();
+        await NativeExecutionSteering();
+        await NativeExecutionSteering(script: true);
+        await NativeExecutionSteering(preparedReview: true);
+        await NativeExecutionSteering(preparedReview: true, rejectSteer: true);
+        await NativeExecutionSteering(preparedReview: true, preparationOnly: true);
+        await NativeBackgroundReview();
         var launch = new System.Diagnostics.ProcessStartInfo();
         launch.Environment.Clear();
         CodexAgent.ApplySystemProxy(launch, new System.Net.WebProxy("http://127.0.0.1:12345"));
@@ -28,7 +37,7 @@ static class CodexTests
         launch.Environment["HTTPS_PROXY"] = "http://explicit:8080";
         CodexAgent.ApplySystemProxy(launch, new System.Net.WebProxy("http://127.0.0.1:12346"));
         Check(launch.Environment["HTTPS_PROXY"] == "http://explicit:8080", "explicit proxy was overwritten");
-        var server = new Server();
+        var server = new Server { EmitCompaction = true };
         using var agent = new CodexAgent((_, _) => server.Connect());
         int calls = 0;
         var spoken = new List<string>();
@@ -36,14 +45,24 @@ static class CodexTests
         { calls++; return Task.FromResult("{\"wood\":23}"); }
         await agent.RunAsync("检查背包", "mock", "/tmp", "", "game instructions", Tools, Execute, spoken.Add, default);
         await agent.RunAsync("继续", "mock", "/tmp", "", "game instructions", Tools, Execute, spoken.Add, default);
+        Check(server.Efforts.All(effort => effort == "low"), "ordinary commands changed their reasoning budget");
         Check(calls == 2 && server.Threads == 1 && spoken.Count == 2, "Codex did not reuse thread or deduplicate replies");
         Check(agent.TokenUsage["total"]["totalTokens"].GetValue<int>() == 200 && agent.UsageUpdates == 2 && agent.TurnsStarted == 2,
             "Codex usage telemetry did not preserve cumulative token usage across turns");
+        Check(agent.ContextRevision == 2, "Codex compaction did not invalidate delta context");
         Check(server.ThreadArgs["baseInstructions"].ToString() == "game instructions" && server.ThreadArgs["environments"].AsArray().Count == 0
             && server.ThreadArgs["config"]["mcp_servers.unrelated.enabled"].GetValue<bool>() == false,
             "game thread did not override instructions/environments/MCP");
+        string gameInstructions = server.ThreadArgs["developerInstructions"].ToString();
+        Check(gameInstructions.Contains("script_program") && gameInstructions.Contains("run_script")
+            && !gameInstructions.Contains("不要开发代码") && gameInstructions.Contains("不要修改模组源码"),
+            "game thread forbids its own behavior scripts or permits editing mod source");
         Check(server.ThreadArgs["dynamicTools"][0]["type"].ToString() == "function" && server.ToolResponses.All(r => r["success"].GetValue<bool>()),
             "dynamic tool registration/result contract changed");
+        Check(server.ThreadArgs["dynamicTools"][0]["description"].ToString().Contains("JSON文本(string)")
+            && gameInstructions.Contains("JSON.parse(await tools.get_state({}))")
+            && gameInstructions.Contains("游戏脚本内的tool已经返回解析后的对象"),
+            "Codex text transport was confused with parsed in-game script values");
         Console.WriteLine("PASS: Codex protocol registers game tools, isolates thread settings, reuses context and deduplicates replies");
 
         server.ToolName = "unknown";
@@ -64,14 +83,43 @@ static class CodexTests
             Check(server.ToolResponses.Last()["contentItems"][0]["text"].ToString() == rejected, "Codex lost rejection details");
         }
         Console.WriteLine("PASS: Codex rejects unknown/malformed calls and accepts non-object tool output");
+        var mapTools = (JsonArray)Tools.DeepClone();
+        mapTools.Add(JsonNode.Parse("""{"type":"function","function":{"name":"terrain_map","parameters":{"type":"object","properties":{}}}}"""));
+        byte[] png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aVXkAAAAASUVORK5CYII=");
+        var map = new JsonObject { ["image_id"] = AgentImages.Register(png), ["bounds"] = new JsonObject { ["x"] = 12, ["y"] = 20 } };
+        var mapServer = new Server { ToolName = "terrain_map" };
+        using var mapAgent = new CodexAgent((_, _) => mapServer.Connect());
+        await mapAgent.RunAsync("查看地形", "mock", "/tmp", "", "game instructions", mapTools,
+            (_, _, _) => Task.FromResult(map.ToJsonString()), spoken.Add, default);
+        var content = mapServer.ToolResponses.Last()["contentItems"].AsArray();
+        Check(content.Count == 2 && content[1]["type"].ToString() == "inputImage"
+            && content[1]["imageUrl"].ToString() == "data:image/png;base64," + Convert.ToBase64String(png)
+            && JsonNode.DeepEquals(JsonNode.Parse(content[0]["text"].ToString()), map), "map image transport lost PNG or coordinates");
+        Check(AgentImages.Take(map) == null && AgentImages.Take(new JsonObject { ["image_id"] = "/tmp/arbitrary.png" }) == null,
+            "map image registration allowed replay or arbitrary file access");
+        Console.WriteLine("PASS: Codex map tool transports registered image and coordinate metadata together");
+        var unicodeResult = new JsonObject { ["name"] = "生命水晶", ["code"] = "const text = '\\u4e2d';\nreturn text;", ["hp"] = 60 };
+        await agent.RunAsync("保留中文与代码", "mock", "/tmp", "", "game instructions", Tools,
+            (_, _, _) => Task.FromResult(unicodeResult.ToJsonString()), spoken.Add, default);
+        string unicodeText = server.ToolResponses.Last()["contentItems"][0]["text"].ToString();
+        Check(unicodeText.Contains("生命水晶") && JsonNode.DeepEquals(JsonNode.Parse(unicodeText), unicodeResult),
+            "model result serialization expands Chinese or changes literal code escapes");
 
         using var cancel = new CancellationTokenSource();
         var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var running = agent.RunAsync("长任务", "mock", "/tmp", "", "game instructions", Tools,
             async (_, _, token) => { entered.SetResult(true); await Task.Delay(Timeout.Infinite, token); return "unreachable"; }, spoken.Add, cancel.Token);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2)); cancel.Cancel();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        int turnsBeforeDanger = agent.TurnsStarted;
+        Check(await agent.Steer("hp=20，原采集目标保留", default)
+            && server.Steers.Count == 1 && server.Steers[0]["expectedTurnId"].ToString().StartsWith("turn")
+            && server.Steers[0]["threadId"].ToString() == "thread" && agent.TurnsStarted == turnsBeforeDanger,
+            "live danger did not steer the current turn or replaced the task");
+        cancel.Cancel();
         try { await running; throw new Exception("Codex cancellation ignored"); } catch (OperationCanceledException) { }
         Check(server.Interrupts == 1 && !server.Stopped, "Codex did not interrupt while preserving reusable session");
+        Check(!await agent.Steer("stale danger", default) && server.Steers.Count == 1,
+            "ended turn accepted stale danger steering");
         await agent.RunAsync("新任务", "mock", "/tmp", "", "game instructions", Tools, Execute, spoken.Add, default);
         Check(server.Threads == 1 && calls == 3, "new Codex task failed after interruption");
         Console.WriteLine("PASS: Codex interrupts blocked tool calls and accepts a replacement task in the same thread");
@@ -197,10 +245,745 @@ static class CodexTests
         Console.WriteLine("PASS: combat makes no periodic model calls, handles player follow-ups, permits one recovery and respects stop on the same Codex thread");
     }
 
-    static async Task NativeGoalProtocol()
+    public static async Task InputOptimizations()
+    {
+        string packageRoot = Path.Combine(Path.GetTempPath(), "codex-native-resolution-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string launcher = Path.Combine(packageRoot, "bin", "codex.js");
+            string native = Path.Combine(packageRoot, "node_modules", "@openai", "fixture-platform", "vendor", "fixture", "bin", "codex");
+            Directory.CreateDirectory(Path.GetDirectoryName(launcher)); Directory.CreateDirectory(Path.GetDirectoryName(native));
+            File.WriteAllText(launcher, "fixture launcher"); File.WriteAllText(native, "fixture native");
+            Check(CodexAgent.NpmNativeExecutable(launcher) == native
+                && CodexAgent.NpmNativeExecutable(native) == native,
+                "default npm launch unnecessarily depended on the child Node architecture");
+            Directory.Delete(Path.Combine(packageRoot, "node_modules"), true);
+            Check(CodexAgent.NpmNativeExecutable(launcher) == launcher,
+                "native resolution discarded a launcher without an installed native package");
+            Check(CodexAgent.ResolveExecutable(launcher) == launcher, "explicit Codex launcher preference was overridden");
+        }
+        finally { if (Directory.Exists(packageRoot)) Directory.Delete(packageRoot, true); }
+        await PromptContinuity();
+        await ModelResults();
+        ContextChanges();
+        ContextPatches();
+        await HistoryCompaction();
+        await NativeBackgroundReview(compact: true);
+        await NativeGoalProtocol(largeHistory: true);
+        InputReplay();
+    }
+
+    static async Task PromptContinuity()
+    {
+        var server = new Server();
+        using var agent = new CodexAgent((_, _) => server.Connect());
+        var options = new JsonObject { ["request"] = "brief", ["objective"] = "retain note and original handle" };
+        Task Run() => agent.RunAsync("continue", "mock", "/tmp", "", "game", Tools,
+            (_, _, _) => Task.FromResult("{}"), _ => { }, default, options);
+        await Run();
+        Check(server.ThreadArgs["serviceTier"]?.ToString() == "fast"
+            && server.ThreadArgs["config"]?["features.fast_mode"]?.GetValue<bool>() == true,
+            "game agent did not explicitly request Fast mode on its own thread");
+        Check(server.ThreadArgs["dynamicTools"][0]["description"].ToString().Contains("JSON文本(string)")
+            && server.ThreadArgs["developerInstructions"].ToString().Contains("JSON.parse(await tools.get_state({}))"),
+            "short transport hints lost the outer string/in-game object distinction");
+        server.Goal["tokensUsed"] = 1000; server.Goal["updatedAt"] = 42;
+        await Run();
+        Check(server.Inputs[0].Contains("retain note and original handle") && !server.Inputs[1].Contains("宿主目标")
+            && !server.Inputs[0].Contains("host_tokens_used") && !server.Inputs[0].Contains("history"),
+            "unchanged goal or cumulative accounting was appended again");
+        await agent.CompactContext(default, force: true);
+        await Run();
+        Check(server.Inputs[2].Contains("retain note and original handle") && !server.Inputs[2].Contains("tokensUsed"),
+            "compaction lost objective or resent changing accounting fields");
+        options["request"] = "new"; options["objective"] = "changed goal";
+        await Run();
+        Check(server.Inputs[3].Contains("changed goal") && agent.GoalState["native"]["tokensUsed"].GetValue<int>() == 1000,
+            "new goal was omitted or host accounting was removed");
+        string system = "original-system-marker";
+        string prompt = AgentScript.Instructions(system, Tools);
+        Check(prompt.Contains(system) && prompt.Contains("game_api") && prompt.Contains("on_failure")
+            && prompt.Contains("action_queue") && prompt.Contains("uncertain") && prompt.Contains("script_report")
+            && prompt.Contains("低血量仅唤醒观察") && !prompt.Contains("\"parameters\":"),
+            "prompt cleanup lost executable, recovery or lookup contracts");
+        Console.WriteLine("PASS: prompts retain runtime contracts; goals are sent on first/change/compaction without repeated accounting");
+    }
+
+    static async Task HistoryCompaction()
+    {
+        var server = new Server { InputTokens = CodexAgent.ContextTokenLimit + 1000 };
+        using var agent = new CodexAgent((_, _) => server.Connect());
+        Task<string> Execute(string _, JsonObject __, CancellationToken ___) => Task.FromResult("{\"hp\":100}");
+        var options = new JsonObject { ["request"] = "same-goal", ["objective"] = "retain collected progress" };
+        await agent.RunAsync("initial snapshot", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default, options);
+        await agent.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+        Check(server.Compactions == 1 && server.Threads == 1 && agent.ContextRevision == 1 && agent.Compactions == 1
+            && agent.GoalState["native"]["status"].ToString() == "active" && agent.GoalState["host_tokens_used"].GetValue<long>() == 150,
+            "large history did not compact on the same thread or reset goal/usage accounting");
+        await agent.RunAsync("fresh host snapshot", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default, options);
+        await agent.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+        Check(server.Compactions == 1 && server.GoalSets == 1, "small compacted history immediately repeated compaction or recreated the goal");
+        server.InputTokens = CodexAgent.ContextTokenLimit + 5000;
+        server.InputTokensAfterCompaction = CodexAgent.ContextTokenLimit + 10000;
+        await agent.RunAsync("new history", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default, options);
+        await agent.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+        await agent.RunAsync("large retained prefix", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default, options);
+        await agent.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+        Check(server.Compactions == 2, "large retained prefix caused an immediate compaction loop");
+        server.InputTokens = 120000; server.FailCompaction = true;
+        await agent.RunAsync("growth after retained prefix", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default, options);
+        await agent.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+        Check(server.Compactions == 3 && agent.Compactions == 2 && agent.LastCompactionError != null
+            && agent.GoalState["native"]["status"].ToString() == "active",
+            "failed compaction was marked complete or stopped the active goal");
+        await agent.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+        Check(server.Compactions == 3, "failed unchanged history entered a tight compaction retry loop");
+        var automatic = new Server { EmitCompaction = true };
+        using var automaticAgent = new CodexAgent((_, _) => automatic.Connect());
+        int refreshes = 0;
+        await automaticAgent.RunAsync("observe", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default,
+            refreshContext: () => { refreshes++; return Task.FromResult("{\"mode\":\"snapshot\",\"hp\":77}"); });
+        Check(refreshes == 1 && automatic.Steers.Count == 1 && automatic.Steers[0]["input"][0]["text"].ToString().Contains("\"hp\":77"),
+            "automatic in-turn compaction did not receive the current host snapshot before continuing");
+        var held = new Server { InputTokens = CodexAgent.ContextTokenLimit + 1000, HoldCompaction = true };
+        using var interrupted = new CodexAgent((_, _) => held.Connect());
+        await interrupted.RunAsync("observe", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default);
+        using var cancellation = new CancellationTokenSource();
+        var waiting = interrupted.PrepareContext("mock", "/tmp", "", "game instructions", Tools, false, cancellation.Token);
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (held.Compactions == 0) { Check(DateTime.UtcNow < deadline, "compaction did not start"); await Task.Delay(1); }
+        await Task.Delay(20); cancellation.Cancel();
+        try { await waiting.WaitAsync(TimeSpan.FromSeconds(4)); throw new Exception("compaction ignored stop"); }
+        catch (OperationCanceledException) { }
+        Check(held.Interrupts == 1 && interrupted.Compactions == 0 && interrupted.TurnsStarted == 1,
+            "stopped compaction remained active, launched another turn or was marked successful");
+        var limitedServer = new Server { InputTokens = CodexAgent.ContextTokenLimit + 1000 };
+        using var limited = new CodexAgent((_, _) => limitedServer.Connect());
+        var budget = (JsonObject)options.DeepClone(); budget["tokenBudget"] = 125;
+        await limited.RunAsync("observe", "mock", "/tmp", "", "game instructions", Tools, Execute, _ => { }, default, budget);
+        try
+        {
+            await limited.PrepareContext("mock", "/tmp", "", "game instructions", Tools, true, default);
+            throw new Exception("compaction bypassed goal token budget");
+        }
+        catch (GoalBudgetExceededException) { }
+        Check(limited.GoalState["native"]["status"].ToString() == "budgetLimited", "compaction cost was not charged to the unfinished goal");
+        Console.WriteLine("PASS: history compacts at measured input size, preserves thread/goal/usage and avoids repeated retained-prefix or failure loops");
+    }
+
+    static void InputReplay()
+    {
+        if (Environment.GetEnvironmentVariable("TB_INPUT_REPLAY") is not string recording) return;
+        var source = JsonNode.Parse(File.ReadAllText(recording)).AsObject();
+        var exported = (JsonObject)source.DeepClone();
+        var context = new AgentContext();
+        var state = new JsonObject();
+        int messages = 0, reports = 0;
+        long before = 0, after = 0;
+        bool replacePrompt = Environment.GetEnvironmentVariable("TB_INPUT_REPLAY_PROMPTS") == "1";
+        foreach (var entry in exported["items"].AsArray())
+        {
+            var item = entry["item"];
+            if (replacePrompt && item["type"]?.ToString() == "message" && item["role"]?.ToString() == "developer")
+                foreach (var part in item["content"].AsArray())
+                    if (part["text"]?.ToString().StartsWith("单次游戏API用run_script(") == true)
+                    {
+                        string old = part["text"].ToString();
+                        string persona = old.Split("回复语言风格：").Skip(1).FirstOrDefault()?.Split('\n')[0] ?? "";
+                        var definitions = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
+                        AgentScript.DescribePrograms(definitions);
+                        part["text"] = AgentScript.Instructions(File.ReadAllText("Agent/System.txt") + "\n回复语言风格：" + persona, definitions);
+                    }
+            if (item["type"]?.ToString() == "custom_tool_call_output" && item["output"] is JsonArray parts)
+                foreach (var part in parts.Where(part => part["type"]?.ToString() == "input_text"))
+                {
+                    string text = part["text"].ToString();
+                    JsonNode value;
+                    try { value = JsonNode.Parse(text); } catch (System.Text.Json.JsonException) { continue; }
+                    if (value is not JsonObject obj || obj["trace"] is not JsonArray && obj["task_plan"] is not JsonObject) continue;
+                    before += text.Length;
+                    part["text"] = AgentModelOutput.Project("run_script", value).ToJsonString(AgentTools.ModelJson);
+                    after += part["text"].ToString().Length; reports++;
+                }
+            if (item["type"]?.ToString() != "message" || item["role"]?.ToString() != "user") continue;
+            foreach (var part in item["content"].AsArray())
+            {
+                string text = part["text"]?.ToString() ?? "";
+                int start = text.LastIndexOf("\n现状：", StringComparison.Ordinal);
+                if (start < 0) continue;
+                start += "\n现状：".Length;
+                var reader = new System.Text.Json.Utf8JsonReader(Encoding.UTF8.GetBytes(text[start..]));
+                using var document = System.Text.Json.JsonDocument.ParseValue(ref reader);
+                string raw = document.RootElement.GetRawText();
+                var old = JsonNode.Parse(raw);
+                if (old["mode"]?.ToString() == "snapshot") state.Clear();
+                foreach (var field in old["state"].AsObject()) state[field.Key] = field.Value?.DeepClone();
+                foreach (var field in old["removed"].AsArray()) state.Remove(field.ToString());
+                var hydrated = (JsonObject)state.DeepClone();
+                foreach (var node in hydrated["task_plan"]?["steps"]?.AsArray() ?? new JsonArray())
+                {
+                    if (node["script_present"]?.GetValue<bool>() == true) node["script"] = "retained script";
+                    if (node["on_failure_present"]?.GetValue<bool>() == true) node["on_failure"] = "retained recovery";
+                }
+                string compact = context.Capture(hydrated).ToJsonString(AgentTools.ModelJson);
+                part["text"] = text[..start] + compact + text[(start + raw.Length)..];
+                before += raw.Length; after += compact.Length; messages++;
+            }
+        }
+        string destination = Environment.GetEnvironmentVariable("TB_INPUT_REPLAY_OUTPUT")
+            ?? Path.Combine(Path.GetTempPath(), "terrablind-input-replayed.json");
+        File.WriteAllText(destination, exported.ToJsonString(AgentTools.ModelJson));
+        Console.WriteLine($"INPUT_REPLAY host_messages={messages} reports={reports} original_chars={before} compact_chars={after} output={destination}");
+    }
+
+    static async Task ModelResults()
+    {
+        var tools = (JsonArray)Tools.DeepClone();
+        tools.Add(JsonNode.Parse("""{"type":"function","function":{"name":"run_script","parameters":{"type":"object","properties":{}}}}"""));
+        var server = new Server { ToolName = "run_script" };
+        using var agent = new CodexAgent((_, _) => server.Connect());
+        var report = JsonNode.Parse("""
+            {"ok":true,"value":{"actual":5,"remaining":1},"tool_counts":{"gather":1},
+             "trace":[{"tool":"gather","result":"large repeated observation"}],"failure":null}
+            """).AsObject();
+        foreach (bool failed in new[] { false, true })
+        {
+            report["ok"] = !failed;
+            report["failure"] = failed ? JsonNode.Parse("""{"tool":"gather","args":{"count":6},"evidence":{"outcome":"inventory_full","actual":5}}""") : null;
+            await agent.RunAsync("read report", "mock", "/tmp", "", "game instructions", tools,
+                (_, _, _) => Task.FromResult(report.ToJsonString()), _ => { }, default);
+            var received = JsonNode.Parse(server.ToolResponses.Last()["contentItems"][0]["text"].ToString());
+            Check(received["trace"] == null && received["report_id"] != null,
+                "model still received repeated trace instead of an addressable full report");
+            Check(JsonNode.DeepEquals(received["value"], report["value"])
+                && JsonNode.DeepEquals(received["failure"], report["failure"])
+                && received["tool_counts"]["gather"].GetValue<int>() == 1
+                && server.ToolResponses.Last()["success"].GetValue<bool>() == !failed,
+                "compact report lost actual progress, failure evidence or rejection status");
+            var full = JsonNode.Parse(await AgentTools.Execute("script_report", new JsonObject { ["id"] = received["report_id"].DeepClone() }, default));
+            Check(JsonNode.DeepEquals(full, report) && report["trace"] != null,
+                "full trace was lost or formatting mutated the host execution report");
+        }
+        var direct = JsonNode.Parse(AgentModelOutput.Format("run_script", report.ToJsonString()));
+        Check(direct["trace"] == null && direct["report_id"] != null,
+            "HTTP conversation formatting retained repeated trace");
+        var internalResult = await AgentScript.Run("return tool('probe').trace;", 0, (_, _) => { },
+            (_, _, _) => Task.FromResult(report.ToJsonString()), _ => Task.CompletedTask, default);
+        Check(JsonNode.DeepEquals(internalResult["value"], report["trace"]),
+            "wire report optimization altered results available inside JavaScript");
+        var plan = JsonNode.Parse("""
+            {"goal":"collect","mode":"dag","revision":2,"status":"active","steps":[
+             {"id":"walk","status":"active","depends_on":[],"script":"move()","on_failure":"repair()",
+              "conditions":[{"kind":"item","type":29,"count":1}]}]}
+            """);
+        plan["steps"][0]["script"] = new string('x', 8000);
+        var write = new JsonObject { ["ok"] = true, ["value"] = new JsonObject { ["plan"] = plan.DeepClone(), ["actual"] = 0 },
+            ["task_plan"] = plan.DeepClone(), ["tool_counts"] = new JsonObject { ["task_plan_patch"] = 1 },
+            ["trace"] = report["trace"].DeepClone() };
+        var folded = AgentModelOutput.Project("run_script", write);
+        Check(folded["value"]["plan"]["steps"][0]["script"] == null
+            && folded["value"]["plan"]["steps"][0]["script_present"]?.GetValue<bool>() == true
+            && folded["value"]["plan"]["steps"][0]["on_failure_present"]?.GetValue<bool>() == true
+            && folded["value"]["plan"]["revision"]?.GetValue<int>() == 2
+            && JsonNode.DeepEquals(folded["value"]["plan"]["steps"][0]["conditions"], plan["steps"][0]["conditions"])
+            && folded["value"]["actual"]?.GetValue<int>() == 0,
+            "plan write acknowledgment repeated source or lost executable state and completion evidence");
+        Check(JsonNode.DeepEquals(AgentModelOutput.Read(folded["report_id"].ToString()), write)
+            && plan["steps"][0]["script"].ToString().Length == 8000,
+            "folding discarded original source or altered the script-owned plan");
+        write["tool_counts"]["get_state"] = 1;
+        Check(JsonNode.DeepEquals(AgentModelOutput.Project("run_script", write)["value"], write["value"])
+            && AgentModelOutput.Project("run_script", write)["task_plan"]["steps"][0]["script"] == null
+            && JsonNode.DeepEquals(AgentModelOutput.Project("get_state", plan), plan),
+            "folding hid explicitly queried plan source");
+        write.Remove("trace");
+        Check(AgentModelOutput.Project("run_script", write)["task_plan"]["steps"][0]["script"] == null,
+            "automatic plan source was repeated in a report without execution trace");
+        string firstReport = direct["report_id"].ToString();
+        for (int i = 0; i < 65; i++) AgentModelOutput.Project("run_script", report);
+        Check(AgentModelOutput.Read(firstReport)["error"]?.ToString() == "script_report_unavailable",
+            "model report archive grew past the declared retention bound");
+        direct = AgentModelOutput.Project("run_script", report);
+        AgentTools.NewTask();
+        Check(AgentModelOutput.Read(direct["report_id"].ToString())["error"]?.ToString() == "script_report_unavailable"
+            && AgentScript.PreparationOnly("return tool('script_report',{id:'known'});"),
+            "report archive leaked into another instruction or read-only evidence was treated as an action");
+        Console.WriteLine("PASS: model reports omit duplicate trace, retain measured progress/failure and expose full evidence without replay");
+    }
+
+    static void ContextChanges()
+    {
+        var context = new AgentContext();
+        var state = JsonNode.Parse("""
+            {"player":{"hp":240},"inventory_slots":[{"slot":0,"type":191,"stack":1}],
+             "task_plan":{"revision":3,"status":"active","steps":[{"id":"walk","workflow":"walk","status":"active","script":"move()","on_failure":"repair()","conditions":[{"kind":"position","x":10,"y":20}]}]},
+             "script_workflows":{"walk":{"revision":5,"running":true,"steps":[{"id":"first","status":"completed","value":{"large":"old result"}}]}},
+             "action_tasks":[{"handle":"old","status":"completed","args":{"code":"large old code"}},
+                 {"handle":"live","status":"running","tool":"nav_to","args":{"x":10,"y":20}}],
+             "equipment":{"duplicate_inventory":"large"},"last_death":{"npc_type":222}}
+            """).AsObject();
+        var first = context.Capture(state);
+        Check(first["mode"].ToString() == "snapshot" && first["state"]["task_plan"]["steps"][0]["script"] == null
+            && first["state"]["task_plan"]["steps"][0]["on_failure"] == null
+            && first["state"]["task_plan"]["steps"][0]["on_failure_present"]?.GetValue<bool>() == true
+            && first["state"]["script_workflows"]["walk"]["steps"][0]["value"] == null
+            && first["state"]["action_tasks"].AsObject().Count == 1 && first["state"]["equipment"] == null,
+            "automatic context repeated completed effects, program source or duplicate inventory");
+        Check(first["state"]["action_tasks"]["live"]["handle"].ToString() == "live"
+            && first["state"]["task_plan"]["steps"][0]["workflow"]?.ToString() == "walk"
+            && first["state"]["last_death"]["npc_type"].GetValue<int>() == 222,
+            "compact context lost live ownership or actual death evidence");
+        state["player"]["hp"] = 70; state["last_death"] = null;
+        var changed = context.Capture(state);
+        Check(changed["mode"].ToString() == "delta" && changed["state"]["player"]["hp"].GetValue<int>() == 70
+            && changed["state"]["inventory_slots"] == null && changed["state"]["task_plan"] == null
+            && changed["state"].AsObject().ContainsKey("last_death") && changed["state"]["last_death"] == null,
+            "delta resent stable sections or retained a cleared danger fact");
+        Check(state["task_plan"]["steps"][0]["script"].ToString() == "move()",
+            "model context altered host-owned task source");
+        context.Reset();
+        Check(context.Capture(state)["mode"].ToString() == "snapshot", "compaction did not restore the current host snapshot");
+        Console.WriteLine("PASS: model context emits bounded summaries and changed sections while retaining live evidence");
+        if (Environment.GetEnvironmentVariable("TB_CONTEXT_REPLAY") is string recording)
+        {
+            context.Reset();
+            long before = 0, after = 0, next = 0; int samples = 0;
+            foreach (string line in File.ReadLines(recording))
+            {
+                var sample = JsonNode.Parse(line);
+                long time = sample["elapsed_ms"].GetValue<long>();
+                if (time < next) continue;
+                next = time + 15000;
+                var full = sample["state"].AsObject();
+                before += full.ToJsonString(AgentTools.ModelJson).Length;
+                after += context.Capture(full).ToJsonString(AgentTools.ModelJson).Length;
+                samples++;
+            }
+            Console.WriteLine($"CONTEXT_REPLAY samples={samples} original_chars={before} delta_chars={after}");
+        }
+    }
+
+    static void ContextPatches()
+    {
+        var state = JsonNode.Parse("""
+            {"player":{"hp":100,"max_hp":100,"pos":{"x":10,"y":20}},
+             "inventory_slots":[{"slot":0,"type":331,"stack":2,"name":"Spore"},{"slot":3,"type":9,"stack":20}],
+             "combat":{"active":false,"session":0,"outcome":"idle","tick":1,"self":{"x":10}},
+             "terrain":{"tick":1,"legend":"stable legend","rows":[".#"],"trap_tiles":[]},
+             "town_npcs":[{"who":1,"name":"Guide","pos":{"x":10,"y":20}}],
+             "last_damage":null,"script_workflows":{"path/a":{"revision":1}}}
+            """).AsObject();
+        var context = new AgentContext();
+        var first = context.Capture(state);
+        Check(first["state"]["inventory_slots"] is JsonObject && first["state"]["inventory_slots"]["0"]["stack"].GetValue<int>() == 2,
+            "automatic inventory snapshot was not keyed by actual slot");
+        var accumulated = first["state"].AsObject().DeepClone().AsObject();
+        state["inventory_slots"][0]["stack"] = 3;
+        state["inventory_slots"].AsArray().RemoveAt(1);
+        state["player"]["pos"]["x"] = 12;
+        state["combat"]["tick"] = 2; state["combat"]["self"]["x"] = 12;
+        state["terrain"]["tick"] = 2;
+        state["terrain"]["trap_tiles"].AsArray().Add(new JsonObject { ["x"] = 13, ["y"] = 20, ["type"] = 135 });
+        state["town_npcs"][0]["pos"]["x"] = 11;
+        state["last_damage"] = new JsonObject { ["damage"] = 20, ["npc_type"] = 42 };
+        state["script_workflows"].AsObject().Remove("path/a");
+        var patch = context.Capture(state);
+        Check(patch["state"]["inventory_slots"]["0"].AsObject().Count == 1
+            && patch["state"]["inventory_slots"]["0"]["stack"].GetValue<int>() == 3
+            && patch["removed"].AsArray().Any(path => path.ToString() == "/inventory_slots/3")
+            && patch["removed"].AsArray().Any(path => path.ToString() == "/script_workflows/path~1a"),
+            "slot update resent stable inventory metadata or lost removed slots/workflows");
+        Check(patch["state"]["player"]["pos"].AsObject().Count == 1 && patch["state"]["combat"] == null
+            && patch["state"]["terrain"]["legend"] == null && patch["state"]["terrain"]["rows"] == null
+            && patch["state"]["terrain"]["trap_tiles"].AsArray().Count == 1
+            && patch["state"]["town_npcs"]["1"]["name"] == null,
+            "context repeated stable/idle data or discarded a newly observed hazard");
+        void Merge(JsonObject target, JsonObject changes)
+        {
+            foreach (var field in changes)
+                if (field.Value is JsonObject nested && target[field.Key] is JsonObject previous) Merge(previous, nested);
+                else target[field.Key] = field.Value?.DeepClone();
+        }
+        Merge(accumulated, patch["state"].AsObject());
+        foreach (var path in patch["removed"].AsArray())
+        {
+            var keys = path.ToString().Split('/').Skip(1).Select(key => key.Replace("~1", "/").Replace("~0", "~")).ToArray();
+            JsonObject parent = accumulated;
+            foreach (string key in keys.Take(keys.Length - 1)) parent = parent[key].AsObject();
+            parent.Remove(keys[^1]);
+        }
+        context.Reset();
+        var fresh = context.Capture(state);
+        Check(JsonNode.DeepEquals(accumulated, fresh["state"]) && fresh["mode"].ToString() == "snapshot"
+            && fresh["state"]["last_damage"]["npc_type"].GetValue<int>() == 42,
+            "patch application or compaction snapshot lost authoritative current state");
+        Console.WriteLine("PASS: recursive context patches update actual slots/fields and removals while preserving hazards, damage and full reset snapshots");
+    }
+
+    static async Task InTurnCompaction()
+    {
+        foreach (var (executing, holdReply, ends) in new[] { (false, false, false), (true, true, false), (true, false, false), (true, true, true) })
+        {
+            var actions = new ActionTasks(async (_, _, ct) => { await Task.Delay(Timeout.Infinite, ct); return "{}"; },
+                _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
+            var action = executing ? actions.Start("nav_to", new JsonObject(), default) : null;
+            var server = new Server { InputTokens = CodexAgent.ContextTokenLimit + 1000,
+                HoldFinalReply = holdReply, HoldCompaction = executing, RejectIdleInterrupt = executing && !holdReply };
+            using var agent = new CodexAgent((_, _) => server.Connect());
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var goal = new JsonObject { ["objective"] = "continue the current action", ["request"] = "compact-active-action" };
+            var run = agent.RunAsync("continue", "", "", "fixture", "system", Tools,
+                (_, _, _) => Task.FromResult("{\"running\":true}"), _ => { }, timeout.Token, goal,
+                canCompact: () => Task.FromResult(actions.HasPrimaryControl));
+            if (executing)
+            {
+                while (server.Compactions == 0) await Task.Delay(5, timeout.Token);
+                Check(!run.IsCompleted && server.Interrupts == 1 && agent.GoalState["native"]["status"].ToString() == "active",
+                    "background compaction completed the goal or waited for a final model message");
+                Check(actions.ActiveHandle == action["handle"].ToString() && actions.HasPrimaryControl,
+                    "compaction released a registered action before it acquired frame controls");
+                if (ends) actions.Reset();
+                else server.FinishCompaction();
+            }
+            await run;
+            Check(server.Compactions == (executing ? 1 : 0) && server.Threads == 1
+                && server.Interrupts == (ends ? 2 : executing ? 1 : 0) && !agent.HasActiveTurn,
+                "in-turn compaction ignored action coverage, replaced the thread or retained active reasoning");
+            Check(agent.Compactions == (executing && !ends ? 1 : 0) && !server.Stopped
+                && agent.GoalState["native"]["status"].ToString() == "active"
+                && (!ends || agent.LastCompactionError == "background_action_ended"),
+                "ended action waited for held compaction or lost its unfinished goal/history connection");
+            actions.Reset();
+        }
+        Console.WriteLine("PASS: large active reasoning hands off history only under background execution, preserving its thread and active goal");
+    }
+
+    static void PreparationContexts()
+    {
+        AgentTools.Plan.Reset();
+        try
+        {
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"collect along a route","mode":"dag","steps":[
+                 {"id":"collect","description":"repeat prepared collection","depends_on":[],
+                  "script":"return tool('gather',{targets:[{item_type:29,count:1,tile_names:['Heart']}]});",
+                  "conditions":[{"kind":"permanent_health","count":300}]}]}
+                """).AsObject(), AgentTaskEvidence.Measure);
+            string first = AgentTools.PreparationContext("first:1", "collect");
+            Check(first == AgentTools.PreparationContext("second:1", "collect"),
+                "unchanged node repeated preparation when its collection handle changed");
+            Check(AgentTools.PreparationContext("first:1", null) != AgentTools.PreparationContext("first:2", null),
+                "independent resumed action lost its new preparation context");
+            AgentTools.Plan.Revise(new JsonObject { ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                ["reason"] = "new executable recovery", ["nodes"] = JsonNode.Parse("""
+                    [{"id":"collect","on_failure":"return {status:'yield',reason:'inspect the new route'};"}]
+                    """) }, AgentTaskEvidence.Measure);
+            Check(first != AgentTools.PreparationContext("second:1", "collect"),
+                "changed node recovery did not rearm preparation");
+        }
+        finally { AgentTools.Plan.Reset(); }
+        Console.WriteLine("PASS: preparation follows node source and recovery revisions while standalone attempts remain independent");
+    }
+
+    static async Task NativeExecutionSteering(bool script = false, bool preparedReview = false, bool rejectSteer = false, bool preparationOnly = false)
     {
         var native = new NativeAgent();
-        var server = new Server();
+        var server = new Server { HoldFinalReply = true, RejectSteer = rejectSteer };
+        var handler = HttpServerSystem.Handler;
+        bool fail = false;
+        int starts = 0;
+        string handle = null;
+        Config.I.AgentUseCodex = true;
+        native.Load();
+        typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .SetValue(native, new CodexAgent((_, _) => server.Connect()));
+        HttpServerSystem.Handler = (path, _) =>
+        {
+            if (path == "/nav_recede") starts++;
+            return (200, path == "/nav_recede_done" ? fail ? new JsonObject { ["done"] = false,
+                ["status"] = "failed", ["reason"] = "fixture_blocked", ["detail"] = new string('x', 10000) }.ToJsonString()
+                : "{\"done\":false}" : "{}");
+        };
+        server.AfterTool = calls =>
+        {
+            if (calls != 1) return;
+            _ = NativeAgent.OnMain(() =>
+            {
+                AgentTools.Plan.Create(JsonNode.Parse("""
+                    {"goal":"prepare during a delayed reply","mode":"dag","steps":[
+                     {"id":"travel","description":"keep moving while preparing","depends_on":[],
+                      "script":"return step('move',()=>{const r=tool('nav_to',{x:900,y:100});if(!r.done)throw new Error('blocked');return r;});",
+                      "conditions":[{"kind":"permanent_health","count":9999}]}]}
+                    """).AsObject(), AgentTaskEvidence.Measure);
+                if (preparationOnly)
+                {
+                    var addition = JsonNode.Parse("""
+                        {"expected_revision":0,"reason":"future action is still a template lookup","add_nodes":[
+                         {"id":"collect","description":"execute the prepared collection","depends_on":["travel"],
+                          "script":"return tool('script_program',{operation:'get',name:'use_life_crystals'});",
+                          "conditions":[{"kind":"permanent_health","count":9999}]}]}
+                        """).AsObject();
+                    addition["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone();
+                    AgentTools.Plan.Revise(addition, AgentTaskEvidence.Measure);
+                }
+                ActionTasks.NodeContext.Value = "travel";
+                try { handle = AgentTools.Actions.Start(script ? "run_script" : "nav_to", script
+                    ? new JsonObject { ["task_node"] = "travel" } : new JsonObject { ["x"] = 900, ["y"] = 100 }, default)["handle"].ToString(); }
+                finally { ActionTasks.NodeContext.Value = null; }
+                return true;
+            }, default);
+        };
+        async Task Until(Func<bool> condition)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(3);
+            while (!condition())
+            {
+                Check(DateTime.UtcNow < deadline, "active execution was not delivered before the delayed reply finished");
+                native.PostUpdateEverything(); await Task.Delay(5);
+            }
+        }
+        try
+        {
+            NativeAgent.Submit("prepare the next operation while this one executes");
+            await Until(() => server.Steers.Count >= 1 && starts == 1);
+            Check(server.Inputs.Count == 1 && server.Interrupts == 0 && AgentTools.Actions.ActiveHandle == handle,
+                "preparation steering started another turn, paused or replaced the route");
+            Check(server.Steers[0]["input"][0]["text"].ToString().Contains("prepare_successor"),
+                "action start did not request preparation in the current reasoning turn");
+            var quiet = DateTime.UtcNow.AddMilliseconds(700);
+            while (DateTime.UtcNow < quiet) { native.PostUpdateEverything(); await Task.Delay(5); }
+            Check(rejectSteer || server.Steers.Count == 1, "unchanged action repeatedly steered the same delayed reply");
+            if (preparedReview)
+            {
+                server.FinishReply();
+                if (preparationOnly)
+                {
+                    await Until(() => server.Inputs.Count == 2);
+                    Check(server.Inputs[1].Contains("collect") && AgentTools.Actions.ActiveHandle == handle && starts == 1,
+                        "preparation of a read-only successor waited for arrival or replaced navigation");
+                    server.FinishReply();
+                    quiet = DateTime.UtcNow.AddMilliseconds(700);
+                    while (DateTime.UtcNow < quiet) { native.PostUpdateEverything(); await Task.Delay(5); }
+                    Check(server.Inputs.Count == 2, "unchanged preparation-only source caused an unbounded background review loop");
+                    Console.WriteLine("PASS: preparation-only successors receive a bounded review while the original action runs");
+                    return;
+                }
+                if (rejectSteer)
+                {
+                    await Until(() => server.Inputs.Count == 2);
+                    Check(AgentTools.Actions.ActiveHandle == handle && starts == 1,
+                        "fallback preparation replaced the action after steering was rejected");
+                    Console.WriteLine("PASS: rejected preparation steering retains the normal background preparation turn");
+                    return;
+                }
+                quiet = DateTime.UtcNow.AddMilliseconds(700);
+                while (DateTime.UtcNow < quiet) { native.PostUpdateEverything(); await Task.Delay(5); }
+                Check(server.Inputs.Count == 1 && AgentTools.Actions.ActiveHandle == handle && starts == 1,
+                    "accepted in-turn preparation was repeated in another model turn");
+                AgentTools.Watches.Emit("low_health", "new-health-after-preparation", new JsonObject { ["hp"] = 20 });
+                await Until(() => server.Inputs.Count == 2);
+                Check(server.Inputs[1].Contains("new-health-after-preparation") && AgentTools.Actions.ActiveHandle == handle && starts == 1,
+                    "preparation deduplication suppressed a new health observation or replaced the running action");
+                Console.WriteLine("PASS: accepted preparation avoids a duplicate turn while new health evidence still wakes the model");
+                return;
+            }
+            fail = true;
+            await Until(() => server.Steers.Count == 2);
+            Check(server.Steers[1]["input"][0]["text"].ToString().Contains("execution_gap")
+                && server.Inputs.Count == 1 && server.Interrupts == 0,
+                "failed execution waited for final text and a new reasoning turn before reporting its gap");
+            string failureNotice = server.Steers[1]["input"][0]["text"].ToString();
+            Check(failureNotice.Contains("fixture_blocked") && failureNotice.Contains("900") && failureNotice.Length < 2500,
+                "execution notice omitted the actual failed tool and target, or resent an oversized result: " + failureNotice[..Math.Min(500, failureNotice.Length)]);
+            Console.WriteLine("PASS: active-turn execution steering prepares successors and delivers uncovered failure before final reply");
+        }
+        finally
+        {
+            NativeAgent.Stop(); native.OnWorldUnload(); native.Unload();
+            Config.I.AgentUseCodex = false; HttpServerSystem.Handler = handler;
+            AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
+        }
+    }
+
+    static async Task NativeBackgroundReview(bool compact = false)
+    {
+        var native = new NativeAgent();
+        var server = new Server { InputTokens = compact ? CodexAgent.ContextTokenLimit + 1000 : 0, HoldCompaction = compact };
+        var originalPosition = Terraria.Main.LocalPlayer.position;
+        int originalHealth = Terraria.Main.LocalPlayer.statLife;
+        Config.I.AgentUseCodex = true;
+        native.Load();
+        typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .SetValue(native, new CodexAgent((_, _) => server.Connect()));
+        string handle = null, queued = null;
+        bool completeFirst = false;
+        server.AfterCompaction = () =>
+        {
+            _ = NativeAgent.OnMain(() =>
+            {
+                Check(AgentTools.Actions.ActiveHandle == handle, "history compaction replaced the running action");
+                Terraria.Main.LocalPlayer.statLife = 77;
+                AgentTools.Watches.Emit("inventory_full", "during-compaction", new JsonObject { ["fixture"] = true });
+                return true;
+            }, default);
+        };
+        Terraria.Main.LocalPlayer.position = new(1600, 1600);
+        HttpServerSystem.Handler = (path, payload) =>
+        {
+            if (compact && path == "/nav_recede" && JsonNode.Parse(payload)?["gx"]?.GetValue<int>() == 950) completeFirst = false;
+            return (200, completeFirst ? "{\"done\":true}" : "{\"done\":false}");
+        };
+        server.AfterTool = calls =>
+        {
+            if (calls == 1) _ = NativeAgent.OnMain(() =>
+            {
+                handle = AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 900, ["y"] = 100 }, default)["handle"].ToString();
+                if (compact) queued = AgentTools.Actions.Enqueue(handle, "nav_to",
+                    new JsonObject { ["x"] = 950, ["y"] = 100 }, null, default)["handle"].ToString();
+                return true;
+            }, default);
+        };
+        try
+        {
+            NativeAgent.Submit("/goal observe while navigation remains active");
+            var movement = System.Diagnostics.Stopwatch.StartNew();
+            bool handedOff = false;
+            void AdvanceMovement()
+            {
+                if (!compact || server.Compactions == 0)
+                    Terraria.Main.LocalPlayer.position.X = 1600 + (float)movement.Elapsed.TotalSeconds * 50;
+            }
+            var deadline = DateTime.UtcNow.AddSeconds(25);
+            while (server.Inputs.Count < 2)
+            {
+                Check(DateTime.UtcNow < deadline, "background observation waited for navigation completion");
+                AdvanceMovement();
+                native.PostUpdateEverything(); await Task.Delay(5);
+                if (compact && server.Compactions > 0 && !handedOff)
+                {
+                    Terraria.Main.LocalPlayer.position = new(900 * 16 - 10, 100 * 16 - 20);
+                    completeFirst = true;
+                    while (AgentTools.Actions.ActiveHandle != queued)
+                    {
+                        Check(DateTime.UtcNow < deadline, "prepared action waited for history compaction to finish");
+                        native.PostUpdateEverything(); await Task.Delay(5);
+                    }
+                    Check(server.Inputs.Count == 1, "another model turn was required for the prepared action");
+                    handedOff = true; handle = queued;
+                    server.FinishCompaction();
+                }
+            }
+            Check(server.Inputs[1].Contains("并行观察") && server.Inputs[1].Contains("on_failure") && AgentTools.Actions.ActiveHandle == handle,
+                $"model was not woken with the original active navigation handle expected={handle} active={AgentTools.Actions.ActiveHandle} input={server.Inputs[1][..Math.Min(1200, server.Inputs[1].Length)]}");
+            var action = AgentTools.Actions.Summary().First(a => a["handle"].ToString() == handle);
+            Check(action["status"].ToString() == "running" && action["attempt"].GetValue<int>() == 1,
+                "background review paused or restarted navigation");
+            if (compact)
+            {
+                Check(server.Compactions == 1 && server.Threads == 1 && server.Inputs[1].Contains("\"mode\":\"snapshot\"")
+                    && server.Inputs[1].Contains("\"hp\":77") && server.Inputs[1].Contains(handle)
+                    && (server.Inputs[1].Contains("\"key\":\"during-compaction\"")
+                        || AgentTools.Watches.Pending()["events"].AsArray().Any(e => e["key"]?.ToString() == "during-compaction")),
+                    "post-compaction state mismatch: compactions=" + server.Compactions + " threads=" + server.Threads
+                    + " pending=" + AgentTools.Watches.Pending() + " input=" + server.Inputs[1][..Math.Min(1800, server.Inputs[1].Length)]);
+                Check(handedOff, "compaction handoff scenario was skipped");
+                Console.WriteLine("PASS: prepared navigation starts during held compaction; refreshed input retains new handle, health and pending events");
+                return;
+            }
+            AgentTools.Watches.Configure(new JsonObject { ["events"] = new JsonArray("nearby_tile", "low_health", "nearby_chest"),
+                ["tile_types"] = new JsonArray(61), ["background_events"] = new JsonArray("nearby_chest") });
+            var localReader = AgentTools.Watches.BeginScriptDelivery();
+            AgentTools.Watches.Emit("nearby_tile", "script-owned-plant", new JsonObject { ["tile_type"] = 61 });
+            var quietUntil = DateTime.UtcNow.AddSeconds(60);
+            while (DateTime.UtcNow < quietUntil)
+            {
+                AdvanceMovement();
+                native.PostUpdateEverything(); await Task.Delay(5);
+                Check(server.Inputs.Count == 2, "unchanged background action caused another periodic model request: "
+                    + AgentTools.Actions.Summary().ToJsonString() + " input=" + server.Inputs.Last()[..Math.Min(1000, server.Inputs.Last().Length)]);
+            }
+            Check(AgentTools.Actions.ActiveHandle == handle && AgentTools.Watches.PendingCount == 1,
+                "model loop paused script-owned movement or consumed its event queue");
+            AgentTools.Watches.Take(); AgentTools.Watches.EndScriptDelivery(localReader);
+            AgentTools.Watches.Configure(new JsonObject { ["events"] = new JsonArray("nearby_tile", "low_health", "nearby_chest"),
+                ["tile_types"] = new JsonArray(61), ["passive_events"] = new JsonArray("nearby_tile"),
+                ["background_events"] = new JsonArray("nearby_chest") });
+            for (int i = 0; i < 3; i++) AgentTools.Watches.Emit("nearby_tile", "passive-plant-" + i,
+                new JsonObject { ["tile_type"] = 61 });
+            var passiveUntil = DateTime.UtcNow.AddMilliseconds(700);
+            while (DateTime.UtcNow < passiveUntil)
+            { AdvanceMovement(); native.PostUpdateEverything(); await Task.Delay(5); }
+            Check(server.Inputs.Count == 2 && AgentTools.Actions.ActiveHandle == handle && AgentTools.Watches.PendingCount == 3,
+                "record-only plants woke the native model loop, interrupted navigation or lost their pending evidence");
+            AgentTools.Watches.Take();
+            async Task Pump(Task work)
+            {
+                var until = DateTime.UtcNow.AddSeconds(3);
+                while (!work.IsCompleted)
+                {
+                    Check(DateTime.UtcNow < until, "resumed-action fixture did not release input");
+                    AdvanceMovement();
+                    native.PostUpdateEverything(); await Task.Delay(5);
+                }
+                await work;
+            }
+            var resumed = Task.Run(async () =>
+            {
+                await AgentTools.Actions.Control(handle, "pause", null, default);
+                await AgentTools.Actions.Control(handle, "resume", new JsonObject { ["x"] = 901, ["y"] = 100 }, default);
+            });
+            await Pump(resumed);
+            deadline = DateTime.UtcNow.AddSeconds(20);
+            while (!server.Inputs.Skip(2).Any(input => input.Contains("并行观察")))
+            {
+                Check(DateTime.UtcNow < deadline, "resuming the same handle did not prepare its new execution attempt");
+                AdvanceMovement();
+                native.PostUpdateEverything(); await Task.Delay(5);
+            }
+            Check(AgentTools.Actions.ActiveHandle == handle
+                && AgentTools.Actions.Summary().First(a => a["handle"]?.ToString() == handle)["attempt"].GetValue<int>() == 2,
+                "background preparation replaced or restarted the resumed action");
+            Check(server.Inputs.Last().Contains("action_queue"), "resumed-action preparation omitted the existing continuation queue");
+            int preparedRequests = server.Inputs.Count;
+            AgentTools.Watches.Emit("low_health", "measured-low-health", new JsonObject { ["hp"] = 20 });
+            deadline = DateTime.UtcNow.AddSeconds(3);
+            while (server.Inputs.Count < preparedRequests + 1)
+            {
+                Check(DateTime.UtcNow < deadline, "low health did not wake the waiting model");
+                AdvanceMovement();
+                native.PostUpdateEverything(); await Task.Delay(5);
+            }
+            Check(AgentTools.Actions.ActiveHandle == handle, "health notification paused the ongoing action");
+            AgentTools.Watches.Emit("nearby_chest", "new-chest", new JsonObject
+            {
+                ["x"] = (int)(Terraria.Main.LocalPlayer.position.X / 16) + 3,
+                ["y"] = (int)(Terraria.Main.LocalPlayer.position.Y / 16)
+            });
+            deadline = DateTime.UtcNow.AddSeconds(3);
+            while (server.Inputs.Count < preparedRequests + 2)
+            {
+                Check(DateTime.UtcNow < deadline, "new passive resource did not wake the waiting model");
+                AdvanceMovement();
+                native.PostUpdateEverything(); await Task.Delay(5);
+            }
+            for (int i = 0; i < 50; i++) { AdvanceMovement(); native.PostUpdateEverything(); await Task.Delay(5); }
+            Check(server.Inputs.Count == preparedRequests + 2 && !AgentTools.Watches.HasAdvisories && AgentTools.Actions.ActiveHandle == handle,
+                $"reported resource repeatedly woke the model or stopped navigation inputs={server.Inputs.Count} expected={preparedRequests + 2} advisories={AgentTools.Watches.HasAdvisories} active={AgentTools.Actions.ActiveHandle} expected_handle={handle} pending={AgentTools.Watches.Pending()} last_input={server.Inputs.Last()[..Math.Min(1200, server.Inputs.Last().Length)]}");
+        }
+        finally
+        {
+            NativeAgent.Stop(); native.OnWorldUnload(); native.Unload();
+            Terraria.Main.LocalPlayer.position = originalPosition;
+            Terraria.Main.LocalPlayer.statLife = originalHealth;
+            HttpServerSystem.Handler = null; Config.I.AgentUseCodex = false;
+        }
+        Console.WriteLine("PASS: host wakes model during navigation without pausing or restarting its handle");
+    }
+
+    static async Task NativeGoalProtocol(bool largeHistory = false)
+    {
+        var native = new NativeAgent();
+        var server = new Server { InputTokens = largeHistory ? CodexAgent.ContextTokenLimit + 1000 : 0 };
         Config.I.AgentUseCodex = true;
         native.Load();
         typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
@@ -208,30 +991,34 @@ static class CodexTests
         try
         {
             NativeAgent.Submit("/goal do not trust an unverified final reply");
-            async Task Paused(int calls)
+            async Task WaitCalls(int calls)
             {
-                var deadline = DateTime.UtcNow.AddSeconds(5);
-                while (NativeAgent.Status != "paused" || server.ToolResponses.Count < calls)
+                var deadline = DateTime.UtcNow.AddSeconds(20);
+                while (server.ToolResponses.Count < calls)
                 {
-                    Check(DateTime.UtcNow < deadline, "native goal continuation did not stop at its bound");
+                    Check(DateTime.UtcNow < deadline, "unverified native goal stopped continuing");
                     native.PostUpdateEverything(); await Task.Delay(5);
                 }
             }
-            await Paused(2);
-            Check(server.Goal["status"].ToString() == "paused" && server.Threads == 1,
+            await WaitCalls(3);
+            if (largeHistory) Check(server.Compactions == 0, "idle goal handoff waited for compaction before starting its next action");
+            Check(server.Goal["status"].ToString() == "active" && server.Threads == 1,
                 "model final reply completed missing game conditions or failed to preserve goal");
-            NativeAgent.Submit("/goal resume");
-            await Paused(4);
-            Check(server.Threads == 1 && NativeAgent.GoalState["host_tokens_used"].GetValue<long>() == 400,
-                "native resume lost thread, target or usage");
+            Check(NativeAgent.Status != "needs_repair" && NativeAgent.GoalState["host_tokens_used"].GetValue<long>() >= 300,
+                "goal stopped at the old no-progress bound or reset usage");
+            NativeAgent.Submit("stop");
+            int calls = server.ToolResponses.Count;
+            for (int i = 0; i < 30; i++) { native.PostUpdateEverything(); await Task.Delay(5); }
+            Check(server.ToolResponses.Count == calls, "explicit stop failed to cancel goal continuation");
         }
         finally { native.OnWorldUnload(); native.Unload(); Config.I.AgentUseCodex = false; }
-        Console.WriteLine("PASS: game /goal stops unverified no-progress replies, reports paused and resumes the same thread without resetting usage");
+        Console.WriteLine("PASS: unverified game goal continues beyond no-progress turns on the same thread until explicit stop");
     }
 
     static async Task GoalProtocol()
     {
-        var server = new Server();
+        var server = new Server { Goal = new JsonObject {
+            ["createdAt"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 45, ["timeUsedSeconds"] = 0 } };
         using var agent = new CodexAgent((_, _) => server.Connect());
         var options = new JsonObject { ["objective"] = "collect and verify", ["request"] = "initial" };
         Task Run() => agent.RunAsync("work", "mock", "/tmp", "", "game", Tools,
@@ -240,6 +1027,10 @@ static class CodexTests
         Check(server.GoalSets == 1 && server.ThreadArgs["ephemeral"].GetValue<bool>() == false
             && server.ThreadArgs["config"]["features.goals"].GetValue<bool>() == false,
             "goal session was not persistent or left model-side completion/dispatch uncontrolled");
+        Check(server.Efforts.Single() == "medium", "long goals did not receive their planning budget");
+        Check(agent.GoalState["host_wall_elapsed_seconds"].GetValue<long>() is >= 45 and < 60
+            && agent.GoalState["native"]["timeUsedSeconds"].GetValue<int>() == 0,
+            "host wall time inherited the native zero timer");
         var rejected = await agent.CompleteGoal(_ => Task.FromResult(new JsonObject { ["verified"] = false }), default);
         Check(rejected["error"]?.ToString() == "goal_not_verified" && server.Goal["status"].ToString() == "active",
             "model ending or failed verification completed native goal");
@@ -268,20 +1059,79 @@ static class CodexTests
         Check(limited.Interrupts == 1 && limited.Goal["status"].ToString() == "budgetLimited",
             "budget did not interrupt or falsely completed goal");
         Console.WriteLine("PASS: actual token telemetry interrupts a budget-limited goal without completing it");
-        var repeated = new Server { RepeatedToolCalls = 100 };
+        var repeated = new Server { RepeatedToolCalls = 33 };
         using var bounded = new CodexAgent((_, _) => repeated.Connect());
         int executions = 0;
-        try
+        var loopOptions = new JsonObject { ["objective"] = "bounded failures", ["request"] = "retry" };
+        await bounded.RunAsync("retry", "mock", "/tmp", "", "game", Tools,
+            (_, _, _) => { executions++; return Task.FromResult("{\"error\":\"no_progress\"}"); }, _ => { }, default, loopOptions);
+        Check(executions == 32 && repeated.Goal["status"].ToString() == "active" && !repeated.Stopped && repeated.Interrupts == 1
+            && repeated.ToolResponses.Last()["contentItems"][0]["text"].ToString().Contains("host_turn_limit"),
+            "turn limit executed the rejected call, stopped the goal or disposed its connection");
+        repeated.RepeatedToolCalls = repeated.ToolResponses.Count + 1;
+        await bounded.RunAsync("continue", "mock", "/tmp", "", "game", Tools,
+            (_, _, _) => { executions++; return Task.FromResult("{}"); }, _ => { }, default, loopOptions);
+        Check(executions == 33 && repeated.Threads == 1 && repeated.Goal["status"].ToString() == "active",
+            "next turn failed to continue on the same goal and thread");
+        Console.WriteLine("PASS: managed goal keeps the per-turn effect bound and continues on the same thread after budget handoff");
+    }
+
+    public static async Task InputOptimizationModel()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "terrablind-input-model-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var definitions = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();
+        AgentScript.DescribePrograms(definitions);
+        string system = AgentScript.Instructions(File.ReadAllText("Agent/System.txt"), definitions)
+            + "\n本轮是只读协议验收，模拟世界只开放get_state。只查询并回答，宿主验证目标。";
+        var entry = AgentScript.EntryTools(definitions);
+        var events = new JsonArray();
+        string note = "note-" + Guid.NewGuid().ToString("N")[..10];
+        const string handle = "retained-navigation-17";
+        int hp = 100, reads = 0, effects = 0;
+        JsonObject State() => new() { ["player"] = new JsonObject { ["hp"] = hp },
+            ["fixture_note"] = hp == 100 ? note : null,
+            ["action_tasks"] = new JsonArray(new JsonObject { ["handle"] = handle, ["tool"] = "nav_to", ["status"] = "running", ["attempt"] = 1 }) };
+        Task<string> Execute(string name, JsonObject args, CancellationToken token)
         {
-            await bounded.RunAsync("retry", "mock", "/tmp", "", "game", Tools,
-                (_, _, _) => { executions++; return Task.FromResult("{\"error\":\"no_progress\"}"); }, _ => { }, default,
-                new JsonObject { ["objective"] = "bounded failures", ["request"] = "retry" });
-            throw new Exception("model tool loop was unbounded");
+            events.Add(new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
+            if (name == "get_state") { reads++; return Task.FromResult(State().ToJsonString()); }
+            if (name == "game_api") return Task.FromResult(AgentScript.DescribeApi(definitions, args).ToJsonString());
+            if (name == "run_script" && args["tool"]?.ToString() == "get_state") return Execute("get_state", new JsonObject(), token);
+            effects++; throw new InvalidOperationException("read-only probe rejected " + name);
         }
-        catch (InvalidOperationException error) { Check(error.Message.Contains("32"), "wrong loop termination evidence"); }
-        Check(executions == 32 && repeated.Goal["status"].ToString() == "blocked" && repeated.Stopped,
-            "repeated failure did not bound effects and preserve blocked native goal");
-        Console.WriteLine("PASS: repeated model tool failures stop at the call limit and persist a blocked native goal");
+        var options = new JsonObject { ["request"] = "input-probe", ["objective"] = "只读核对记忆、最新现场与原动作，完成由宿主验收" };
+        using var agent = new CodexAgent();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(180));
+        var times = new JsonObject();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await agent.RunAsync("调用get_state一次，记住fixture_note和正在执行的原handle，在后续轮次保留。回复这两项和hp，结束本轮。",
+            "", root, "gpt-6.1-sol", system, entry, Execute, text => events.Add(new JsonObject { ["text"] = text }), deadline.Token, options);
+        times["initial_ms"] = clock.ElapsedMilliseconds;
+        var before = agent.TokenUsage;
+        Check(reads == 1 && events.Any(e => e["text"]?.ToString().Contains(note) == true), "model did not read and retain initial note");
+        clock.Restart();
+        Check(await agent.CompactContext(deadline.Token, force: true), "real app-server compaction failed: " + agent.LastCompactionError);
+        times["compaction_ms"] = clock.ElapsedMilliseconds;
+        Check(agent.Compactions == 1 && agent.GoalState["native"]["status"]?.ToString() == "active", "compaction lost active host goal");
+        hp = 77;
+        var context = new AgentContext();
+        string snapshot = context.Capture(State()).ToJsonString();
+        clock.Restart();
+        int replyStart = events.Count;
+        await agent.RunAsync("并行观察：原动作继续。调用get_state一次核对新hp。然后只回复之前记住的fixture_note、原handle、新hp；这是核对，无需恢复任何动作。\n现状：" + snapshot,
+            "", root, "gpt-6.1-sol", system, entry, Execute, text => events.Add(new JsonObject { ["text"] = text }), deadline.Token, options);
+        times["after_compaction_ms"] = clock.ElapsedMilliseconds;
+        string reply = string.Join("\n", events.Skip(replyStart).Select(e => e["text"]?.ToString()));
+        Check(reads == 2 && effects == 0 && reply.Contains(note) && reply.Contains(handle) && reply.Contains("77"),
+            "real compacted model lost memory/current state or attempted game action");
+        var completed = await agent.CompleteGoal(_ => Task.FromResult(new JsonObject { ["verified"] = true,
+            ["retained_note"] = note, ["hp"] = hp, ["handle"] = handle, ["effects"] = effects }), deadline.Token);
+        string report = Path.Combine(root, "result.json");
+        File.WriteAllText(report, new JsonObject { ["model"] = "gpt-6.1-sol", ["mock_world"] = true, ["events"] = events,
+            ["timings"] = times, ["before_usage"] = before, ["after_usage"] = agent.TokenUsage,
+            ["compactions"] = agent.Compactions, ["goal"] = completed, ["prompt_chars"] = system.Length }.ToJsonString());
+        Console.WriteLine("INPUT_MODEL_COMPLETE actual_codex=true mock_world=true game_actions=0 report=" + report);
     }
 
     public static async Task GoalSmoke()
@@ -372,6 +1222,8 @@ static class CodexTests
 
     public static async Task ScriptModel(bool fullTools = false, string selectedModel = "")
     {
+        if (Environment.GetEnvironmentVariable("TB_SCRIPT_ENTRY_CHECK") == "1")
+        { await RuntimeTests.EntryModel(); return; }
         string root = Directory.GetCurrentDirectory();
         var names = new[] { "run_script", "get_state", "gather", "say", "game_catalog" };
         var tools = new JsonArray(JsonNode.Parse(File.ReadAllText(Path.Combine(root, "Agent/Tools.json"))).AsArray()
@@ -412,6 +1264,7 @@ static class CodexTests
                         _ => Task.CompletedTask, token)).ToJsonString(); }
                     finally { depth--; }
                 }
+                else if (name == "game_api") result = AgentScript.DescribeApi(tools, args).ToJsonString();
                 else if (name == "get_state") result = new JsonObject
                 {
                     ["inventory_slots"] = new JsonArray(new JsonObject { ["slot"] = 0, ["type"] = 29, ["prefix"] = 0,
@@ -499,8 +1352,12 @@ static class CodexTests
     {
         readonly Lines _input = new();
         public int Threads, Interrupts;
+        public int Compactions, InputTokens, InputTokensAfterCompaction = 20000;
+        public bool FailCompaction, HoldCompaction;
+        string compactTurn;
+        public Action AfterCompaction;
         int _turn;
-        public bool Stopped, LoggedIn = true, FailTurn;
+        public bool Stopped, LoggedIn = true, FailTurn, EmitCompaction, HoldFinalReply, RejectSteer, RejectIdleInterrupt;
         public string ToolName = "get_state";
         public Action<int> AfterTool;
         public JsonObject ThreadArgs;
@@ -509,12 +1366,38 @@ static class CodexTests
         public int RepeatedToolCalls = 1;
         public readonly List<JsonObject> ToolResponses = new();
         public readonly List<string> Inputs = new();
+        public readonly List<string> Efforts = new();
+        public readonly List<JsonObject> Steers = new();
         public void Drop() => _input.End();
         public CodexConnection Connect() => new(_input, new Writer(Receive), () => { Stopped = true; _input.End(); });
         void Send(JsonObject message) => _input.Add(message.ToJsonString());
         void Reply(JsonNode id, JsonObject result) => Send(new JsonObject { ["id"] = id.DeepClone(), ["result"] = result });
         void Completed(string status) => Send(new JsonObject { ["method"] = "turn/completed", ["params"] = new JsonObject
         { ["threadId"] = "thread", ["turn"] = new JsonObject { ["id"] = "turn" + _turn, ["status"] = status } } });
+        public void FinishReply()
+        {
+            var completed = new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
+            { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["item"] = new JsonObject
+            { ["id"] = "reply" + _turn, ["type"] = "agentMessage", ["text"] = "完成了" } } };
+            Send(completed); Send(completed); Completed("completed");
+        }
+        public void FinishCompaction()
+        {
+            string turn = compactTurn;
+            if (!FailCompaction)
+            {
+                Send(new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
+                    { ["threadId"] = "thread", ["turnId"] = turn, ["item"] = new JsonObject { ["type"] = "contextCompaction" } } });
+                Send(new JsonObject { ["method"] = "thread/tokenUsage/updated", ["params"] = new JsonObject
+                    { ["threadId"] = "thread", ["tokenUsage"] = new JsonObject
+                        { ["total"] = new JsonObject { ["totalTokens"] = _turn * 100 + Compactions * 50 } } } });
+                InputTokens = InputTokensAfterCompaction;
+                AfterCompaction?.Invoke();
+            }
+            Send(new JsonObject { ["method"] = "turn/completed", ["params"] = new JsonObject
+                { ["threadId"] = "thread", ["turn"] = new JsonObject { ["id"] = turn, ["status"] = FailCompaction ? "failed" : "completed" } } });
+            compactTurn = null;
+        }
         void Receive(string line)
         {
             var message = JsonNode.Parse(line).AsObject();
@@ -525,6 +1408,17 @@ static class CodexTests
             else if (method == "config/read") Reply(message["id"], JsonNode.Parse("{\"config\":{\"mcp_servers\":{\"unrelated\":{}}}}").AsObject());
             else if (method == "thread/start")
             { Threads++; ThreadArgs = message["params"].AsObject(); Reply(message["id"], JsonNode.Parse("{\"thread\":{\"id\":\"thread\"}}").AsObject()); }
+            else if (method == "thread/compact/start")
+            {
+                Compactions++;
+                string turn = "compact" + Compactions;
+                compactTurn = turn;
+                Reply(message["id"], new JsonObject());
+                Send(new JsonObject { ["method"] = "turn/started", ["params"] = new JsonObject
+                    { ["threadId"] = "thread", ["turn"] = new JsonObject { ["id"] = turn } } });
+                if (HoldCompaction) return;
+                FinishCompaction();
+            }
             else if (method == "thread/goal/set")
             {
                 GoalSets++; Goal ??= new JsonObject();
@@ -535,21 +1429,48 @@ static class CodexTests
             else if (method == "thread/goal/get") Reply(message["id"], new JsonObject { ["goal"] = Goal?.DeepClone() });
             else if (method == "turn/start")
             {
+                Efforts.Add(message["params"]["effort"].ToString());
                 Inputs.Add(message["params"]["input"][0]["text"].ToString());
                 _turn++;
                 Reply(message["id"], new JsonObject { ["turn"] = new JsonObject { ["id"] = "turn" + _turn } });
                 if (FailTurn) { Completed("failed"); return; }
+                if (EmitCompaction) Send(new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
+                    { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["item"] = new JsonObject { ["type"] = "contextCompaction" } } });
                 Send(new JsonObject { ["method"] = "item/tool/call", ["id"] = "tool" + _turn, ["params"] = new JsonObject
                 { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["callId"] = "call" + _turn, ["tool"] = ToolName, ["arguments"] = new JsonObject() } });
             }
-            else if (method == "turn/interrupt") { Interrupts++; Reply(message["id"], new JsonObject()); Completed("interrupted"); }
+            else if (method == "turn/interrupt")
+            {
+                Interrupts++;
+                if (RejectIdleInterrupt && compactTurn == null)
+                {
+                    Send(new JsonObject { ["id"] = message["id"].DeepClone(),
+                        ["error"] = new JsonObject { ["message"] = "no active turn to interrupt" } });
+                    return;
+                }
+                Reply(message["id"], new JsonObject());
+                if (compactTurn == null) Completed("interrupted");
+                else
+                {
+                    Send(new JsonObject { ["method"] = "turn/completed", ["params"] = new JsonObject
+                        { ["threadId"] = "thread", ["turn"] = new JsonObject { ["id"] = compactTurn, ["status"] = "interrupted" } } });
+                    compactTurn = null;
+                }
+            }
+            else if (method == "turn/steer")
+            {
+                Steers.Add(message["params"].AsObject());
+                if (RejectSteer) Send(new JsonObject { ["id"] = message["id"].DeepClone(), ["error"] = new JsonObject { ["message"] = "fixture steering rejected" } });
+                else Reply(message["id"], new JsonObject { ["turnId"] = "turn" + _turn });
+            }
             else if (method == null)
             {
                 ToolResponses.Add(message["result"].AsObject());
                 AfterTool?.Invoke(ToolResponses.Count);
                 var usage = new JsonObject { ["method"] = "thread/tokenUsage/updated", ["params"] = new JsonObject
                     { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["tokenUsage"] = new JsonObject
-                        { ["total"] = new JsonObject { ["totalTokens"] = _turn * 100 } } } };
+                        { ["total"] = new JsonObject { ["totalTokens"] = _turn * 100 + Compactions * 50 },
+                          ["last"] = new JsonObject { ["inputTokens"] = InputTokens } } } };
                 Send(usage); Send(usage);
                 if (ToolResponses.Count < RepeatedToolCalls)
                 {
@@ -558,10 +1479,8 @@ static class CodexTests
                             ["tool"] = ToolName, ["arguments"] = new JsonObject() } });
                     return;
                 }
-                var completed = new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
-                { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["item"] = new JsonObject
-                { ["id"] = "reply" + _turn, ["type"] = "agentMessage", ["text"] = "完成了" } } };
-                Send(completed); Send(completed); Completed("completed");
+                if (HoldFinalReply) return;
+                FinishReply();
             }
         }
     }

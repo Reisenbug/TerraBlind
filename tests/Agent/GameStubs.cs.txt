@@ -6,6 +6,21 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 
+namespace Terraria.Utilities
+{
+    public struct FastRandom { public FastRandom(ulong seed) { } }
+}
+
+namespace Terraria.Graphics.Light
+{
+    public class TileLightScanner
+    {
+        public static readonly Dictionary<(int, int), Microsoft.Xna.Framework.Vector3> Emissions = new();
+        private void ApplyTileLight(Terraria.Tile tile, int x, int y, ref Terraria.Utilities.FastRandom random,
+            ref Microsoft.Xna.Framework.Vector3 color) => color = Emissions.GetValueOrDefault((x, y));
+    }
+}
+
 namespace Terraria.Map
 {
     public static class MapHelper
@@ -15,35 +30,92 @@ namespace Terraria.Map
     }
 }
 
+namespace Terraria.GameContent.ItemDropRules
+{
+    public interface IItemDropRuleCondition { string GetConditionDescription(); }
+    public struct DropRateInfo
+    {
+        public int itemId, stackMin, stackMax;
+        public float dropRate;
+        public List<IItemDropRuleCondition> conditions;
+    }
+    public struct DropRateInfoChainFeed { public DropRateInfoChainFeed(float rate) { } }
+    public interface IItemDropRule { void ReportDroprates(List<DropRateInfo> drops, DropRateInfoChainFeed feed); }
+    public class ItemDropDatabase
+    {
+        public readonly Dictionary<int, List<IItemDropRule>> Rules = new();
+        public readonly List<IItemDropRule> Global = new();
+        public List<IItemDropRule> GetRulesForNPCID(int type, bool includeGlobalDrops)
+            => Rules.GetValueOrDefault(type, new()).Concat(includeGlobalDrops ? Global : new()).ToList();
+    }
+}
+
+namespace Terraria.UI
+{
+    public static class ItemSlot
+    {
+        public static Action<Terraria.Item[], int, int> RightClickHandler;
+        public static void RightClick(Terraria.Item[] items, int context = 0, int slot = 0) => RightClickHandler?.Invoke(items, context, slot);
+    }
+    public static class ChestUI
+    {
+        public static Action LootHandler;
+        public static void LootAll() => LootHandler?.Invoke();
+    }
+}
+
 namespace Terraria
 {
     public static class Main
     {
-        public static bool dedServ, gameMenu;
+        public static bool dedServ, gameMenu, playerInventory;
         public static string SavePath = "/tmp/terrablind-agent-test-world";
+        public static string worldName = "test";
+        public static int worldID;
         public static int netMode, myPlayer, maxPlayers = 8, maxTilesX = 1000, maxTilesY = 1000;
         public static uint GameUpdateCount;
+        public static int mouseX, mouseY;
+        public static Microsoft.Xna.Framework.Vector2 screenPosition;
+        public static double worldSurface, rockLayer;
+        public static GameContent.ItemDropRules.ItemDropDatabase ItemDropsDB = new();
         public static Player[] player = Enumerable.Range(0, maxPlayers).Select(id => new Player { whoAmI = id }).ToArray();
         public static Player LocalPlayer = player[0];
         public static Projectile[] projectile = Enumerable.Range(0, 20).Select(i => new Projectile { whoAmI = i }).ToArray();
         public static int maxNPCs = 20, maxItems = 20;
+        public static Item mouseItem = new();
+        public static bool mouseRight, mouseRightRelease;
         public static NPC[] npc = Enumerable.Range(0, 20).Select(_ => new NPC()).ToArray();
         public static Item[] item = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
         public static Tile[,] tile = new Tile[1000, 1000];
         public static Chest[] chest = new Chest[1000];
-        public static bool[] tileSolid = { false, true }, tileSolidTop = { false, false };
-        public static bool[] tileAxe = { false, false }, tileHammer = { false, false };
+        public static bool[] tileSolid = Enumerable.Range(0, 1000).Select(i => i == 1).ToArray(), tileSolidTop = new bool[1000];
+        public static bool[] tileAxe = new bool[1000], tileHammer = new bool[1000];
         public static readonly List<string> Chat = new();
         public static void NewText(string text) => Chat.Add(text);
     }
-    public class Chest { public int x, y; public Item[] item = Enumerable.Range(0, 40).Select(_ => new Item()).ToArray(); }
+    public class Chest
+    {
+        public int x, y; public bool locked;
+        public Item[] item = Enumerable.Range(0, 40).Select(_ => new Item()).ToArray();
+        public static bool IsLocked(int x, int y) => Main.chest.FirstOrDefault(c => c != null && c.x == x && c.y == y)?.locked == true;
+    }
     public class Player
     {
+        public Item trashItem = new();
         public Item[] armor = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
         public bool IsItemSlotUnlockedAndUsable(int slot) => slot < 8 || slot >= 10 && slot < 18;
-        public bool active = true, dead, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
+        public bool active = true, dead, suffocating, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
         public bool HasAmmunition = true;
-        public bool controlUp, controlDown, controlHook, ExtraJump;
+        public bool noFallDmg;
+        public bool honeyWet, ignoreWater;
+        public float gravDir = 1;
+        public int fallStart, extraFall;
+        public bool delayUseItem, mouseInterface;
+        public bool ZoneSkyHeight, ZoneOverworldHeight, ZoneDirtLayerHeight, ZoneRockLayerHeight, ZoneUnderworldHeight;
+        public bool ZoneJungle, ZoneDesert, ZoneSnow, ZoneBeach, ZoneDungeon, ZoneCorrupt, ZoneCrimson, ZoneHallow, ZoneLihzhardTemple, ZoneUndergroundDesert;
+        public Func<Item, bool> ItemSpaceHandler;
+        public (bool CanTakeItem, bool ItemIsGoingToVoidVault) ItemSpace(Item item) => (ItemSpaceHandler?.Invoke(item) ?? true, false);
+        public bool controlUp, controlDown, controlHook, controlMount, controlUseTile, controlThrow, ExtraJump;
         public float wingTime, manaCost = 1;
         public static float jumpSpeed = 5.01f;
         public float jumpSpeedBoost, maxRunSpeed = 3, accRunSpeed = 3, runAcceleration = .08f, gravity = .4f;
@@ -53,8 +125,9 @@ namespace Terraria
         public bool AnyExtraJumpUsable() => ExtraJump;
         public bool PickAmmo(Item item, out int shot, out float speed, out int damage, out float knockback, out int ammo, bool dontConsume)
         { shot = item.shoot; speed = item.shootSpeed; damage = item.damage; knockback = 0; ammo = 1; return HasAmmunition; }
-        public int itemAnimation;
+        public int itemAnimation, potionDelay, chest = -1;
         public int statLife = 100, whoAmI, team, selectedItem, direction, width = 20, height = 40;
+        public int lifeRegen, lifeRegenCount;
         public System.Numerics.Vector2 position;
         public string name = "test";
         public Microsoft.Xna.Framework.Vector2 velocity;
@@ -63,23 +136,35 @@ namespace Terraria
         public bool HasAmmo(Item item) => HasAmmunition;
         public int GetWeaponDamage(Item item) => item.damage;
         public Item[] inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
+        public void DropSelectedItem(int slot, ref Item item)
+        {
+            int index = Array.FindIndex(Main.item, value => !value.active);
+            Main.item[index] = item; item.active = true; item = new Item();
+        }
     }
     public class NPC
     {
-        public int type, life = 100, lifeMax = 100, damage = 10, width = 20, height = 20;
-        public bool active, friendly, townNPC, boss;
+        public int whoAmI;
+        public int type, life = 100, lifeMax = 100, damage = 10, defense, width = 20, height = 20;
+        public bool active, friendly, townNPC, boss, dontTakeDamage, immortal, chaseable = true;
+        public bool CanBeChasedBy(object attacker = null, bool ignoreDontTakeDamage = false)
+            => active && chaseable && lifeMax > 5 && (!dontTakeDamage || ignoreDontTakeDamage) && !friendly && !immortal;
         public Microsoft.Xna.Framework.Vector2 velocity;
         public Microsoft.Xna.Framework.Vector2 position;
         public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
     }
     public static class Lang
     {
+        public static string GetNPCNameValue(int type) => "NPC " + type;
         public static Dictionary<int, string> MapLabels = new();
         public static string GetMapObjectName(int id) => MapLabels.GetValueOrDefault(id, "");
     }
     public class Item
     {
-        public bool active;
+        public bool active, consumable;
+        public bool favorited, accessory, material;
+        public int defense, headSlot = -1, bodySlot = -1, legSlot = -1;
+        public int healLife;
         public Microsoft.Xna.Framework.Vector2 velocity;
         public Microsoft.Xna.Framework.Vector2 position;
         public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
@@ -100,22 +185,39 @@ namespace Terraria
     {
         public bool HasUnactuatedTile, IsActuated, IsHalfBlock;
         public bool HasTile => HasUnactuatedTile;
-        public int TileType, Slope, LiquidType, LiquidAmount;
+        public int TileType, WallType, Slope, LiquidType, LiquidAmount;
+        public int TileFrameX, TileFrameY;
+        public bool RedWire, BlueWire, GreenWire, YellowWire;
     }
     public class Mount { public bool Active; }
     public class Projectile
     {
-        public bool active, arrow, friendly, hostile, tileCollide = true;
-        public int owner, damage, identity, whoAmI, type, extraUpdates;
+        public bool active, arrow, friendly, hostile, ownerHitCheck, tileCollide = true;
+        public int owner, damage, identity, whoAmI, type, extraUpdates, aiStyle;
         public int width = 8, height = 8;
         public Microsoft.Xna.Framework.Vector2 velocity, Center;
     }
-    public static class WorldGen { public static bool InWorld(int x, int y) => x >= 0 && y >= 0 && x < 1000 && y < 1000; }
+    public static class WorldGen { public static bool InWorld(int x, int y, int margin = 0)
+        => x >= margin && y >= margin && x < Main.maxTilesX - margin && y < Main.maxTilesY - margin; }
     public static class Collision
     {
+        public static bool up, down;
+        public static bool CanTileHurt(int type, int x, int y, Player player) => true;
+        public struct HurtTile { public int type; }
+        public static Func<Microsoft.Xna.Framework.Vector2, int, int, Player, bool> HurtTest;
+        public static HurtTile HurtTiles(Microsoft.Xna.Framework.Vector2 position, int width, int height, Player player)
+            => new() { type = HurtTest?.Invoke(position, width, height, player) == true ? 48 : -1 };
+        public static HurtTile HurtTiles(System.Numerics.Vector2 position, int width, int height, Player player)
+            => HurtTiles(new Microsoft.Xna.Framework.Vector2(position.X, position.Y), width, height, player);
+        public static Microsoft.Xna.Framework.Vector2 TileCollision(Microsoft.Xna.Framework.Vector2 position,
+            Microsoft.Xna.Framework.Vector2 velocity, int width, int height, bool fallThrough = false, bool fall2 = false, int gravDir = 1)
+            => SolidCollision(position + velocity, width, height) ? Microsoft.Xna.Framework.Vector2.Zero : velocity;
         public static bool Clear = true;
         public static Func<Microsoft.Xna.Framework.Vector2, Microsoft.Xna.Framework.Vector2, bool> LineTest;
         public static bool CanHitLine(Microsoft.Xna.Framework.Vector2 a, int w, int h, Microsoft.Xna.Framework.Vector2 b, int w2, int h2) => LineTest?.Invoke(a, b) ?? Clear;
+        public static bool TupleHitLine(int x1, int y1, int x2, int y2, int ignoreX, int ignoreY,
+            List<Tuple<int, int>> ignoreTargets, out Tuple<int, int> col)
+        { col = null; return false; }
         public static Func<Microsoft.Xna.Framework.Vector2, int, int, bool> SolidTest;
         public static bool SolidCollision(Microsoft.Xna.Framework.Vector2 position, int width, int height) => SolidTest?.Invoke(position, width, height) ?? false;
     }
@@ -129,17 +231,43 @@ namespace Terraria
 }
 namespace Terraria.ID
 {
-    public static class ItemID { }
-    public static class NPCID { }
-    public static class TileID { public const int FixtureSource = 1, FixtureOther = 2; }
+    public static class WallID { public const int SpiderUnsafe = 62; }
+    public static class ProjAIStyleID { public const int ShortSword = 161; }
+    public static class ItemID { public const int FixtureGoal = 191, Umbrella = 946, TragicUmbrella = 4707; }
+    public static class NPCID { public const int FixtureEnemy = 222, Lihzahrd = 198, LihzahrdCrawler = 199, FlyingSnake = 226; }
+    public static class ProjectileID { }
+    public static class LiquidID { public const int Water = 0, Lava = 1, Honey = 2, Shimmer = 3; }
+    public static class TileID
+    {
+        public const int FixtureSource = 1, FixtureOther = 2;
+        public const int Containers = 21, Containers2 = 467;
+        public const int PressurePlates = 135, Traps = 137, Boulder = 138, Explosives = 141;
+        public const int RollingCactus = 484, BouncyBoulder = 664, LifeCrystalBoulder = 665;
+        public static class Sets
+        {
+            public static bool[] Falling = new bool[1000], Suffocate = new bool[1000], CrackedBricks = new bool[1000];
+            public static int[] TouchDamageImmediate = new int[1000];
+        }
+    }
     public static class NetmodeID { public const int SinglePlayer = 0, MultiplayerClient = 1, Server = 2; }
     public static class MessageID { public const int TogglePVP = 30, SyncEquipment = 5; }
     public static class AmmoID { public const int None = 0, Arrow = 40; }
     public static class MountID { public const int QueenSlime = 50; }
-    public static class ContentSamples { public static Dictionary<int, Terraria.Projectile> ProjectilesByType = new(); }
+    public static class ContentSamples
+    {
+        public static Dictionary<int, Terraria.Projectile> ProjectilesByType = new();
+        public static Dictionary<int, Terraria.Item> ItemsByType = new();
+    }
 }
 namespace Terraria.ModLoader
 {
+    public static class ItemLoader
+    {
+        public static int ItemCount = 6000;
+        public static Func<Terraria.Item, bool> RightClickTest;
+        public static bool CanRightClick(Terraria.Item item) => RightClickTest?.Invoke(item) == true;
+    }
+    public static class NPCLoader { public static int NPCCount = 700; }
     public class GlobalNPC { public virtual void OnKill(Terraria.NPC npc) { } }
     public class Mod
     {
@@ -181,6 +309,10 @@ namespace Terraria.ModLoader
 }
 namespace TerraBlind
 {
+    public static class TerrainMap
+    {
+        public static JsonObject Read(JsonObject args) => new() { ["stub"] = true };
+    }
     public class TerraBlind : Terraria.ModLoader.Mod { }
     public class Config
     {
@@ -199,7 +331,22 @@ namespace TerraBlind
     public static class DiagLog { public static void Write(string text) { } }
     public static class ItemUseCoordinator { public static bool IsActive; public static void Stop() => IsActive = false; }
     public static class PlaceAnywhere { public static bool IsRunning; }
-    public static class StateSpacePlanner { public static bool PreserveTerrain; }
+    public static class PlaceAction { public static bool IsRunning; }
+    public static class PlaceCoordinator { public static bool IsActive; }
+    public static class PlaceWalls { public static bool IsRunning; }
+    public static class StateSpacePlanner { public static bool PreserveTerrain, ReservesItemUse; }
+    public static class CombatForecast
+    {
+        public static long CompletionVersion;
+        public static Func<JsonObject, CancellationToken, Task<JsonObject>> RefreshHandler;
+        public static Func<JsonObject, JsonObject> PrepareHandler;
+        public static void Reset() { }
+        public static JsonObject Poll(JsonObject args, JsonObject scene) => new() { ["status"] = "unavailable", ["reason"] = "engine_not_linked" };
+        public static JsonObject Prepare(JsonObject args) => PrepareHandler?.Invoke(args) ?? new() { ["error"] = "engine_not_linked" };
+        public static Task<JsonObject> Refresh(JsonObject args, Func<JsonObject> observe, CancellationToken token) => RefreshHandler?.Invoke(args, token) ?? Task.FromResult(args);
+        public static JsonObject Receipt(JsonObject args, JsonObject result) => result;
+    }
+    public static class VanillaNavBridge { public static bool Enabled; public static string Stage = "Moving"; }
     public sealed class GameWoodHarvest : IWoodHarvestWorld
     {
         public System.Threading.Tasks.Task<System.Text.Json.Nodes.JsonObject> Observe(System.Threading.CancellationToken token) => throw new NotSupportedException("Game adapter requires engine");
@@ -210,24 +357,33 @@ namespace TerraBlind
     public static class Cursor
     {
         public static float X, Y;
-        public static void AimPx(float x, float y) { X = x; Y = y; }
+        public static void AimPx(float x, float y) { X = x; Y = y; Terraria.Main.mouseX = (int)x; Terraria.Main.mouseY = (int)y; }
     }
     public static class Halt
     {
         public static int Stops;
         public static string All() { Stops++; RecedingNav.Active = false; return "stopped"; }
     }
-    public static class StateSnapshotPlayer { public static void StopRemoteTask() { } }
+    public static class StateSnapshotPlayer
+    {
+        public static Func<bool> HellStart;
+        public static bool StartHellRun(out string why) { why = "fixture_start"; return HellStart?.Invoke() == true; }
+        public static void StopRemoteTask() { }
+    }
     public static class ReplaySystem { public static void Stop() { } }
     public static class KeyPress { public static void Clear() { } }
     public static class Combat
     {
+        public static Func<Terraria.Player, Terraria.NPC, Terraria.Item, Microsoft.Xna.Framework.Vector2> AimHandler;
+        public static Microsoft.Xna.Framework.Vector2 Aim(Terraria.Player player, Terraria.NPC npc, Terraria.Item weapon)
+            => AimHandler?.Invoke(player, npc, weapon) ?? npc.Center;
         public static string Last = "idle";
         public static bool Enabled;
         public static int Stops;
         public static void Stop() => Stops++;
     }
-    public static class Dodge { public static bool Enabled; public static string Last = "idle"; }
+    public static class Dodge { public static bool Enabled; public static string Last = "idle"; public static float MovementReserveScale = 1;
+        public static JevariaCombat.CombatSnapshot Snapshot; public static void Stop() { Last = "stopped"; } }
     public static class Equipment
     {
         public static JsonArray Snapshot() => new();
@@ -246,14 +402,26 @@ namespace TerraBlind
         public static string Phase = "idle", Outcome = "", Reason = "";
         public static bool Start(out string why) { why = ""; return true; }
     }
+    public static class FallSafety
+    {
+        public static int Damage;
+        public static int LandingDamage(Terraria.Player player, System.Numerics.Vector2 position, int fallStart) => Damage;
+    }
+
     public static class RecedingNav
     {
         public static bool Active;
+        public static bool FieldReady = true;
         public static string LastStop = "";
         public static void Start(int x, int y) => Active = true;
         public static void Stop() => Active = false;
     }
-    public static class StateSerializer { public static string ToJson(object snapshot) => "{}"; }
+    public static class MazeWand
+    {
+        public static Dictionary<(int, int), int> Field;
+        public static Dictionary<(int, int), int> PeekFieldOrNull(int x, int y) => Field;
+    }
+    public static class StateSerializer { public static string ToJson(object snapshot) => snapshot is JsonObject json ? json.ToJsonString() : "{}"; }
     public static class ActExecutor
     {
         public static int OriginCx(Terraria.Player player) => 12;
@@ -262,8 +430,16 @@ namespace TerraBlind
     public static class Reach
     {
         public static Func<Terraria.Player, int, int, bool> MineTest;
-        public static bool CanInteract(Terraria.Player player, int x, int y) => true;
+        public static Func<Terraria.Player, int, int, bool> InteractTest;
+        public static bool CanInteract(Terraria.Player player, int x, int y) => InteractTest?.Invoke(player, x, y) ?? true;
         public static bool CanMine(Terraria.Player player, int x, int y) => MineTest?.Invoke(player, x, y) ?? true;
+    }
+    public static class TreasureGrab
+    {
+        public static bool IsRunning;
+        public static Func<int, int, int> OpenHandler;
+        public static int OpenAt(int x, int y, out string why) { why = "test"; return OpenHandler?.Invoke(x,y) ?? -1; }
+        public static void CloseChest() => Terraria.Main.LocalPlayer.chest = -1;
     }
     public static class HttpServerSystem
     {

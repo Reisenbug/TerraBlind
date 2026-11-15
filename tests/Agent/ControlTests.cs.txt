@@ -1,0 +1,157 @@
+using System;
+using TerraBlind;
+
+static class ControlTests
+{
+    static void Check(bool condition, string message)
+    { if (!condition) throw new Exception(message); }
+
+    public static void Run()
+    {
+        var parallel = new AgentControlSession(new AgentControlPolicy());
+        Check(parallel.Begin("nav_to", null, out long navTicket) == null, "navigation session failed");
+        Check(parallel.Begin("fight", null, out long attackTicket) == null, "attack reserved navigation channel");
+        parallel.End(attackTicket);
+        Check(parallel.Active && parallel.Tool == "nav_to", "attack cleanup released navigation session");
+        Check(AgentControlSession.RequiredChannels("fight", new System.Text.Json.Nodes.JsonObject()) == ControlChannels.ItemUse,
+            "attack requires movement ownership");
+        parallel.End(navTicket);
+        Check(parallel.Begin("act", null, out long direct, ControlChannels.Movement) == null && parallel.OwnsDirectMovement,
+            "explicit short movement did not own its movement channel");
+        var restoreDirect = parallel.SuspendPrimary();
+        Check(!parallel.OwnsDirectMovement, "suspended movement retained input ownership");
+        Check(parallel.Begin("act", null, out long hand, ControlChannels.ItemUse) == null && !parallel.OwnsDirectMovement,
+            "item-only intervention incorrectly suppressed evasive movement");
+        parallel.End(hand); restoreDirect();
+        Check(parallel.OwnsDirectMovement, "reaction failed to restore the original movement ownership");
+        parallel.End(direct);
+        Check(!parallel.OwnsDirectMovement, "completed movement retained authority over later dodging");
+        var policy = new AgentControlPolicy();
+        var movement = ControlChannels.Movement;
+        var use = ControlChannels.ItemUse;
+        string claim = policy.Claim(movement, ControlLifetime.Task, null, "stop unsafe excavation");
+        Check(policy.Check(ControlBehavior.Navigation, movement) != null, "navigation survived acquisition");
+        Check(policy.Check(ControlBehavior.Direct, movement, claim)?["error"].ToString() == "control_handoff_pending",
+            "agent gained control before old input owner finished cleanup");
+        policy.ConfirmReleased(claim);
+        Check(policy.Check(ControlBehavior.Direct, movement, claim) == null, "confirmed agent could not move");
+        foreach (var behavior in new[] { ControlBehavior.Navigation, ControlBehavior.Dodge, ControlBehavior.Survival, ControlBehavior.Workflow })
+            Check(policy.Check(behavior, movement) != null, "automatic movement bypassed claim: " + behavior);
+        Check(policy.Check(ControlBehavior.Attack, use) == null, "movement-only claim blocked independent weapon use");
+        Check(policy.Check(ControlBehavior.Direct, use, claim)?["error"].ToString() == "control_claim_missing_channel",
+            "movement claim also granted item control");
+        string item = policy.Claim(use, ControlLifetime.Action, "harvest", "keep pickaxe and cursor together");
+        policy.ConfirmReleased(item);
+        foreach (var behavior in new[] { ControlBehavior.Attack, ControlBehavior.Mining, ControlBehavior.Placement })
+            Check(policy.Check(behavior, use) != null, "item channel failed to exclude " + behavior);
+        bool conflict = false;
+        long revision = policy.Revision;
+        try { policy.Claim(ControlChannels.All, ControlLifetime.Task, null, "conflict"); }
+        catch (InvalidOperationException) { conflict = true; }
+        Check(conflict && policy.Revision == revision, "conflicting claim partially changed ownership");
+        Console.WriteLine("PASS: control claims await cleanup and exclude conflicting movement and shared item writers");
+
+        string veto = policy.Deny(new[] { ControlBehavior.Navigation }, ControlLifetime.Persistent, null, "buried by this route");
+        policy.Release(claim);
+        Check(policy.Check(ControlBehavior.Navigation, movement)?["error"].ToString() == "behavior_forbidden",
+            "handoff release silently restored forbidden navigation");
+        Check(policy.Check(ControlBehavior.Direct, movement, claim)?["error"].ToString() == "control_claim_expired",
+            "late callback reused released claim");
+        policy.EndAction("another_action");
+        Check(policy.Check(ControlBehavior.Attack, use) != null, "unrelated completion released action scope");
+        policy.EndAction("harvest");
+        Check(policy.Check(ControlBehavior.Attack, use) == null, "completed action retained item claim");
+        policy.Deny(new[] { ControlBehavior.Attack }, ControlLifetime.Task, null, "avoid fighting during this task");
+        policy.BeginTask();
+        Check(policy.Check(ControlBehavior.Attack, use) == null, "task restriction leaked into next task");
+        Check(policy.Check(ControlBehavior.Navigation, movement) != null, "persistent restriction disappeared on new task");
+        policy.Release(veto);
+        Check(policy.Check(ControlBehavior.Navigation, movement) == null, "explicit release did not restore navigation");
+        Check(policy.Snapshot()["rules"].AsArray().Count == 0, "released rules remained in observation");
+        Console.WriteLine("PASS: control overrides have independent scopes and stale claims cannot regain control");
+
+        var session = new AgentControlSession(policy);
+        Check(session.CheckWorkflow("start_run") == null, "uncontrolled legacy workflow was disabled");
+        Check(session.Begin("gather", null, out long gathering) == null, "gather could not acquire free controls");
+        Check(session.CheckWorkflow("start_run") != null && session.CheckWorkflow("collect_treasure") != null,
+            "legacy workflow borrowed another active action's input ownership");
+        session.End(gathering);
+        Check(session.Begin("collect_treasure", null, out long treasure) == null
+            && session.CheckWorkflow("collect_treasure") == null && session.CheckWorkflow("start_run") != null,
+            "workflow ownership blocked its own implementation or admitted an unrelated workflow");
+        session.End(treasure);
+        Check(AgentControlSession.ActionTool("build_house") && !AgentControlSession.ActionTool("house_site"),
+            "house tools have incorrect input ownership");
+        Check(session.Begin("build_house", null, out long building) == null, "house builder could not acquire free input");
+        Check(session.CheckWorkflow("build_house") == null && session.CheckWorkflow("start_run") != null,
+            "house builder admitted an unrelated legacy workflow");
+        session.End(building);
+        Check(session.Begin("hell_run", null, out long hell) == null, "legacy hell workflow could not acquire input");
+        Check(session.CheckWorkflow("build_house") == null && session.CheckWorkflow("wof_prep") == null
+            && session.CheckWorkflow("start_run") != null && session.CheckWorkflow("collect_treasure") != null,
+            "hell workflow blocked its own phases or admitted an unrelated workflow");
+        session.End(hell);
+        claim = policy.Claim(ControlChannels.All, ControlLifetime.Task, null, "manual recovery");
+        policy.ConfirmReleased(claim);
+        Check(session.Begin("act", null, out _) != null, "unclaimed action acquired reserved input");
+        Check(session.Begin("act", claim, out long execution) == null, "claim holder could not execute direct controls");
+        Check(session.Check(ControlBehavior.Direct, movement, delegated: true) == null, "direct actuator lost delegated claim");
+        Check(session.Check(ControlBehavior.Navigation, movement, delegated: true) != null,
+            "late navigator borrowed a direct action claim");
+        Check(session.Check(ControlBehavior.Attack, use) != null && session.Check(ControlBehavior.Survival, movement) != null,
+            "automatic defense borrowed explicit action authority");
+        session.End(execution);
+        Check(session.Check(ControlBehavior.Direct, movement, delegated: true) != null,
+            "finished action retained authority over claimed input");
+        Check(session.Begin("nav_to", claim, out long next) == null, "explicit navigation could not receive claim");
+        session.End(execution);
+        Check(session.Active, "old action cleanup cleared a newer execution");
+        string noMining = policy.Deny(new[] { ControlBehavior.Mining }, ControlLifetime.Task, null, "sand collapse");
+        Check(session.Check(ControlBehavior.Mining, use, delegated: true) != null,
+            "navigation delegation bypassed an independent mining prohibition");
+        session.End(next); policy.Release(noMining); policy.Release(claim);
+        foreach (string tool in new[] { "mine", "mine_vein", "chop_wood" })
+        {
+            claim = policy.Claim(ControlChannels.All, ControlLifetime.Task, null, "mining with defense");
+            policy.ConfirmReleased(claim);
+            Check(session.Begin(tool, claim, out long mining) == null
+                && session.Check(ControlBehavior.Attack, use, delegated: true) == null,
+                tool + " did not delegate its claimed item channel for defense");
+            string noAttack = policy.Deny(new[] { ControlBehavior.Attack }, ControlLifetime.Task, null, "hold fire");
+            Check(session.Check(ControlBehavior.Attack, use, delegated: true) != null,
+                tool + " defense bypassed an explicit attack prohibition");
+            session.End(mining); policy.Release(noAttack); policy.Release(claim);
+        }
+        Check(AgentControlSession.RequiredChannels("act", System.Text.Json.Nodes.JsonNode.Parse(
+            "{\"steps\":[{\"keys\":[\"right\"],\"until\":{\"frames\":10}}]}").AsObject()) == movement,
+            "movement-only primitive falsely requires item ownership");
+        Console.WriteLine("PASS: explicit action delegation excludes stale controllers and respects independent prohibitions");
+        string sand = policy.Deny(new[] { ControlBehavior.Mining }, ControlLifetime.Task, null,
+            "sand collapse at measured tiles", (20, 30, 4, 8));
+        claim = policy.Claim(ControlChannels.All, ControlLifetime.Task, null, "recover from sand");
+        policy.ConfirmReleased(claim);
+        policy.Release(claim);
+        Check(policy.Check(ControlBehavior.Navigation, ControlChannels.All) == null,
+            "local veto disabled all navigation");
+        Check(policy.CheckAt(ControlBehavior.Mining, 23, 37)?["rule"].ToString() == sand,
+            "handback forgot rejected excavation");
+        Check(policy.CheckAt(ControlBehavior.Mining, 24, 37) == null
+            && policy.CheckAt(ControlBehavior.Mining, 23, 38) == null
+            && policy.CheckAt(ControlBehavior.Placement, 23, 37) == null,
+            "local mining veto blocked unrelated actions or adjacent cells");
+        policy.BeginTask();
+        Check(policy.CheckAt(ControlBehavior.Mining, 23, 37) == null, "local task veto leaked into new task");
+        string arena = policy.Deny(new[] { ControlBehavior.Navigation, ControlBehavior.Dodge }, ControlLifetime.Task, null,
+            "stay in measured arena", (20, 30, 40, 20), outside: true);
+        Check(!policy.ForbiddenAt(ControlBehavior.Navigation, 20, 30)
+            && policy.ForbiddenAt(ControlBehavior.Navigation, 60, 30)
+            && policy.CheckAt(ControlBehavior.Dodge, 40, 50)?["rule"].ToString() == arena,
+            "confinement reversed the permitted region or missed its edge");
+        Check(policy.BoundsAllowed(ControlBehavior.Dodge, 20, 30, 1.25f, 2.625f)
+            && !policy.BoundsAllowed(ControlBehavior.Dodge, 59, 31, 1.25f, 2.625f)
+            && !policy.BoundsAllowed(ControlBehavior.Dodge, 30, 48, 1.25f, 2.625f), "confinement ignored body width or height");
+        policy.Release(arena);
+        Check(policy.BoundsAllowed(ControlBehavior.Dodge, 59, 31, 1.25f, 2.625f), "released arena still restricted movement");
+        Console.WriteLine("PASS: rejected excavation remains forbidden after handback while other terrain actions remain available");
+    }
+}

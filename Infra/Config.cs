@@ -62,6 +62,9 @@ namespace TerraBlind
 		[DefaultValue(false)]
 		public bool AlwaysGillsAndShine;
 
+		[DefaultValue(true)]
+		public bool FastMining = true;
+
 		[Header("Nav")]
 		// 默认关:它改的是调了几个月的选边热路径
 		[DefaultValue(false)]

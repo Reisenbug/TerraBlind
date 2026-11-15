@@ -60,6 +60,9 @@ namespace TerraBlind
 			ItemUseCoordinator.Stop();
 			SkillExecutor.Stop();
 			ActExecutor.Stop();
+			WalkCoordinator.Stop();
+			JumpCoordinator.Stop();
+			PlaceCoordinator.Stop();
 
 			// 停完还得松手:控制权锁跨帧持有,不放的话下一个动作抢不到
 			AxisLock.Reset();

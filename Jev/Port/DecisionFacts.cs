@@ -8,7 +8,9 @@ namespace TerraBlind.JevariaCombat;
 
 public static class DecisionFacts
 {
-    public static string State(CombatSnapshot snapshot, string bossNotes)
+    public static string State(CombatSnapshot snapshot, string bossNotes) => State(snapshot, bossNotes, null);
+
+    public static string State(CombatSnapshot snapshot, string bossNotes, System.Text.Json.Nodes.JsonObject agentConstraints)
     {
         bool pillion = snapshot.MountType == MountID.QueenSlime;
         string mountName = pillion ? "Gelatinous Pillion" : "Slimy Saddle";
@@ -19,8 +21,10 @@ public static class DecisionFacts
         {
             hp_percent = snapshot.Health * 100 / Math.Max(1, snapshot.MaxHealth),
             i_am_losing_health_over_time = snapshot.LosingHealthOverTime,
-            my_speed_to_the_right = (int)(snapshot.Player.Velocity.X * 60f / 16f),
-            my_speed_upward = (int)(-snapshot.Player.Velocity.Y * 60f / 16f),
+            my_speed_to_the_right = (int)(snapshot.Player.Velocity.X * (snapshot.HoneyWet ? .25f : 1f) * 60f / 16f),
+            my_speed_upward = (int)(-snapshot.Player.Velocity.Y * (snapshot.HoneyWet ? .25f : 1f) * 60f / 16f),
+            honey = new { touching = snapshot.HoneyWet, surface_below_feet_tiles = snapshot.HoneyBelowPixels / 16,
+                effect = "While touching honey, actual displacement is one quarter of velocity; upward escape takes priority. Platforms above honey support walking; descending through them enters the pool." },
             movement = new
             {
                 can_double_jump = snapshot.CanDoubleJump,
@@ -52,7 +56,16 @@ public static class DecisionFacts
                 above = Room(snapshot.SolidDistances.Up, snapshot.WorldDistances.Up),
                 below = Room(snapshot.SolidDistances.Down, snapshot.WorldDistances.Down)
             },
-            boss_notes = bossNotes
+            boss_notes = bossNotes,
+            agent_constraints = agentConstraints == null ? null : new
+            {
+                units = "world tiles, y increases downward",
+                meaning = "confine: player body stays inside region; deny: listed behaviors blocked inside region",
+                player_bounds = new { x = (snapshot.Player.Center.X - snapshot.Player.Size.X / 2) / 16,
+                    y = (snapshot.Player.Center.Y - snapshot.Player.Size.Y / 2) / 16,
+                    width = snapshot.Player.Size.X / 16, height = snapshot.Player.Size.Y / 16 },
+                policy = agentConstraints
+            }
         };
         return JsonSerializer.Serialize(state);
     }
@@ -102,6 +115,7 @@ public static class DecisionFacts
             : Room(snapshot.SolidDistances.Down, snapshot.WorldDistances.Down) - GameMovement.LowerReserveCells * snapshot.MovementReserveScale;
         float travelEstimate = burst ? (y < 0 ? 18f : 22f) : (y < 0 ? 10f : 18f);
         float vertical = y * Math.Max(0f, Math.Min(travelEstimate, verticalRoom));
+        if (snapshot.HoneyWet) { horizontal *= .25f; vertical *= .25f; }
         Vector2 displacement = new(horizontal * 16f, vertical * 16f);
         Vector2 playerAfter = snapshot.Player.Center + displacement;
         string bossClearance = string.Join("; ", snapshot.Bosses.Concat(snapshot.Parts)

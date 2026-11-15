@@ -1,0 +1,68 @@
+using System;
+using System.Collections.Generic;
+using System.Text.Json.Nodes;
+
+namespace TerraBlind;
+
+public sealed class AgentRecovery
+{
+    readonly Dictionary<string, int> attempts = new();
+    readonly Dictionary<string, int> gatherBest = new();
+    JsonObject latest;
+    int revision, offered, rounds;
+    public int Revision => revision;
+    public bool Denied(string tool, JsonObject args) => attempts.GetValueOrDefault(tool + ":" + args.ToJsonString()) >= 3;
+    public bool Exhausted => latest != null && (latest["attempts"].GetValue<int>() >= 3 || rounds >= 3);
+
+    public void Record(string tool, JsonObject args, string output)
+    {
+        JsonObject result;
+        try { result = JsonNode.Parse(output) as JsonObject; }
+        catch (System.Text.Json.JsonException) { return; }
+        if (result == null) return;
+        bool failed = result["error"] != null || result["ok"]?.ToString() == "false" || result["accepted"]?.ToString() == "false"
+            || result["status"]?.ToString() is "failed" or "stopped_short"
+            || result["outcome"]?.ToString() is "source_unavailable" or "no_progress" or "stalled" or "stuck" or "timeout";
+        if (!failed)
+        {
+            if (latest?["tool"]?.ToString() == tool) latest = null;
+            return;
+        }
+        string key = tool + ":" + args.ToJsonString();
+        if (tool == "gather" && result["targets"] is JsonArray targets)
+        {
+            bool progressed = false;
+            foreach (var target in targets)
+            {
+                string itemKey = key + ":" + target["item_type"];
+                int actual = Math.Min(target["actual"].GetValue<int>(), target["wanted"].GetValue<int>());
+                bool known = gatherBest.TryGetValue(itemKey, out int bestActual);
+                progressed |= known && actual > bestActual;
+                gatherBest[itemKey] = known ? Math.Max(bestActual, actual) : actual;
+            }
+            if (progressed) { attempts[key] = 0; rounds = 0; }
+        }
+        int count = attempts.GetValueOrDefault(key) + 1;
+        attempts[key] = count;
+        var evidence = new JsonObject();
+        foreach (string field in new[] { "error", "detail", "outcome", "status", "reason", "requested_name", "name_candidates", "targets", "state", "dist" })
+            if (result[field] != null) evidence[field] = result[field].DeepClone();
+        latest = new JsonObject { ["tool"] = tool, ["args"] = args.DeepClone(), ["evidence"] = evidence,
+            ["attempts"] = count, ["revision"] = ++revision };
+        if (result["source_error"] is JsonObject sourceError)
+            evidence["source_error"] = sourceError.DeepClone();
+        foreach (string field in new[] { "placed", "wanted" })
+            if (result[field] != null) evidence[field] = result[field].DeepClone();
+        if (result["cells"] is JsonArray cells && cells.Count > 0) evidence["last_cell"] = cells[^1]?.DeepClone();
+    }
+
+    public bool Offer()
+    {
+        if (latest == null || offered == revision || Exhausted) return false;
+        offered = revision; rounds++; return true;
+    }
+
+    public JsonObject Snapshot() => new() { ["latest"] = latest?.DeepClone(), ["revision"] = revision,
+        ["repair_rounds"] = rounds, ["exhausted"] = Exhausted };
+    public void Reset() { attempts.Clear(); gatherBest.Clear(); latest = null; revision = offered = rounds = 0; }
+}

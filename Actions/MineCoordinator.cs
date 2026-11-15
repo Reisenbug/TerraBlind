@@ -19,6 +19,7 @@ namespace TerraBlind
 		private static volatile MineRequest _active;
 		// 连着多少帧扫不出要挖的格就认输。横向挖有"走进已挖开的隧道"这种合法空帧,给足余量
 		private static int _idleFrames;
+		private static int _idleDistance;
 		private static int _alignFrames;
 		private const int IdleMax = 90;
 		// 上次为够不着而伸手的那一格。只为日志去重。每帧都打会刷满
@@ -42,6 +43,7 @@ namespace TerraBlind
 			_active = r;
 			_stallFrames = 0;
 			_idleFrames = 0;
+			_idleDistance = int.MaxValue;
 			_alignFrames = 0;
 			_lastRemaining = int.MaxValue;
 			Outcome = "running";
@@ -212,6 +214,9 @@ namespace TerraBlind
 			// 但连着空这么久就是真扫不出来了,交回上层重规划
 			if (tx == int.MinValue)
 			{
+				int distance = req.Dir is MineDir.Left or MineDir.Right
+					? System.Math.Abs(pcx - req.TargetWx) : System.Math.Abs(pfeet - req.TargetWy);
+				if (distance < _idleDistance) { _idleDistance = distance; _idleFrames = 0; }
 				if (++_idleFrames <= IdleMax) return;
 				DiagLog.Write($"[mine] 连着{IdleMax}帧扫不出要挖的格 dir={req.Dir} target=({req.TargetWx},{req.TargetWy}) 人=({pcx},{pfeet}) → stop");
 				Finish("no_tiles", $"这个方向扫不出要挖的格,人在({pcx},{pfeet})");
@@ -241,8 +246,11 @@ namespace TerraBlind
 			// 于是挥满 StallMax 帧一格没掉,上层重选又选中同一条边,再挥。死循环。
 			// 现场:人在(1118,829)对着(1117,831)挥了 600 帧,sentinel 判 H 平线放弃整段。
 			// 尺子用 Reach.CanMine(vanilla 挖掘那一份),别另编
+			int previousSlot = p.selectedItem;
+			p.selectedItem = slot;
 			if (!Reach.CanMine(p, tx, ty))
 			{
+				p.selectedItem = previousSlot;
 				DiagLog.Write($"[mine] 够不着 ({tx},{ty}) dir={req.Dir} 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → stop");
 				Finish("out_of_reach", $"够不着({tx},{ty}),人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
 				return;

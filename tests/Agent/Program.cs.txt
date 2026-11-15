@@ -41,9 +41,23 @@ static class Tests
 
     static async Task Main(string[] args)
     {
+        if (args.Contains("--decision-contracts")) { await ScriptTests.Decisions(); return; }
+        if (args.Contains("--input-optimization-model")) { await CodexTests.InputOptimizationModel(); return; }
+        if (args.Contains("--input-optimization-checks"))
+        {
+            await CodexTests.InputOptimizations();
+            Console.WriteLine("INPUT_OPTIMIZATIONS_COMPLETE model_calls=0"); return;
+        }
+        if (args.Contains("--control-contracts"))
+        {
+            ControlTests.Run(); TaskPlanTests.Run(); await CodexTests.Run();
+            Console.WriteLine("CONTROL_CONTRACTS_COMPLETE model_calls=0"); return;
+        }
         if (args.Contains("--planning-probe")) { await CodexTests.PlanningProbe(); return; }
+        if (args.Contains("--skill-learning-model")) { await RuntimeTests.SkillLearningModel(); return; }
         if (args.Contains("--goal-smoke")) { await CodexTests.GoalSmoke(); return; }
         if (args.Contains("--goal-control-smoke")) { await CodexTests.GoalControlSmoke(); return; }
+        if (args.Contains("--plan-repair-model")) { await PlanRepairModel.Run(); return; }
         if (args.Contains("--routing-benchmark")) { await RoutingBenchmark.Run(args.Length > 1 ? args[1] : "gpt-6-astra", args.Length > 2 ? int.Parse(args[2]) : 2); return; }
         if (args.Contains("--codex-smoke")) { await CodexTests.Smoke(); return; }
         if (args.Contains("--script-model")) { await CodexTests.ScriptModel(); return; }
@@ -143,7 +157,8 @@ static class Tests
         HistoryTests.Run();
         InventoryTests.Run();
         await WatchTests.Run();
-        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=81");
+        SurfaceBiomeTests.Run();
+        Console.WriteLine("AGENT_CHECKS_COMPLETE groups=94");
     }
 
     sealed class FakeHandler : HttpMessageHandler

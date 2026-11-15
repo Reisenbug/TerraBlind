@@ -1,0 +1,35 @@
+using Terraria;
+
+namespace TerraBlind;
+
+public static class CombatLoadout
+{
+    public static int PreferredType;
+    public static bool Usable(Item item) => item != null && !item.IsAir && item.damage > 0 && item.ammo == 0
+        && item.pick == 0 && item.axe == 0 && item.hammer == 0;
+
+    public static int Select(Player player, NPC target = null)
+    {
+        int best = -1;
+        for (int slot = 0; slot < 10; slot++)
+        {
+            var item = player.inventory[slot];
+            if (!Usable(item) || item.useAmmo > 0 && !player.HasAmmo(item)
+                || item.mana * player.manaCost > player.statMana) continue;
+            if (target != null && !FightCoordinator.CanHitTarget(player, item, target.Center, target.width / 2f)) continue;
+            if (PreferredType > 0)
+            {
+                if (item.type == PreferredType) return slot;
+                continue;
+            }
+            if (best < 0) best = slot;
+            else
+            {
+                var previous = player.inventory[best];
+                if (previous.consumable && !item.consumable || previous.consumable == item.consumable
+                    && player.GetWeaponDamage(item) > player.GetWeaponDamage(previous)) best = slot;
+            }
+        }
+        return best;
+    }
+}

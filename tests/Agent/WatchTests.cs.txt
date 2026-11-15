@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using TerraBlind;
@@ -9,6 +10,68 @@ static class WatchTests
 
     public static async Task Run()
     {
+        var healthWatch = new AgentWatch();
+        healthWatch.EnsureDefaults();
+        foreach (int hp in new[] { 100, 80, 30 })
+            healthWatch.Observe(new JsonObject { ["hp"] = hp, ["max_hp"] = 100 });
+        Check(!healthWatch.HasPending, "default health warning fired at or above 30 percent");
+        healthWatch.Observe(new JsonObject { ["hp"] = 29, ["max_hp"] = 100 });
+        Check(healthWatch.Take().Count == 1, "health below 30 percent did not warn");
+        healthWatch.Observe(new JsonObject { ["hp"] = 120, ["max_hp"] = 400 });
+        Check(!healthWatch.HasPending, "30 percent boundary warned after maximum health changed");
+        healthWatch.Observe(new JsonObject { ["hp"] = 119, ["max_hp"] = 400 });
+        Check(healthWatch.Take().Count == 1, "health warning did not scale with maximum health");
+        healthWatch.Configure(new JsonObject { ["events"] = new JsonArray("low_health"), ["health_below"] = 80 });
+        healthWatch.Observe(new JsonObject { ["hp"] = 80, ["max_hp"] = 100 });
+        healthWatch.Observe(new JsonObject { ["hp"] = 79, ["max_hp"] = 100 });
+        Check(healthWatch.Take().Count == 1, "explicit absolute health threshold was ignored");
+        healthWatch.Reset(); healthWatch.EnsureDefaults();
+        healthWatch.Observe(new JsonObject { ["hp"] = 79, ["max_hp"] = 100 });
+        Check(!healthWatch.HasPending && healthWatch.HealthBelow == 30, "reset retained explicit health threshold");
+        var tilesWatch = AgentTools.Watches;
+        tilesWatch.Reset();
+        tilesWatch.Configure(JsonNode.Parse("{\"events\":[\"nearby_tile\"],\"tile_types\":[12,59],\"radius\":5}").AsObject());
+        tilesWatch.LocalDelivery = true;
+        var player = new Terraria.Player { position = new System.Numerics.Vector2(1600, 1600), width = 0, height = 0 };
+        var oldTiles = Terraria.Main.tile;
+        Terraria.Main.tile = new Terraria.Tile[1000, 1000];
+        try
+        {
+            Terraria.Main.tile[103, 102] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 12 };
+            Terraria.Main.tile[104, 102] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 12 };
+            Terraria.Main.tile[101, 100] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+            var tiles = NativeAgent.ObserveTiles(player);
+            Check(tiles.Count == 1 && tiles[0]["x"].GetValue<int>() == 103
+                && !tiles[0]["route_assessed"].GetValue<bool>(), "tile scanner confused range, subscription or reachability");
+            var observation = new JsonObject { ["hp"] = 100, ["tiles"] = tiles };
+            tilesWatch.Observe(observation);
+            Check(tilesWatch.Take().Count == 1, "subscribed tile was not observed");
+            tilesWatch.Observe(observation);
+            Check(!tilesWatch.HasPending, "unchanged tile repeatedly interrupted execution");
+            for (int i = 0; i < 8; i++)
+                tilesWatch.Observe(new JsonObject { ["tiles"] = new JsonArray(new JsonObject
+                    { ["tile_type"] = 59, ["x"] = 100 + i, ["y"] = 100 }) });
+            Check(tilesWatch.Take().Count == 8 && tilesWatch.Snapshot()["wake_count"].GetValue<int>() == 0,
+                "local opportunity handling consumed model budget or lost later resources");
+            try
+            {
+                tilesWatch.Configure(JsonNode.Parse("{\"events\":[\"nearby_tile\"]}").AsObject());
+                throw new Exception("empty tile subscription accepted");
+            }
+            catch (ArgumentException) { }
+            Check(tilesWatch.WatchesTile(12), "invalid reconfiguration destroyed existing watch");
+        }
+        finally { Terraria.Main.tile = oldTiles; tilesWatch.Reset(); }
+        Console.WriteLine("PASS: subscribed world tiles observed within range without claiming route safety or consuming model wakes");
+        var recovery = new AgentRecovery();
+        var bad = JsonNode.Parse("{\"name\":\"wrong\"}").AsObject();
+        for (int i = 0; i < 3; i++) recovery.Record("find_tiles", bad, "{\"error\":\"ambiguous_tile_name\",\"name_candidates\":[{\"internal\":\"Heart\"}]}");
+        Check(recovery.Exhausted && recovery.Denied("find_tiles", bad) && !recovery.Offer(), "identical failed arguments received unlimited recovery rounds");
+        recovery.Reset(); recovery.Record("find_tiles", bad, "{\"error\":\"ambiguous_tile_name\"}");
+        Check(recovery.Offer() && !recovery.Offer(), "unchanged failure caused repeat model wake");
+        recovery.Record("find_tiles", new JsonObject { ["name"] = "Heart" }, "{\"tiles\":[{\"x\":1,\"y\":2}]}");
+        Check(recovery.Snapshot()["latest"] == null && !recovery.Exhausted, "corrected query retained stale failure");
+        Console.WriteLine("PASS: recovery deduplicates wake requests, bounds identical failures and clears corrected query evidence");
         var watch = new AgentWatch();
         var config = JsonNode.Parse("{\"events\":[\"nearby_chest\",\"action_finished\",\"low_health\"]}").AsObject();
         watch.Configure(config);
@@ -17,7 +80,7 @@ static class WatchTests
         Check(watch.Take().Count == 1, "chest did not emit one event");
         watch.Configure(config); watch.Observe(state);
         Check(!watch.HasPending, "reconfiguration reset same-chest deduplication");
-        state["hp"] = 50; watch.Observe(state); watch.Observe(state);
+        state["hp"] = 29; watch.Observe(state); watch.Observe(state);
         Check(watch.Take().Count == 1, "unchanged health repeatedly woke model");
         Console.WriteLine("PASS: event evidence deduplicates chests and health across reconfiguration");
 
@@ -26,16 +89,118 @@ static class WatchTests
             state["chests"] = new JsonArray(new JsonObject { ["x"] = i + 100, ["y"] = 1 });
             watch.Observe(state);
         }
-        Check(watch.Snapshot()["wake_count"].GetValue<int>() == 6 && watch.Take().Count == 4 && !watch.Armed,
-            "wake budget failed to bound repeated changed events");
-        try { watch.Request("more"); throw new Exception("unbounded active wake accepted"); }
-        catch (InvalidOperationException) { }
+        var boundedEvents = watch.Take();
+        Check(watch.Snapshot()["wake_count"].GetValue<int>() == 6 && boundedEvents.Count == 10 && watch.Armed
+            && boundedEvents.Count(e => e["wake_deferred"]?.GetValue<bool>() == true) == 5,
+            "wake budget lost observed opportunities or allowed extra interruptions");
+        state["chests"] = new JsonArray(new JsonObject { ["x"] = 999, ["y"] = 1 });
+        watch.Observe(state);
+        Check(watch.HasPending && !watch.HasInterrupting && watch.Take()[0]["evidence"]["x"].GetValue<int>() == 999,
+            "deferred opportunity lost evidence or woke the model");
+        watch.Observe(state);
+        Check(!watch.HasPending, "deferred opportunity was not deduplicated");
+        var requested = watch.Request("route needs review");
+        Check(requested["kind"]?.ToString() == "decision_point" && watch.HasInterrupting
+            && watch.Take()[0]["reason"]?.ToString() == "route needs review",
+            "exhausted opportunity budget rejected a required script decision and aborted its action");
         watch.End();
-        Check(!watch.Armed && !watch.HasPending && watch.Snapshot()["history"].AsArray().Count == 6,
+        Check(!watch.Armed && !watch.HasPending && watch.Snapshot()["history"].AsArray().Count == 14,
             "completion left observations active or erased acceptance evidence");
         watch.Reset(); Check(!watch.Armed && !watch.HasPending && watch.Snapshot()["history"].AsArray().Count == 0,
             "task scope leaked events or state");
-        Console.WriteLine("PASS: task wake budget is shared, bounded and cleared on reset");
+        Console.WriteLine("PASS: opportunity wakes stay bounded while required script decisions remain available");
+
+        watch.EnsureDefaults();
+        state["hp"] = 100;
+        for (int i = 0; i < 6; i++)
+        {
+            state["chests"] = new JsonArray(new JsonObject { ["x"] = i, ["y"] = 1 });
+            watch.Observe(state);
+        }
+        watch.Take();
+        state["chests"] = new JsonArray(); state["hp"] = 29; state["suffocating"] = true;
+        state["actions"] = new JsonArray(new JsonObject { ["handle"] = "buried", ["attempt"] = 1, ["status"] = "running" });
+        watch.Observe(state);
+        var danger = watch.Take();
+        Check(danger.Count == 2 && danger[0]["kind"].ToString() == "low_health" && danger[1]["kind"].ToString() == "suffocating",
+            "chest budget suppressed actual low health or suffocation");
+        watch.Observe(state);
+        Check(!watch.HasPending, "unchanged danger flooded the model");
+        state["hp"] = 100; state["suffocating"] = false;
+        watch.Observe(state);
+        Check(!watch.HasPending, "recovery incorrectly emitted danger");
+        state["hp"] = 29; state["suffocating"] = true;
+        watch.Observe(state);
+        Check(watch.Take().Count == 2, "new danger after recovery was hidden within the same action");
+        state["actions"][0]["attempt"] = 2;
+        watch.Observe(state);
+        Check(watch.Take().Count == 2, "resuming into danger permanently suppressed safety events");
+        watch.Reset();
+        Console.WriteLine("PASS: low health and suffocation bypass opportunity budget and deduplicate per action attempt");
+
+        watch.EnsureDefaults();
+        var collecting = JsonNode.Parse("{\"hp\":100,\"item_counts\":{\"29\":2},\"actions\":[{\"handle\":\"collect\",\"attempt\":1,\"status\":\"running\",\"tool\":\"gather\",\"args\":{\"targets\":[{\"item_type\":29,\"count\":10}]}}]}").AsObject();
+        watch.Observe(collecting);
+        Check(!watch.HasPending, "existing inventory appeared as a new acquisition");
+        collecting["item_counts"]["29"] = 3;
+        watch.Observe(collecting);
+        var acquired = watch.Take();
+        Check(acquired.Count == 1 && acquired[0]["kind"].ToString() == "target_acquired"
+            && acquired[0]["evidence"]["gained"].GetValue<int>() == 1
+            && acquired[0]["evidence"]["handle"].ToString() == "collect", "target acquisition lost actual gain or action handle");
+        watch.Observe(collecting);
+        Check(!watch.HasPending, "unchanged inventory repeatedly woke the model");
+        collecting["item_counts"]["29"] = 2; watch.Observe(collecting);
+        collecting["item_counts"]["29"] = 3; watch.Observe(collecting);
+        Check(watch.Take().Count == 1, "consumption permanently suppressed a later genuine acquisition");
+        collecting["item_counts"]["99"] = 50; watch.Observe(collecting);
+        Check(!watch.HasPending, "unrequested mining debris interrupted target gathering");
+        watch.Reset();
+        Console.WriteLine("PASS: target inventory gains wake once, survive consumption and ignore existing inventory or unrelated debris");
+
+        var navigation = new NavigationProgress();
+        var terrain = new System.Collections.Generic.Dictionary<int, long> { [1] = 1 };
+        Check(navigation.Observe(0, 0, 0, 1000, terrain, planning: true) == null
+            && navigation.Observe(40, 0, 0, 1000, terrain, planning: true) == null
+            && navigation.Observe(41, 0, 0, 1000, terrain) == null
+            && navigation.Observe(48.9, 0, 0, 1000, terrain) == null
+            && navigation.Observe(49, 0, 0, 1000, terrain)?["reason"]?.ToString() == "stationary",
+            "navigation stall timing did not start after field preparation");
+        navigation = new NavigationProgress();
+        Check(navigation.Observe(0, 0, 0, 1000, terrain) == null
+            && navigation.Observe(7.9, 0, 0, 1000, terrain) == null, "execution grace interrupted");
+        Check(navigation.Observe(8, 0, 0, 1000, terrain)?["reason"]?.ToString() == "stationary", "stationary execution retained the former thirty-second minimum");
+        navigation = new NavigationProgress();
+        navigation.Observe(0, 0, 0, 1000, terrain);
+        navigation.Observe(25, 100, 0, 900, terrain);
+        terrain[1] = 0;
+        Check(navigation.Observe(32, 100, 0, 900, terrain) == null, "excavation was declared stalled");
+        Check(navigation.Observe(39, 100, 0, 900, terrain) == null
+            && navigation.Observe(40, 100, 0, 900, terrain)?["reason"]?.ToString() == "stationary", "execution stall deadline failed");
+        navigation = new NavigationProgress();
+        navigation.Observe(0, 0, 0, 1000, terrain);
+        for (int i = 1; i < 30; i++)
+        {
+            terrain[100 + i] = 1;
+            Check(navigation.Observe(i, i % 2 * 100, 0, 1000 + i % 2 * 100, terrain) == null,
+                "detour interrupted before no-progress deadline");
+        }
+        Check(navigation.Observe(30, 0, 0, 1000, terrain)?["reason"]?.ToString() == "moving_without_route_progress",
+            "oscillation or newly visible tiles masked no progress");
+        Console.WriteLine("PASS: navigation separates planning, execution stalls, excavation and oscillation");
+        navigation = new NavigationProgress();
+        navigation.Observe(0, 0, 0, 1000, terrain);
+        for (int i = 1; i < 8; i++)
+            Check(navigation.Observe(i, i % 2 * 22, 0, 1000 + i % 2 * 22, terrain) == null,
+                "local movement interrupted before its recovery window");
+        Check(navigation.Observe(8, 0, 0, 1000, terrain)?["reason"]?.ToString() == "local_oscillation",
+            "small local oscillation retained the thirty-second recovery delay");
+        navigation = new NavigationProgress();
+        navigation.Observe(0, 0, 0, 1000, terrain);
+        for (int i = 1; i <= 12; i++)
+            Check(navigation.Observe(i, i * 3, 0, 1000 - i * 3, terrain) == null,
+                "slow movement toward the target was treated as local oscillation");
+        Console.WriteLine("PASS: bounded oscillation yields early while slow forward progress continues");
 
         int effects = 0;
         var progress = new ScriptProgress();

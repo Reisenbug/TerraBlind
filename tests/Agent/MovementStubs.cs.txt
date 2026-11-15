@@ -8,6 +8,10 @@ namespace TerraBlind.JevariaCombat;
 public class GameSensor
 {
     public const int WorldEdgeCells = 40;
+    public float MovementReserveScale = 1;
+    public CombatSnapshot Capture(Player p, ulong sequence, DodgeIntent previous, long duration)
+        => Main.npc.Any(npc => npc is { active: true, boss: true })
+            ? CapturePlayer(p, p, sequence, previous, duration) with { MovementReserveScale = MovementReserveScale } : null;
     public CombatSnapshot CapturePlayer(Player p, Player target, ulong sequence, DodgeIntent previous, long duration)
     {
         CombatEntity Entity(Player player) => new(player.whoAmI, player.name, player.Center, player.velocity, new Vector2(20, 40), 0);

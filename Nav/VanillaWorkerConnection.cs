@@ -92,22 +92,31 @@ public sealed class VanillaWorkerConnection : IDisposable
 
     public async Task<JsonObject> Send(JsonObject request, CancellationToken cancellation = default)
     {
+        long queuedAt = Stopwatch.GetTimestamp();
         await serial.WaitAsync(cancellation);
         try
         {
             var timer = Stopwatch.StartNew();
+            double queueMs = Stopwatch.GetElapsedTime(queuedAt).TotalMilliseconds;
             cancellation.ThrowIfCancellationRequested();
             long id = Interlocked.Increment(ref nextRequest);
             request["request_id"] = id;
+            long writeStartedAt = Stopwatch.GetTimestamp();
             await Write(request);
+            double writeMs = Stopwatch.GetElapsedTime(writeStartedAt).TotalMilliseconds;
             using var registration = cancellation.Register(() => _ = Cancel(id));
+            long responseStartedAt = Stopwatch.GetTimestamp();
             string line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(request["command"]?.GetValue<string>() == "reachability" ? 120 : 20));
+            double responseMs = Stopwatch.GetElapsedTime(responseStartedAt).TotalMilliseconds;
             var result = JsonNode.Parse(line ?? throw new IOException("推演连接已断开")).AsObject();
             cancellation.ThrowIfCancellationRequested();
             if (result["request_id"]?.GetValue<long>() != id && result["error"] == null)
                 throw new IOException("推演响应与请求不匹配");
             if (result["error"] != null) throw new InvalidOperationException(result["error"].GetValue<string>());
             result["roundtrip_ms"] = timer.Elapsed.TotalMilliseconds;
+            result["queue_ms"] = queueMs;
+            result["write_ms"] = writeMs;
+            result["response_wait_ms"] = responseMs;
             return result;
         }
         finally { serial.Release(); }

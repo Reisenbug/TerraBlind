@@ -86,6 +86,7 @@ namespace TerraBlind
 			if (req == null) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { _active = null; return; }
+			if (FightCoordinator.AttackAnimationActive) { _prevAnim = 0; return; }
 
 			_elapsed++;
 
@@ -174,6 +175,7 @@ namespace TerraBlind
 				if (hb < 0) hb = 0;   // no empty hotbar slot → displace slot 0 (its item goes to the backpack slot)
 				PvpInventory.SwapSlots(slot, hb);
 				slot = hb;
+				req.Slot = hb;
 			}
 
 			// LLM 给的是"树大概在这儿",常落在树叶或空气上。像原版 SmartCursor 那样吸附到最近可作用的格
@@ -318,7 +320,7 @@ namespace TerraBlind
 			else if (it.pick > 0) ok = (x, y) => Main.tile[x, y].HasTile && Main.tileSolid[Main.tile[x, y].TileType] && !Main.tileHammer[Main.tile[x, y].TileType];
 			else return false;   // not a collecting tool, don't snap
 
-			if (InBounds(wx, wy) && ok(wx, wy)) return false;   // already on a valid tile, no snap needed
+			if (InBounds(wx, wy) && ok(wx, wy)) return true;   // already on a valid tile, no snap needed
 
 			int bestX = -1, bestY = -1, bestD = int.MaxValue;
 			for (int dx = -SnapRadius; dx <= SnapRadius; dx++)

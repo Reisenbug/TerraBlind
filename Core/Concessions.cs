@@ -132,15 +132,22 @@ namespace TerraBlind
 	// 这里一次覆盖所有物品,挖和放都在内
 	public class ConcessionSpeed : GlobalItem
 	{
+		public const int MiningSpeedMultiplier = 6;
 		// 【雷管不加速】。原版 useTime=useAnimation=40,把投掷节奏卡死在 40 帧
 		// 这是打肉山那套距离表的基准。加速到 1/8 会让雷管连珠炮一样出去,
 		// 距离/血量全对不上,打起来会出大问题
 		static bool NoSpeedup(Item it) => it != null && it.type == ItemID.Dynamite;
+		static float TimeMultiplier(Item item, Player player)
+		{
+			float multiplier = Concessions.Enabled && !NoSpeedup(item) ? Concessions.UseTimeMul : 1f;
+			if (Config.I.FastMining && player.whoAmI == Main.myPlayer && item.pick > 0) multiplier /= MiningSpeedMultiplier;
+			return multiplier;
+		}
 
 		public override float UseTimeMultiplier(Item item, Player player)
-			=> Concessions.Enabled && !NoSpeedup(item) ? Concessions.UseTimeMul : 1f;
+			=> TimeMultiplier(item, player);
 
 		public override float UseAnimationMultiplier(Item item, Player player)
-			=> Concessions.Enabled && !NoSpeedup(item) ? Concessions.UseTimeMul : 1f;
+			=> TimeMultiplier(item, player);
 	}
 }

@@ -75,6 +75,7 @@ namespace TerraBlind
 		public static void Tick()
 		{
 			if (!On) return;
+			if (AgentTools.ControlSession.CheckWorkflow("wof_fight") != null) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) return;
 

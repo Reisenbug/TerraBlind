@@ -63,6 +63,8 @@ namespace TerraBlind
 		public static bool Start(int houseWx, int houseWy, int bridgeDir, out string why)
 		{
 			why = "";
+			var denied = AgentTools.ControlSession.CheckWorkflow("wof_prep");
+			if (denied != null) { why = denied["error"].ToString(); return false; }
 			if (Main.LocalPlayer == null) { why = "no_player"; return false; }
 			_houseWx = houseWx; _houseWy = houseWy; _bridgeDir = bridgeDir >= 0 ? 1 : -1;
 			_frames = 0; _nightAt = 0; _dug.Clear();
@@ -238,6 +240,7 @@ namespace TerraBlind
 		public static void Tick()
 		{
 			if (!IsRunning) return;
+			if (AgentTools.ControlSession.CheckWorkflow("wof_prep") != null) return;
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active) { Fail("no_player"); return; }
 			_frames++;

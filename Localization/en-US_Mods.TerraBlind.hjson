@@ -88,6 +88,11 @@ Configs: {
 			Tooltip: Turns the lava surface you are about to land on into a block, spending one from your inventory. Off by default, since it changes your world without being asked.
 		}
 
+		FastMining: {
+			Label: 加速挖掘
+			Tooltip: 将本机角色镐子的挖掘间隔和挥动动画缩短为六分之一。默认开启，实时生效。
+		}
+
 		AlwaysGillsAndShine: {
 			Label: Always Gills and Shine
 			Tooltip: Keeps the Gills and Shine buffs refreshed every frame, so the run does not drown or walk blind.

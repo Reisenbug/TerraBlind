@@ -12,11 +12,72 @@ static class ActionTests
 
     public static async Task Run()
     {
+        await IsolatedNavigationGoal();
+        await QueuedActions();
+        var history = new ActionTasks((_, args, _) => Task.FromResult(args.ToJsonString()),
+            _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
+        string firstHandle = null, historyHandle = null;
+        for (int i = 0; i < 40; i++)
+        {
+            var args = new JsonObject { ["sequence"] = i };
+            var started = i % 2 == 0 ? history.Start("nav_to", args, default)
+                : history.Enqueue(historyHandle, "nav_to", args, null, default);
+            historyHandle = started["handle"].ToString();
+            firstHandle ??= historyHandle;
+            JsonObject terminal;
+            do { terminal = await history.Query(historyHandle, 100, default); }
+            while (terminal["status"].ToString() == "running");
+            Check(terminal["status"].ToString() == "completed", "long action history interrupted sequential work");
+        }
+        Check((await history.Query(firstHandle, 0, default))["result"]["sequence"].GetValue<int>() == 0,
+            "continuing a long task erased the evidence of its first action");
+        string failureDetail = "step_requires_reconciliation: second " + new string('x', 1200);
+        var failedAction = new ActionTasks((_, _, _) => Task.FromException<string>(new InvalidOperationException(failureDetail)),
+            _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
+        string failedHandle = failedAction.Start("run_script", new JsonObject(), default)["handle"].ToString();
+        JsonObject failedResult;
+        do { failedResult = await failedAction.Query(failedHandle, 100, default); }
+        while (failedResult["status"].ToString() == "running");
+        var failedSummary = failedAction.Summary()[0]["result"];
+        Check(failedSummary["detail"]?.ToString() == failureDetail[..1000] + "…"
+            && failedSummary["error"].ToString() == "action_failed"
+            && failedResult["result"]["detail"].ToString() == failureDetail,
+            "action summary lost bounded failure context or changed the full evidence");
+        var recovery = new AgentRecovery();
+        var gatherArgs = JsonNode.Parse("{\"targets\":[{\"item_type\":209,\"count\":9}]}").AsObject();
+        void RecordStock(int count) => recovery.Record("gather", gatherArgs, new JsonObject
+        {
+            ["ok"] = false, ["outcome"] = "source_unavailable",
+            ["targets"] = new JsonArray(new JsonObject { ["item_type"] = 209, ["wanted"] = 9, ["actual"] = count, ["met"] = false })
+        }.ToJsonString());
+        for (int count = 1; count <= 4; count++)
+        {
+            RecordStock(count);
+            Check(!recovery.Denied("gather", gatherArgs) && recovery.Offer(),
+                "verified material progress exhausted recovery as unchanged failures");
+        }
+        Check(recovery.Snapshot()["latest"]["evidence"]["outcome"].ToString() == "source_unavailable",
+            "partial material progress erased the remaining failure");
+        RecordStock(3); RecordStock(4);
+        Check(recovery.Denied("gather", gatherArgs), "dropping and reacquiring stock reset the no-progress guard");
+        recovery.Reset(); RecordStock(1); RecordStock(1); RecordStock(1);
+        Check(recovery.Denied("gather", gatherArgs), "unchanged stock bypassed the no-progress guard");
+        recovery.Reset(); RecordStock(9); RecordStock(10); RecordStock(11);
+        Check(recovery.Denied("gather", gatherArgs), "surplus of an already fulfilled target counted as remaining-goal progress");
+        await InterruptedChest();
         int stock = 0, attempts = 0, stops = 0, hp = 80;
         var collecting = Signal(); var cleaning = Signal(); var release = Signal();
+        var defending = Signal();
         Task<JsonObject> Observe(CancellationToken token) => Task.FromResult(new JsonObject { ["stock"] = Volatile.Read(ref stock), ["hp"] = hp });
         async Task<string> Execute(string tool, JsonObject args, CancellationToken token)
         {
+            if (tool == "fight")
+            {
+                Check(ActionTasks.NodeContext.Value == "defense-node", "defense inherited collection node");
+                defending.TrySetResult(true);
+                await Task.Delay(Timeout.Infinite, token);
+            }
+            Check(ActionTasks.NodeContext.Value == "collection-node", "resumed action inherited caller node instead of original owner");
             if (Interlocked.Increment(ref attempts) == 1)
             {
                 Interlocked.Exchange(ref stock, 3); collecting.TrySetResult(true);
@@ -33,31 +94,61 @@ static class ActionTests
             Interlocked.Increment(ref stops);
         }
         var actions = new ActionTasks(Execute, Observe, Stop);
+        ActionTasks.NodeContext.Value = "collection-node";
         string id = actions.Start("gather", new JsonObject { ["count"] = 10 }, default)["handle"].ToString();
+        ActionTasks.NodeContext.Value = null;
         await collecting.Task.WaitAsync(TimeSpan.FromSeconds(3));
         var running = await actions.Query(id, 0, default);
+        Check(running["task_node"].ToString() == "collection-node", "action query omitted owning node");
         Check(running["status"].ToString() == "running" && running["observation"]["stock"].GetValue<int>() == 3,
             "query could not observe inventory while collection was in flight");
         var pause = actions.Control(id, "pause", null, default);
         await cleaning.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Check(!pause.IsCompleted && actions.HasActive, "pause released input before cancellation cleanup finished");
-        try { actions.Start("fight", new JsonObject(), default); throw new Exception("overlapping action accepted"); }
+        try { actions.Start("gather", new JsonObject(), default); throw new Exception("overlapping action accepted"); }
         catch (InvalidOperationException) { }
         release.TrySetResult(true);
         var paused = await pause.WaitAsync(TimeSpan.FromSeconds(3));
         Check(paused["status"].ToString() == "paused" && paused["observation"]["stock"].GetValue<int>() == 3
             && !actions.HasActive && stops == 1, "pause lost progress or failed to release input");
         Console.WriteLine("PASS: action handle observes in-flight work and pause waits for exclusive input cleanup");
+        ActionTasks.NodeContext.Value = "collection-node";
+        try
+        {
+            actions.Start("gather", new JsonObject { ["count"] = 10 }, default);
+            throw new Exception("DAG silently replaced paused action with identical new handle");
+        }
+        catch (InvalidOperationException error)
+        {
+            Check(error.Message.Contains(id), "duplicate action rejection omitted original continuation handle");
+        }
+        ActionTasks.NodeContext.Value = null;
+
+        ActionTasks.NodeContext.Value = "defense-node";
+        string guard = actions.Start("fight", new JsonObject { ["seconds"] = 15 }, default)["handle"].ToString();
+        await defending.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Check((await actions.Query(id, 0, default))["status"].ToString() == "paused"
+            && (await actions.Query(guard, 0, default))["status"].ToString() == "running",
+            "observing paused collection displaced temporary defense");
+        try { actions.Start("fight", new JsonObject(), default); throw new Exception("second attack stole defense input"); }
+        catch (InvalidOperationException) { }
+        var guardEnd = await actions.Control(guard, "cancel", null, default);
+        Check(guardEnd["status"].ToString() == "cancelled" && !actions.HasActive && stops == 2,
+            "temporary defense did not release input before continuation");
+        Console.WriteLine("PASS: temporary defense permits observation and releases ownership before same-handle continuation");
 
         hp = 100;
-        await actions.Query(id, 0, default);
         var resumed = await actions.Control(id, "resume", null, default);
+        ActionTasks.NodeContext.Value = null;
+        Check(resumed["task_node"].ToString() == "collection-node", "resume changed action owner");
         Check(resumed["handle"].ToString() == id && resumed["attempt"].GetValue<int>() == 2, "resume replaced the task handle");
+        Check(resumed["observation"] == null || resumed["observation"]["hp"].GetValue<int>() == 100,
+            "resume presented pause-time health as the new attempt's current observation");
         Check(resumed["previous_attempt"]["observation"]["hp"].GetValue<int>() == 80,
             "fresh observations erased the actual pause-time condition");
         JsonObject completed;
         do { completed = await actions.Query(id, 100, default); } while (completed["status"].ToString() == "running");
-        Check(completed["status"].ToString() == "completed" && stock == 10 && attempts == 2 && stops == 2,
+        Check(completed["status"].ToString() == "completed" && stock == 10 && attempts == 2 && stops == 3,
             "resumed gather did not continue its original total inventory target");
         try { await actions.Control(id, "resume", null, default); throw new Exception("completed action restarted"); }
         catch (InvalidOperationException) { }
@@ -79,6 +170,37 @@ static class ActionTests
         }
         Console.WriteLine("PASS: navigation and fight handles honor root cancellation and release owned input");
 
+        var laneStarts = new System.Collections.Concurrent.ConcurrentDictionary<string, bool>();
+        var laneStops = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var lanes = new ActionTasks(async (name, _, token) =>
+        {
+            laneStarts[name] = true;
+            await Task.Delay(Timeout.Infinite, token);
+            return "{}";
+        }, Observe, _ => throw new Exception("parallel action used global cleanup"), stopTool: (name, owns) =>
+        {
+            if (owns()) laneStops.Enqueue(name);
+            return Task.CompletedTask;
+        });
+        string walking = lanes.Start("nav_to", new JsonObject(), default)["handle"].ToString();
+        string shooting = lanes.Start("fight", new JsonObject(), default)["handle"].ToString();
+        for (int i = 0; i < 100 && laneStarts.Count < 2; i++) await Task.Delay(10);
+        Check(laneStarts.Count == 2, "attack and navigation did not run concurrently");
+        await lanes.Control(shooting, "cancel", null, default);
+        Check((await lanes.Query(walking, 0, default))["status"].ToString() == "running"
+            && laneStops.Count == 1 && laneStops.TryPeek(out var cleanedLane) && cleanedLane == "fight",
+            "stopping attack cleaned navigation inputs");
+        await lanes.Control(walking, "cancel", null, default);
+        foreach (string status in new[] { "completed", "cancelled", "failed" })
+        {
+            var attackWatch = new AgentWatch(); attackWatch.EnsureDefaults();
+            attackWatch.Emit("action_finished", status, new JsonObject { ["tool"] = "fight", ["status"] = status });
+            Check(attackWatch.HasPending && !attackWatch.HasInterrupting,
+                "attack completion or failure forced navigation to pause");
+            attackWatch.Emit("low_health", status, new JsonObject { ["hp"] = 10 });
+            Check(!attackWatch.HasInterrupting && attackWatch.HasHealthNotice, "low health stopped navigation or lost its notice");
+        }
+
         var staleEntered = Signal(); var staleRelease = Signal(); int staleStops = 0;
         var stale = new ActionTasks(async (_, _, token) => { await Task.Delay(Timeout.Infinite, token); return "{}"; }, Observe,
             async owns => { staleEntered.TrySetResult(true); await staleRelease.Task; if (owns()) staleStops++; });
@@ -89,5 +211,371 @@ static class ActionTests
         try { await cancelling; } catch (ArgumentException) { }
         Check(staleStops == 0 && stale.Snapshot().Count == 0, "old world cleanup stopped a new owner or restored stale handles");
         Console.WriteLine("PASS: world reset invalidates old handles and prevents stale cleanup from changing new input");
+
+        int position = 0;
+        var navigation = new ActionTasks((_, args, _) =>
+        {
+            position = args["x"].GetValue<int>() * 16;
+            return Task.FromResult("{\"done\":true}");
+        }, _ => Task.FromResult(new JsonObject { ["pos"] = new JsonObject { ["x"] = position, ["y"] = 0 } }),
+            _ => Task.CompletedTask);
+        async Task Arrive(int x)
+        {
+            string handle = navigation.Start("nav_to", new JsonObject { ["x"] = x, ["y"] = 0 }, default)["handle"].ToString();
+            while ((await navigation.Query(handle, 100, default))["status"].ToString() == "running") { }
+        }
+        await Arrive(0);
+        Check(navigation.NavigationArrivals == 0, "no-op arrival counted as game progress");
+        await Arrive(20);
+        Check(navigation.NavigationArrivals == 1, "verified travel did not count as execution progress");
+        await Arrive(0); await Arrive(20);
+        Check(navigation.NavigationArrivals == 2, "repeated destination farmed continuation progress");
+        navigation.BeginTask();
+        Check(navigation.NavigationArrivals == 0, "navigation progress leaked across instructions");
+        Console.WriteLine("PASS: real navigation arrivals advance continuation; no-op and repeated destinations do not");
+
+        var oldStarted = Signal(); var oldCleaning = Signal(); var cleanupDone = Signal();
+        var granting = Signal(); var grantDone = Signal();
+        var transfer = new ActionTasks(async (_, _, token) =>
+        {
+            oldStarted.TrySetResult(true); await Task.Delay(Timeout.Infinite, token); return "{}";
+        }, Observe, async owns =>
+        {
+            oldCleaning.TrySetResult(true); await cleanupDone.Task;
+            Check(owns(), "old action lost authority while still cleaning up");
+        });
+        string previousHandle = transfer.Start("nav_to", new JsonObject(), default)["handle"].ToString();
+        await oldStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        bool granted = false;
+        var handoff = transfer.Handoff(async valid =>
+        {
+            granting.TrySetResult(true); await grantDone.Task;
+            Check(valid(), "handoff lost its reservation"); granted = true;
+        }, default);
+        await oldCleaning.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(!granted && !handoff.IsCompleted, "handoff completed before old cleanup");
+        cleanupDone.TrySetResult(true);
+        await granting.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(!transfer.HasActive && transfer.Conflicts, "handoff gap allowed a new input writer");
+        try { transfer.Start("fight", new JsonObject(), default); throw new Exception("start raced handoff"); }
+        catch (InvalidOperationException) { }
+        try { await transfer.Control(previousHandle, "resume", null, default); throw new Exception("resume raced handoff"); }
+        catch (InvalidOperationException) { }
+        grantDone.TrySetResult(true);
+        var handed = await handoff.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(granted && handed["paused_action"].ToString() == previousHandle && !transfer.Conflicts,
+            "handoff lost paused action or retained transition reservation");
+        Check((await transfer.Query(previousHandle, 0, default))["status"].ToString() == "paused",
+            "takeover cancelled rather than preserved previous task");
+        Console.WriteLine("PASS: takeover reserves input across cleanup and confirmation without losing the paused task");
+
+        var acquireStarted = Signal(); var allowAcquire = Signal();
+        bool staleGrant = false;
+        var resetTransfer = transfer.Handoff(async valid =>
+        {
+            acquireStarted.TrySetResult(true); await allowAcquire.Task;
+            if (valid()) staleGrant = true;
+        }, default);
+        await acquireStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        transfer.Reset(); allowAcquire.TrySetResult(true);
+        try { await resetTransfer; throw new Exception("reset handoff reported success"); }
+        catch (OperationCanceledException) { }
+        Check(!staleGrant && !transfer.Conflicts, "world reset let stale handoff reclaim controls");
+        Console.WriteLine("PASS: world reset invalidates pending control acquisition");
+
+        var failedCleanup = new ActionTasks(async (_, _, token) =>
+        { await Task.Delay(Timeout.Infinite, token); return "{}"; }, Observe,
+            _ => throw new InvalidOperationException("fixture cleanup failure"));
+        failedCleanup.Start("nav_to", new JsonObject(), default);
+        bool falselyAcquired = false;
+        var failedTransfer = await failedCleanup.Handoff(_ => { falselyAcquired = true; return Task.CompletedTask; }, default);
+        Check(!falselyAcquired && failedTransfer["error"].ToString() == "control_handoff_cleanup_failed",
+            "cleanup failure falsely granted control");
+        Console.WriteLine("PASS: failed input cleanup rejects takeover with original action evidence");
+
+        var scopedPolicy = new AgentControlPolicy();
+        var cleanupStarted = Signal(); var cleanupAllowed = Signal();
+        int completionCount = 0;
+        var scoped = new ActionTasks(async (_, _, token) =>
+        { await Task.Delay(Timeout.Infinite, token); return "{}"; }, Observe,
+            async owns => { cleanupStarted.TrySetResult(true); await cleanupAllowed.Task; },
+            (handle, owns) =>
+            {
+                if (owns()) { scopedPolicy.EndAction(handle); completionCount++; }
+                return Task.CompletedTask;
+            });
+        string scopeHandle = scoped.Start("gather", new JsonObject(), default)["handle"].ToString();
+        scopedPolicy.Deny(new[] { ControlBehavior.Attack }, ControlLifetime.Action, scopeHandle, "collect quietly");
+        var scopePause = scoped.Control(scopeHandle, "pause", null, default);
+        await cleanupStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(scopedPolicy.Check(ControlBehavior.Attack, ControlChannels.ItemUse) != null,
+            "action override expired before input cleanup");
+        cleanupAllowed.TrySetResult(true); await scopePause;
+        Check(completionCount == 0 && scopedPolicy.Check(ControlBehavior.Attack, ControlChannels.ItemUse) != null,
+            "pause discarded the action override needed on resume");
+        await scoped.Control(scopeHandle, "resume", null, default);
+        await scoped.Control(scopeHandle, "cancel", null, default);
+        Check(completionCount == 1 && scopedPolicy.Check(ControlBehavior.Attack, ControlChannels.ItemUse) == null,
+            "cancelled action retained its override after verified cleanup");
+        Console.WriteLine("PASS: action overrides survive pause and expire only after terminal input cleanup");
+
+        int pausedStops = 0, pausedEnds = 0;
+        var cancelEntered = Signal(); var cancelAllowed = Signal();
+        var detached = new ActionTasks(async (_, _, token) =>
+        { await Task.Delay(Timeout.Infinite, token); return "{}"; }, Observe,
+            _ => { pausedStops++; return Task.CompletedTask; },
+            async (_, valid) => { cancelEntered.TrySetResult(true); await cancelAllowed.Task; if (valid()) pausedEnds++; });
+        string detachedId = detached.Start("nav_to", new JsonObject { ["x"] = 100 }, default)["handle"].ToString();
+        await detached.Control(detachedId, "pause", null, default);
+        var detachedCancel = detached.Control(detachedId, "cancel", null, default);
+        await cancelEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(!detachedCancel.IsCompleted && pausedStops == 1, "paused cancel returned before cleanup or stopped inputs twice");
+        try { await detached.Control(detachedId, "resume", null, default); throw new Exception("resume raced paused cancellation"); }
+        catch (InvalidOperationException) { }
+        string sideHandle = detached.Start("fight", new JsonObject(), default)["handle"].ToString();
+        cancelAllowed.TrySetResult(true);
+        var detachedResult = await detachedCancel.WaitAsync(TimeSpan.FromSeconds(3));
+        Check(detachedResult["status"].ToString() == "cancelled" && pausedEnds == 1
+            && pausedStops == 1 && detached.ActiveHandle == sideHandle,
+            "cancelling a paused original task left it paused or stopped the inserted action");
+        await detached.Control(sideHandle, "cancel", null, default);
+        Console.WriteLine("PASS: vetoing a paused intent finalizes its scope without stopping the inserted action or allowing resume races");
+        int allEnded = 0;
+        var all = new ActionTasks(async (_, _, token) =>
+        { await Task.Delay(Timeout.Infinite, token); return "{}"; }, Observe,
+            _ => Task.CompletedTask, (_, valid) => { if (valid()) allEnded++; return Task.CompletedTask; });
+        string parked = all.Start("nav_to", new JsonObject { ["x"] = 200 }, default)["handle"].ToString();
+        await all.Control(parked, "pause", null, default);
+        string inserted = all.Start("fight", new JsonObject(), default)["handle"].ToString();
+        all.CancelAll();
+        foreach (string handle in new[] { parked, inserted })
+        {
+            var ended = await all.Query(handle, 1000, default);
+            Check(ended["status"].ToString() == "cancelled", "global stop left a parked or inserted intent alive");
+        }
+        Check(allEnded == 2 && !all.HasActive, "global stop failed to release both action scopes");
+        Console.WriteLine("PASS: global stop cancels paused originals and active insertions with scope cleanup");
+    }
+
+    static async Task IsolatedNavigationGoal()
+    {
+        var native = new NativeAgent(); native.Load();
+        var previousField = MazeWand.Field; var previousReach = Reach.InteractTest;
+        var previousHandler = HttpServerSystem.Handler;
+        bool ready = RecedingNav.FieldReady;
+        try
+        {
+            MazeWand.Field = new() { [(900, 100)] = 0 };
+            Reach.InteractTest = (_, _, _) => false;
+            int polls = 0, stops = 0;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/nav_recede_done") polls++;
+                if (path == "/nav_recede_stop") stops++;
+                return (200, "{\"done\":false}");
+            };
+            async Task Pump(Task task)
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(2);
+                while (!task.IsCompleted)
+                {
+                    Check(DateTime.UtcNow < deadline, "isolated goal entered the repeated escape-step loop");
+                    native.PostUpdateEverything(); await Task.Delay(2);
+                }
+                await task;
+            }
+            RecedingNav.FieldReady = false;
+            using var cancel = new CancellationTokenSource();
+            var action = AgentTools.Navigate(new JsonObject { ["x"] = 900, ["y"] = 100 }, cancel.Token);
+            var startedBy = DateTime.UtcNow.AddSeconds(2);
+            while (polls == 0)
+            {
+                Check(DateTime.UtcNow < startedBy, "navigation never started polling");
+                native.PostUpdateEverything(); await Task.Delay(2);
+            }
+            Check(!action.IsCompleted, "unfinished field was classified as a disconnected goal");
+            MazeWand.Field[(899, 100)] = 1;
+            RecedingNav.FieldReady = true;
+            for (int i = 0; i < 30; i++) { native.PostUpdateEverything(); await Task.Delay(2); }
+            Check(!action.IsCompleted && stops == 0, "connected field was incorrectly interrupted");
+            MazeWand.Field.Remove((899, 100));
+            await Pump(action);
+            Check(action.Result["error"]?.ToString() == "navigation_goal_isolated" && stops == 1
+                && action.Result["target"]?["x"]?.GetValue<int>() == 900,
+                "isolated navigation failed without stopping movement and preserving the target evidence");
+        }
+        finally
+        {
+            native.OnWorldUnload(); native.Unload(); MazeWand.Field = previousField;
+            Reach.InteractTest = previousReach; HttpServerSystem.Handler = previousHandler;
+            RecedingNav.FieldReady = ready;
+        }
+        Console.WriteLine("PASS: ready isolated goal stops immediately with target evidence; an unfinished field keeps executing");
+    }
+
+    static async Task QueuedActions()
+    {
+        var watch = new AgentWatch();
+        var reader1 = watch.BeginScriptDelivery();
+        var reader2 = watch.BeginScriptDelivery();
+        watch.EndScriptDelivery(reader1);
+        Check(watch.LocalDelivery, "ending one script disabled another script event reader");
+        watch.Reset();
+        var reader3 = watch.BeginScriptDelivery();
+        watch.EndScriptDelivery(reader2);
+        Check(watch.LocalDelivery, "stale script cleanup disabled the new task reader");
+        watch.EndScriptDelivery(reader3);
+        Check(!watch.LocalDelivery, "last script reader did not restore agent event delivery");
+        watch.EnsureDefaults();
+        watch.Observe(new JsonObject { ["hp"] = 100,
+            ["actions"] = new JsonArray(new JsonObject { ["handle"] = "moving", ["tool"] = "nav_to", ["status"] = "running",
+                ["args"] = new JsonObject { ["x"] = 100, ["y"] = 100 } }),
+            ["chests"] = new JsonArray(new JsonObject { ["x"] = 10, ["y"] = 10 }) });
+        Check(watch.HasPending && !watch.HasInterrupting, "default chest discovery stopped navigation before agent selection");
+        watch.Reset();
+        watch.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest") });
+        watch.Observe(new JsonObject { ["hp"] = 100, ["chests"] = new JsonArray(new JsonObject { ["x"] = 10, ["y"] = 10 }) });
+        Check(watch.HasInterrupting, "explicit chest interruption policy was ignored");
+        watch.Reset(); watch.EnsureDefaults();
+        JsonObject Chain(string status) => new() { ["hp"] = 100, ["actions"] = new JsonArray(
+            new JsonObject { ["handle"] = "arrival", ["status"] = "completed", ["attempt"] = 1, ["tool"] = "nav_to" },
+            new JsonObject { ["handle"] = "collection", ["after_handle"] = "arrival", ["status"] = status, ["attempt"] = 1, ["tool"] = "gather" }) };
+        watch.Observe(Chain("running"));
+        Check(watch.HasPending && !watch.HasInterrupting, "predecessor completion interrupts its already running continuation");
+        watch.Observe(Chain("failed"));
+        Check(!watch.HasInterrupting && watch.HasAdvisories, "continuation failure stopped control or lost its review notice");
+        watch.Reset(); watch.EnsureDefaults();
+        var danger = Chain("running"); danger["suffocating"] = true;
+        watch.Observe(danger);
+        Check(watch.HasInterrupting, "queued handoff suppressed an independent survival event");
+        foreach (string ending in new[] { "completed", "failed", "paused", "cancelled", "cancel_paused", "cancel_queued", "new_task" })
+        {
+            var began = Signal(); var release = Signal(); var nextBegan = Signal();
+            int attempts = 0, preparations = 0;
+            var actions = new ActionTasks(async (tool, _, token) =>
+            {
+                if (tool == "nav_to")
+                {
+                    attempts++; began.TrySetResult(true);
+                    await release.Task.WaitAsync(token);
+                    return ending == "failed" ? "{\"done\":false}" : "{\"done\":true}";
+                }
+                Check(ActionTasks.NodeContext.Value == "collect", "queued action lost DAG owner");
+                nextBegan.TrySetResult(true);
+                return "{\"outcome\":\"enough\"}";
+            }, _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask,
+            prepareQueued: (before, after, _) =>
+            {
+                Check(before == "travel" && after == "collect", "queue did not provide predecessor ownership");
+                preparations++;
+                return Task.CompletedTask;
+            });
+            ActionTasks.NodeContext.Value = "travel";
+            string first = actions.Start("nav_to", new JsonObject(), default)["handle"].ToString();
+            ActionTasks.NodeContext.Value = null;
+            await began.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            string next = actions.Enqueue(first, "gather", new JsonObject(), "collect", default)["handle"].ToString();
+            Check(!nextBegan.Task.IsCompleted && actions.ActiveHandle == first,
+                "queue interrupted navigation or launched before arrival");
+            if (ending == "paused")
+            {
+                await actions.Control(first, "pause", null, default);
+                Check((await actions.Query(next, 0, default))["status"].ToString() == "queued", "pause discarded continuation");
+                await actions.Control(first, "resume", null, default);
+            }
+            if (ending == "cancelled") await actions.Control(first, "cancel", null, default);
+            if (ending == "cancel_paused")
+            {
+                await actions.Control(first, "pause", null, default);
+                await actions.Control(first, "cancel", null, default);
+            }
+            if (ending == "cancel_queued") await actions.Control(next, "cancel", null, default);
+            if (ending == "new_task") actions.BeginTask();
+            release.TrySetResult(true);
+            JsonObject result;
+            do { result = await actions.Query(first, 100, default); } while (result["status"].ToString() == "running");
+            if (ending is "completed" or "paused")
+            {
+                await nextBegan.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                do { result = await actions.Query(next, 100, default); } while (result["status"].ToString() == "running");
+                Check(result["status"].ToString() == "completed" && preparations == 1
+                    && result["handoff_ms"].GetValue<double>() < 1000, "prepared continuation did not run within one second");
+                Console.WriteLine($"QUEUE_HANDOFF ending={ending} handoff_ms={result["handoff_ms"]} attempts={attempts}");
+            }
+            else
+            {
+                result = await actions.Query(next, 0, default);
+                Check(!nextBegan.Task.IsCompleted && preparations == 0
+                    && result["status"].ToString() == (ending is "new_task" or "cancel_queued" ? "cancelled" : "blocked"),
+                    "failed/cancelled/old task automatically launched continuation");
+            }
+        }
+        Console.WriteLine("PASS: queued actions continue without model calls, preserve pause and stop after failure or task replacement");
+        foreach (string value in new[] { "{\"status\":\"yield\"}", "{\"status\":\"needs_review\"}", "{\"done\":false,\"status\":\"stopped_short\"}", "{\"error\":\"blocked\"}", "42" })
+        {
+            var actions = new ActionTasks((_, _, _) => Task.FromResult("{\"ok\":true,\"value\":" + value + "}"),
+                _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
+            string handle = actions.Start("run_script", new JsonObject(), default)["handle"].ToString();
+            JsonObject result;
+            do { result = await actions.Query(handle, 100, default); } while (result["status"].ToString() == "running");
+            Check(result["status"].ToString() == (value == "42" ? "completed" : "failed"),
+                "script transport success concealed an unfinished action or rejected a primitive result: " + result);
+        }
+        var progress = new ScriptProgress();
+        progress.Begin("return {status:'needs_review'};");
+        progress.End(new JsonObject { ["value"] = new JsonObject { ["status"] = "needs_review" } });
+        Check(progress.Yielded, "explicit review result allowed automatic replay of the unresolved script");
+        Console.WriteLine("PASS: queued scripts preserve yielded and failed outcomes instead of treating JS return as completion");
+    }
+
+    static async Task InterruptedChest()
+    {
+        var navigationStarted = Signal();
+        var chestStarted = Signal();
+        int navigationAttempts = 0, chestAttempts = 0, stock = 0;
+        var tasks = new ActionTasks(async (tool, args, token) =>
+        {
+            if (tool == "nav_to")
+            {
+                Check(args["x"].GetValue<int>() == 100, "inserted chest changed original destination");
+                if (++navigationAttempts == 1)
+                { navigationStarted.TrySetResult(true); await Task.Delay(Timeout.Infinite, token); }
+                return "{\"done\":true}";
+            }
+            Check(args["x"].GetValue<int>() == 20, "resumed chest lost its original location");
+            if (++chestAttempts == 1)
+            { chestStarted.TrySetResult(true); await Task.Delay(Timeout.Infinite, token); }
+            stock = 7;
+            return "{\"outcome\":\"done\"}";
+        }, _ => Task.FromResult(new JsonObject { ["stock"] = stock }), _ => Task.CompletedTask);
+        string navigation = tasks.Start("nav_to", new JsonObject { ["x"] = 100 }, default)["handle"].ToString();
+        await navigationStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await tasks.Control(navigation, "pause", null, default);
+        string chest = tasks.Start("collect_treasure", new JsonObject { ["x"] = 20 }, default)["handle"].ToString();
+        await chestStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await tasks.Control(chest, "pause", null, default);
+        Check((await tasks.Query(navigation, 0, default))["status"].ToString() == "paused",
+            "interrupting inserted chest lost paused original navigation");
+        await tasks.Control(chest, "resume", null, default);
+        JsonObject result;
+        do { result = await tasks.Query(chest, 100, default); } while (result["status"].ToString() == "running");
+        Check(result["status"].ToString() == "completed" && result["attempt"].GetValue<int>() == 2
+            && result["observation"]["stock"].GetValue<int>() == 7, "resumed chest lost result evidence");
+        await tasks.Control(navigation, "resume", null, default);
+        do { result = await tasks.Query(navigation, 100, default); } while (result["status"].ToString() == "running");
+        Check(result["status"].ToString() == "completed" && navigationAttempts == 2,
+            "original navigation failed to resume after interrupted chest");
+        Console.WriteLine("PASS: interrupted inserted chest retains its handle and original navigation resumes");
+        foreach (string outcome in new[] { "failed", "stopped", "partial" })
+        {
+            var incomplete = new ActionTasks((_, _, _) => Task.FromResult(new JsonObject
+                { ["outcome"] = outcome, ["reason"] = "chest not fully collected" }.ToJsonString()),
+                _ => Task.FromResult(new JsonObject { ["stock"] = 2 }), _ => Task.CompletedTask);
+            string handle = incomplete.Start("collect_treasure", new JsonObject { ["x"] = 20 }, default)["handle"].ToString();
+            do { result = await incomplete.Query(handle, 100, default); } while (result["status"].ToString() == "running");
+            Check(result["status"].ToString() == "failed" && result["result"]["outcome"].ToString() == outcome
+                && result["observation"]["stock"].GetValue<int>() == 2, "incomplete chest was reported as completed or lost partial gains");
+        }
+        Console.WriteLine("PASS: failed, stopped and partial chest collection preserve evidence without false completion");
     }
 }

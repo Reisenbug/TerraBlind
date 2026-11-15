@@ -20,7 +20,7 @@ public static class VanillaNavBridge
     public static bool OwnsExcavation => phase == Phase.Excavating && excavation != null;
     public static string Stage => refreshSource != null ? "Refreshing" : phase.ToString();
     enum Phase { Moving, Approaching, Braking, Preparing, Using, Mining, Excavating, JumpPlacing }
-    static bool placementAirborne;
+    static bool placementAirborne, preciseGoal;
     static float placementStartY;
     static int[] placementControls = Array.Empty<int>();
     static uint placementInputAt;
@@ -64,6 +64,7 @@ public static class VanillaNavBridge
         skippedEdit = null;
         continuingPlacement = false;
         waitingPlacementTools = false;
+        preciseGoal = false;
     }
 
     static void Fail(string reason)
@@ -81,9 +82,11 @@ public static class VanillaNavBridge
         RecedingNav.Stop();
     }
 
-    public static bool Tick(Player player, int gx, int gy)
+    public static bool Tick(Player player, int gx, int gy, bool precise = false)
     {
-        if (!Enabled) return false;
+        preciseGoal = precise;
+        if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+        { Fail("agent_navigation_forbidden"); return true; }
         try { Drive(player, gx, gy); }
         catch (Exception error) { Fail("engine_route:" + error.GetBaseException().Message); }
         return true;
@@ -563,7 +566,7 @@ public static class VanillaNavBridge
             && player.Hitbox.Intersects(new Rectangle(edit.X * 16, edit.Y * 16, 16, 16)))
         {
             preparation["jump_place"] = true;
-            preparation["search_jump_place"] = true;
+            preparation["search_jump_place"] = !preciseGoal;
             DiagLog.Write($"[engine-jump-place-request] tile=({edit.X},{edit.Y}) continuing={continuingPlacement} release_jump={player.releaseJump} item_time={player.itemTime} item_animation={player.itemAnimation}");
         }
         preparing = VanillaNavigationDemo.Instance.PrepareTerrain(preparation);
@@ -572,6 +575,8 @@ public static class VanillaNavBridge
 
     static void StartEdit()
     {
+        if (AgentTools.Control.CheckAt(edit.Type < 0 ? ControlBehavior.Mining : ControlBehavior.Placement, edit.X, edit.Y) != null)
+        { Fail("agent_region_forbidden"); return; }
         ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = edit.X, TargetWy = edit.Y,
             Slot = edit.Slot, Strict = edit.Type < 0 });
         useAt = uint.MaxValue;
@@ -681,6 +686,8 @@ public static class VanillaNavBridge
             return;
         }
         if (phase is not Phase.Using and not Phase.Mining) return;
+        if (AgentTools.Control.CheckAt(edit.Type < 0 ? ControlBehavior.Mining : ControlBehavior.Placement, edit.X, edit.Y) != null)
+        { player.controlUseItem = false; Fail("agent_region_forbidden"); return; }
         player.delayUseItem = player.mouseInterface = false;
         Main.HoveringOverAnNPC = Main.SmartInteractShowingGenuine = false;
         if (edit.Type < 0 && !LavaSafety.CanMine(edit.X, edit.Y))

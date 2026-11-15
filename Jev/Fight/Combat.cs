@@ -92,7 +92,7 @@ namespace TerraBlind
 			   && !(npc.lifeMax <= 5 && npc.damage == 0);
 
 		// 小怪优先
-		static int Worst(Player p, out int cx, out int cy, out int dist)
+		static int Worst(Player p, Item weapon, out int cx, out int cy, out int dist)
 		{
 			int wall = WallBody();
 			if (wall >= 0)
@@ -103,12 +103,12 @@ namespace TerraBlind
 					 + System.Math.Abs(cy - (int)(p.Center.Y / 16f));
 				return wall;
 			}
-			int n = Pick(p, false, out cx, out cy, out dist);
-			return n >= 0 ? n : Pick(p, true, out cx, out cy, out dist);
+			int n = Pick(p, weapon, false, out cx, out cy, out dist);
+			return n >= 0 ? n : Pick(p, weapon, true, out cx, out cy, out dist);
 		}
 
 		// bossPass=false 只看小怪(有射程限制);true 只看 boss(不限射程,它会飞远再冲回来)
-		static int Pick(Player p, bool bossPass, out int cx, out int cy, out int dist)
+		static int Pick(Player p, Item weapon, bool bossPass, out int cx, out int cy, out int dist)
 		{
 			cx = cy = 0; dist = 0;
 			int best = -1;
@@ -121,12 +121,14 @@ namespace TerraBlind
 			{
 				var npc = Main.npc[i];
 				if (!Hostile(npc)) continue;
+				if (!FightCoordinator.CanHitTarget(p, weapon, npc.Center)) continue;
 				// 毁灭者只有头带 boss 标志,身体算小怪就被 30 格射程滤掉
 				if ((npc.boss || DestroyerSegment(npc.type)) != bossPass) continue;
 				// 毁灭者打最近的体节
 				if (npc.type == Terraria.ID.NPCID.TheDestroyer) continue;
 				if (twinLock && npc.type != Terraria.ID.NPCID.Spazmatism) continue;
 				if (DodgeOnlyPart(npc.type)) continue;
+				if (npc.type == Terraria.ID.NPCID.SkeletronHand && !Main.expertMode && Alive(Terraria.ID.NPCID.SkeletronHead)) continue;
 				int ncx = (int)(npc.Center.X / 16f), ncy = (int)(npc.Center.Y / 16f);
 				int d = System.Math.Abs(ncx - pcx) + System.Math.Abs(ncy - pcy);
 				// boss 的部件不限射程
@@ -165,24 +167,6 @@ namespace TerraBlind
 			return true;
 		}
 
-		// 打小怪用 0 号位,打 boss 本体用 1 号位。【目标类型天然就是阶段】--
-		// 克脑一阶段本体打不动,Worst() 那时只会返回爬行者,不用存阶段变量
-		static int WeaponSlot(Player p, bool atBoss)
-		{
-			int want = atBoss ? 1 : 0;
-			if (Usable(p, want)) return want;
-			for (int i = 0; i < 10; i++)
-				if (Usable(p, i)) return i;
-			return -1;
-		}
-
-		static bool Usable(Player p, int i)
-		{
-			var it = p.inventory[i];
-			if (it == null || it.IsAir || it.damage <= 0 || it.useStyle == 0) return false;
-			return it.pick == 0 && it.axe == 0 && it.hammer == 0;
-		}
-
 		static bool BossOnField()
 		{
 			for (int i = 0; i < Main.maxNPCs; i++)
@@ -196,6 +180,7 @@ namespace TerraBlind
 			if (!Enabled || !AgentPermissions.Attack) { Release(); return; }
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active || p.dead || Manual.On) { Release(); return; }
+			if (FightCoordinator.HoldingFallProtection(p)) { Last = "fall protection"; return; }
 			if (BossOnField())
 			{
 				if (Dodge.TryAttackBoss(p, out var bossAim))
@@ -207,7 +192,9 @@ namespace TerraBlind
 			}
 			Dodge.EndBossAttack(p);
 
-			int n = Worst(p, out int tcx, out int tcy, out int dist);
+			int slot = CombatLoadout.Select(p);
+			if (slot < 0) { Last = "no weapon"; Release(); return; }
+			int n = Worst(p, p.inventory[slot], out int tcx, out int tcy, out int dist);
 			if (n < 0) { Last = "no enemies"; _target = -1; Release(); return; }
 
 			// 【有目标就打,不问 Jev】。问的是"要不要停下赶路",boss 战里它对探测器和手答了 36% 的 Ignore,
@@ -230,12 +217,8 @@ namespace TerraBlind
 			}
 			_target = n;
 
-			if (WorkBusy && !_call.InterruptWork) { Last = "placing, hold fire"; NoFire("在放置"); return; }
+			if (WorkBusy && !_call.InterruptWork) { Last = "placing, hold fire"; NoFire("在放置"); Release(); return; }
 			_noFire = "";
-
-			int slot = WeaponSlot(p, Main.npc[n].boss || DestroyerSegment(Main.npc[n].type));
-			if (slot < 0)
-			{ Last = "no weapon"; DiagLog.Write("[combat] 不挥:热键栏里没有纯武器"); Release(); return; }
 
 			// 放置以外的持有者一律抢:寻路砸网砸罐、挖矿都能重来,挨打不能等
 			if (!AxisLock.Take(Owner, Ax.Use, () => Enabled))
@@ -252,7 +235,7 @@ namespace TerraBlind
 			if (slot >= 10) { Last = "weapon not in hotbar"; NoFire("武器不在热键栏"); return; }
 			p.selectedItem = slot;
 			Main.SmartCursorWanted_Mouse = false;
-			var aim = UseLead ? Lead(p, Main.npc[n], ShotSpeed(p, p.inventory[slot])) : Main.npc[n].Center;
+			var aim = Aim(p, Main.npc[n], p.inventory[slot]);
 			AimTarget = aim;
 			Cursor.AimPx(aim.X, aim.Y);
 			// 【看 itemAnimation 不看 itemTime】。itemTime 是整个使用周期(星怒要等星星落完),
@@ -263,10 +246,14 @@ namespace TerraBlind
 			{
 				_swinging = true;
 				_loggedTarget = n;
-				DiagLog.Write($"[combat] 挥 {Main.npc[n].TypeName} ({tcx},{tcy}) {dist}格 血{p.statLife}/{p.statLifeMax}");
+				DiagLog.Write($"[combat] 挥 {Main.npc[n].TypeName} ({tcx},{tcy}) {dist}格 血{p.statLife}/{p.statLifeMax} weapon={p.inventory[slot].type} slot={slot} nav={RecedingNav.Active}");
 			}
 			Last = $"hitting {Main.npc[n].TypeName} at {dist}";
+			if (!bossFight) AxisLock.Release(Owner);
 		}
+
+		internal static Microsoft.Xna.Framework.Vector2 Aim(Player p, NPC npc, Item weapon)
+			=> UseLead ? Lead(p, npc, ShotSpeed(p, weapon)) : npc.Center;
 
 		static float ShotSpeed(Player p, Item weapon)
 		{

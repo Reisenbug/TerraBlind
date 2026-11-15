@@ -14,6 +14,7 @@ namespace TerraBlind;
 public class NativeAgent : ModSystem
 {
     static readonly ConcurrentQueue<Action> MainQueue = new();
+    static readonly ConcurrentQueue<Action> FrameQueue = new();
     static NativeAgent _instance;
     HttpClient _http;
     AgentConversation _conversation;
@@ -25,6 +26,9 @@ public class NativeAgent : ModSystem
     string _system;
     JsonObject _goalOptions;
     Task _goalStopping = Task.CompletedTask;
+    Task _dangerDelivery = Task.CompletedTask;
+    Task _idleReaction = Task.CompletedTask;
+    int _lastDangerNotice;
     internal static JsonObject GoalState => _instance?._codex?.GoalState;
     DateTime _lastFeedback;
     DateTime _lastWatch;
@@ -39,6 +43,30 @@ public class NativeAgent : ModSystem
         return messages;
     }
     public static string Status { get; private set; } = "idle";
+    internal static bool Processing => _instance?._running?.IsCompleted == false
+        && _instance._cancel?.IsCancellationRequested == false && _instance._answer == null;
+
+    internal static JsonArray ObserveTiles(Player player)
+    {
+        var result = new JsonArray();
+        var watch = AgentTools.Watches;
+        if (!watch.Subscribed("nearby_tile")) return result;
+        int px = (int)(player.Center.X / 16), py = (int)(player.Center.Y / 16), radius = watch.Radius;
+        for (int x = Math.Max(0, px - radius); x <= Math.Min(Main.maxTilesX - 1, px + radius); x++)
+            for (int y = Math.Max(0, py - radius); y <= Math.Min(Main.maxTilesY - 1, py + radius); y++)
+            {
+                int distance = Math.Abs(x - px) + Math.Abs(y - py);
+                if (distance > radius) continue;
+                var tile = Main.tile[x, y];
+                if (!tile.HasTile || !watch.WatchesTile(tile.TileType)) continue;
+                result.Add(new JsonObject { ["tile_type"] = (int)tile.TileType, ["x"] = x, ["y"] = y,
+                    ["frame_x"] = (int)tile.TileFrameX, ["frame_y"] = (int)tile.TileFrameY,
+                    ["distance_tiles_manhattan"] = distance, ["liquid_amount"] = (int)tile.LiquidAmount,
+                    ["liquid_type"] = tile.LiquidType, ["route_assessed"] = false,
+                    ["unit"] = "tile_cell", ["collection_verified"] = false });
+            }
+        return result;
+    }
 
     public override void Load()
     {
@@ -48,6 +76,8 @@ public class NativeAgent : ModSystem
         _conversation = new AgentConversation(_http);
         _system = Encoding.UTF8.GetString(Mod.GetFileBytes("Agent/System.txt"));
         _schemas = JsonNode.Parse(Encoding.UTF8.GetString(Mod.GetFileBytes("Agent/Tools.json"))).AsArray();
+        AgentControlSession.DescribeClaims(_schemas);
+        AgentScript.DescribePrograms(_schemas);
     }
 
     public static void Submit(string text)
@@ -156,8 +186,18 @@ public class NativeAgent : ModSystem
             CloseCodex();
             return;
         }
+        int frameWaiters = FrameQueue.Count;
+        for (int i = 0; i < frameWaiters && FrameQueue.TryDequeue(out var waiter); i++) waiter();
         while (MainQueue.TryDequeue(out var action)) action();
-        if (!Main.gameMenu && _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false
+        if (!Main.gameMenu && _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false)
+        {
+            AgentTools.ObserveBossControl(Processing);
+            AgentTools.ContinuePreparedNode(_cancel.Token);
+            AgentTools.ObserveContinuity();
+            AgentTools.LootPassingChest();
+        }
+        if (!Main.gameMenu && (AgentTools.Watches.LocalDelivery || AgentTools.Watches.HasScriptHandlers
+                || _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false)
             && AgentTools.Watches.Armed && DateTime.UtcNow - _lastWatch >= TimeSpan.FromMilliseconds(250))
         {
             _lastWatch = DateTime.UtcNow;
@@ -167,9 +207,49 @@ public class NativeAgent : ModSystem
                 if (chest != null && chest.item.Any(i => !i.IsAir)
                     && Math.Abs(chest.x - p.Center.X / 16) + Math.Abs(chest.y - p.Center.Y / 16) <= AgentTools.Watches.Radius)
                     chests.Add(new JsonObject { ["x"] = chest.x, ["y"] = chest.y });
-            AgentTools.Watches.Observe(new JsonObject { ["hp"] = p.statLife, ["dead"] = p.dead,
+            AgentTools.Watches.Observe(new JsonObject { ["hp"] = p.statLife, ["max_hp"] = p.statLifeMax2,
+                ["dead"] = p.dead, ["suffocating"] = p.suffocating,
+                ["tick"] = (long)Main.GameUpdateCount, ["honey_slowed"] = p.honeyWet && !p.ignoreWater,
+                ["last_damage"] = AgentTools.LastDamage?.DeepClone(), ["last_death"] = AgentTools.LastDeath?.DeepClone(),
+                ["item_counts"] = new JsonObject(p.inventory.Where(item => !item.IsAir).GroupBy(item => item.type)
+                    .Select(group => new System.Collections.Generic.KeyValuePair<string, JsonNode>(group.Key.ToString(), JsonValue.Create(group.Sum(item => item.stack))))),
+                ["pos"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y },
                 ["inventory_full"] = !p.inventory.Take(50).Any(i => i.IsAir), ["chests"] = chests,
-                ["actions"] = AgentTools.Actions.Snapshot() });
+                ["bosses"] = new JsonArray(Main.npc.Where(n => n != null && n.active && n.boss && n.life > 0
+                    && Math.Abs(n.Center.X - p.Center.X) + Math.Abs(n.Center.Y - p.Center.Y) <= 200 * 16)
+                    .Select(n => (JsonNode)new JsonObject { ["who"] = n.whoAmI, ["type"] = n.type,
+                        ["name"] = Terraria.Lang.GetNPCNameValue(n.type), ["hp"] = n.life, ["max_hp"] = n.lifeMax,
+                        ["x"] = n.Center.X / 16f, ["y"] = n.Center.Y / 16f, ["tick"] = Main.GameUpdateCount }).ToArray()),
+                ["tiles"] = ObserveTiles(p),
+                ["drops"] = AgentTools.Watches.Subscribed("nearby_drop") ? NearbyDrops.Read(AgentTools.Watches.Radius) : null,
+                ["actions"] = AgentTools.Actions.Summary() });
+            if (AgentTools.Watches.Samples % 20 == 0)
+                DiagLog.Write("[agent_observe] " + AgentTools.Watches.LastObservation.ToJsonString());
+            if (_running?.IsCompleted == false && _cancel?.IsCancellationRequested == false && _idleReaction.IsCompleted)
+                _idleReaction = AgentTools.ReactWhileIdle(_cancel.Token);
+            if (_codex != null && Processing && _dangerDelivery.IsCompleted)
+            {
+                var danger = AgentTools.Watches.Pending()["events"].AsArray().LastOrDefault(e =>
+                    e["id"].GetValue<int>() > _lastDangerNotice
+                    && (e["kind"].ToString() is "low_health" or "honey_slowdown" || !AgentTools.Watches.LocalDelivery
+                        && e["kind"].ToString() is "suffocating" or "player_died" or "boss_appeared"));
+                if (danger != null)
+                {
+                    _lastDangerNotice = danger["id"].GetValue<int>();
+                    var observation = new JsonObject { ["event_id"] = _lastDangerNotice, ["kind"] = danger["kind"].DeepClone(),
+                        ["hp"] = p.statLife, ["max_hp"] = p.statLifeMax2, ["dead"] = p.dead,
+                        ["potion_delay_ticks"] = p.potionDelay, ["active_handle"] = AgentTools.Actions.ActiveHandle,
+                        ["last_damage"] = AgentTools.LastDamage?.DeepClone() };
+                    bool bossAppeared = danger["kind"].ToString() == "boss_appeared";
+                    if (bossAppeared) observation["boss"] = danger["evidence"]?.DeepClone();
+                    if (danger["kind"].ToString() == "honey_slowdown") observation["honey_slowed"] = true;
+                    string instruction = bossAppeared
+                        ? "宿主观察到附近Boss，原目标及进度保留。依据任务、战斗许可与现场，决定交接战斗、调整路线或继续当前行动。调整前核对当前动作句柄。现场："
+                        : "宿主实时危险观察，原目标和进度保留。低血量仅通知，当前动作继续；不得单凭低血量暂停、取消、原地回血或等待审阅。仅任务明确约束死亡时按该约束处理。请在行动期间调整后续方案：";
+                    _dangerDelivery = _codex.Steer(instruction + observation.ToJsonString(AgentTools.ModelJson), _cancel.Token);
+                }
+                else _dangerDelivery = AgentTools.NotifyExecution(_codex, _cancel.Token);
+            }
         }
         if (Status == "后台动作执行中" && !AgentTools.Actions.HasActive) Status = "idle";
         if (PvpDuel.Active) PvpDuel.Update(Main.LocalPlayer);
@@ -201,67 +281,156 @@ public class NativeAgent : ModSystem
         _cancel = new CancellationTokenSource();
         var token = _cancel.Token;
         AgentTools.NewTask();
+        _lastDangerNotice = 0;
         string system = AgentScript.Instructions(_system + "\n回复语言风格：" + Config.I.AgentPersona, _schemas);
         var entrySchemas = AgentScript.EntryTools(_schemas);
         Progress(useCodex ? "正在连接 Codex 并等待响应。" : "正在请求模型。", "等待模型响应");
-        DiagLog.Write($"[agent] backend={(useCodex ? "codex" : "api")} model={(useCodex ? codexModel : model)}");
+        DiagLog.Write($"[agent] backend={(useCodex ? "codex" : "api")} model={(useCodex ? codexModel : model)} api_revision={AgentTools.ApiRevision} assembly={typeof(NativeAgent).Assembly.ManifestModule.ModuleVersionId}");
         _running = Task.Run(async () =>
         {
             try
             {
                 await _goalStopping.WaitAsync(token);
-                string state = await AgentTools.State(token);
+                await AgentTools.Execute("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
+                    ["code"] = ScriptLibrary.Example("safety_reactions")["code"].DeepClone() }, token);
+                var modelContext = new AgentContext();
+                int contextRevision = 0;
+                Task<bool> Covered() => OnMain(() => (AgentTools.ControlSession.PrimaryActive || AgentTools.Actions.HasPrimaryControl)
+                    && !Main.LocalPlayer.dead && !AgentTools.Watches.HasModelInterrupting, token);
+                async Task<string> Context()
+                {
+                    if (useCodex)
+                    {
+                        bool executing = await Covered();
+                        await codex.PrepareContext(codexPath, cwd, codexModel, system, entrySchemas, goalOptions != null, token,
+                            compact: executing, keepExecuting: Covered);
+                    }
+                    if (useCodex && contextRevision != codex.ContextRevision)
+                    { modelContext.Reset(); contextRevision = codex.ContextRevision; }
+                    string result = modelContext.Capture(JsonNode.Parse(await AgentTools.State(token)).AsObject()).ToJsonString(AgentTools.ModelJson);
+                    DiagLog.Write($"[agent-context] chars={result.Length} revision={contextRevision}");
+                    return result;
+                }
+                string state = await Context();
                 void Say(string text) => MainQueue.Enqueue(() => { if (!token.IsCancellationRequested) AgentChat.Say(text); });
                 string input = goal + "\n现状：" + state;
                 long recoverySession = -1;
                 int noProgressContinuations = 0;
+                int preparationContinuations = 0;
+                string preparedAttempt = null;
+                bool preparedDuringRespawn = false;
                 while (true)
                 {
                     int progressBefore = await OnMain(() => AgentTools.Plan.Progress, token);
+                    int arrivalsBefore = AgentTools.Actions.NavigationArrivals;
+                    int discoveriesBefore = await OnMain(() => AgentTools.DiscoveryRevision, token);
                     var workflowBefore = await OnMain(() => AgentTools.Workflows.ToDictionary(w => w.Key, w => w.Value.Segment), token);
-                    int completedBefore = await OnMain(() => AgentTools.Workflows.Values.Sum(w => w.Completed), token);
                     if (useCodex)
-                        await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token, goalOptions);
+                        await codex.RunAsync(input, codexPath, cwd, codexModel, system, entrySchemas, AgentTools.Execute, Say, token, goalOptions, Context,
+                            Covered);
                     else
                         await _conversation.RunAsync(input, url, key, model, system, entrySchemas, AgentTools.Execute, Say, token);
-                    while (await OnMain(() => AgentTools.Actions.HasActive && AgentTools.Watches.Armed
-                        && !AgentTools.Watches.HasPending, token))
-                        await Task.Delay(100, token);
-                    if (await OnMain(() => AgentTools.Watches.HasPending, token))
+                    bool scriptYielded = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.Yielded
+                        && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
+                    bool reviewRequested = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.ReviewRequested
+                        && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
+                    var backgroundReview = System.Diagnostics.Stopwatch.StartNew();
+                    bool historyChanged = useCodex && contextRevision != codex.ContextRevision;
+                    string preparingAttempt = await OnMain(() => AgentTools.PreparationContext(
+                        AgentTools.Actions.ActiveAttempt, AgentTools.Actions.ActiveNode), token);
+                    var preparation = await OnMain(() => (Delay: AgentTools.Plan.RequiresNodeExecution ? 0 : 15,
+                        Nodes: AgentTools.Plan.PreparationNodes(AgentTools.Actions.ActiveNode, AgentTaskEvidence.Measure)), token);
+                    bool prepareNext = historyChanged || preparingAttempt != null && preparingAttempt != preparedAttempt
+                        && (preparingAttempt != AgentTools.PreparationNotifiedContext || preparation.Nodes.Count > 0);
+                    double reviewDelay = preparation.Delay;
+                    while (!reviewRequested && (!prepareNext || backgroundReview.Elapsed.TotalSeconds < reviewDelay)
+                        && await OnMain(() => AgentTools.Actions.HasActive && (goalOptions != null || AgentTools.Watches.Armed)
+                        && !AgentTools.Watches.HasModelInterrupting && !AgentTools.Watches.HasHealthNotice && !AgentTools.Watches.HasAdvisories, token))
                     {
+                        await Task.Delay(100, token);
+                        preparingAttempt = await OnMain(() => AgentTools.PreparationContext(
+                            AgentTools.Actions.ActiveAttempt, AgentTools.Actions.ActiveNode), token);
+                        prepareNext = historyChanged || preparingAttempt != null && preparingAttempt != preparedAttempt
+                            && (preparingAttempt != AgentTools.PreparationNotifiedContext || preparation.Nodes.Count > 0);
+                    }
+                    if (!reviewRequested && (prepareNext
+                        || await OnMain(() => AgentTools.Watches.HasHealthNotice || AgentTools.Watches.HasAdvisories, token))
+                        && await OnMain(() => AgentTools.Actions.HasActive && !AgentTools.Watches.HasModelInterrupting, token))
+                    {
+                        preparedAttempt = preparingAttempt;
+                        var healthNotices = await OnMain(AgentTools.Watches.TakeHealthNotices, token);
+                        var opportunities = await OnMain(AgentTools.Watches.Advisories, token);
+                        input = "并行观察：后台动作继续。补齐当前节点on_failure和后继script；独立动作的父脚本已退出时用action_queue衔接。"
+                            + "\n待补齐节点：" + preparation.Nodes.ToJsonString()
+                            + "\n健康通知：" + healthNotices.ToJsonString()
+                            + "\n沿途机会：" + opportunities.ToJsonString(AgentTools.ModelJson)
+                            + "\n现状：" + await Context();
+                        await OnMain(() => { DiagLog.Write("[agent] background_review active_handle=" + AgentTools.Actions.ActiveHandle
+                            + " prepare=" + prepareNext + " health=" + healthNotices.Count
+                            + " opportunities=" + string.Join(",", opportunities.Select(e => e["kind"]?.ToString()))); return true; }, token);
+                        continue;
+                    }
+                    if (await OnMain(() => AgentTools.Watches.HasModelInterrupting, token))
+                    {
+                        if (AgentTools.Actions.NavigationArrivals > arrivalsBefore) noProgressContinuations = 0;
                         string handle = AgentTools.Actions.ActiveHandle;
                         if (handle != null) await AgentTools.Actions.Control(handle, "pause", null, token);
-                        var events = await OnMain(() => AgentTools.Watches.Take(), token);
-                        input = "原目标：" + goal + "\n宿主事件已暂停原后台动作并释放输入。根据实际事件调整剩余代码；已完成step不重复，uncertain先核对。"
+                        if (goalOptions == null && await OnMain(() => AgentTools.Recovery.Exhausted, token)) break;
+                        var events = await OnMain(() => AgentTools.Watches.TakeModelInterrupts(8), token);
+                        input = "宿主事件已暂停原后台动作并释放输入。根据事件调整剩余代码；已完成step保留，uncertain先核对。"
                             + "临时参数仅属于该动作，不能放宽玩家权限；需要继续时恢复同一handle。\n事件：" + events.ToJsonString()
-                            + "\n现状：" + await AgentTools.State(token);
+                            + "\n现状：" + await Context();
                         continue;
                     }
                     bool died = await OnMain(() => Main.LocalPlayer.dead, token);
                     if (died && !await OnMain(() => PvpDuel.Active, token))
                     {
-                        while (await OnMain(() => Main.LocalPlayer.dead, token)) await Task.Delay(250, token);
-                        input = "原目标：" + goal + "\n刚才死亡，现已复活。依据实际现状继续未完成目标，不要重放旧坐标操作。\n现状：" + await AgentTools.State(token);
+                        if (preparedDuringRespawn)
+                            while (await OnMain(() => Main.LocalPlayer.dead, token)) await Task.Delay(250, token);
+                        preparedDuringRespawn = await OnMain(() => Main.LocalPlayer.dead, token);
+                        input = preparedDuringRespawn
+                            ? "继续原目标。角色正在等待复活，现在查询资源、配方和现场证据，修订未完成节点的script，准备恢复方案。实际动作在复活后核对新位置再执行。\n现状：" + await Context()
+                            : "继续原目标。刚才死亡，现已复活。依据实际现状执行已准备的恢复方案。\n现状：" + await Context();
                         continue;
                     }
+                    preparedDuringRespawn = false;
                     bool canContinue = await OnMain(() => AgentTools.Plan.Incomplete
                         && AgentTools.Plan.Snapshot()["status"]?.ToString() != "blocked"
                         && !PvpDuel.Active, token);
                     if (goalOptions != null && !await OnMain(() => AgentTools.Plan.VerifyFinal(AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), token))
                         canContinue = await OnMain(() => AgentTools.Plan.Snapshot()["status"]?.ToString() != "blocked", token);
-                    bool progressed = await OnMain(() => AgentTools.Plan.Progress > progressBefore, token);
-                    bool scriptYielded = await OnMain(() => AgentTools.Workflows.Any(w => w.Value.Yielded
-                        && w.Value.Segment > (workflowBefore.TryGetValue(w.Key, out int previous) ? previous : 0)), token);
+                    bool progressed = await OnMain(() => AgentTools.Plan.Progress > progressBefore, token)
+                        || AgentTools.Actions.NavigationArrivals > arrivalsBefore;
+                    if (AgentTools.Actions.NavigationArrivals > arrivalsBefore)
+                        await OnMain(() => { DiagLog.Write("[agent_progress] navigation_arrivals=" + AgentTools.Actions.NavigationArrivals); return true; }, token);
                     if (scriptYielded)
                     {
                         canContinue = true;
-                        progressed |= await OnMain(() => AgentTools.Workflows.Values.Sum(w => w.Completed) > completedBefore, token);
                     }
-                    if (progressed) noProgressContinuations = 0;
-                    if (canContinue && (progressed || noProgressContinuations++ < 1))
+                    if (progressed) { noProgressContinuations = 0; preparationContinuations = 0; }
+                    if (await OnMain(() => AgentTools.Recovery.Exhausted, token)) canContinue = false;
+                    if (canContinue && await OnMain(() => AgentTools.Recovery.Offer(), token))
                     {
-                        input = "原目标：" + goal + "\n计划尚未完成或脚本主动yield，请结合script_workflows和当前状态续写剩余代码。不要重做已完成step；uncertain步骤先核对。不能只建立计划或说准备行动就结束；无可执行办法则明确报告阻塞，不再yield空转。未取得实际进展时宿主仅额外续接一次。\n现状："
-                            + await AgentTools.State(token);
+                        input = "工具失败：按证据修正参数、来源或局部方案，继续原任务。"
+                            + "修复最多3轮，同一失败参数最多3次。\n失败证据："
+                            + (await OnMain(() => AgentTools.Recovery.Snapshot(), token)).ToJsonString(AgentTools.ModelJson) + "\n现状：" + await Context();
+                        continue;
+                    }
+                    bool discovered = await OnMain(() => AgentTools.DiscoveryRevision > discoveriesBefore, token);
+                    if (canContinue && (progressed || discovered && preparationContinuations++ < 4 || noProgressContinuations++ < 1))
+                    {
+                        input = "计划未完成或脚本yield：结合当前workflow续写并执行剩余步骤，uncertain先核对。"
+                            + "新查证资料仅允许最多4轮准备续接，重复查询不增加准备机会；没有新资料或实际进展时仅额外续接一次。请执行采集、移动或制作；无可执行办法则明确报告阻塞，不再yield空转。\n现状："
+                            + await Context();
+                        continue;
+                    }
+                    if (goalOptions != null && !await OnMain(() => AgentTools.Plan.VerifyFinal(AgentTaskEvidence.Measure)["verified"].GetValue<bool>(), token))
+                    {
+                        await OnMain(() => { Progress("目标未完成，继续调整方案。", "目标续接中", false); return true; }, token);
+                        input = "目标尚未通过宿主验收，按当前阻塞调整并继续原计划。"
+                            + "已有后台动作保持执行；失败按新证据换方案。"
+                            + "修复blocked节点并保留既有进度。"
+                            + "\n现状：" + await Context();
                         continue;
                     }
                     JsonObject report;
@@ -282,7 +451,7 @@ public class NativeAgent : ModSystem
                         await Task.Delay(250, token);
                     }
                     if (report["ended"] != null) break;
-                    input = "原目标：" + goal + "\n按玩家补充或本会话唯一一次自动受阻求助处理。完成具体操作或说明限制后结束本轮，不轮询、不等待、不重启战斗；Jev会继续控制。\n战况：" + report.ToJsonString();
+                    input = "PvP新要求或本会话一次受阻求助：处理后结束本轮，Jev继续控制。\n战况：" + report.ToJsonString();
                 }
                 if (goalOptions != null)
                 {
@@ -296,7 +465,8 @@ public class NativeAgent : ModSystem
                     {
                         string handle = AgentTools.Actions.ActiveHandle;
                         if (handle != null) await AgentTools.Actions.Control(handle, "pause", null, token);
-                        await codex.SuspendGoal(await OnMain(() => AgentTools.Plan.Snapshot()["status"]?.ToString() == "blocked" ? "blocked" : "paused", token), token);
+                        if (await OnMain(() => AgentTools.Recovery.Exhausted || AgentTools.Plan.Snapshot()["status"]?.ToString() == "blocked", token))
+                            await codex.SuspendGoal("blocked", token);
                     }
                     await OnMain(() => { DiagLog.Write("[agent] goal result " + final?.ToJsonString()); return true; }, token);
                 }
@@ -304,9 +474,14 @@ public class NativeAgent : ModSystem
                 {
                     if (AgentTools.Plan.Incomplete || AgentTools.Workflows.Values.Any(w => w.Yielded)
                         || goalOptions != null && codex.GoalState?["native"]?["status"]?.ToString() != "complete")
-                        Progress("本轮已结束，但长任务尚未验证完成；进度已保留，可发指令继续。", "paused");
+                    {
+                        if (goalOptions != null)
+                            Progress("本轮执行未完成，已停止空转；目标与进度保留，等待修复或 /tb /goal resume。", "needs_repair");
+                        else Progress("本轮已结束，但长任务尚未验证完成；进度已保留，可发指令继续。", "paused");
+                    }
                     else Status = AgentTools.Actions.HasActive ? "后台动作执行中" : "idle";
-                    if (!AgentTools.Actions.HasActive && !AgentTools.Plan.Incomplete) AgentTools.Watches.End();
+                    if (!AgentTools.Actions.HasActive && !AgentTools.Plan.Incomplete)
+                    { AgentTools.ClearTaskPolicy(); AgentTools.Watches.End(); }
                     return true;
                 }, token);
             }
@@ -332,7 +507,7 @@ public class NativeAgent : ModSystem
 
     internal static Task<T> OnMain<T>(Func<T> action, CancellationToken token)
     {
-        var result = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var result = new TaskCompletionSource<T>();
         var registration = token.Register(() => result.TrySetCanceled(token));
         MainQueue.Enqueue(() =>
         {
@@ -346,13 +521,28 @@ public class NativeAgent : ModSystem
         return result.Task;
     }
 
+    internal static Task NextUpdate(CancellationToken token)
+    {
+        var result = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registration = token.Register(() => result.TrySetCanceled(token));
+        FrameQueue.Enqueue(() => { result.TrySetResult(true); registration.Dispose(); });
+        return result.Task;
+    }
+
     internal static void ValidateTool(string name, JsonObject args)
     {
         var schema = _instance?._schemas?.FirstOrDefault(t => t["function"]?["name"]?.ToString() == name);
         if (schema == null) throw new ArgumentException("未知游戏工具：" + name);
         foreach (var field in schema["function"]?["parameters"]?["required"]?.AsArray() ?? new JsonArray())
-            if (args[field.ToString()] == null) throw new ArgumentException("工具缺少必填参数：" + field);
+            if (args[field.ToString()] == null)
+            {
+                var error = new ArgumentException("工具缺少必填参数：" + field);
+                error.Data["tool_schema"] = schema["function"].DeepClone();
+                throw error;
+            }
     }
+
+    internal static JsonObject DescribeApi(JsonObject args) => AgentScript.DescribeApi(_instance._schemas, args);
 
     internal static async Task<string> Ask(string question, CancellationToken token)
     {
@@ -369,9 +559,15 @@ public class NativeAgent : ModSystem
     public override void OnWorldUnload()
     {
         Cancel();
+        AgentTools.ClearTaskPolicy(true);
         AgentTools.Plan.Reset();
         AgentTools.Workflows.Clear();
         AgentTools.Actions.Reset();
+        AgentTools.Control.Reset();
+        AgentTools.ControlSession.Reset();
+        AgentTools.LastDamage = AgentTools.LastDeath = AgentTools.LastContactEscape = AgentTools.LastAutomaticHeal = null;
+        AgentTools.ContactEscapeActive = false;
+        CombatLoadout.PreferredType = 0;
         AgentTaskEvidence.Reset();
         PlayerCombat.Stop();
         PvpDuel.Stop();
@@ -393,7 +589,10 @@ public class NativeAgent : ModSystem
 
 public static class AgentPermissions
 {
-    public static bool Dodge = true;
-    public static bool Attack = true;
-    public static void Reset() { Dodge = Attack = true; }
+    static bool dodge = true, attack = true;
+    public static bool CanDodge(bool delegated = false) => dodge && AgentTools.ControlAllows(ControlBehavior.Dodge, ControlChannels.Movement, delegated);
+    public static bool CanAttack(bool delegated = false) => attack && AgentTools.ControlAllows(ControlBehavior.Attack, ControlChannels.ItemUse, delegated);
+    public static bool Dodge { get => CanDodge(); set => dodge = value; }
+    public static bool Attack { get => CanAttack(); set => attack = value; }
+    public static void Reset() { dodge = attack = true; }
 }

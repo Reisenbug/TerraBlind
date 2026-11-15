@@ -881,6 +881,7 @@ namespace TerraBlind
 				var amtMatch = System.Text.RegularExpressions.Regex.Match(rb, "\"amount\":(\\d+)");
 				int amount = amtMatch.Success ? int.Parse(amtMatch.Groups[1].Value) : 1;
 				// 先刷配方表:vanilla 只在背包 UI 那条路上刷,传送直达地狱时表是空的
+				Main.LocalPlayer.AdjTiles();
 				Recipe.FindRecipes();
 				int targetId = -1;
 				if (idMatch.Success)
@@ -989,6 +990,7 @@ namespace TerraBlind
 						if (Terraria.ID.ItemID.Search.ContainsName(nm))
 						{ want = Terraria.ID.ItemID.Search.GetId(nm); break; }
 					var p2 = Main.LocalPlayer;
+					p2.AdjTiles();
 					Recipe.FindRecipes();
 					var available = new System.Collections.Generic.HashSet<int>();
 					for (int i = 0; i < Main.numAvailableRecipes; i++) available.Add(Main.availableRecipe[i]);
@@ -1860,9 +1862,12 @@ namespace TerraBlind
 						else
 							haveAt = true;
 					}
+					int paSlot = PlaceAction.ResolveSlot(paIt.Groups[1].Value);
+					int paTile = paSlot >= 0 ? Main.LocalPlayer.inventory[paSlot].createTile : -1;
+					int paWall = paSlot >= 0 ? Main.LocalPlayer.inventory[paSlot].createWall : -1;
 					if (haveAt)
 						paOk = PlaceAnywhere.Start(paIt.Groups[1].Value, paX, paY, out paWhy);
-					body = paOk ? "{\"accepted\":true,\"world\":[" + paX + "," + paY + "],\"note\":\"poll /place_anywhere_status\"}"
+					body = paOk ? "{\"accepted\":true,\"world\":[" + paX + "," + paY + "],\"expected_tile\":" + paTile + ",\"expected_wall\":" + paWall + ",\"note\":\"poll /place_anywhere_status\"}"
 								: "{\"accepted\":false,\"reason\":\"" + JsonEsc(paWhy) + "\"}";
 				}
 			}
@@ -2110,6 +2115,8 @@ namespace TerraBlind
 			// ---- LLM agent bridge (see AgentChat.cs) ----
 			else if (path == "/nav_recede")
 			{
+				if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+					return (409, "{\"error\":\"agent_navigation_forbidden\"}");
 				// Bellman receding-horizon nav (same engine as the K keybind). Poll /nav_recede_done for the outcome.
 				string reqBody;
 				reqBody = payload;
@@ -2156,6 +2163,25 @@ namespace TerraBlind
 						DiagLog.Write($"[warm] 后台开建 ({wgx},{wgy})");
 						body = "{\"ok\":true,\"cached\":false}";
 					}
+				}
+			}
+			else if (path == "/descent_main_route")
+			{
+				var request = System.Text.Json.Nodes.JsonNode.Parse(payload).AsObject();
+				body = MainDescentRoute(request).ToJsonString();
+			}
+			else if (path == "/descent_route_status")
+			{
+				var request = System.Text.Json.Nodes.JsonNode.Parse(payload).AsObject();
+				string biome = request["name"]?.ToString()?.ToLowerInvariant() ?? "";
+				lock (_rwLock)
+				{
+					bool matches = _rwKey == biome + "\u0001" + payload;
+					body = new System.Text.Json.Nodes.JsonObject
+					{
+						["status"] = _rwBusy ? (matches ? "running" : "busy") : !matches ? "not_started" : _rwJson == null ? "failed" : "ready",
+						["result"] = matches && !_rwBusy && _rwJson != null ? System.Text.Json.Nodes.JsonNode.Parse(_rwJson) : null
+					}.ToJsonString();
 				}
 			}
 			else if (path == "/descent_route_async")
@@ -2244,6 +2270,12 @@ namespace TerraBlind
 					isb.Append(",\"type\":").Append(it.type);
 					isb.Append(",\"stack\":").Append(it.stack);
 					isb.Append(",\"damage\":").Append(it.damage);
+					isb.Append(",\"useAmmo\":").Append(it.useAmmo);
+					isb.Append(",\"hasAmmo\":").Append(it.useAmmo <= 0 || Main.LocalPlayer.HasAmmo(it) ? "true" : "false");
+					isb.Append(",\"shoot\":").Append(it.shoot);
+					isb.Append(",\"shootSpeed\":").Append(it.shootSpeed.ToString(System.Globalization.CultureInfo.InvariantCulture));
+					isb.Append(",\"useTime\":").Append(it.useTime);
+					isb.Append(",\"useAnimation\":").Append(it.useAnimation);
 					isb.Append(",\"pick\":").Append(it.pick);
 					isb.Append(",\"axe\":").Append(it.axe);
 					isb.Append(",\"hammer\":").Append(it.hammer);
@@ -2268,6 +2300,7 @@ namespace TerraBlind
 				string biome = bnM.Success ? bnM.Groups[1].Value.ToLowerInvariant() : "";
 				ushort[] sigTypes = BiomeSig(biome);
 				if (sigTypes == null) { body = "{\"error\":\"unknown_biome\",\"name\":\"" + JsonEsc(biome) + "\"}"; status = 400; }
+                else if (biome == "jungle") body = BiomeSearch.Jungle().ToJsonString();
 				else
 				{
 					var want = new System.Collections.Generic.HashSet<ushort>(sigTypes);
@@ -2422,6 +2455,11 @@ namespace TerraBlind
 				var mdM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"max_dist\"\\s*:\\s*(\\d+)");
 				int wantN = nM2.Success ? int.Parse(nM2.Groups[1].Value) : 5;
 				int maxD = mdM.Success ? int.Parse(mdM.Groups[1].Value) : 300;
+				var frameXM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"frame_x\"\\s*:\\s*(\\d+)");
+				var frameYM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"frame_y\"\\s*:\\s*(\\d+)");
+				int? frameX = frameXM.Success ? int.Parse(frameXM.Groups[1].Value) : null;
+				int? frameY = frameYM.Success ? int.Parse(frameYM.Groups[1].Value) : null;
+				bool includeLocked = System.Text.RegularExpressions.Regex.IsMatch(reqBody, "\"include_locked\"\\s*:\\s*true");
 				var pl = Main.LocalPlayer;
 				if (!nameM.Success || pl == null)
 				{
@@ -2451,12 +2489,13 @@ namespace TerraBlind
 								if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) continue;
 								var t = Main.tile[x, y];
 								if (!t.HasTile || t.TileType != wantType) continue;
+								if (frameX.HasValue && t.TileFrameX != frameX.Value || frameY.HasValue && t.TileFrameY != frameY.Value) continue;
 								// 箱子是 2x2 一个 TileID,只有左上角那格(frameX%36==0 && frameY%36==0)算锚点。
 								// 去重到它,顺便用 frameX 认出是哪种箱子。
 								if (wantType == Terraria.ID.TileID.Containers || wantType == Terraria.ID.TileID.Containers2)
 								{
 									if (t.TileFrameX % 36 != 0 || t.TileFrameY % 36 != 0) continue;
-									if (Terraria.Chest.IsLocked(x, y)) continue;
+									if (!includeLocked && Terraria.Chest.IsLocked(x, y)) continue;
 									if (wantType == Terraria.ID.TileID.Containers && t.TileFrameX / 36 == 16) continue;
 									found.Add((x, y, ChestKindName(wantType, t.TileFrameX / 36)));
 								}
@@ -2483,6 +2522,7 @@ namespace TerraBlind
 						fsb.Append($"{{\"x\":{found[i].x},\"y\":{found[i].y},\"dist\":{System.Math.Abs(found[i].x - pcx) + System.Math.Abs(found[i].y - pcy)}");
 						fsb.Append(",\"near_hive_wall\":").Append(InHive(found[i].x, found[i].y) ? "true" : "false");
 						if (found[i].kind != null) fsb.Append($",\"kind\":\"{JsonEsc(found[i].kind)}\"");
+						if (found[i].kind != null) fsb.Append(",\"locked\":").Append(Terraria.Chest.IsLocked(found[i].x, found[i].y) ? "true" : "false");
 						fsb.Append("}");
 					}
 					fsb.Append(']');
@@ -3285,6 +3325,52 @@ namespace TerraBlind
 				["hell_x"] = cell.x, ["hell_y"] = cell.y };
 		}
 
+		static System.Collections.Generic.List<(int x, int y)> MainDescentLine(DescentData data)
+		{
+			var line = new System.Collections.Generic.List<(int x, int y)>();
+			var seen = new System.Collections.Generic.HashSet<(int, int)>();
+			var cell = (x: data.EntX, y: data.EntY);
+			for (int step = 0; step < 20000 && seen.Add(cell); step++)
+			{
+				line.Add(cell);
+				if (data.Field.TryGetValue(cell, out int cost) && cost == 0) break;
+				int bestCost = int.MaxValue;
+				var best = cell;
+				foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
+				{
+					var next = (x: cell.x + dx, y: cell.y + dy);
+					if (data.Field.TryGetValue(next, out int value) && value < bestCost)
+					{ bestCost = value; best = next; }
+				}
+				if (best == cell) break;
+				cell = best;
+			}
+			return line;
+		}
+
+		static System.Text.Json.Nodes.JsonObject MainDescentRoute(System.Text.Json.Nodes.JsonObject request)
+		{
+			var sig = BiomeSig(request["name"]?.ToString()?.ToLowerInvariant() ?? "");
+			if (sig == null) return new() { ["found"] = false, ["error"] = "unknown_biome" };
+			int offset = request["offset"]?.GetValue<int>() ?? 0;
+			int limit = request["limit"]?.GetValue<int>() ?? 256;
+			if (offset < 0 || limit < 1 || limit > 512) return new() { ["error"] = "invalid_route_page" };
+			var data = ComputeDescent(sig, out string why);
+			if (data == null) return new() { ["found"] = false, ["reason"] = why };
+			var line = MainDescentLine(data);
+			var points = new System.Text.Json.Nodes.JsonArray();
+			for (int i = offset; i < line.Count && i < offset + limit; i++)
+				points.Add(new System.Text.Json.Nodes.JsonArray(line[i].x, line[i].y));
+			return new()
+			{
+				["found"] = true, ["line_kind"] = "main_descent", ["cost"] = data.Cost,
+				["entrance"] = new System.Text.Json.Nodes.JsonObject { ["x"] = data.EntX, ["y"] = data.EntY },
+				["hell_x"] = line[^1].x, ["hell_y"] = line[^1].y,
+				["line"] = points, ["line_len"] = line.Count, ["line_offset"] = offset,
+				["next_offset"] = offset + points.Count < line.Count ? System.Text.Json.Nodes.JsonValue.Create(offset + points.Count) : null
+			};
+		}
+
 		static string DescentRouteJson(ushort[] sigTypes, string reqBody)
 		{
 					var dd = ComputeDescent(sigTypes, out string why);
@@ -3328,23 +3414,7 @@ namespace TerraBlind
 						// 记下地表那段有多长:预算只该按【入口往下】那段算。人在出生点时前半段能有上千格,
 						// 算进去等于凭空多发一倍额度,而那些额度全花在地表。空岛就是这么去的。
 						int surfaceLen = line.Count;
-						var cur = (dd.EntX, dd.EntY);
-						var seen = new System.Collections.Generic.HashSet<(int, int)>();
-						for (int step = 0; step < 20000; step++)
-						{
-							line.Add(cur);
-							if (!seen.Add(cur)) break;
-							if (dd.Field.TryGetValue(cur, out int hc) && hc == 0) break;
-							int bestN = int.MaxValue; var best = cur;
-							foreach (var (dx2, dy2) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
-							{
-								var n = (cur.Item1 + dx2, cur.Item2 + dy2);
-								if (!dd.Field.TryGetValue(n, out int dn)) continue;
-								if (dn < bestN) { bestN = dn; best = n; }
-							}
-							if (best == cur) break;
-							cur = best;
-						}
+						line.AddRange(MainDescentLine(dd));
 						// 走廊按【绕道代价】划,不按直线距离:走一格 3、挖一格 26,"离 25 格"说明不了值不值。
 						// 第二张多源场种在主线上(线上每格 0),从宝藏往下降就描出真实绕道路径,沿途 StepCost 就是价钱。
 						var digM = System.Text.RegularExpressions.Regex.Match(reqBody, "\"dig_max\"\\s*:\\s*(\\d+)");

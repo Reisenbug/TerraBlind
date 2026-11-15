@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading;
@@ -10,48 +11,82 @@ namespace TerraBlind;
 public sealed class GameGather : IGatherWorld
 {
     readonly GatherTarget[] _targets;
-    public GameGather(GatherTarget[] targets) => _targets = targets;
+    readonly GatherArea _area;
+    readonly Dictionary<int, (NPC Entity, int Generation)> observedNpcs = new();
+    readonly Dictionary<int, (Item Entity, int Generation)> observedDrops = new();
+    int dropGeneration;
+    int npcGeneration;
+    public GameGather(GatherTarget[] targets, GatherArea area = null) { _targets = targets; _area = area; }
 
     public async Task<JsonObject> Observe(CancellationToken token)
     {
+        await AgentTools.ReactAtBoundary(token);
         var scene = await NativeAgent.OnMain(() =>
         {
             var p = Main.LocalPlayer;
-            var counts = new JsonObject(); var candidates = new JsonArray();
+            var counts = new JsonObject(); var candidates = new JsonArray(); var itemSpace = new JsonObject();
             foreach (var target in _targets)
             {
                 counts[target.ItemType.ToString()] = p.inventory.Where(i => !i.IsAir && i.type == target.ItemType).Sum(i => i.stack);
+                var sample = new Item(); sample.SetDefaults(target.ItemType);
+                itemSpace[target.ItemType.ToString()] = p.ItemSpace(sample).CanTakeItem;
                 for (int i = 0; i < Main.maxItems; i++)
                 {
                     var item = Main.item[i];
                     if (item.active && item.type == target.ItemType && Microsoft.Xna.Framework.Vector2.Distance(item.Center, p.Center) < 1600)
-                        candidates.Add(Candidate(target.ItemType, "drop", i, item.Center.X / 16, item.Center.Y / 16, p));
+                    {
+                        if (!observedDrops.TryGetValue(i, out var identity) || !ReferenceEquals(identity.Entity, item))
+                            observedDrops[i] = identity = (item, ++dropGeneration);
+                        var candidate = Candidate(target.ItemType, "drop", i, item.Center.X / 16, item.Center.Y / 16, p);
+                        candidate["drop_generation"] = identity.Generation;
+                        candidate["can_pickup"] = p.ItemSpace(item).CanTakeItem;
+                        candidate["id"] = $"{target.ItemType}:drop:{i}:{identity.Generation}";
+                        candidates.Add(candidate);
+                    }
                 }
                 for (int i = 0; i < Main.maxNPCs; i++)
                 {
                     var npc = Main.npc[i];
                     if (npc.active && !npc.friendly && !npc.townNPC && target.Npcs.Contains(npc.type)
+                        && FightCoordinator.TempleTargetAllowed(p, npc)
                         && Microsoft.Xna.Framework.Vector2.Distance(npc.Center, p.Center) < 1280)
                     {
                         var candidate = Candidate(target.ItemType, "npc", i, npc.Center.X / 16, npc.Center.Y / 16, p);
+                        if (!observedNpcs.TryGetValue(i, out var identity) || !ReferenceEquals(identity.Entity, npc))
+                            observedNpcs[i] = identity = (npc, ++npcGeneration);
+                        candidate["npc_generation"] = identity.Generation;
+                        candidate["id"] = $"{target.ItemType}:npc:{i}:{identity.Generation}";
                         candidate["npc_type"] = npc.type;
+                        candidate["source_verified"] = false;
+                        candidate["hp"] = npc.life;
+                        candidate["clear_line"] = Collision.CanHitLine(p.Center, 4, 4, npc.Center, 4, 4);
+                        if (candidate["distance"].GetValue<float>() > 40)
+                        {
+                            candidate["blocked_reason"] = "combat_out_of_range";
+                            candidate["combat_range_tiles"] = 40;
+                        }
                         candidates.Add(candidate);
                     }
                 }
             }
-            return new JsonObject { ["counts"] = counts, ["candidates"] = candidates,
+            return new JsonObject { ["counts"] = counts, ["candidates"] = candidates, ["item_space"] = itemSpace,
+                ["source_rules"] = Gather.DescribeSources(_targets),
                 ["error"] = p.dead ? "interrupted_by_death" : null };
         }, token);
         if (scene["error"] != null) return scene;
         foreach (var target in _targets.Where(t => scene["counts"][t.ItemType.ToString()].GetValue<int>() < t.Count))
         foreach (string tile in target.Tiles)
         {
-            var found = await AgentTools.FindTiles(new JsonObject { ["name"] = tile, ["n"] = 12, ["max_dist"] = 2000 }, token);
-            if (found["error"] != null) { scene["error"] = found["error"].DeepClone(); return scene; }
+            var found = await AgentTools.FindTiles(new JsonObject { ["name"] = tile, ["n"] = 12, ["max_dist"] = 2000,
+                ["source_area"] = _area?.Snapshot(), ["frame_x"] = target.TileFrameX, ["frame_y"] = target.TileFrameY }, token);
+            if (found["error"] != null)
+            { scene["error"] = found["error"].DeepClone(); scene["source_error"] = found.DeepClone(); return scene; }
             foreach (var cell in found["tiles"]?.AsArray() ?? new JsonArray())
                 scene["candidates"].AsArray().Add(new JsonObject { ["item_type"] = target.ItemType, ["kind"] = "tile",
+                    ["source_verified"] = false,
                     ["id"] = $"{target.ItemType}:tile:{cell["x"]}:{cell["y"]}", ["x"] = cell["x"].DeepClone(),
-                    ["y"] = cell["y"].DeepClone(), ["distance"] = cell["dist"]?.DeepClone() ?? JsonValue.Create(0) });
+                    ["y"] = cell["y"].DeepClone(), ["distance"] = cell["dist"]?.DeepClone() ?? JsonValue.Create(0),
+                    ["tile_type"] = cell["tile_type"]?.DeepClone(), ["frame_x"] = cell["frame_x"]?.DeepClone(), ["frame_y"] = cell["frame_y"]?.DeepClone() });
         }
         return scene;
     }
@@ -75,15 +110,46 @@ public sealed class GameGather : IGatherWorld
     {
         string kind = candidate["kind"].ToString();
         int x = candidate["x"].GetValue<int>(), y = candidate["y"].GetValue<int>();
-        if (kind == "tile") return await AgentTools.CollectTarget(x, y, token, false) ?? new JsonObject { ["error"] = "target_changed" };
+        if (kind == "tile")
+        {
+            var requested = _targets.First(t => t.ItemType == candidate["item_type"].GetValue<int>());
+            JsonObject Satisfied() => Main.LocalPlayer.inventory.Where(i => i.type == requested.ItemType).Sum(i => i.stack) >= requested.Count
+                ? new JsonObject { ["outcome"] = "target_satisfied" } : null;
+            var completed = await NativeAgent.OnMain(Satisfied, token);
+            if (completed != null) return completed;
+            bool unchanged = await NativeAgent.OnMain(() =>
+            {
+                var tile = Main.tile[x, y];
+                return tile.HasTile && (candidate["tile_type"] == null || tile.TileType == candidate["tile_type"].GetValue<int>())
+                    && (candidate["frame_x"] == null || tile.TileFrameX == candidate["frame_x"].GetValue<int>())
+                    && (candidate["frame_y"] == null || tile.TileFrameY == candidate["frame_y"].GetValue<int>());
+            }, token);
+            if (!unchanged) return new JsonObject { ["error"] = "target_changed" };
+            return await AgentTools.CollectTarget(x, y, token, false, completion: Satisfied) ?? new JsonObject { ["error"] = "target_changed" };
+        }
         int who = candidate["who"].GetValue<int>();
         if (kind == "drop")
         {
+            bool ValidDrop() => observedDrops.TryGetValue(who, out var identity)
+                && identity.Generation == candidate["drop_generation"]?.GetValue<int>()
+                && ReferenceEquals(identity.Entity, Main.item[who]) && Main.item[who].active
+                && Main.item[who].type == candidate["item_type"].GetValue<int>();
+            JsonObject PickupBlocked() => ValidDrop() && !Main.LocalPlayer.ItemSpace(Main.item[who]).CanTakeItem
+                ? new JsonObject { ["ok"] = false, ["outcome"] = "inventory_full", ["item_type"] = Main.item[who].type,
+                    ["who"] = who, ["stack"] = Main.item[who].stack } : null;
             int stable = 0;
+            Microsoft.Xna.Framework.Vector2? previousPosition = null;
             for (int i = 0; i < 20; i++)
             {
-                bool moving = await NativeAgent.OnMain(() => Main.item[who].active && Main.item[who].velocity.LengthSquared() > .01f, token);
-                stable = moving ? 0 : stable + 1;
+                var sample = await NativeAgent.OnMain(() =>
+                {
+                    var item = Main.item[who];
+                    return (Valid: ValidDrop(), Position: item.Center, Blocked: PickupBlocked());
+                }, token);
+                if (!sample.Valid) return new JsonObject { ["outcome"] = "target_changed" };
+                if (sample.Blocked != null) return sample.Blocked;
+                stable = previousPosition.HasValue && (sample.Position - previousPosition.Value).LengthSquared() <= .25f ? stable + 1 : 0;
+                previousPosition = sample.Position;
                 if (stable >= 2) break;
                 await Task.Delay(150, token);
             }
@@ -91,33 +157,48 @@ public sealed class GameGather : IGatherWorld
             {
                 var item = Main.item[who];
                 DiagLog.Write($"[gather] drop who={who} pos={item.Center} velocity={item.velocity} player={Main.LocalPlayer.Center}");
-                if (item.velocity.LengthSquared() > .01f) return new JsonObject { ["moving"] = true };
+                if (!ValidDrop()) return null;
+                if (PickupBlocked() is JsonObject blocked) return blocked;
+                if (stable < 2 || (item.Center - previousPosition.Value).LengthSquared() > .25f)
+                    return new JsonObject { ["moving"] = true };
                 return item.active && item.type == candidate["item_type"].GetValue<int>()
-                    ? new JsonObject { ["gx"] = (int)(item.Center.X / 16), ["gy"] = (int)(item.Center.Y / 16), ["stand"] = true,
+                    ? new JsonObject { ["gx"] = (int)(item.Center.X / 16), ["gy"] = (int)(item.Center.Y / 16), ["stand"] = false,
                         ["near"] = Microsoft.Xna.Framework.Vector2.Distance(item.Center, Main.LocalPlayer.Center) <= 48 } : null;
             }, token);
             if (live == null) return new JsonObject { ["outcome"] = "target_changed" };
+            if (live["outcome"] != null) return live;
             if (live["moving"] != null) return new JsonObject { ["outcome"] = "drop_still_moving" };
             if (live["near"]?.GetValue<bool>() == true)
             {
                 await Task.Delay(400, token);
-                return new JsonObject { ["outcome"] = "waited_for_pickup" };
+                return await NativeAgent.OnMain(PickupBlocked, token) ?? new JsonObject { ["outcome"] = "waited_for_pickup" };
             }
-            live.Remove("near");
-            var start = await AgentTools.Call("/nav_recede", live, token);
-            if (AgentTools.Rejected(start)) return start;
-            var result = await AgentTools.Wait("/nav_recede_done", "nav", "/nav_recede_stop", 12, token);
+            var result = await AgentTools.Navigate(new JsonObject { ["x"] = live["gx"].DeepClone(),
+                ["y"] = live["gy"].DeepClone(), ["mode"] = "stand" }, token, 12, PickupBlocked);
             await Task.Delay(400, token);
-            return result;
+            return await NativeAgent.OnMain(PickupBlocked, token) ?? result;
         }
         bool Valid() => who >= 0 && who < Main.maxNPCs && Main.npc[who].active && !Main.npc[who].friendly
-            && !Main.npc[who].townNPC && Main.npc[who].type == candidate["npc_type"].GetValue<int>();
+            && FightCoordinator.TempleTargetAllowed(Main.LocalPlayer, Main.npc[who])
+            && !Main.npc[who].townNPC && Main.npc[who].type == candidate["npc_type"].GetValue<int>()
+            && observedNpcs.TryGetValue(who, out var identity) && ReferenceEquals(identity.Entity, Main.npc[who])
+            && candidate["npc_generation"]?.GetValue<int>() == identity.Generation;
         if (!await NativeAgent.OnMain(Valid, token)) return new JsonObject { ["error"] = "target_changed" };
-        if (candidate["distance"].GetValue<float>() > 30)
+        var engagement = await NativeAgent.OnMain(() =>
         {
-            var approach = await AgentTools.Navigate(new JsonObject { ["x"] = x, ["y"] = y }, token, 8);
-            if (approach["done"]?.GetValue<bool>() != true) return approach;
-        }
+            if (!Valid()) return new JsonObject { ["error"] = "target_changed" };
+            var player = Main.LocalPlayer;
+            var npc = Main.npc[who];
+            float distance = Microsoft.Xna.Framework.Vector2.Distance(player.Center, npc.Center) / 16;
+            return distance <= 40 ? null : new JsonObject { ["outcome"] = "combat_out_of_range",
+                ["npc"] = who, ["npc_type"] = npc.type, ["distance_tiles"] = distance, ["combat_range_tiles"] = 40,
+                ["target_x"] = npc.Center.X / 16, ["target_y"] = npc.Center.Y / 16,
+                ["player_x"] = player.Center.X / 16, ["player_y"] = player.Center.Y / 16,
+                ["hp"] = player.statLife, ["target_hp"] = npc.life,
+                ["clear_line"] = Collision.CanHitLine(player.Center, 4, 4, npc.Center, 4, 4),
+                ["detail"] = "敌怪超出当前战斗范围，未向敌怪坐标导航；选择并验证人物站位后恢复原采集句柄。" };
+        }, token);
+        if (engagement != null) return engagement;
         int hpBefore = 0;
         var startFight = await NativeAgent.OnMain(() =>
         {
@@ -128,15 +209,39 @@ public sealed class GameGather : IGatherWorld
             return true;
         }, token);
         if (!startFight) return new JsonObject { ["error"] = "target_changed" };
+        int blockedSamples = 0, previousHp = hpBefore;
+        JsonObject combat = null;
         try
         {
             for (int i = 0; i < 32; i++)
             {
                 await Task.Delay(250, token);
-                if (!await NativeAgent.OnMain(() => Valid() && !Main.LocalPlayer.dead, token)) break;
+                combat = await NativeAgent.OnMain(() =>
+                {
+                    var player = Main.LocalPlayer;
+                    bool present = Valid();
+                    return new JsonObject { ["target_present"] = present, ["hp_before"] = hpBefore,
+                        ["hp_after"] = present ? Main.npc[who].life : 0, ["self_dead"] = player.dead,
+                        ["clear_line"] = present && Collision.CanHitLine(player.Center, 4, 4, Main.npc[who].Center, 4, 4),
+                        ["requires_clear_line"] = FightCoordinator.NeedsClearLine(player.HeldItem),
+                        ["weapon_type"] = player.HeldItem.type,
+                        ["target_x"] = present ? Main.npc[who].Center.X / 16f : null,
+                        ["target_y"] = present ? Main.npc[who].Center.Y / 16f : null };
+                }, token);
+                if (!combat["target_present"].GetValue<bool>() || combat["self_dead"].GetValue<bool>()) break;
+                int hp = combat["hp_after"].GetValue<int>();
+                blockedSamples = !combat["clear_line"].GetValue<bool>() && combat["requires_clear_line"].GetValue<bool>()
+                    && hp >= previousHp ? blockedSamples + 1 : 0;
+                previousHp = hp;
+                if (blockedSamples >= 8)
+                {
+                    combat["outcome"] = "combat_obstructed";
+                    combat["blocked_samples"] = blockedSamples;
+                    combat["sample_interval_ms"] = 250;
+                    return combat;
+                }
             }
-            return await NativeAgent.OnMain(() => new JsonObject { ["target_present"] = Valid(),
-                ["hp_before"] = hpBefore, ["hp_after"] = Valid() ? Main.npc[who].life : 0, ["self_dead"] = Main.LocalPlayer.dead }, token);
+            return combat;
         }
         finally { if (!token.IsCancellationRequested) await NativeAgent.OnMain(() => { FightCoordinator.Stop(); return true; }, token); }
     }

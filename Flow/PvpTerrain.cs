@@ -56,33 +56,22 @@ public static class PvpTerrain
     {
         if (Collision.CanHitLine(from, 4, 4, to, 4, 4))
             return new JsonObject { ["clear"] = true, ["collision_model"] = "engine_line_probe" };
-        int steps = Math.Max(1, (int)Math.Ceiling(Vector2.Distance(from, to) / 4f));
-        Vector2 previous = from;
-        for (int i = 1; i <= steps; i++)
+        var result = new JsonObject { ["clear"] = false, ["collision_model"] = "engine_line_probe" };
+        if (Collision.TupleHitLine((int)((from.X + 2) / 16), (int)((from.Y + 2) / 16),
+            (int)((to.X + 2) / 16), (int)((to.Y + 2) / 16), 0, 0, new(), out var hit)
+            && InWorld(hit.Item1, hit.Item2))
         {
-            Vector2 point = Vector2.Lerp(from, to, i / (float)steps);
-            if (!Collision.CanHitLine(previous, 4, 4, point, 4, 4))
+            var tile = Main.tile[hit.Item1, hit.Item2];
+            if (tile.HasTile && !tile.IsActuated && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType])
             {
-                int x = (int)(point.X / 16), y = (int)(point.Y / 16);
-                var result = new JsonObject { ["clear"] = false, ["sample_x"] = point.X, ["sample_y"] = point.Y,
-                    ["collision_model"] = "four_pixel_line_probe" };
-                for (int dx = -1; dx <= 1; dx++)
-                for (int dy = -1; dy <= 1; dy++)
-                    if (Support(x + dx, y + dy))
-                    {
-                        var tile = Main.tile[x + dx, y + dy];
-                        result["blocker"] = new JsonObject { ["x"] = x + dx, ["y"] = y + dy,
-                            ["type"] = (int)tile.TileType, ["slope"] = (int)tile.Slope, ["half_block"] = tile.IsHalfBlock,
-                            ["location_precision"] = "tile_near_first_failed_probe" };
-                        return result;
-                    }
-                result["blocker_unknown"] = "collision_failed_without_identified_support_tile";
+                result["blocker"] = new JsonObject { ["x"] = hit.Item1, ["y"] = hit.Item2,
+                    ["type"] = (int)tile.TileType, ["slope"] = (int)tile.Slope, ["half_block"] = tile.IsHalfBlock,
+                    ["location_precision"] = "engine_tuple_hit_line" };
                 return result;
             }
-            previous = point;
         }
-        return new JsonObject { ["clear"] = false, ["collision_model"] = "engine_line_probe",
-            ["blocker_unknown"] = "whole_line_failed_without_identified_subsegment" };
+        result["blocker_unknown"] = "engine_tile_probe_did_not_identify_a_solid_blocker";
+        return result;
     }
 
     public static bool ValidStance(Player self, float x, float y)
@@ -94,6 +83,24 @@ public static class PvpTerrain
     }
 
     public static JsonObject Observe(Player self, Player target, bool detailed = false)
+        => Observe(self, target.Center, detailed);
+
+    internal static JsonObject ProbeStance(Player self, Vector2 target, int x, int y)
+    {
+        Vector2 center = new(x * 16 + 8, y * 16 - self.height / 2f);
+        if (!InWorld(x, y) || Vector2.Distance(self.Center, center) > 960)
+            return new JsonObject { ["support_x"] = x, ["support_y"] = y, ["error"] = "stance_out_of_observation_range" };
+        var topLeft = center - new Vector2(self.width / 2f, self.height / 2f);
+        bool fits = topLeft.X >= 0 && topLeft.Y >= 0 && topLeft.X + self.width <= Main.maxTilesX * 16
+            && topLeft.Y + self.height <= Main.maxTilesY * 16 && !Collision.SolidCollision(topLeft, self.width, self.height);
+        var tile = Main.tile[x, y];
+        return new JsonObject { ["x"] = center.X, ["y"] = center.Y, ["support_x"] = x, ["support_y"] = y,
+            ["supported"] = Support(x, y), ["body_fits"] = fits,
+            ["support_slope"] = (int)tile.Slope, ["support_half_block"] = tile.IsHalfBlock,
+            ["shot_line"] = fits ? Trace(center, target) : null, ["reachability"] = "unknown_not_a_computed_path" };
+    }
+
+    internal static JsonObject Observe(Player self, Vector2 targetCenter, bool detailed = false)
     {
         var probes = new JsonArray();
         foreach (int dx in new[] { -12, -6, 0, 6, 12 })
@@ -108,16 +115,16 @@ public static class PvpTerrain
                 Vector2 topLeft = center - new Vector2(self.width / 2f, self.height / 2f);
                 if (!Collision.SolidCollision(topLeft, self.width, self.height))
                     probes.Add(new JsonObject { ["x"] = center.X, ["y"] = center.Y, ["support_x"] = x, ["support_y"] = y,
-                        ["body_fits"] = true, ["shot_line"] = Trace(center, target.Center),
+                        ["body_fits"] = true, ["shot_line"] = Trace(center, targetCenter),
                         ["reachability"] = "unknown_not_a_computed_path" });
                 break;
             }
         }
         var result = new JsonObject { ["captured_tick"] = Main.GameUpdateCount,
-            ["direct_line"] = Trace(self.Center, target.Center), ["stance_probes"] = probes,
+            ["direct_line"] = Trace(self.Center, targetCenter), ["stance_probes"] = probes,
             ["warning"] = "A clear line is not a valid curved projectile trajectory or proof of reachability." };
         if (detailed)
-            result["tile_windows"] = new JsonArray(Window(self.Center, 32, 20), Window(target.Center, 16, 12));
+            result["tile_windows"] = new JsonArray(Window(self.Center, 32, 20), Window(targetCenter, 16, 12));
         return result;
     }
 

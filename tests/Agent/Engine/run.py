@@ -11,13 +11,18 @@ import time
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--world", type=Path, default=Path("/tmp/terrablind-descent-world/Worlds/World.wld"), help="World copied into the disposable save")
     mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--behavior", action="store_true", help="Saved JS combat, live Jev judgment, loot and original-goal continuation")
+    mode.add_argument("--control", action="store_true", help="Native control takeover and terrain veto trial, no model calls")
     mode.add_argument("--live", action="store_true", help="After checks, run the real Codex agent for at most 180 seconds; consumes model quota")
     mode.add_argument("--batch", action="store_true", help="Only collect ten placed crystals through production gather; no model calls")
     mode.add_argument("--health-live", action="store_true", help="Real agent obtains 300 permanent HP with navigation stubbed; consumes model quota")
     mode.add_argument("--workflow-live", action="store_true", help="Real model writes monitored gathering, pauses on low HP, then resumes; consumes quota")
     mode.add_argument("--watch-live", action="store_true", help="Real model handles a passive chest event, loots, changes gathering target and resumes; consumes quota")
     mode.add_argument("--decision-live", action="store_true", help="Also require a model-authored explicit decision point between looting and resumed collection")
+    mode.add_argument("--biome-check", action="store_true", help="Verify a jungle entrance against sky exposure, body clearance and native player biome")
+    mode.add_argument("--automatic-live", action="store_true", help="Luna collects and loots without being told to register watches or background handles")
     mode.add_argument("--planning-readonly", action="store_true", help="Real model queries actual game state then proposes an action without executing it")
     mode.add_argument("--interactions", action="store_true", help="Real equipment swaps and generic NPC dialogue buttons, no model calls")
     mode.add_argument("--hornets", action="store_true", help="Sequential hornets in a low arena, throwing knives, no model calls")
@@ -36,13 +41,21 @@ def main():
         if len(scripts) != 1:
             raise ValueError("This per-item acceptance requires exactly one model-authored script")
         shutil.copy2(args.model_script, root / "model-script.json")
-    source = Path("/tmp/terrablind-descent-world/Worlds/World.wld")
+    source = args.world
     if not source.exists():
         raise RuntimeError("The isolated test world is missing")
     shutil.copy2(source, root / "Worlds/Checks.wld")
     staging = Path.home() / "Library/Application Support/TerraBlindDev/agent-277ba5a4e4c2/staging/Mods/TerraBlind.tmod"
     shutil.copy2(staging, root / "Mods/TerraBlind.tmod")
     user = Path.home() / "Library/Application Support/Terraria/tModLoader"
+    if args.behavior:
+        key = json.loads((user / "ModConfigs/TerraBlind_Config.json").read_text()).get("TypeSafeKey", "")
+        if not key.strip():
+            raise RuntimeError("The isolated behavior trial requires a configured TypeSafe key")
+        (root / "ModConfigs").mkdir()
+        config = root / "ModConfigs/TerraBlind_Config.json"
+        config.write_text(json.dumps({"TypeSafeKey": key}))
+        config.chmod(0o600)
     for name in ("config.json", "input profiles.json"):
         shutil.copy2(user / name, root / name)
     (root / "Mods/enabled.json").write_text('["TerraBlind","Engine"]')
@@ -55,6 +68,12 @@ def main():
     print("AGENT_ENGINE_ROOT", root, flush=True)
     command = [str(tml / "dotnet_arm64/dotnet"), "tModLoader.dll", "-nosteam",
         "-tmlsavedirectory", str(root), "-agentenginecheck", "-tbhttpport", str(port)]
+    if args.control:
+        command.remove("-agentenginecheck")
+        command.append("-agentcontrolcheck")
+    if args.behavior:
+        command.remove("-agentenginecheck")
+        command.append("-agentbehaviorcheck")
     if args.live:
         command.append("-agentlivecheck")
     if args.batch:
@@ -63,10 +82,14 @@ def main():
         command.append("-agenthealthcheck")
     if args.workflow_live:
         command.append("-agentworkflowcheck")
-    if args.watch_live or args.decision_live:
+    if args.watch_live or args.decision_live or args.automatic_live:
         command.append("-agentwatchcheck")
     if args.decision_live:
         command.append("-agentdecisioncheck")
+    if args.biome_check:
+        command.append("-agentbiomecheck")
+    if args.automatic_live:
+        command.append("-agentautomaticcheck")
     if args.planning_readonly:
         command.append("-agentplanningcheck")
     if args.interactions:
@@ -87,11 +110,14 @@ def main():
             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
         print("AGENT_ENGINE_PID", process.pid, flush=True)
         try:
-            deadline = time.monotonic() + (300 if args.live or args.health_live or args.workflow_live or args.watch_live or args.decision_live or args.planning_readonly else 180)
+            material_review = args.behavior and os.environ.get("TB_MATERIAL_MODEL_REVIEW") == "1"
+            full_craft = args.behavior and os.environ.get("TB_FULL_CRAFT_TRIAL") == "1"
+            health_trial = full_craft and os.environ.get("TB_JUNGLE_HEALTH_TRIAL") == "1"
+            deadline = None if health_trial else time.monotonic() + (1900 if full_craft else 300 if material_review or args.live or args.health_live or args.workflow_live or args.watch_live or args.decision_live or args.automatic_live or args.planning_readonly else 180)
             while process.poll() is None:
                 if (root / "agent-engine-result.json").exists():
                     break
-                if time.monotonic() > deadline:
+                if deadline is not None and time.monotonic() > deadline:
                     raise TimeoutError(f"Engine check timed out; inspect {root}/client.log")
                 if "An error occurred while loading" in (root / "client.log").read_text():
                     raise RuntimeError(f"Mod load failed; inspect {root}/client.log")
@@ -105,6 +131,11 @@ def main():
                     process.kill()
                     process.wait(timeout=5)
     report = root / "agent-engine-result.json"
+    if args.control:
+        if not report.exists() or not json.loads(report.read_text())["ok"] or "CONTROL_TAKEOVER_COMPLETE native_engine=true model_calls=0" not in (root / "client.log").read_text():
+            raise RuntimeError(f"Control trial failed: exit={process.returncode}; inspect {root}/client.log")
+        print("CONTROL_TRIAL_PASS", root, flush=True)
+        return
     if not report.exists() or not json.loads(report.read_text())["ok"]:
         raise RuntimeError(f"Engine checks failed: exit={process.returncode}; inspect {root}/client.log and result JSON")
     print(json.loads(report.read_text())["detail"], flush=True)

@@ -15,6 +15,7 @@ public static class LavaSafety
     public static bool CanMine(int x, int y)
     {
         if (x <= 0 || y <= 0 || x >= Main.maxTilesX - 1 || y >= Main.maxTilesY - 1) return false;
+        if (Main.LocalPlayer?.lavaImmune == true) return true;
         var tile = Main.tile[x, y];
         if (tile.HasTile && tile.TileType == TileID.Hellstone) return false;
         for (int dx = -1; dx <= 1; dx++)
