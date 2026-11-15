@@ -3698,6 +3698,8 @@ public sealed partial class BehaviorTrial : ModSystem
             p.itemAnimation = p.itemTime = 0; p.selectedItem = 0;
             return true;
         });
+        if (Environment.GetEnvironmentVariable("TB_CANCELLED_NAVIGATION_PROBE") == "1")
+        { await CancelledNavigationTrial(x, floor); return; }
         await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
             ["code"] = "skill('safety_reactions',0);" });
         var input = new JsonObject { ["station"] = new JsonObject { ["x"] = x + 3, ["y"] = floor - 1 },
@@ -3727,6 +3729,50 @@ public sealed partial class BehaviorTrial : ModSystem
             || result["value"]?["first"]?["completed"]?[0]?["approach"]?["condition_met"]?.GetValue<bool>() != true)
             throw new Exception("native crafting batch did not verify station approach and inventory targets: " + result);
         Console.WriteLine($"CRAFT_BATCH_NATIVE_PASS elapsed_ms={clock.ElapsedMilliseconds} bow=1 arrows=50 repeated_crafts=0 model_calls=0");
+    }
+
+    async Task CancelledNavigationTrial(int x, int floor)
+    {
+        var target = new JsonObject { ["x"] = x + 10, ["y"] = floor - 1, ["mode"] = "stand" };
+        var args = new JsonObject { ["workflow"] = "native-cancelled-navigation", ["code"] =
+            "step('bench',()=>tool('craft',{name:'WorkBench'}));return step('route',()=>tool('nav_to',"
+            + target.ToJsonString() + "));" };
+        using var cancellation = new CancellationTokenSource();
+        var clock = Stopwatch.StartNew();
+        var operation = AgentTools.Execute("run_script", args, cancellation.Token);
+        bool moved = false, cancelled = false;
+        try
+        {
+            while (!operation.IsCompleted && clock.Elapsed.TotalSeconds < 5)
+            {
+                moved = await OnMain(() => RecedingNav.Active && Main.LocalPlayer.position.X >= x * 16 + 16);
+                if (moved) break;
+                await Task.Delay(16);
+            }
+        }
+        finally { cancellation.Cancel(); }
+        try { await operation; }
+        catch (OperationCanceledException) { cancelled = true; }
+        var interrupted = await Call("script_progress", new JsonObject {
+            ["workflow"] = "native-cancelled-navigation", ["action"] = "get" });
+        long resumedAt = clock.ElapsedMilliseconds;
+        var resumed = await Call("run_script", args);
+        var observed = await OnMain(() => new JsonObject {
+            ["bench_count"] = Main.LocalPlayer.inventory.Where(i => i.type == ItemID.WorkBench).Sum(i => i.stack),
+            ["wood_count"] = Main.LocalPlayer.inventory.Where(i => i.type == ItemID.Wood).Sum(i => i.stack),
+            ["dx"] = Math.Abs(Main.LocalPlayer.Center.X - ((x + 10) * 16 + 8)),
+            ["dy"] = Math.Abs(Main.LocalPlayer.Bottom.Y - floor * 16), ["navigation"] = RecedingNav.Active });
+        var report = new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds,
+            ["resume_ms"] = clock.ElapsedMilliseconds - resumedAt, ["moved_before_cancel"] = moved,
+            ["cancelled"] = cancelled, ["target"] = target, ["interrupted"] = interrupted,
+            ["resumed"] = resumed, ["observed"] = observed, ["fixture_terrain"] = true, ["model_calls"] = 0 };
+        File.WriteAllText(Path.Combine(Main.SavePath, "cancelled-navigation-native.json"), report.ToJsonString());
+        if (!moved || !cancelled || resumed["ok"]?.GetValue<bool>() != true
+            || resumed["value"]?["done"]?.GetValue<bool>() != true
+            || observed["bench_count"].GetValue<int>() != 1 || observed["wood_count"].GetValue<int>() != 70
+            || observed["dx"].GetValue<float>() > 8 || observed["dy"].GetValue<float>() > 8)
+            throw new Exception("native cancelled navigation did not resume without repeating the completed craft: " + report);
+        Console.WriteLine("CANCELLED_NAVIGATION_NATIVE_PASS " + observed.ToJsonString());
     }
 
     async Task CoverTrial()

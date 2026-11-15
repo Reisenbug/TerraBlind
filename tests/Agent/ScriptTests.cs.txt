@@ -40,6 +40,7 @@ static class ScriptTests
         NavigationGoalProgress();
         await PreparedGapHandoff();
         await PreparedGapHandoff(danger: true);
+        await CancelledNavigationContinuation();
         BuiltinDiscovery();
         await CombatIntentContinuation();
         CoverCandidateContracts();
@@ -86,7 +87,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "no_prefix_rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=60 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=61 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -1387,6 +1388,47 @@ static class ScriptTests
         Console.WriteLine("PASS: initial model instructions expose callable skill names and purposes without inlining source; chars=" + index.Length);
     }
 
+    static async Task CancelledNavigationContinuation()
+    {
+        foreach (string mode in new[] { "navigation", "item_use", "mixed" })
+        {
+            var progress = new ScriptProgress();
+            int crafted = 0, moves = 0;
+            string pending = mode == "item_use" ? "tool('use_item',{slot:0})" : "tool('nav_to',{x:20,y:30})";
+            string source = "step('prepared',()=>tool('craft',{name:'WorkBench'}));return step('pending',()=>{"
+                + (mode == "mixed" ? "tool('craft',{name:'WorkBench'});" : "") + "return " + pending + ";});";
+            using var cancellation = new CancellationTokenSource();
+            bool cancelled = false;
+            try { await AgentScript.Run(source, 5, (_, _) => { }, (name, args, token) =>
+            {
+                if (name == "craft") { crafted++; return Task.FromResult("{\"ok\":true}"); }
+                if (name == "nav_to") moves++;
+                cancellation.Cancel();
+                return Task.FromCanceled<string>(token);
+            }, _ => Task.CompletedTask, cancellation.Token, progress); }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { cancelled = true; }
+            Check(cancelled && progress.Summary()["last_execution"]?["error"]?.ToString() == "cancelled" && progress.Completed == 1,
+                "cancellation lost already completed effects: " + progress.Summary());
+            var saved = progress.Snapshot()["steps"][1];
+            Check((saved["repeatable_navigation"]?.GetValue<bool>() == true) == (mode == "navigation"),
+                "cancelled movement was blocked or an uncertain item effect became repeatable: " + saved);
+            var resumed = await AgentScript.Run(source, 5, (_, _) => { }, (name, args, token) =>
+            {
+                if (name == "craft") crafted++;
+                if (name == "nav_to") moves++;
+                return Task.FromResult("{\"done\":true}");
+            }, _ => Task.CompletedTask, default, progress);
+            Check(resumed["ok"]?.GetValue<bool>() == (mode == "navigation")
+                && crafted == (mode == "mixed" ? 2 : 1) && moves == (mode == "navigation" ? 2 : mode == "mixed" ? 1 : 0),
+                "continuation repeated completed work or an uncertain material effect: " + mode + " " + resumed);
+            if (mode == "navigation")
+                Check(progress.Completed == 2 && progress.Snapshot()["steps"][1]["previous_failure"]?["outcome"]?.ToString() == "cancelled"
+                    && progress.Snapshot()["steps"][1]["previous_failure"]?["args"]?["x"]?.GetValue<int>() == 20,
+                    "resumed navigation discarded cancellation evidence");
+        }
+        Console.WriteLine("PASS: cancelled single navigation resumes without repeating completed effects; item and mixed steps retain reconciliation");
+    }
+
     static async Task PreparedGapHandoff(bool danger = false)
     {
         var agent = new NativeAgent(); agent.Load();
@@ -2539,6 +2581,7 @@ static class ScriptTests
 
     public static async Task Run()
     {
+        await CancelledNavigationContinuation();
         await QuietObservation();
         await MixedBiomeObservation();
         await ReactiveHandlers();

@@ -598,6 +598,7 @@ public static class AgentScript
                     long started = clock.ElapsedMilliseconds;
                     inputEffects |= AgentControlSession.ActionTool(name) || name == "control";
                     inTool = true;
+                    (reactions.Handling ? handlerProgress : progress)?.StartCall(name, args);
                     string result = reactions.Await(execute(name, args, budget.Token));
                     (reactions.Handling ? handlerProgress : progress)?.Record(name, args, result);
                     inTool = false;

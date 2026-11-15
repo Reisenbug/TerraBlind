@@ -26,7 +26,7 @@ public sealed class ScriptProgress
             ["blocked"] = state["blocked"]?.DeepClone(), ["verified_actions"] = state["verified_actions"]?.DeepClone() };
     }
     int stepCalls;
-    JsonObject navigationFailure;
+    JsonObject navigationFailure, pendingNavigation;
     static readonly JsonSerializerOptions JsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     public int Completed { get { lock (gate) return steps.Values.Count(s => s["status"].ToString() == "completed"); } }
     public int Segment { get { lock (gate) return segment; } }
@@ -57,6 +57,7 @@ public sealed class ScriptProgress
             if (running) throw new InvalidOperationException("workflow正在执行，不能并发续接。");
             if (executedSource != source) intentMemory = null;
             executedSource = source;
+            pendingNavigation = null;
             running = true; segment++; revision++;
         }
     }
@@ -103,10 +104,17 @@ public sealed class ScriptProgress
         }
     }
 
+    internal void StartCall(string name, JsonObject args)
+    {
+        lock (gate) pendingNavigation = name == "nav_to" && stepCalls == 0
+            && steps.Values.Any(s => s["status"]?.ToString() == "running") ? args.DeepClone().AsObject() : null;
+    }
+
     public void Record(string name, JsonObject args, string result)
     {
         lock (gate)
         {
+            pendingNavigation = null;
             if (steps.Values.Any(s => s["status"]?.ToString() == "running"))
             {
                 navigationFailure = null;
@@ -136,7 +144,14 @@ public sealed class ScriptProgress
                     step["repeatable_navigation"] = true;
                     step["failure"] = navigationFailure.DeepClone();
                 }
+                else if (pendingNavigation != null && result["error"]?.ToString() == "cancelled")
+                {
+                    step["repeatable_navigation"] = true;
+                    step["failure"] = new JsonObject { ["outcome"] = "cancelled", ["tool"] = "nav_to",
+                        ["args"] = pendingNavigation.DeepClone() };
+                }
             }
+            pendingNavigation = null;
             last = new JsonObject { ["error"] = result["error"]?.DeepClone(), ["detail"] = result["detail"]?.DeepClone(),
                 ["value"] = result["value"]?.DeepClone(), ["tool_counts"] = result["tool_counts"]?.DeepClone(),
                 ["tool_calls"] = result["tool_calls"]?.DeepClone(), ["elapsed_ms"] = result["elapsed_ms"]?.DeepClone(),
