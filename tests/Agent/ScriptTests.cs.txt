@@ -33,6 +33,7 @@ static class ScriptTests
         await IntentHostContinuation(stop: true);
         await IntentPolicyIntegration();
         await IntentPolicyIntegration(overridePolicy: true);
+        await IdlePolicyHandoff();
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();
@@ -75,7 +76,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=49 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=50 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -1306,6 +1307,62 @@ static class ScriptTests
         Console.WriteLine("PASS: death observations remain readable after repeated failures and respawn; failed actions stay guarded");
     }
 
+    static async Task IdlePolicyHandoff()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var http = HttpServerSystem.Handler;
+        bool dead = Terraria.Main.LocalPlayer.dead, manual = Manual.On, release = false;
+        int actions = 0;
+        async Task Pump(Func<bool> done)
+        {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (!done())
+            {
+                Check(timer.Elapsed.TotalSeconds < 5, "idle action handoff stalled");
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+        }
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.ControlSession.Reset();
+            Manual.On = false; Terraria.Main.LocalPlayer.dead = false;
+            var setup = AgentTools.Execute("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
+                ["code"] = "on('tick',()=>{tool('act',{steps:[{keys:['right'],until:{frames:1}}]});return {handled:true};});" }, default);
+            await Pump(() => setup.IsCompleted); await setup;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/act") actions++;
+                return (200, path == "/act_status"
+                    ? (release ? "{\"active\":false,\"outcome\":\"done\"}" : "{\"active\":true}") : "{}");
+            };
+            var idle = AgentTools.ReactWhileIdle(default);
+            typeof(NativeAgent).GetField("_idleReaction", System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.NonPublic).SetValue(agent, idle);
+            await Pump(() => actions == 1 && AgentTools.ControlSession.PrimaryActive);
+            int messages = AgentChat.Messages.Count;
+            var main = AgentTools.Execute("run_script", new JsonObject { ["workflow"] = "idle-handoff-test", ["code"] = """
+                tool('say',{text:'foreground-ready'});
+                return tool('act',{steps:[{keys:['left'],until:{frames:1}}]});
+                """ }, default);
+            await Pump(() => AgentChat.Messages.Skip(messages).Contains("foreground-ready"));
+            for (int i = 0; i < 30; i++) { agent.PostUpdateEverything(); await Task.Delay(1); }
+            Check(!main.IsCompleted && actions == 1, "foreground action failed instead of waiting for the in-flight idle action");
+            release = true;
+            await Pump(() => main.IsCompleted && idle.IsCompleted);
+            var result = JsonNode.Parse(await main);
+            Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["outcome"]?.ToString() == "done"
+                && actions == 2 && !AgentTools.ControlSession.PrimaryActive,
+                "foreground handoff replayed idle work or leaked control: " + result);
+            await idle;
+        }
+        finally
+        {
+            release = true; HttpServerSystem.Handler = http; Manual.On = manual; Terraria.Main.LocalPlayer.dead = dead;
+            AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); agent.Unload();
+        }
+        Console.WriteLine("PASS: prepared foreground action waits for idle defense, then acquires controls without a model retry");
+    }
+
     static async Task IntentPolicyIntegration(bool overridePolicy = false)
     {
         var agent = new NativeAgent(); agent.Load();
@@ -2344,6 +2401,7 @@ static class ScriptTests
         await IntentHostContinuation(stop: true);
         await IntentPolicyIntegration();
         await IntentPolicyIntegration(overridePolicy: true);
+        await IdlePolicyHandoff();
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();

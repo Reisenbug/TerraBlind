@@ -1234,26 +1234,34 @@ public static partial class AgentTools
         }
     }
 
+    static int pendingPrimaryActions;
     static async Task<string> ExecuteWithTaskPolicy(string name, JsonObject args, CancellationToken token)
     {
-        if (AgentControlSession.ActionTool(name) && name != "gather" && AgentScript.CurrentReactions.Value?.Handling != true)
-            await ReactAtBoundary(token, context: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
-        string output = await Execute(name, args, token);
-        var local = AgentScript.CurrentReactions.Value;
-        var policy = taskPolicy?.Reactions;
-        if (!AgentControlSession.ActionTool(name) || local?.Handling == true || policy?.Has("action_failed") != true
-            || local?.Active == true && local.Has("action_failed")) return output;
-        if (JsonNode.Parse(output) is not JsonObject failed || !ScriptProgress.Failed(failed)
-            || failed["task_policy_recovery"] != null) return output;
-        var decision = await ServiceReaction(policy, () => Task.FromResult(new JsonObject { ["kind"] = "action_failed",
-            ["tool"] = name, ["args"] = args.DeepClone(), ["result"] = failed.DeepClone(), ["task_node"] = ActionTasks.NodeContext.Value }), token);
-        if (decision?["retry"]?.GetValue<bool>() == true)
+        bool primary = AgentControlSession.ActionTool(name) && AgentScript.CurrentReactions.Value?.Handling != true;
+        if (primary) Interlocked.Increment(ref pendingPrimaryActions);
+        try
         {
-            output = await Execute(name, args, token);
-            if (JsonNode.Parse(output) is JsonObject retried)
-            { retried["task_policy_recovery"] = true; output = retried.ToJsonString(); }
+            if (primary) await NativeAgent.IdleReaction.WaitAsync(token);
+            if (primary && name != "gather")
+                await ReactAtBoundary(token, context: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
+            string output = await Execute(name, args, token);
+            var local = AgentScript.CurrentReactions.Value;
+            var policy = taskPolicy?.Reactions;
+            if (!AgentControlSession.ActionTool(name) || local?.Handling == true || policy?.Has("action_failed") != true
+                || local?.Active == true && local.Has("action_failed")) return output;
+            if (JsonNode.Parse(output) is not JsonObject failed || !ScriptProgress.Failed(failed)
+                || failed["task_policy_recovery"] != null) return output;
+            var decision = await ServiceReaction(policy, () => Task.FromResult(new JsonObject { ["kind"] = "action_failed",
+                ["tool"] = name, ["args"] = args.DeepClone(), ["result"] = failed.DeepClone(), ["task_node"] = ActionTasks.NodeContext.Value }), token);
+            if (decision?["retry"]?.GetValue<bool>() == true)
+            {
+                output = await Execute(name, args, token);
+                if (JsonNode.Parse(output) is JsonObject retried)
+                { retried["task_policy_recovery"] = true; output = retried.ToJsonString(); }
+            }
+            return output;
         }
-        return output;
+        finally { if (primary) Interlocked.Decrement(ref pendingPrimaryActions); }
     }
 
     internal static async Task ReactWhileIdle(CancellationToken token)
@@ -1262,7 +1270,8 @@ public static partial class AgentTools
         {
             string node = await NativeAgent.OnMain(() =>
             {
-                if (taskPolicy?.Reactions?.Active != true || Main.LocalPlayer.dead || Manual.On || ContactEscapeActive
+                if (Volatile.Read(ref pendingPrimaryActions) > 0
+                    || taskPolicy?.Reactions?.Active != true || Main.LocalPlayer.dead || Manual.On || ContactEscapeActive
                     || ControlSession.PrimaryActive || Actions.HasPrimaryControl) return null;
                 return Plan.RequiresNodeExecution ? Plan.Snapshot()["current_step"]?.ToString() : "";
             }, token);

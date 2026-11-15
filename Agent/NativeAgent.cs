@@ -28,6 +28,7 @@ public class NativeAgent : ModSystem
     Task _goalStopping = Task.CompletedTask;
     Task _dangerDelivery = Task.CompletedTask;
     Task _idleReaction = Task.CompletedTask;
+    internal static Task IdleReaction => _instance?._idleReaction ?? Task.CompletedTask;
     int _lastDangerNotice;
     internal static JsonObject GoalState => _instance?._codex?.GoalState;
     DateTime _lastFeedback;
