@@ -395,7 +395,7 @@ public static partial class AgentTools
             || !Plan.RequiresNodeExecution || Main.LocalPlayer.dead || ContactEscapeActive) return;
         if (pendingNode != null)
         {
-            if (Watches.HasInterrupting) return;
+            if (Watches.HasRecoveryBlocker) return;
             string ready = pendingNode;
             pendingNode = null;
             if (Plan.Snapshot()["ready_steps"].AsArray().Any(n => n?.ToString() == ready))
@@ -434,7 +434,7 @@ public static partial class AgentTools
         plan = Plan.Snapshot();
         string next = verified ? plan["current_step"]?.ToString() : owner;
         if (next == null || !plan["ready_steps"].AsArray().Any(n => n?.ToString() == next)) return;
-        if (Watches.HasInterrupting)
+        if (Watches.HasRecoveryBlocker)
         {
             pendingNode = next;
             LastContinuation = new JsonObject { ["after_handle"] = handle, ["task_node"] = next,

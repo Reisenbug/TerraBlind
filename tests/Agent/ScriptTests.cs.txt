@@ -38,6 +38,8 @@ static class ScriptTests
         await NavigationConditionContracts();
         await NavigationConditionContracts(existingTick: true);
         NavigationGoalProgress();
+        await PreparedGapHandoff();
+        await PreparedGapHandoff(danger: true);
         BuiltinDiscovery();
         await CombatIntentContinuation();
         CoverCandidateContracts();
@@ -84,7 +86,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "no_prefix_rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=58 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=60 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -1383,6 +1385,73 @@ static class ScriptTests
             && index.Length < builtins.Sum(s => s["code"].ToString().Length) / 5,
             "startup hid callable skills or embedded their source instead of a compact capability index");
         Console.WriteLine("PASS: initial model instructions expose callable skill names and purposes without inlining source; chars=" + index.Length);
+    }
+
+    static async Task PreparedGapHandoff(bool danger = false)
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var http = HttpServerSystem.Handler;
+        var p = Terraria.Main.LocalPlayer;
+        int lifeMax = p.statLifeMax;
+        bool dead = p.dead, suffocating = p.suffocating;
+        int actions = 0;
+        async Task Pump(Func<bool> done)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (!done())
+            {
+                Check(clock.Elapsed.TotalSeconds < 5, "prepared gap handoff did not settle: actions=" + actions
+                    + " continuation=" + AgentTools.LastContinuation);
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+        }
+        try
+        {
+            AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask();
+            p.dead = p.suffocating = false; p.statLifeMax = 100;
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/act") actions++;
+                if (path == "/nav_recede") { actions++; RecedingNav.Active = true; }
+                if (path == "/nav_recede_done") return (200, "{\"done\":true}");
+                return (200, path == "/act_status" ? "{\"active\":false}" : "{}");
+            };
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"prepared work after an execution gap","mode":"dag","steps":[
+                  {"id":"first","description":"first action","depends_on":[],"script":"return {};",
+                   "conditions":[{"kind":"permanent_health","count":100}]},
+                  {"id":"next","description":"prepared action","depends_on":["first"],
+                   "script":"return tool('act',{steps:[{keys:['right'],until:{frames:1}}]});",
+                   "conditions":[{"kind":"item","type":191,"count":9999}]}]}
+                """).AsObject(), _ => 0);
+            ActionTasks.NodeContext.Value = "first";
+            try { AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = 12, ["y"] = 34 }, default); }
+            finally { ActionTasks.NodeContext.Value = null; }
+            await Pump(() => !AgentTools.Actions.HasPrimaryControl);
+            AgentTools.Watches.ExecutionFault(new JsonObject { ["task_node"] = "next", ["reason"] = "script_requires_review" });
+            if (danger)
+            {
+                p.suffocating = true;
+                AgentTools.Watches.Observe(new JsonObject { ["hp"] = 100, ["suffocating"] = true });
+            }
+            AgentTools.ContinuePreparedNode(default);
+            if (danger) Check(actions == 1 && AgentTools.LastContinuation?["status"]?.ToString() == "waiting_event_review",
+                "prepared handoff ignored actual suffocation");
+            else
+            {
+                await Pump(() => actions >= 2 && !AgentTools.Actions.HasPrimaryControl
+                    && AgentTools.LastContinuation?["status"]?.ToString() is "returned" or "execution_gap");
+                Check(actions == 2 && AgentTools.LastContinuation?["task_node"]?.ToString() == "next",
+                    "execution-gap notification blocked or replaced the prepared successor");
+            }
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Watches.Reset(); AgentTools.Plan.Reset();
+            p.statLifeMax = lifeMax; p.dead = dead; p.suffocating = suffocating;
+            HttpServerSystem.Handler = http; agent.Unload();
+        }
+        Console.WriteLine("PASS: prepared successors bypass execution-gap review while retaining danger blockers: danger=" + danger);
     }
 
     static void NavigationGoalProgress()
