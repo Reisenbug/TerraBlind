@@ -416,6 +416,14 @@
           "step_y": {
             "type": "integer",
             "description": "连放时每格往下挪几行(往上给负数),默认0"
+          },
+          "preserve_for_action": {
+            "type": "boolean",
+            "description": "保护已验证的新方块，当前动作期间导航保留这些施工成果；动作结束自动释放，可由control查询及撤销。"
+          },
+          "local": {
+            "type": "boolean",
+            "description": "就地放置，需给出x/y；位置失效或放置失败返回实际结果。适用于即时施工，保留原生动画和逐格验证。"
           }
         },
         "required": [

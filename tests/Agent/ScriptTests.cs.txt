@@ -29,6 +29,9 @@ static class ScriptTests
     {
         await IntentContracts();
         await IntentHostContinuation();
+        CoverCandidateContracts();
+        await CoverDecisionContracts();
+        await LocalPlacementContracts();
         await TestDecisionChannels();
         await TestDecisionTravel();
         await TestJointDecision();
@@ -68,7 +71,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=42 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=45 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -1092,6 +1095,170 @@ static class ScriptTests
         Console.WriteLine("PASS: navigation intent selects separation, expires, respects ownership and permissions, and publishes without movement handoff");
     }
 
+    static void CoverCandidateContracts()
+    {
+        var p = Terraria.Main.LocalPlayer;
+        var position = p.position; var velocity = p.velocity;
+        int slot = p.selectedItem; bool dead = p.dead; float gravity = p.gravDir;
+        var inventory = p.inventory.ToArray(); var npcs = Terraria.Main.npc; var shots = Terraria.Main.projectile;
+        var tiles = new List<(int X, int Y, Terraria.Tile Tile)>();
+        try
+        {
+            AgentTools.NewTask(); AgentTools.ControlSession.Reset();
+            p.position = new System.Numerics.Vector2(800, 800 - p.height); p.velocity = default;
+            p.dead = false; p.gravDir = 1;
+            for (int i = 0; i < p.inventory.Length; i++) p.inventory[i] = new Terraria.Item();
+            p.inventory[8] = new Terraria.Item { type = 777, stack = 20, createTile = 1, useTime = 10, Name = "Fixture block" };
+            Terraria.Main.npc = new[] { new Terraria.NPC { whoAmI = 3, active = true, damage = 20,
+                position = new Microsoft.Xna.Framework.Vector2(p.position.X + 160, p.position.Y) } };
+            Terraria.Main.projectile = Array.Empty<Terraria.Projectile>();
+            for (int x = 43; x <= 58; x++)
+            for (int y = 44; y <= 51; y++)
+            {
+                tiles.Add((x, y, Terraria.Main.tile[x, y]));
+                Terraria.Main.tile[x, y] = new Terraria.Tile { HasUnactuatedTile = y >= 50, TileType = 1 };
+            }
+            JsonArray Read() => (JsonArray)typeof(AgentTools).GetMethod("CoverCandidates",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).Invoke(null, new object[] { p, 25 });
+            var candidates = Read();
+            Check(candidates.Count == 2 && candidates.All(c => c["side"].ToString() == "right") && p.selectedItem == slot,
+                "cover generation lost actual threat side, native state or usable footing: " + candidates);
+            int blockedX = candidates[0]["action"]["x"].GetValue<int>();
+            Terraria.Main.tile[blockedX, 49].LiquidAmount = 255;
+            Terraria.Main.tile[blockedX, 49].LiquidType = Terraria.ID.LiquidID.Water;
+            Check(Read().Count == 2, "cover generation treated ordinary water as lava");
+            Terraria.Main.tile[blockedX, 49].LiquidType = Terraria.ID.LiquidID.Honey;
+            Check(Read().Count == 2, "cover generation treated honey as lava");
+            Terraria.Main.tile[blockedX, 49].LiquidType = Terraria.ID.LiquidID.Lava;
+            Check(Read().Count == 1, "cover generation proposed placing into lava");
+            Terraria.Main.tile[blockedX, 49].LiquidAmount = 0;
+            string denied = AgentTools.Control.Deny(new[] { ControlBehavior.Placement }, ControlLifetime.Task, null,
+                "protect construction cell", (blockedX, 49, 1, 1));
+            Check(Read().Count == 1, "cover generation ignored a placement veto");
+            AgentTools.Control.Release(denied);
+            Terraria.Main.npc[0].noTileCollide = true;
+            Check(Read().Count == 0, "tile-ignoring threat was described as intercepted");
+            Terraria.Main.npc[0].noTileCollide = false; p.inventory[8].favorited = true;
+            Check(Read().Count == 0, "cover generation consumed a favorite material");
+            p.inventory[8].favorited = false; p.inventory[8].stack = 3;
+            Check(Read().Count == 0, "cover generation proposed an unaffordable wall");
+            Terraria.Main.tile[blockedX, 49].HasUnactuatedTile = true;
+            Terraria.Main.tile[blockedX, 48].HasUnactuatedTile = true;
+            p.inventory[8].stack = 2;
+            var partial = Read();
+            Check(partial.Count == 1 && partial[0]["cost"].GetValue<int>() == 2
+                && partial[0]["action"]["y"].GetValue<int>() == 47 && partial[0]["action"]["n"].GetValue<int>() == 2,
+                "cover generation discarded a partial wall or repeated completed cells");
+            p.inventory[8].stack = 20; p.velocity.Y = 1;
+            Check(Read().Count == 0, "cover construction was proposed during a fall");
+        }
+        finally
+        {
+            foreach (var tile in tiles) Terraria.Main.tile[tile.X, tile.Y] = tile.Tile;
+            Array.Copy(inventory, p.inventory, inventory.Length); Terraria.Main.npc = npcs; Terraria.Main.projectile = shots;
+            p.position = position; p.velocity = velocity; p.selectedItem = slot; p.dead = dead; p.gravDir = gravity;
+            AgentTools.NewTask();
+        }
+        Console.WriteLine("PASS: cover candidates check threat side, material, footing and permissions without changing selected equipment");
+    }
+
+    static async Task LocalPlacementContracts()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var previous = HttpServerSystem.Handler;
+        var oldTiles = new[] { Terraria.Main.tile[12, 34], Terraria.Main.tile[12, 33], Terraria.Main.tile[12, 32] };
+        int starts = 0; JsonArray target = null;
+        async Task<T> Pump<T>(Task<T> task)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            { Check(clock.Elapsed.TotalSeconds < 5, "local placement did not return"); agent.PostUpdateEverything(); await Task.Delay(1); }
+            return await task;
+        }
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.ControlSession.Reset();
+            HttpServerSystem.Handler = (path, payload) =>
+            {
+                if (path == "/place_at")
+                {
+                    starts++; target = JsonNode.Parse(payload)["world"].DeepClone().AsArray();
+                    if (starts < 3) Terraria.Main.tile[12, target[1].GetValue<int>()] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+                    return (200, "{\"accepted\":true}");
+                }
+                Check(path == "/place_at_status", "local placement entered automatic navigation/preparation: " + path);
+                return (200, new JsonObject { ["running"] = false, ["outcome"] = starts < 3 ? "done" : "blocked",
+                    ["reason"] = starts < 3 ? "" : "out_of_reach", ["cells"] = new JsonArray(new JsonObject {
+                        ["at"] = target.DeepClone(), ["type"] = starts < 3 ? 1 : -1 }) }.ToJsonString());
+            };
+            var result = JsonNode.Parse(await Pump(AgentTools.Execute("place_at", new JsonObject {
+                ["item"] = "777", ["x"] = 12, ["y"] = 34, ["n"] = 4, ["step_y"] = -1, ["local"] = true }, default)));
+            Check(result["placed"].GetValue<int>() == 2 && result["outcome"].ToString() == "partial" && starts == 3
+                && result["cells"][0]["verified"].GetValue<bool>() && result["cells"][1]["verified"].GetValue<bool>(),
+                "local placement lost partial work, skipped world verification or retried displacement: " + result);
+        }
+        finally
+        {
+            for (int i = 0; i < 3; i++) Terraria.Main.tile[12, 34 - i] = oldTiles[i];
+            HttpServerSystem.Handler = previous; AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); agent.Unload();
+        }
+        Console.WriteLine("PASS: local placement verifies native cell results and returns displacement without automatic navigation or scaffolding");
+    }
+
+    static async Task CoverDecisionContracts()
+    {
+        foreach (string scenario in new[] { "build", "stale", "partial", "unverified", "disabled" })
+        {
+            int builds = 0, reads = 0;
+            var cover = JsonNode.Parse("""
+                {"id":"cover_right_12_20_9","side":"right","item_type":9,"item_name":"Wood","cost":4,
+                 "action":{"item":"9","x":12,"y":20,"n":4,"step_y":-1,"preserve_for_action":true}}
+                """).AsObject();
+            var combat = JsonNode.Parse("""
+                {"player":{"hp":35},"targets":[{"contact_damage":20,"weapons":[]}],"projectiles":[],
+                 "forecast":{"status":"pending","reason":"worker_warming"}}
+                """).AsObject();
+            combat["cover_candidates"] = new JsonArray(cover.DeepClone());
+            var result = await AgentScript.Run("const input=" + new JsonObject { ["context"] = "cover-test",
+                ["destination"] = new JsonObject { ["x"] = 30, ["y"] = 20 }, ["allow_cover"] = scenario != "disabled" }.ToJsonString()
+                + ";\n" + ScriptLibrary.Example("joint_combat")["code"], 5, (_, _) => { }, (name, args, _) =>
+                {
+                    JsonObject response;
+                    if (name == "combat_assess")
+                    {
+                        response = combat.DeepClone().AsObject();
+                        if (++reads > 1 && scenario == "stale") response["cover_candidates"] = new JsonArray();
+                    }
+                    else if (name == "jev_judge")
+                    {
+                        Check(args["questions"]["response"]["criteria"]?["keep_current"] != null
+                            && args["state"]["covers"]?.AsArray().Count == 1, "cover decision omitted continuing or its concrete cells");
+                        response = new JsonObject { ["status"] = "ready", ["request_id"] = 1,
+                            ["input_state"] = args["state"].DeepClone(), ["result"] = JsonNode.Parse("""
+                                {"elapsed_ms":30,"answers":{"response":{"choice":"cover_right_12_20_9"},"attention":{"choice":"terrain"}}}
+                                """) };
+                    }
+                    else
+                    {
+                        Check(name == "place_at" && args["preserve_for_action"]?.GetValue<bool>() == true,
+                            "cover did not delegate verified construction with action protection");
+                        builds++;
+                        int count = scenario == "partial" ? 2 : 4;
+                        response = new JsonObject { ["ok"] = count == 4, ["placed"] = count, ["outcome"] = count == 4 ? "done" : "partial",
+                            ["cells"] = new JsonArray(Enumerable.Range(0, count).Select(i => (JsonNode)new JsonObject {
+                                ["verified"] = scenario != "unverified", ["world"] = new JsonArray(12, 20 - i) }).ToArray()) };
+                    }
+                    return Task.FromResult(response.ToJsonString());
+                }, _ => Task.CompletedTask, default);
+            Check(result["ok"].GetValue<bool>() && builds == (scenario is "stale" or "disabled" ? 0 : 1)
+                && (result["value"]["applied"]?.GetValue<bool>() == true) == (scenario == "build"),
+                "cover accepted stale/unverified construction or needed a movement forecast: " + scenario + " " + result);
+            if (scenario == "build") Check(result["value"]["agent_review"] == null,
+                "verified cover redundantly woke the Agent to prepare terrain already handled locally");
+        }
+        Console.WriteLine("PASS: cover selection works during forecast preparation, refreshes legality and verifies every placed cell");
+    }
+
     static async Task IntentHostContinuation()
     {
         var agent = new NativeAgent(); agent.Load();
@@ -2061,6 +2228,9 @@ static class ScriptTests
         }
         await IntentContracts();
         await IntentHostContinuation();
+        CoverCandidateContracts();
+        await CoverDecisionContracts();
+        await LocalPlacementContracts();
         await TestDecisionChannels();
         await TestDecisionTravel();
         await TestJointDecision();

@@ -350,7 +350,8 @@ public sealed class CombatForecast : ModSystem
                 }
                 plans.Add(new JsonObject { ["id"] = movement["id"] + "_weapon_" + type,
                     ["movement"] = movement["id"].DeepClone(), ["weapon_type"] = type, ["weapon_name"] = weapon?.Name,
-                    ["movement_available"] = movement["id"].ToString() == "follow_route" || movement["safe_landing"].GetValue<bool>(),
+                    ["movement_available"] = movement["id"].ToString() == "follow_route"
+                        || movement["safe_landing"].GetValue<bool>() && AgentPermissions.CanDodge(delegated: true),
                     ["target_checks"] = targetChecks, ["target_motion"] = "constant-velocity hypothesis" });
             }
         }

@@ -148,7 +148,7 @@ namespace Terraria
     {
         public int whoAmI;
         public int type, life = 100, lifeMax = 100, damage = 10, defense, width = 20, height = 20;
-        public bool active, friendly, townNPC, boss, dontTakeDamage, immortal, chaseable = true;
+        public bool active, friendly, townNPC, boss, dontTakeDamage, immortal, noTileCollide, noGravity, chaseable = true;
         public bool CanBeChasedBy(object attacker = null, bool ignoreDontTakeDamage = false)
             => active && chaseable && lifeMax > 5 && (!dontTakeDamage || ignoreDontTakeDamage) && !friendly && !immortal;
         public Microsoft.Xna.Framework.Vector2 velocity;
@@ -452,6 +452,7 @@ namespace TerraBlind
     }
     public static class Reach
     {
+        public static bool CanPlace(Terraria.Player player, int x, int y) => true;
         public static Func<Terraria.Player, int, int, bool> MineTest;
         public static Func<Terraria.Player, int, int, bool> InteractTest;
         public static bool CanInteract(Terraria.Player player, int x, int y) => InteractTest?.Invoke(player, x, y) ?? true;

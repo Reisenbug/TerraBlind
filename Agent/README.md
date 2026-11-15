@@ -18,6 +18,8 @@
 
 `movement_capabilities.fall_forecast` 给出当前下坠在原生方块碰撞、当前水平速度与重力下的预计落点、帧数和摔伤，包含免摔、致命性与推演假设。默认反应策略在预计摔伤时也调用 Jev 的短程移动选择；执行器继续验证真实引擎候选。平台接落优先采用零伤害方案，也可采用比继续下坠伤害更低、且当前血量足以承受的方案。
 
+`combat_assess.cover_candidates` 提供角色站稳时左右两侧的四格挡墙候选：材料、库存、具体施工参数、预计使用帧数与当前能截住的威胁编号。部分建好的同材质墙只补剩余格子。穿墙敌人和穿墙弹幕按原生属性筛除；移动敌人仍可能绕行。`joint_combat` 将施工与移动/武器放在同一轮 Jev 选择中，施工前刷新候选，完成后核验每格。`allow_cover:false` 可关闭施工。`place_at` 的 `local:true` 从当前位置逐格放置，受阻后带部分成果返回；`preserve_for_action:true` 将实际新方块保留到当前动作结束，保护记录可通过 `control` 查询和撤销。后台动作仍持有控制权时，输入隔离和默认防护持续生效。
+
 ### 接入与配置
 
 默认使用本机 Codex 后端。先安装 Codex CLI 并执行 `codex login`；mod 在首次收到任务时自动启动 `codex app-server`，不需要 Python 或额外终端窗口。在模组配置 → TerraBlind → 内置 Agent 中：

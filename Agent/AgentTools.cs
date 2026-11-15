@@ -2781,6 +2781,7 @@ public static partial class AgentTools
             .OrderBy(n => Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center)).Take(8);
         return new JsonObject { ["tick"] = Main.GameUpdateCount, ["recent_damage"] = LastDamage?.DeepClone(),
             ["fall_forecast"] = NavigationSurvival.AssessFall(p),
+            ["cover_candidates"] = CoverCandidates(p, radius),
             ["preferred_weapon_type"] = CombatLoadout.PreferredType,
             ["navigation_options"] = AgentNavigationIntent.Options(),
             ["boss_present"] = Main.npc.Any(n => n != null && n.active && n.boss
@@ -2804,6 +2805,7 @@ public static partial class AgentTools
             ["targets"] = new JsonArray(targets.Select(n => (JsonNode)new JsonObject
             {
                 ["who"] = n.whoAmI, ["type"] = n.type, ["hp"] = n.life, ["contact_damage"] = n.damage, ["defense"] = n.defense,
+                ["ignores_tiles"] = n.noTileCollide, ["ignores_gravity"] = n.noGravity,
                 ["name"] = Lang.GetNPCNameValue(n.type),
                 ["x"] = n.Center.X / 16, ["y"] = n.Center.Y / 16,
                 ["width_tiles"] = n.width / 16f, ["height_tiles"] = n.height / 16f,
@@ -2827,8 +2829,67 @@ public static partial class AgentTools
             }).ToArray()) };
     }
 
+    static JsonArray CoverCandidates(Player player, int radius)
+    {
+        var result = new JsonArray();
+        if (player.dead || player.gravDir != 1 || player.velocity.Y != 0
+            || !ControlAllows(ControlBehavior.Placement, ControlChannels.ItemUse, delegated: true)) return result;
+        var materials = player.inventory.Take(50).Select((item, slot) => (item, slot))
+            .Where(v => !v.item.IsAir && !v.item.favorited && v.item.stack > 0 && v.item.createTile >= 0
+                && Main.tileSolid[v.item.createTile] && !Main.tileSolidTop[v.item.createTile])
+            .OrderByDescending(v => v.item.stack).Take(2).ToArray();
+        int bottom = (int)Math.Ceiling(player.Bottom.Y / 16f) - 1;
+        int previous = player.selectedItem;
+        try
+        {
+            foreach (var (item, slot) in materials)
+            foreach (int side in new[] { -1, 1 })
+            foreach (int gap in new[] { 2, 3 })
+            {
+                int x = side < 0 ? (int)(player.position.X / 16) - gap : (int)((player.position.X + player.width - 1) / 16) + gap;
+                if (!WorldGen.InWorld(x, bottom + 1) || !WorldGen.InWorld(x, bottom - 3)) continue;
+                var footing = Main.tile[x, bottom + 1];
+                if (!footing.HasUnactuatedTile || !Main.tileSolid[footing.TileType] || Main.tileSolidTop[footing.TileType]) continue;
+                player.selectedItem = slot;
+                int existing = Enumerable.Range(0, 4).TakeWhile(i => Main.tile[x, bottom - i].HasUnactuatedTile
+                    && Main.tile[x, bottom - i].TileType == item.createTile).Count();
+                int cost = 4 - existing;
+                if (cost == 0 || item.stack < cost) continue;
+                bool Fits(int y) => !Main.tile[x, y].HasTile && (Main.tile[x, y].LiquidAmount == 0 || Main.tile[x, y].LiquidType != Terraria.ID.LiquidID.Lava)
+                    && Reach.CanPlace(player, x, y) && !Control.ForbiddenAt(ControlBehavior.Placement, x, y);
+                if (!Enumerable.Range(existing, cost).All(i => Fits(bottom - i))) continue;
+                bool Crosses(Microsoft.Xna.Framework.Vector2 target)
+                {
+                    float dx = target.X - player.Center.X;
+                    if (Math.Abs(dx) < 1) return false;
+                    float t = (x * 16 + 8 - player.Center.X) / dx;
+                    float y = player.Center.Y + t * (target.Y - player.Center.Y);
+                    return t > 0 && t < 1 && y >= (bottom - 3) * 16 && y <= (bottom + 1) * 16;
+                }
+                var enemies = Main.npc.Where(n => n != null && n.active && !n.friendly && !n.townNPC && n.damage > 0
+                    && !n.noTileCollide && Microsoft.Xna.Framework.Vector2.Distance(n.Center, player.Center) <= radius * 16 && Crosses(n.Center)).ToArray();
+                var shots = Main.projectile.Where(s => s != null && s.active && s.hostile && s.damage > 0 && s.tileCollide
+                    && Microsoft.Xna.Framework.Vector2.Distance(s.Center, player.Center) <= radius * 16 && Crosses(s.Center)).ToArray();
+                if (enemies.Length == 0 && shots.Length == 0) continue;
+                result.Add(new JsonObject { ["id"] = $"cover_{(side < 0 ? "left" : "right")}_{x}_{bottom}_{item.type}",
+                    ["side"] = side < 0 ? "left" : "right", ["item_type"] = item.type, ["item_name"] = item.Name,
+                    ["available"] = item.stack, ["existing_cells"] = existing, ["cost"] = cost, ["estimated_use_ticks"] = Math.Max(1, item.useTime) * cost,
+                    ["action"] = new JsonObject { ["item"] = item.type.ToString(), ["x"] = x, ["y"] = bottom - existing,
+                        ["n"] = cost, ["step_y"] = -1, ["preserve_for_action"] = true, ["local"] = true },
+                    ["intercepts_npcs"] = new JsonArray(enemies.Select(n => (JsonNode)JsonValue.Create(n.whoAmI)).ToArray()),
+                    ["intercepts_projectiles"] = new JsonArray(shots.Select(s => (JsonNode)JsonValue.Create(s.whoAmI)).ToArray()),
+                    ["scope"] = "Four empty non-lava cells in native placement range above solid footing. Upper cells depend on placing lower cells first. Intercepts describe current center-to-player lines; enemies can move around the wall. Actual placement and effects require verification." });
+            }
+        }
+        finally { player.selectedItem = previous; }
+        return result;
+    }
+
     static async Task<JsonObject> Place(JsonObject args, CancellationToken token)
     {
+        string protectAction = Bool(args, "preserve_for_action") ? Actions.ActiveHandle : null;
+        bool local = Bool(args, "local");
+        if (local && (args["x"] == null || args["y"] == null)) throw new ArgumentException("local放置需要明确世界格坐标x/y。");
         int count = Math.Clamp(Int(args, "n", 1), 1, 200);
         int placed = 0;
         var cells = new JsonArray();
@@ -2837,12 +2898,18 @@ public static partial class AgentTools
             var payload = new JsonObject { ["item"] = Text(args, "item") };
             if (args["x"] != null && args["y"] != null)
                 payload["world"] = new JsonArray(Int(args, "x") + i * Int(args, "step_x"), Int(args, "y") + i * Int(args, "step_y"));
-            var result = await Call("/place_anywhere", payload, token);
+            var result = await Call(local ? "/place_at" : "/place_anywhere", payload, token);
             var placement = (JsonObject)result.DeepClone();
             var progress = new NavigationProgress();
-            if (!Rejected(result)) result = await Wait("/place_anywhere_status", "running", "/place_anywhere_stop", 120, token,
-                elapsed => NativeAgent.OnMain(() => PlacementProgress(progress, elapsed, placement), token),
+            if (!Rejected(result)) result = await Wait(local ? "/place_at_status" : "/place_anywhere_status", "running",
+                local ? "/place_at_stop" : "/place_anywhere_stop", local ? 0 : 120, token,
+                local ? null : elapsed => NativeAgent.OnMain(() => PlacementProgress(progress, elapsed, placement), token),
                 new JsonObject { ["tool"] = "place_at", ["args"] = args.DeepClone() });
+            if (local)
+            {
+                placement["world"] = payload["world"]?.DeepClone();
+                placement["expected_tile"] = result["cells"]?.AsArray().FirstOrDefault()?["type"]?.DeepClone();
+            }
             if (Text(result, "error") == "placement_no_progress")
                 await NativeAgent.OnMain(() => { StopInputs(preserveAttack: Actions.HasAttack); return true; }, token);
             if (Text(result, "outcome") == "done")
@@ -2854,6 +2921,10 @@ public static partial class AgentTools
                     bool verified = inWorld && (expectedTile >= 0 && Main.tile[x, y].HasTile && Main.tile[x, y].TileType == expectedTile
                         || expectedWall > 0 && Main.tile[x, y].WallType == expectedWall);
                     result["world"] = placement["world"]?.DeepClone(); result["verified"] = verified;
+                    if (verified && expectedTile >= 0 && protectAction != null && Actions.Summary().Any(a =>
+                        a["handle"]?.ToString() == protectAction && a["status"]?.ToString() is "running" or "paused"))
+                        result["mining_protection"] = Control.Deny(new[] { ControlBehavior.Mining }, ControlLifetime.Action,
+                            protectAction, "Preserve verified construction during its current action", (x, y, 1, 1));
                     if (!verified)
                     {
                         bool occupied = inWorld && Main.tile[x, y].HasTile;

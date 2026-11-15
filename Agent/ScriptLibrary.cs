@@ -488,14 +488,18 @@ public sealed class ScriptLibrary
             return {registered:true};
             """);
         if (name == "joint_combat") return Template(name,
-            "内置共享战斗决策，可直接调用revision=0；joint_reactions传combat_skill_revision。input含context、destination、instruction、last_request及interval_ms/max_age_ms。候选后台计算，pending期间原动作继续。返回request_id和applied供调用者去重；宿主执行前核对轨迹，执行期间检测偏离。",
+            "内置即时防护决策，可直接调用revision=0；joint_reactions传combat_skill_revision。input含context、destination、instruction、last_request及interval_ms/max_age_ms；allow_cover:false可关闭施工候选。Jev联合选择移动、武器或四格挡墙；移动后台推演，挡墙给出实际材料、格子、耗时和当前能截住的威胁，推演准备期间也可选择施工。放完逐格验证，当前动作保留挡墙并在结束时释放保护。返回request_id、applied、choice和cover供去重及观察。",
             """
             const c=tool('combat_assess',{radius:25,terrain_radius:8,forecast:true,context:input.context,destination:input.destination});
             const f=c.forecast;
-            if(c.boss_present||f.status!=='ready'||f.plans.length<2) return {status:f.status,reason:f.reason};
+            const plans=f.status==='ready'?f.plans:[];
+            const covers=input.allow_cover===false?[]:c.cover_candidates??[];
+            if(c.boss_present||plans.length+covers.length<1) return {status:f.status,reason:f.reason};
             if(!c.targets.some(n=>n.contact_damage>0)&&!c.projectiles.length&&(c.fall_forecast?.damage??0)<=0) return {status:'no_threat'};
-            const criteria=Object.fromEntries(f.plans.map(p=>[p.id,{movement:p.movement,weapon_type:p.weapon_type}]));
-            const movements=f.movements.map(({engine_ms,roundtrip_ms,queue_ms,...m})=>m);
+            const criteria={...(plans.length?{}:{keep_current:'Continue the current action while preparation runs.'}),
+              ...Object.fromEntries(plans.map(p=>[p.id,{movement:p.movement,weapon_type:p.weapon_type}])),
+              ...Object.fromEntries(covers.map(p=>[p.id,{build:p.action,side:p.side,cost:p.cost,item:p.item_name}]))};
+            const movements=(f.movements??[]).map(({engine_ms,roundtrip_ms,queue_ms,...m})=>m);
             const weapons=[...new Map(c.targets.flatMap(n=>n.weapons).map(({line_or_reach_passed,...w})=>[w.type,w])).values()];
             const r=tool('jev_judge',{channel:'combat',context:input.context,interval_ms:input.interval_ms??750,
               max_age_ms:input.max_age_ms??2000,state:{instruction:input.instruction??'',destination:input.destination,
@@ -505,9 +509,9 @@ public sealed class ScriptLibrary
                 forecast_id:f.id,sample_tick:f.sample_tick,age_frames:f.age_frames,sample_player_pixels:f.sample_player,
                 comparison_frames:f.comparison_frames,
                 scope:f.scope,known_route_frames:f.known_route_frames,prefix_source:f.prefix_source,walk_intent:f.walk_intent,
-                movements,plans:f.plans},
+                movements,plans,covers},
               questions:{response:{type:'choice',instructions:
-                'Which available movement and weapon combination best avoids incoming damage and fall damage while carrying out state.instruction? Use the measured candidate outcomes and landing checks; fall_forecast describes the current fall under its stated assumptions.',criteria},
+                'Which immediate movement, weapon or cover construction best prevents damage while advancing state.instruction? Compare measured movement and landing outcomes with the concrete wall cells, build time, material value and intercepted threats. Walls also obstruct your attacks and route; mobile enemies may go around them. fall_forecast uses its stated assumptions.',criteria},
                 attention:{type:'choice',instructions:
                   'Do the available controls suffice to make useful progress, or should the Agent revise equipment or terrain preparation? Current actions continue during review. Consider the task, incoming damage, weapon reach, ammo and the measured candidate outcomes.',
                   criteria:{continue:'Continue with current preparation and control.',
@@ -519,7 +523,9 @@ public sealed class ScriptLibrary
             if(r.status==='failed'){
               print({...record,error:r.result.error});return {request_id:r.request_id,error:r.result.error};
             }
-            const plan=r.input_state.plans.find(p=>p.id===r.result.answers.response.choice);
+            const choice=r.result.answers.response.choice;
+            const cover=r.input_state.covers?.find(p=>p.id===choice);
+            const plan=r.input_state.plans.find(p=>p.id===choice);
             const attention=r.result.answers.attention?.choice;
             const agentReview=attention&&attention!=='continue'?{
               key:attention+':'+(attention!=='terrain'?weapons.map(w=>w.type+':'+w.has_ammo).sort().join(',')
@@ -531,13 +537,28 @@ public sealed class ScriptLibrary
                 terrain:c.terrain?{origin:c.terrain.origin,rows:c.terrain.rows,legend:c.terrain.legend,player_bounds:c.terrain.player_bounds}:null,
                 selected_plan:plan,model_ms:r.result.elapsed_ms}}:null;
             let applied;
-            if(!plan?.movement_available) applied={error:'landing_unresolved'};
+            if(cover){
+              const fresh=tool('combat_assess',{radius:25}).cover_candidates?.find(p=>p.id===cover.id);
+              if(!fresh) applied={error:'cover_candidate_changed'};
+              else{
+                const built=tool('place_at',fresh.action);
+                const verified=built.ok===true&&built.placed===fresh.cost&&built.cells?.length===fresh.cost
+                  &&built.cells.every((cell,i)=>cell.verified===true&&cell.world?.[0]===fresh.action.x
+                    &&cell.world?.[1]===fresh.action.y+i*fresh.action.step_y);
+                applied=verified?{outcome:'cover_built',protections:built.cells.map(c=>c.mining_protection).filter(Boolean)}
+                  :{error:built.error??'cover_not_verified',reason:built.outcome};
+              }
+            }
+            else if(choice==='keep_current') applied={};
+            else if(!plan?.movement_available) applied={error:'landing_unresolved'};
             else if(plan.movement==='follow_route') applied=plan.weapon_type>0?tool('set_combat',{weapon_type:plan.weapon_type}):{};
             else applied=tool('act',{steps:[{keys:['right'],until:{frames:1}}],combat_candidate:{
               context:input.context,forecast_id:r.input_state.forecast_id,plan_id:plan.id}});
             print({...record,choice:r.result.answers.response.choice,action:applied.error??applied.outcome??'follow_route',
               reason:applied.reason,decision_forecast_id:applied.decision_forecast_id,execution_forecast_id:applied.execution_forecast_id});
-            return {request_id:r.request_id,applied:!applied.error,weapon_type:plan?.weapon_type,error:applied.error??null,agent_review:agentReview};
+            return {request_id:r.request_id,applied:!applied.error,choice,cover:cover?.id,outcome:applied.outcome,
+              weapon_type:plan?.weapon_type,error:applied.error??null,
+              agent_review:applied.outcome==='cover_built'&&attention==='terrain'?null:agentReview};
             """);
         if (name is "reactive_travel" or "task_reactions" or "decision_travel" or "decision_reactions" or "joint_reactions") return Template(name,
             "task_reactions和decision_reactions注册整趟任务策略，目的地从event.execution的实际导航读取；travel版本另需destination并执行单段导航。input包含resources（item_type/count/tile_type/tile_name及可选frame_x/frame_y）、weapon_order、trash_types/drop_types、max_detour_tiles、health_reserve、contact_pass_types、allow_trigger_removal。decision版本默认启用weapon/movement/opportunity三维后台判断，decisions数组可单独启停作对照；instruction给当前意图，decision_interval_ms、decision_max_age_ms和decision_max_displacement_tiles调整更新及应用条件。判断期间原动作继续，只有执行具体干预才暂停并恢复。print记录每次采用的request_id、选择、耗时和动作结果。资源来源提前查证，策略源码可随现场修改。",

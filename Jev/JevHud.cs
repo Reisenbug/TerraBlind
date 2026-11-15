@@ -107,6 +107,8 @@ namespace TerraBlind
 
 		static string Choice(string choice)
 		{
+			if (choice.StartsWith("cover_left_")) return "向左搭挡墙";
+			if (choice.StartsWith("cover_right_")) return "向右搭挡墙";
 			int split = choice.IndexOf("_weapon_", StringComparison.Ordinal);
 			if (split >= 0 && int.TryParse(choice[(split + 8)..], out int weapon))
 				return Label(choice[..split]) + " · " + Lang.GetItemNameValue(weapon);
