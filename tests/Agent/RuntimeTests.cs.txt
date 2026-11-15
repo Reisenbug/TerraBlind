@@ -16,6 +16,79 @@ using Game = Terraria.Main;
 static class RuntimeTests
 {
     static readonly NativeAgent Agent = new();
+    public static async Task QueryHandoff()
+    {
+        Agent.Load();
+        foreach (bool mayAct in new[] { false, true })
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
+            var previousHandler = HttpServerSystem.Handler;
+            var workflows = AgentTools.Workflows.Keys.ToHashSet();
+            int starts = 0, moves = 0;
+            bool finishFirst = false;
+            using var attackCancellation = new CancellationTokenSource();
+            using var observerCancellation = new CancellationTokenSource();
+            Task<string> observer = null;
+            try
+            {
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    if (path == "/nav_recede") starts++;
+                    if (path == "/act") moves++;
+                    return (200, path == "/fight_active" ? "{\"active\":true}"
+                        : path == "/nav_recede_done" ? new JsonObject { ["done"] = finishFirst || starts > 1 }.ToJsonString()
+                        : "{}");
+                };
+                var attack = AgentTools.Actions.Start("fight", new JsonObject { ["seconds"] = 30d }, attackCancellation.Token);
+                await PumpUntil(() => AgentTools.Actions.HasAttack);
+                string first = "step('first',()=>tool('nav_to',{x:12,y:34}));";
+                AgentTools.Plan.Create(new JsonObject { ["goal"] = "continue prepared work during observation", ["mode"] = "dag",
+                    ["steps"] = new JsonArray(new JsonObject { ["id"] = "travel", ["description"] = "two prepared routes",
+                        ["depends_on"] = new JsonArray(), ["script"] = first + "return {status:'yield'};",
+                        ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "item", ["type"] = 191, ["count"] = 9999 }) }) }, _ => 0);
+                await Execute(AgentTools.Execute("run_script", new JsonObject { ["task_node"] = "travel", ["background"] = true }, default));
+                await PumpUntil(() => starts == 1);
+                AgentTools.Plan.Revise(new JsonObject { ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                    ["reason"] = "prepare the next route before arrival", ["nodes"] = new JsonArray(new JsonObject {
+                        ["id"] = "travel", ["script"] = first + "step('second',()=>tool('nav_to',{x:16,y:34}));return {status:'yield'};" }) }, _ => 0);
+                string code = "for(let i=0;i<4;i++)tool('action_query',{handle:"
+                    + JsonValue.Create(attack["handle"].ToString()).ToJsonString() + ",wait_ms:1000});"
+                    + (mayAct ? "return tool('act',{steps:[{keys:['right'],until:{frames:1}}]});" : "return {observed:true};");
+                observer = AgentTools.Execute("run_script", new JsonObject { ["code"] = code,
+                    ["task_node"] = mayAct ? "travel" : null,
+                    ["workflow"] = mayAct ? "handoff-observer-action" : null }, observerCancellation.Token);
+                await PumpUntil(() => AgentTools.QueriesInFlight > 0 || observer.IsCompleted);
+                Check(!observer.IsCompleted, "observer did not enter its pending query: " + (observer.IsCompletedSuccessfully ? observer.Result : observer.Status));
+                finishFirst = true;
+                await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                if (mayAct)
+                {
+                    for (int i = 0; i < 10; i++)
+                    { AgentTools.ContinuePreparedNode(default); Agent.PostUpdateEverything(); await Task.Delay(5); }
+                    Check(starts == 1 && moves == 0, "an action-capable observer lost its exclusive execution boundary");
+                    observerCancellation.Cancel();
+                    try { await Execute(observer); } catch (OperationCanceledException) { }
+                }
+                await PumpUntil(() => { AgentTools.ContinuePreparedNode(default); return starts == 2; });
+                Check(mayAct || !observer.IsCompleted && timer.ElapsedMilliseconds < 500,
+                    "prepared route waited for a read-only observer: " + timer.ElapsedMilliseconds + "ms");
+                Console.WriteLine($"QUERY_HANDOFF may_act={mayAct} handoff_ms={timer.ElapsedMilliseconds} observer_pending={!observer.IsCompleted} model_calls=0");
+            }
+            finally
+            {
+                observerCancellation.Cancel(); attackCancellation.Cancel();
+                if (observer != null) try { await Execute(observer); } catch (OperationCanceledException) { }
+                AgentTools.Stop();
+                await PumpUntil(() => !AgentTools.Actions.HasActive && AgentTools.Workflows.Where(w => !workflows.Contains(w.Key)).All(w => !w.Value.Running));
+                AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+                foreach (string id in AgentTools.Workflows.Keys.Where(id => !workflows.Contains(id)).ToArray()) AgentTools.Workflows.Remove(id);
+                HttpServerSystem.Handler = previousHandler;
+            }
+        }
+        Console.WriteLine("PASS: pending read-only scripts do not delay prepared actions; action-capable scripts retain their boundary");
+    }
+
     static async Task TestPlacementReaction()
     {
         Agent.Load(); AgentTools.NewTask(); AgentTools.Plan.Reset();
@@ -1086,6 +1159,7 @@ static class RuntimeTests
 
     public static async Task Run()
     {
+        await QueryHandoff();
         await TestPlacementReaction();
         TestHoneyNotice();
         TestPassiveOpportunityWake();

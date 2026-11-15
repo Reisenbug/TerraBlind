@@ -208,6 +208,7 @@ public static partial class AgentTools
     static readonly Dictionary<string, string> recoveredActions = new();
     static Task continuation = Task.CompletedTask;
     static int executingScripts;
+    static int actionScripts;
     static readonly AsyncLocal<(string Id, ScriptProgress Progress)?> recoveryContext = new();
     static readonly AsyncLocal<bool> preparedDispatch = new();
     static string pendingNode;
@@ -391,7 +392,7 @@ public static partial class AgentTools
     }
     internal static void ContinuePreparedNode(CancellationToken token)
     {
-        if (token.IsCancellationRequested || !continuation.IsCompleted || Actions.HasPrimaryControl || ControlSession.PrimaryActive || Volatile.Read(ref executingScripts) > 0
+        if (token.IsCancellationRequested || !continuation.IsCompleted || Actions.HasPrimaryControl || ControlSession.PrimaryActive || Volatile.Read(ref actionScripts) > 0
             || !Plan.RequiresNodeExecution || Main.LocalPlayer.dead || ContactEscapeActive) return;
         if (pendingNode != null)
         {
@@ -991,7 +992,7 @@ public static partial class AgentTools
     static readonly AsyncLocal<long> scriptInvocation = new();
     static bool ObservationTool(string name) => name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
         or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "jev_judge" or "item_info" or "wiki_search" or "wiki_page"
-        or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status";
+        or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status" or "action_query";
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
     {
         long id = Interlocked.Increment(ref invocationSequence);
@@ -1636,7 +1637,9 @@ public static partial class AgentTools
                 }, token);
                 Guid eventReader = localEvents ? await NativeAgent.OnMain(Watches.BeginScriptDelivery, token) : Guid.Empty;
                 Guid handlerReader = Guid.NewGuid();
+                bool mayAct = !AgentScript.PreparationOnly(source);
                 Interlocked.Increment(ref executingScripts);
+                if (mayAct) Interlocked.Increment(ref actionScripts);
                 long currentInvocation = Interlocked.Increment(ref invocationSequence);
                 try
                 {
@@ -1664,6 +1667,7 @@ public static partial class AgentTools
                 finally
                 {
                     Interlocked.Decrement(ref executingScripts);
+                    if (mayAct) Interlocked.Decrement(ref actionScripts);
                     await NativeAgent.OnMain(() => { Watches.EndHandlers(handlerReader); return true; }, default);
                     if (eventReader != Guid.Empty)
                         await NativeAgent.OnMain(() => { Watches.EndScriptDelivery(eventReader); return true; }, default);
