@@ -1,4 +1,5 @@
 using Microsoft.Xna.Framework;
+using System.Text.Json.Nodes;
 using Terraria;
 using Terraria.ID;
 
@@ -172,12 +173,15 @@ public static class NavigationSurvival
 
     static bool TryPlatformCatch(Player player)
     {
-        if (player.gravDir != 1 || player.AnyExtraJumpUsable() || player.itemAnimation > 0 || player.itemTime > 0
-            || !DangerousLandingSoon(player, out _, includeOpenFall: true, horizon: 60)) return false;
+        if (FallSafety.Immune(player) || player.gravDir != 1 || player.AnyExtraJumpUsable()
+            || player.itemAnimation > 0 || player.itemTime > 0) return false;
+        var projected = ProjectLanding(player, 60);
+        if (projected.Damage <= 0) return false;
         float nextVelocity = System.Math.Min(player.velocity.Y + player.gravity, player.maxFallSpeed);
         float followingVelocity = System.Math.Min(nextVelocity + player.gravity, player.maxFallSpeed);
         int y = (int)System.Math.Ceiling((player.Bottom.Y + nextVelocity + followingVelocity) / 16);
-        if (FallSafety.LandingDamage(player, new Vector2(player.position.X, y * 16 - player.height), player.fallStart) > 0) return false;
+        int catchDamage = FallSafety.LandingDamage(player, new Vector2(player.position.X, y * 16 - player.height), player.fallStart);
+        if (catchDamage >= player.statLife || catchDamage > 0 && catchDamage >= projected.Damage) return false;
         int frames = 0;
         float descent = 0, velocity = player.velocity.Y;
         while (descent < y * 16 - player.Bottom.Y && frames < 60)
@@ -205,6 +209,7 @@ public static class NavigationSurvival
             finally { player.selectedItem = previous; }
             if (!placement.HasValue) continue;
             HoldItem(player, slot); holdingPlacement = true; webTarget = placement.Value;
+            DiagLog.Write($"[survival-platform-choice] projected_damage={projected.Damage} catch_damage={catchDamage} projected_frames={projected.Frames} target=({webTarget.X},{webTarget.Y})");
             Interrupt(player, "place_platform");
             player.delayUseItem = false; player.mouseInterface = false;
             Cursor.AimTile(webTarget.X, webTarget.Y); player.controlUseItem = true;
@@ -218,8 +223,25 @@ public static class NavigationSurvival
 
     static bool DangerousLandingSoon(Player player, out Vector2 landing, bool includeOpenFall = false, int horizon = 12)
     {
-        landing = player.position;
-        if (FallSafety.Immune(player) || player.velocity.Y * player.gravDir <= 0) return false;
+        var projected = ProjectLanding(player, horizon);
+        landing = projected.Position;
+        return projected.Damage > 0 && (projected.Landed || includeOpenFall);
+    }
+
+    public static JsonObject AssessFall(Player player)
+    {
+        var projected = ProjectLanding(player, 60);
+        return new JsonObject { ["immune"] = FallSafety.Immune(player), ["landed"] = projected.Landed,
+            ["frames"] = projected.Frames, ["damage"] = projected.Damage,
+            ["lethal"] = projected.Damage >= player.statLife && projected.Damage > 0,
+            ["landing_pixels"] = new JsonObject { ["x"] = projected.Position.X, ["y"] = projected.Position.Y },
+            ["assumption"] = "Current horizontal velocity and gravity with native tile collisions; no new controls, tile changes or entity collisions. An unlanded tail is a 60-frame bound, not a confirmed landing." };
+    }
+
+    static (Vector2 Position, bool Landed, int Frames, int Damage) ProjectLanding(Player player, int horizon)
+    {
+        if (FallSafety.Immune(player) || player.velocity.Y * player.gravDir <= 0)
+            return (player.position, false, 0, 0);
         var position = player.position;
         var velocity = player.velocity;
         int fallStart = player.fallStart;
@@ -232,13 +254,10 @@ public static class NavigationSurvival
                 false, false, (int)player.gravDir);
             position += allowed;
             if (allowed.Y * player.gravDir < velocity.Y * player.gravDir)
-            {
-                landing = position;
-                return FallSafety.LandingDamage(player, position, fallStart) > 0;
-            }
+                return (position, true, frame + 1, FallSafety.LandingDamage(player, position, fallStart));
             fallStart = FallSafety.ResetDistance(player, position, fallStart, velocity.Y, frame + 1);
         }
-        return includeOpenFall && FallSafety.LandingDamage(player, position, fallStart) > 0;
+        return (position, false, horizon, FallSafety.LandingDamage(player, position, fallStart));
     }
 
     static void Interrupt(Player player, string action)

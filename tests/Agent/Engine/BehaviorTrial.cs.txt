@@ -993,6 +993,7 @@ public sealed partial class BehaviorTrial : ModSystem
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_TASK_POLICY_PROBE") == "1") { await TaskPolicyTrial(); return; }
+        if (Environment.GetEnvironmentVariable("TB_FALL_CATCH_PROBE") == "1") { await FallCatchTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_FALL_PLACEMENT_PROBE") == "1") { await FallPlacementTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_CONSUMABLE_HANDOFF_PROBE") == "1") { await ConsumableHandoffTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_DESERT_CONTACT_PROBE") == "1") { await DesertContactTrial(); return; }
@@ -3666,6 +3667,80 @@ public sealed partial class BehaviorTrial : ModSystem
             || after["inventory_slots"].AsArray().Where(i => i["type"]?.GetValue<int>() == ItemID.LifeCrystal).Sum(i => i["stack"].GetValue<int>()) != 1)
             throw new Exception("native atomic policy failed: " + report);
         Console.WriteLine("ATOMIC_POLICY_NATIVE_PASS " + report.ToJsonString());
+    }
+
+    async Task FallCatchTrial()
+    {
+        var report = await OnMain(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            var p = Main.LocalPlayer;
+            int x = Main.spawnTileX, y = Main.spawnTileY + 10;
+            foreach (var item in p.inventory) item.TurnToAir();
+            foreach (var item in p.armor) item.TurnToAir();
+            for (int tx = x - 3; tx <= x + 3; tx++)
+            for (int ty = y - 4; ty <= y + 7; ty++) Main.tile[tx, ty].ClearEverything();
+            Main.tile[x - 1, y + 1].ResetToType(TileID.Stone);
+            Main.tile[x, y + 4].ResetToType(TileID.Stone);
+            Main.tile[x + 1, y + 4].ResetToType(TileID.Stone);
+            p.inventory[5].SetDefaults(ItemID.WoodPlatform); p.inventory[5].stack = 20;
+            p.position = new Vector2(x * 16 + 2, (y - 1) * 16 - p.height);
+            p.velocity = new Vector2(0, 10); p.gravDir = 1; p.noFallDmg = false;
+            p.fallStart = p.fallStart2 = y - 29; p.statLife = 35;
+            p.itemAnimation = p.itemTime = 0; p.selectedItem = 0;
+            var attempt = typeof(NavigationSurvival).GetMethod("TryPlatformCatch", HiddenStatic);
+            int catchDamage = FallSafety.LandingDamage(p, new Vector2(p.position.X, (y + 1) * 16 - p.height), p.fallStart);
+            int floorDamage = FallSafety.LandingDamage(p, new Vector2(p.position.X, (y + 4) * 16 - p.height), p.fallStart);
+            var forecast = NavigationSurvival.AssessFall(p);
+            var timing = Stopwatch.StartNew();
+            for (int i = 0; i < 500; i++) NavigationSurvival.AssessFall(p);
+            double meanMs = timing.Elapsed.TotalMilliseconds / 500;
+            bool accepted = (bool)attempt.Invoke(null, new object[] { p });
+            var result = new JsonObject { ["hp"] = p.statLife, ["catch_damage"] = catchDamage,
+                ["floor_damage"] = floorDamage, ["accepted"] = accepted,
+                ["target_x"] = x, ["target_y"] = y + 1,
+                ["fall_forecast"] = forecast, ["forecast_mean_ms"] = meanMs,
+                ["selected_type"] = p.HeldItem.type, ["use_item"] = p.controlUseItem,
+                ["native_collision"] = true, ["model_calls"] = 0 };
+            NavigationSurvival.Reset(p);
+            p.statLife = catchDamage;
+            result["lethal_catch_rejected"] = !(bool)attempt.Invoke(null, new object[] { p });
+            NavigationSurvival.Reset(p);
+            p.statLife = 35; p.noFallDmg = true;
+            result["immune_unchanged"] = !(bool)attempt.Invoke(null, new object[] { p }) && p.selectedItem == 0;
+            p.noFallDmg = false;
+            return result;
+        });
+        File.WriteAllText(Path.Combine(Main.SavePath, "fall-catch-native.json"), report.ToJsonString());
+        Console.WriteLine("FALL_CATCH_MEASURED " + report.ToJsonString());
+        if (!report["accepted"].GetValue<bool>() || report["catch_damage"].GetValue<int>() >= report["hp"].GetValue<int>()
+            || report["floor_damage"].GetValue<int>() < report["hp"].GetValue<int>()
+            || report["fall_forecast"]["damage"].GetValue<int>() != report["floor_damage"].GetValue<int>()
+            || !report["fall_forecast"]["landed"].GetValue<bool>()
+            || !report["lethal_catch_rejected"].GetValue<bool>() || !report["immune_unchanged"].GetValue<bool>())
+            throw new Exception("survivable platform catch was rejected or fall immunity changed");
+        int tx = report["target_x"].GetValue<int>(), ty = report["target_y"].GetValue<int>();
+        await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            p.position = new Vector2(tx * 16 + 2, (ty - 2) * 16 - p.height);
+            p.velocity = new Vector2(0, .4f); p.fallStart = p.fallStart2 = ty - 30;
+            p.statLife = 35; p.dead = false; p.immune = false; p.immuneTime = 0;
+            p.itemAnimation = p.itemTime = p.jump = 0; p.releaseUseItem = true;
+            return true;
+        });
+        report["placement"] = await Call("place_at", new JsonObject { ["item"] = ItemID.WoodPlatform.ToString(), ["x"] = tx, ["y"] = ty });
+        await Task.Delay(250);
+        var after = await OnMain(() => new JsonObject { ["hp"] = Main.LocalPlayer.statLife,
+            ["dead"] = Main.LocalPlayer.dead, ["platforms"] = Main.LocalPlayer.inventory[5].stack,
+            ["placed"] = Main.tile[tx, ty].HasTile && Main.tile[tx, ty].TileType == TileID.Platforms,
+            ["grounded"] = Main.LocalPlayer.velocity.Y == 0 });
+        report["after"] = after;
+        File.WriteAllText(Path.Combine(Main.SavePath, "fall-catch-native.json"), report.ToJsonString());
+        if (after["dead"].GetValue<bool>() || after["hp"].GetValue<int>() != 35 - report["catch_damage"].GetValue<int>()
+            || !after["placed"].GetValue<bool>() || !after["grounded"].GetValue<bool>() || after["platforms"].GetValue<int>() != 19)
+            throw new Exception("native selected catch did not place and land: " + report);
+        Console.WriteLine("FALL_CATCH_NATIVE_PASS cases=4 actual_item_placement=true model_calls=0");
     }
 
     async Task FallPlacementTrial()
