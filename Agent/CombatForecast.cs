@@ -196,7 +196,8 @@ public sealed class CombatForecast : ModSystem
         var batch = await VanillaNavigationDemo.Instance.Observe(new JsonObject { ["command"] = "combat_replays",
             ["snapshot"] = snapshot.DeepClone(), ["trace_damage"] = true,
             ["branches"] = new JsonArray(inputs.Select(pair => (JsonNode)new JsonObject {
-                ["id"] = pair.Key, ["controls"] = new JsonArray(pair.Value.Select(k => (JsonNode)JsonValue.Create(k)).ToArray()) }).ToArray()) }, token);
+                ["id"] = pair.Key, ["controls"] = new JsonArray(pair.Value.Select(k => (JsonNode)JsonValue.Create(k)).ToArray()),
+                ["stop_grounded_after"] = pair.Key == "follow_route" ? 0 : lead.Length + 24 }).ToArray()) }, token);
         if (!execution && walk != null)
         {
             double center = Number(scene["player"]["pos"]["x"]) + Number(scene["player"]["size_pixels"]["width"]) / 2;

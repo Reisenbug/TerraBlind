@@ -5037,6 +5037,36 @@ public sealed partial class BehaviorTrial : ModSystem
         var report = new JsonObject { ["passed"] = true, ["branches"] = branches.Count, ["matched_frames"] = frames,
             ["batch_roundtrip_ms"] = batched["roundtrip_ms"].DeepClone(), ["batch_engine_ms"] = batched["total_ms"].DeepClone(),
             ["single_replays_ms"] = clock.Elapsed.TotalMilliseconds };
+        var full = await Observe(new JsonObject { ["command"] = "combat_replays", ["snapshot"] = snapshot.DeepClone(), ["branches"] = branches.DeepClone() });
+        var shortBranches = branches.DeepClone().AsArray();
+        foreach (var branch in shortBranches) branch["stop_grounded_after"] = 24;
+        var shortened = await Observe(new JsonObject { ["command"] = "combat_replays", ["snapshot"] = snapshot.DeepClone(), ["branches"] = shortBranches });
+        int shortenedFrames = 0;
+        foreach (var branch in shortened["branches"].AsArray())
+        {
+            var complete = full["branches"].AsArray().First(b => b["id"].ToString() == branch["id"].ToString());
+            int count = branch["frames"].AsArray().Count;
+            if (!JsonNode.DeepEquals(new JsonArray(complete["frames"].AsArray().Take(count).Select(f => f.DeepClone()).ToArray()), branch["frames"]))
+                throw new Exception("Landing stop changed movement prefix: " + branch["id"]);
+            shortenedFrames += count;
+        }
+        report["landing_stop_frames"] = shortenedFrames;
+        report["full_engine_ms"] = full["total_ms"].DeepClone();
+        report["landing_stop_engine_ms"] = shortened["total_ms"].DeepClone();
+        var fullTimes = new JsonArray();
+        var shortenedTimes = new JsonArray();
+        for (int trial = 0; trial < 6; trial++)
+        {
+            for (int order = 0; order < 2; order++)
+            {
+                bool early = (trial + order) % 2 == 0;
+                var measured = await Observe(new JsonObject { ["command"] = "combat_replays", ["snapshot"] = snapshot.DeepClone(),
+                    ["branches"] = (early ? shortBranches : branches).DeepClone() });
+                (early ? shortenedTimes : fullTimes).Add(measured["total_ms"].DeepClone());
+            }
+        }
+        report["full_engine_trials_ms"] = fullTimes;
+        report["landing_stop_engine_trials_ms"] = shortenedTimes;
         File.WriteAllText(Path.Combine(Main.SavePath, "combat-batch-check.json"), report.ToJsonString());
         Console.WriteLine("COMBAT_BATCH_CHECK " + report.ToJsonString());
     }
@@ -5126,6 +5156,18 @@ public sealed partial class BehaviorTrial : ModSystem
                         if (landing.Frame != (safe ? minimum : 0))
                             throw new Exception("Native landing classification incorrect: " + scenario + " " + landing);
                         row["landing_" + minimum] = new JsonObject { ["frame"] = landing.Frame, ["reason"] = landing.Reason };
+                        var early = await Observe(new JsonObject { ["command"] = "combat_replays", ["snapshot"] = snapshot.DeepClone(), ["trace_damage"] = true,
+                            ["branches"] = new JsonArray(new JsonObject { ["id"] = scenario, ["controls"] = controls.DeepClone(), ["stop_grounded_after"] = minimum }) });
+                        var truncated = early["branches"][0].AsObject();
+                        int count = truncated["frames"].AsArray().Count;
+                        var original = batch["branches"][0].AsObject();
+                        if (!JsonNode.DeepEquals(new JsonArray(original["frames"].AsArray().Take(count).Select(f => f.DeepClone()).ToArray()), truncated["frames"])
+                            || !JsonNode.DeepEquals(new JsonArray(original["health_frames"].AsArray().Take(count).Select(f => f.DeepClone()).ToArray()), truncated["health_frames"])
+                            || !JsonNode.DeepEquals(new JsonArray(original["hurt_events"].AsArray().Where(e => e["frame"].GetValue<int>() <= count).Select(e => e.DeepClone()).ToArray()), truncated["hurt_events"])
+                            || !landing.Equals(((int Frame, string Reason))classifier.Invoke(null, new object[] { truncated, 200, minimum }))
+                            || landing.Frame > 0 && count != landing.Frame)
+                            throw new Exception("Landing stop changed native evidence or safety classification: " + scenario + " minimum=" + minimum);
+                        row["landing_stop_" + minimum] = new JsonObject { ["frames"] = count, ["engine_ms"] = early["total_ms"].DeepClone() };
                     }
                 }
                 if (scenario is "healthy" or "poison" or "gills" or "poison_gills")
@@ -5146,6 +5188,7 @@ public sealed partial class BehaviorTrial : ModSystem
                     ["end_hp"] = full["frames"].AsArray()[^1]["hp"].DeepClone(),
                     ["landing"] = row["landing_24"]?.DeepClone(),
                     ["hurt_events"] = batch?["branches"]?[0]?["hurt_events"]?.DeepClone() }.ToJsonString());
+                if (scenario == "healthy") await CheckCombatBatch();
             }
         }
         finally

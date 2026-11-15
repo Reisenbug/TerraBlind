@@ -2116,7 +2116,8 @@ public sealed class Engine : ModSystem
                 {
                     var result = predictor.Predict(branchControls, detailed: false, stopOnDamage: !traceDamage,
                         controlPolicy: traceDamage ? (player, frame) =>
-                        { CombatDamageTrace.Frame = frame + 1; return branchControls[frame]; } : null);
+                        { CombatDamageTrace.Frame = frame + 1; return branchControls[frame]; } : null,
+                        stopGroundedAfter: branch["stop_grounded_after"]?.GetValue<int>() ?? 0);
                     result["id"] = branch["id"].DeepClone();
                     if (traceDamage) { result["hurt_events"] = events; result["health_frames"] = health; }
                     results.Add(result);

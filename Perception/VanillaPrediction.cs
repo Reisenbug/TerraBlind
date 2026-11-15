@@ -248,11 +248,12 @@ public sealed class VanillaPrediction
 
     public JsonObject Predict(int[] controls, bool detailed = true, bool captureEnd = false, bool restoreAfter = true,
         System.Collections.Generic.List<MovementSample> samples = null, bool stopOnDamage = false, int maxFrames = 240,
-        Func<Player, int, int> controlPolicy = null)
+        Func<Player, int, int> controlPolicy = null, int stopGroundedAfter = 0)
     {
         CheckCancellation();
         VanillaFrame.RequireWorker();
         if (controls.Length == 0 || controls.Length > maxFrames) throw new ArgumentException($"horizon_must_be_1_to_{maxFrames}");
+        if (stopGroundedAfter < 0 || stopGroundedAfter > controls.Length) throw new ArgumentException("invalid_landing_minimum");
         var trace = new JsonArray();
         samples?.Clear();
         var timer = Stopwatch.StartNew();
@@ -301,6 +302,8 @@ public sealed class VanillaPrediction
                 }
                 var interior = area; interior.Inflate(-32, -32);
                 if (!interior.Contains(player.Hitbox)) { outcome = "outside_observed_world"; break; }
+                if (stopGroundedAfter > 0 && frameIndex + 1 >= stopGroundedAfter
+                    && Collision.SolidCollision(player.position + new Vector2(0, player.gravDir), player.width, player.height)) break;
             }
             if (captureEnd && outcome == "complete")
                 end = VanillaFrame.Capture(player, new Rectangle(area.X / 16, area.Y / 16, area.Width / 16, area.Height / 16),
