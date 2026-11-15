@@ -31,6 +31,8 @@ static class ScriptTests
         await IntentContracts();
         await IntentHostContinuation();
         await IntentHostContinuation(stop: true);
+        await IntentPolicyIntegration();
+        await IntentPolicyIntegration(overridePolicy: true);
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();
@@ -73,7 +75,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=47 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=49 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -1304,6 +1306,58 @@ static class ScriptTests
         Console.WriteLine("PASS: death observations remain readable after repeated failures and respawn; failed actions stay guarded");
     }
 
+    static async Task IntentPolicyIntegration(bool overridePolicy = false)
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var http = HttpServerSystem.Handler;
+        var player = Terraria.Main.LocalPlayer;
+        int health = player.statLife, polls = 0, messages = AgentChat.Messages.Count;
+        bool dead = player.dead;
+        async Task<JsonObject> Call(string name, JsonObject args)
+        {
+            var task = AgentTools.Execute(name, args, default);
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            {
+                Check(timer.Elapsed.TotalSeconds < 5, "intent policy integration stalled");
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+            return JsonNode.Parse(await task).AsObject();
+        }
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
+            player.dead = false; player.statLife = 80;
+            await Call("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
+                ["code"] = "on('tick',()=>{tool('say',{text:'intent-policy-tick'});return {handled:true};});" });
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/nav_recede_done")
+                {
+                    if (++polls >= 3) player.statLife = 81;
+                    return (200, polls >= 3 ? "{\"done\":true}" : "{\"done\":false}");
+                }
+                return (200, "{\"accepted\":true}");
+            };
+            var result = await Call("run_script", new JsonObject { ["workflow"] = "intent-policy-test",
+                ["code"] = (overridePolicy ? "on('tick',()=>({handled:true}));" : "") + """
+                    return intents({observe:()=>tool('get_state',{fields:['health_dynamics']}),done:s=>s.health_dynamics.hp>=81,
+                      candidates:s=>[{id:'travel',description:'continue travelling',baseline:true,
+                        run:()=>tool('nav_to',{x:12,y:34}),verify:(r,b,a)=>a.health_dynamics.hp>b.health_dynamics.hp}]});
+                    """ });
+            bool delivered = AgentChat.Messages.Skip(messages).Contains("intent-policy-tick");
+            Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["status"]?.ToString() == "completed"
+                && delivered == !overridePolicy,
+                "intent bookkeeping suppressed task safety or replaced an explicit local override: " + result);
+        }
+        finally
+        {
+            AgentTools.ClearTaskPolicy(true); AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
+            HttpServerSystem.Handler = http; player.statLife = health; player.dead = dead; agent.Unload();
+        }
+        Console.WriteLine("PASS: intent ticks preserve task policy and respect explicit local replacement; override=" + overridePolicy);
+    }
+
     static async Task IntentHostContinuation(bool stop = false)
     {
         var agent = new NativeAgent(); agent.Load();
@@ -2288,6 +2342,8 @@ static class ScriptTests
         await ObservationAfterDeath();
         await IntentHostContinuation();
         await IntentHostContinuation(stop: true);
+        await IntentPolicyIntegration();
+        await IntentPolicyIntegration(overridePolicy: true);
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();

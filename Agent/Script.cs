@@ -111,6 +111,7 @@ public static class AgentScript
         sealed record Request(JsonObject Event, TaskCompletionSource<JsonObject> Completion, ExecutionContext Context, CancellationToken Token);
         readonly object gate = new();
         readonly Dictionary<string, Func<JsonObject, JsonObject>> handlers = new();
+        readonly HashSet<string> policyOverrides = new();
         readonly Queue<Request> requests = new();
         TaskCompletionSource<bool> signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
         bool servicing;
@@ -147,10 +148,17 @@ public static class AgentScript
             return true;
         }
         public string[] Kinds { get { lock (gate) return handlers.Keys.ToArray(); } }
+        public string[] PolicyOverrides { get { lock (gate) return policyOverrides.ToArray(); } }
         public bool Has(string kind) { lock (gate) return handlers.ContainsKey(kind); }
-        public void Remove(string kind) { lock (gate) handlers.Remove(kind); }
-        public void Register(string kind, Func<JsonObject, JsonObject> handler)
-        { lock (gate) handlers[kind] = handler; }
+        public void Remove(string kind) { lock (gate) { handlers.Remove(kind); policyOverrides.Remove(kind); } }
+        public void Register(string kind, Func<JsonObject, JsonObject> handler, bool append)
+        {
+            lock (gate)
+            {
+                handlers[kind] = handler;
+                if (append) policyOverrides.Remove(kind); else policyOverrides.Add(kind);
+            }
+        }
 
         public async Task<JsonObject> Dispatch(JsonObject notice, CancellationToken token)
         {
@@ -416,7 +424,7 @@ public static class AgentScript
         + "快速现场判断可在tick里用jev_judge的channel/context后台发起，读取ready中的request_id、input_state和result后按现场执行，等待期间原动作继续。script_program example decision_reactions提供weapon/movement/opportunity三个可独立启停的可编辑示例，decisions数组选择维度，instruction给当前意图；保存为技能后可在task_policy中用skill调用。"
         + "\n多目标短程接续用intents({observe,candidates,done,instruction,max_actions})。observe返回现场，candidates返回最多16个候选，每个含稳定id、version、description、run和verify(result,before,after)；baseline:true是Agent预先许可的默认行动，detour:true可途中执行并恢复原动作。observe/candidates/done/verify只读。Jev在动作中预选后继，完成以verify的真实状态核对；失败候选同版本不会重复执行。max_actions默认8，达到后返回continue，宿主可自动续本节点；completed/blocked游标保存在workflow，源码修改时重新评估。已查证资源可直接skill('resource_intents',0,{targets,destination,chests,instruction})，含多类采集、赶路和开箱；来源与地点由当前世界工具查询，目标数量按真实库存。get_state.local_intents可读当前意图、预备意图和反馈。"
         + "处理函数可返回{handled:true,agent_review:{key,reason,evidence}}请求Agent后台调整方案，原动作继续且处理函数保留。key标识同一问题，宿主按key去重并共享每指令6次机会唤醒预算；evidence保留关键现场，最多8000字符。"
-        + "组合策略时先skill注册基础处理，再on(kind,handler,{append:true})追加该事件的处理；依注册顺序执行，handled:false交回审阅或retry:true重试时结束本次处理链。on默认替换同名处理。task_policy只写skill调用和增补代码，完整技能保存在script_program。"
+        + "组合策略时先skill注册基础处理，再on(kind,handler,{append:true})追加该事件的处理；依注册顺序执行，handled:false交回审阅或retry:true重试时结束本次处理链。局部append处理也保留整趟task_policy的同名事件；on默认替换同名处理。intents的内部tick保留任务策略。task_policy只写skill调用和增补代码，完整技能保存在script_program。"
         + "挖掘、use_item、place_at和act执行期间同样投递事件：只读判断立即运行，处理函数的物品或移动动作在当前原子动作完成后交接；原动作结果先保存，随后主脚本继续。长段输入拆成有明确世界结果的短动作，让策略及时接手。"
         + "on('action_failed',event=>...)接收tool/args/result；查证并完成修复后返回{retry:true}，宿主仅立即重试原调用一次，原失败保留记录；压力板、背包满等可在本地处理。处理失败返回证据给主脚本或显式decision_point。技能reactive_travel提供机会、背包、压力板、荆棘和战斗策略的可编辑示例。"
         + "task_plan_patch带expected_revision和reason，nodes更新现节点，add_nodes插入机会或恢复节点；保留原意图、workflow、handle和step id。当前片段正常yield后续跑已保存新版本；already_running保留原执行，派发中的handle可为空。"
@@ -520,7 +528,7 @@ public static class AgentScript
                     options.Constraints.MaxArraySize = 100000;
                     options.Constraints.RegexTimeout = TimeSpan.FromMilliseconds(100);
                 });
-                engine.SetValue("__gameOn", new Action<string, Jint.Native.JsValue>((kind, handler) =>
+                engine.SetValue("__gameOn", new Action<string, Jint.Native.JsValue, bool>((kind, handler, append) =>
                 {
                     if (kind is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "nearby_npc_killed"
                         or "inventory_full" or "target_acquired" or "low_health" or "honey_slowdown" or "tick" or "action_failed"))
@@ -531,7 +539,7 @@ public static class AgentScript
                         engine.Constraints.Reset();
                         try { return JsonNode.Parse(engine.Invoke(handler, notice.ToJsonString()).AsString())?.AsObject(); }
                         finally { engine.Constraints.Reset(); }
-                    });
+                    }, append);
                     registerReaction?.Invoke(kind);
                 }));
                 engine.SetValue("__gameHandling", new Action<bool, string>((value, facts) =>
@@ -711,15 +719,18 @@ public static class AgentScript
                             try { value = handlers.get(event.kind)(event); return value; }
                             finally { handling = false; setHandling(false, stringify(value) ?? '{}'); }
                         };
+                        const policyInheritance = new Map();
                         const on = (kind, handler, options = {}) => {
                             if (typeof handler !== 'function') throw new Error('on需要事件名和处理函数');
                             const previous = handlers.get(kind);
+                            const append = options.append === true && (!previous || policyInheritance.get(kind) === true);
+                            policyInheritance.set(kind, append);
                             handlers.set(kind, options.append && previous ? event => {
                                 const first = previous(event);
                                 if (first?.handled === false || first?.retry === true) return first;
                                 return {...first, ...handler(event)};
                             } : handler);
-                            register(kind, json => stringify(dispatch(parse(json))) ?? '{}');
+                            register(kind, json => stringify(dispatch(parse(json))) ?? '{}', append);
                         };
                         const tool = (name, args = {}) => {
                             if (name === 'step') throw new Error('step是JS内置函数，不是游戏API。请直接写step(id, () => valueOrAction)，不要写tool("step", ...)。修正调用并沿用原workflow，已完成步骤不会重做。');
