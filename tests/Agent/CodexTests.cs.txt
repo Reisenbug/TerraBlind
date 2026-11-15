@@ -19,6 +19,10 @@ static class CodexTests
 
     public static async Task Run()
     {
+        var child = CodexAgent.StartInfo("/usr/bin/true", "/tmp");
+        Check(child.ArgumentList.Contains("features.hooks=false") && child.ArgumentList.Contains("features.goals=true")
+            && child.ArgumentList.Contains("features.plugins=false") && child.ArgumentList.Contains("project_doc_max_bytes=0"),
+            "game Codex inherited startup hooks or lost its isolated goal configuration");
         await InputOptimizations();
         await InTurnCompaction();
         PreparationContexts();

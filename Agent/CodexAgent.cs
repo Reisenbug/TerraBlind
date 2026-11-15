@@ -298,23 +298,7 @@ public sealed class CodexAgent : IDisposable
     static CodexConnection Launch(string executable, string cwd)
     {
         Directory.CreateDirectory(cwd);
-        var start = new ProcessStartInfo(ResolveExecutable(executable))
-        {
-            WorkingDirectory = cwd, UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(false), StandardOutputEncoding = Encoding.UTF8
-        };
-        start.ArgumentList.Add("app-server"); start.ArgumentList.Add("--listen"); start.ArgumentList.Add("stdio://");
-        start.ArgumentList.Add("-c"); start.ArgumentList.Add("features.goals=true");
-        foreach (string feature in new[] { "shell_tool", "unified_exec", "plugins", "apps", "multi_agent", "multi_agent_v2", "memories",
-            "memory_tool", "code_mode", "view_image", "skill_search" })
-        { start.ArgumentList.Add("-c"); start.ArgumentList.Add($"features.{feature}=false"); }
-        start.ArgumentList.Add("-c"); start.ArgumentList.Add("features.skip_host_skill_discovery=true");
-        start.ArgumentList.Add("-c"); start.ArgumentList.Add("skills.include_instructions=false");
-        start.ArgumentList.Add("-c"); start.ArgumentList.Add("project_doc_max_bytes=0");
-        start.ArgumentList.Add("-c"); start.ArgumentList.Add("web_search=\"disabled\"");
-        if (!OperatingSystem.IsWindows()) start.Environment["PATH"] = (start.Environment["PATH"] ?? "") + ":/usr/local/bin:/opt/homebrew/bin";
-        ApplySystemProxy(start, HttpClient.DefaultProxy);
+        var start = StartInfo(executable, cwd);
         var process = Process.Start(start) ?? throw new IOException("无法启动 Codex。");
         _ = process.StandardError.ReadToEndAsync().ContinueWith(errors =>
         {
@@ -330,6 +314,28 @@ public sealed class CodexAgent : IDisposable
             try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
             process.Dispose();
         });
+    }
+
+    internal static ProcessStartInfo StartInfo(string executable, string cwd)
+    {
+        var start = new ProcessStartInfo(ResolveExecutable(executable))
+        {
+            WorkingDirectory = cwd, UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardInputEncoding = new UTF8Encoding(false), StandardOutputEncoding = Encoding.UTF8
+        };
+        start.ArgumentList.Add("app-server"); start.ArgumentList.Add("--listen"); start.ArgumentList.Add("stdio://");
+        start.ArgumentList.Add("-c"); start.ArgumentList.Add("features.goals=true");
+        foreach (string feature in new[] { "hooks", "shell_tool", "unified_exec", "plugins", "apps", "multi_agent", "multi_agent_v2", "memories",
+            "memory_tool", "code_mode", "view_image", "skill_search" })
+        { start.ArgumentList.Add("-c"); start.ArgumentList.Add($"features.{feature}=false"); }
+        start.ArgumentList.Add("-c"); start.ArgumentList.Add("features.skip_host_skill_discovery=true");
+        start.ArgumentList.Add("-c"); start.ArgumentList.Add("skills.include_instructions=false");
+        start.ArgumentList.Add("-c"); start.ArgumentList.Add("project_doc_max_bytes=0");
+        start.ArgumentList.Add("-c"); start.ArgumentList.Add("web_search=\"disabled\"");
+        if (!OperatingSystem.IsWindows()) start.Environment["PATH"] = (start.Environment["PATH"] ?? "") + ":/usr/local/bin:/opt/homebrew/bin";
+        ApplySystemProxy(start, HttpClient.DefaultProxy);
+        return start;
     }
 
     internal static void ApplySystemProxy(ProcessStartInfo start, IWebProxy proxy)
