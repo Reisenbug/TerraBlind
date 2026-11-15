@@ -2,206 +2,158 @@
 
 [中文](#中文) · [English](#english)
 
-一个 tModLoader mod：把泰拉瑞亚的感知、寻路、建造、战斗拆成一套可调用的工具，并用这些工具组合出一条**从新世界开局到打死肉山**的完整流程。
-此项目完全在AI辅助下开发。
+**让 AI 在真实游戏中理解目标、作出判断，并持续行动。**
 
-A tModLoader mod: a toolbox of perception, pathfinding, building and combat primitives for Terraria, plus one hand-written pipeline that chains them from a fresh world all the way to killing the Wall of Flesh.
-This project was developed entirely with the assistance of AI.
-![status](https://img.shields.io/badge/milestone-boss%20fights-red) ![ai](https://img.shields.io/badge/AI-Jev%20drives%20the%20fights-brightgreen) ![tml](https://img.shields.io/badge/tModLoader-1.4.4.9-blue)
+TerraBlind 是一个以 Terraria 为载体的实时游戏 Agent 项目，运行于 tModLoader。LLM 负责规划、调查和编写行为脚本，Jev 负责快速情境判断，游戏执行层负责感知、寻路、瞄准与逐帧操作。
 
-**Jev 打 boss** -- Jev fights the bosses
+**An AI agent that plans, decides and acts in a live game.**
 
-| [![Jev 打穿大师模式肉前全 boss](docs/cover-jev-zh.png)](https://www.bilibili.com/video/BV1Boe26JEh4/) | [![Jev beat every pre-hardmode boss in master mode](docs/cover-jev-en.png)](https://www.youtube.com/watch?v=g6CADbjBhlk) |
+TerraBlind uses Terraria as an environment for building a real-time game agent. An LLM plans and writes executable behavior, Jev makes fast contextual decisions, and the game runtime handles perception, navigation, aiming and frame-level control.
+
+![agent](https://img.shields.io/badge/AI-LLM%20Agent%20%2B%20Jev-brightgreen) ![runtime](https://img.shields.io/badge/runtime-tModLoader-blue)
+
+## Demo
+
+**Jev 驱动的 Boss 战 / Jev-driven boss fights**
+
+| [![Jev 打穿大师模式肉前全 Boss](docs/cover-jev-zh.png)](https://www.bilibili.com/video/BV1Boe26JEh4/) | [![Jev fights every pre-Hardmode boss on Master difficulty](docs/cover-jev-en.png)](https://www.youtube.com/watch?v=g6CADbjBhlk) |
 |:---:|:---:|
 | [哔哩哔哩](https://www.bilibili.com/video/BV1Boe26JEh4/) | [YouTube](https://www.youtube.com/watch?v=g6CADbjBhlk) |
 
-**纯代码通关肉山** -- Wall of Flesh, code only
+**早期纯代码流程：击败肉山 / Earlier code-only Wall of Flesh run**
 
 | [![14 分钟击败肉山](docs/cover-zh.jpg)](https://www.bilibili.com/video/BV1PmbP6ZEJc/) | [![Wall of Flesh in 14 minutes](docs/cover-en.jpg)](https://www.youtube.com/watch?v=5fHr4ESr6os) |
 |:---:|:---:|
 | [哔哩哔哩](https://www.bilibili.com/video/BV1PmbP6ZEJc/) | [YouTube](https://www.youtube.com/watch?v=5fHr4ESr6os) |
 
-从 `/start` 到击败肉山，全程 14 分 15 秒（三倍速下）。
-From `/start` to a dead Wall of Flesh in 14 minutes 15 seconds (at 3x speed).
+早期固定流程从 `/start` 到击败肉山，用时14分15秒（三倍速）。该演示的辅助设置见下文。
+
+The earlier fixed pipeline takes 14 minutes 15 seconds at 3× speed. Its assistance settings are described below.
 
 ---
 
 ## 中文
 
-### 这是什么
+### 我们在解决什么
 
-TerraBlind 里的每一样东西，本质上都是**工具**：寻路、瞄准、使用物品、开箱、放平台、盖房，等等。
+模型思考需要时间，游戏世界每一帧都在变化。TerraBlind 探索的是：**如何让耗时的高层推理，驱动连贯、及时、能处理变化的实时行动。**
 
-`/start` 是**手工把这些工具串起来的一条流程**，目标是击败经典难度下的肉山。
+玩家通过自然语言给出目标，例如去丛林收集资源、制作装备，再准备一场 Boss 战。Agent 调查世界与配方，建立任务依赖，编写可执行策略，在行动过程中继续观察和调整。
 
-> **上一个 milestone：纯代码通关肉山，没有 AI 介入游戏。已完成。**
->
-> **当前 milestone：让模型开打。** boss 战由 [Jev](https://docs.typesafe.ai) 驱动，见下。
+当前重点是行动的连贯性、现场判断和执行效率。复杂长任务的稳定性、生存和失败恢复仍在迭代。
 
-### Jev 打 boss
+### 三个部分如何协作
 
-[Jev](https://docs.typesafe.ai) 是 TypeSafe 的 System One 模型。它不生成文字，只返回带概率的类型化判断。
-
-分两层：
-
-- **Jev 每 ~300ms 答一次**（实测中位 300ms，min 252 / p90 402）。同一份 state 一次问完所有问题，并行求值不加延迟。
-- **反射层每帧翻译成按键**（60Hz）：瞄准、距离、冲刺的双击时序、钩爪落点搜索、跳跃的"松一帧"、意图过期回退，全归代码。
-
-走位意图是**两个正交的轴**，不是九选一的枚举：
-
-| 轴 | 取值 | 问的是 |
+| 部分 | 职责 | 具体做什么 |
 | --- | --- | --- |
-| `horizontal` | `Away` / `Hold` / `Near` | 和 boss 的距离该怎么变 |
-| `vertical` | `Rise` / `Level` / `Drop` | 高度该怎么变 |
+| **LLM Agent** | 理解目标、规划和改写策略 | 查询配方、物品与 Wiki；拆解任务；编写 JavaScript；准备后继和恢复脚本 |
+| **Jev 决策模型** | 根据现场快速作出类型化判断 | Boss 走位；局部移动与武器选择；通过脚本接入沿途机会、路线和战术判断 |
+| **游戏执行层** | 持续执行、测量与验证 | 感知世界；导航与物理推演；挖掘、放置、拾取、瞄准；输入交接与结果核验 |
 
-两题各选一个就凑出九个方向，斜着走自然包含在内。**旋转不是第三个轴** -- 绕着 boss 走就是这两个轴的一个组合。拆开之前是九个离散意图（`Keep`/`Back`/`Close`/`Evade`/`Up`/`Float`/`Grapple`/`Orbit`/`Dive`），表达不了对角线，而且每个选项要同时描述两件事，判据互相打架。
+~~~mermaid
+flowchart TD
+    User[自然语言目标] --> Agent[LLM Agent：调查与规划]
+    Agent --> Plan[DAG：前置依赖与完成条件]
+    Plan --> Script[JavaScript 策略与技能]
+    World[真实游戏状态] --> Agent
+    World --> Jev[Jev：现场判断]
+    Jev --> Script
+    Script --> Runtime[执行层：持续操作与逐帧控制]
+    Jev --> Runtime
+    Runtime --> World
+    World --> Verify[宿主：验证实际结果]
+    Verify --> Plan
+    Verify --> Agent
+~~~
 
-另外还有一个 `danger` 五档评分和几个 noul：`should_dash_now`、`should_grapple_now`、`should_jump_now`。
+**慢循环**调查未知、修改计划和准备策略。**快循环**在游戏内执行已经准备好的行为，处理事件，并使用 Jev 判断现场选择。模型准备下一步时，当前后台动作可以继续运行；已保存的后继脚本由宿主按依赖与验收结果调度。
 
-**意图和手段分开**：Jev 只说要达成什么，跳 / 二段跳 / 翅膀 / 钩爪里挑哪个由代码算 -- 哪个能用是确定的量，没必要问模型。冲刺留在决策层，因为它的无敌帧和时机需要读懂战局。
+### Agent 写代码来玩游戏
 
-Jev 答判断，代码拥有瞄准、距离、时序和 TTL。
+Agent 通过 `run_script` 执行 JavaScript，用 `tool(...)` 组合游戏能力。策略里可以有循环、条件、库存检查和事件处理，例如边赶路边关注附近资源，完成一段采集后继续下一项。
 
-每个 boss 的背板是**一段中文文字**（`Jev/Fight/BossBook.cs`），不是分支：怎么打、场地什么样、禁用哪几个意图、保持几格。加一个 boss 通常只是加一条文字条目。目前十条：克苏鲁之眼、史莱姆王、克苏鲁之脑、世界吞噬者、骷髅王、双子魔眼、蜂王、鹿角怪、饥饿、肉山，其中双子魔眼 / 饥饿 / 肉山另带一条保持距离的数。
+这是一种 **Code as Policies** 的思路：模型把行为写成在游戏里运行的程序，再根据新事实修改它。
 
-背板可以**在游戏内改**：模组配置里的 `BossPlaybook` 开局自动铺满游戏里全部 boss，文本默认就是代码里那段，每条单独 on/off。
+已有的执行机制包括：
 
-录制是在**大师模式**下跑的。
+- **任务 DAG**：表达共享前置、依赖和完成条件，按真实库存、永久生命、装备、位置、击杀等状态验收。
+- **后台动作**：以句柄查询、暂停和续接导航、采集或战斗，保留原任务与进度。
+- **途中反应**：用 `on(...)` 注册现场处理；用 `task_policy` 让策略覆盖整项任务。
+- **技能库**：通过 `script_program` 保存、读取和修订 JavaScript，以 `skill(...)` 复用。
+- **恢复证据**：保留失败参数、执行结果和现场状态，供 Agent 核对与调整。
 
-`/bossbook` 可以整个关掉背板，只留场地和通用字段，用来验知识到底值多少。
+目标完成由宿主读取游戏状态验证。详细接口见 [Agent/README.md](Agent/README.md)。
 
-需要一个 TypeSafe API key，三个来源按优先级：模组配置界面 → 仓库根目录的 `.env`（见 `.env.example`，已进 `.gitignore` 和 `buildIgnore`）→ 环境变量 `TYPESAFE_API_KEY`。没有 key 时战斗层退回保守的 baseline，不影响主线流程。
+### Jev 如何参与战斗
 
-### 完成度
+[Jev](https://docs.typesafe.ai) 是 TypeSafe 的 System One 模型。这里用它在结构化候选中作出选择，执行代码把选择落实成游戏操作。
 
-主线流程已经在种子 **`1.1.2.38154567`** 上稳定跑通：输入/start → 建造速通4人NPC房屋 → 前往丛林并尽量从main entrance下地狱 → 地狱选址 → 搭桥 → 盖NPC单人房屋 → 引入爆破专家，购买雷管 → 引入向导，捅下岩浆 → 雷管定点爆破肉山。
+Boss 战的输入包含玩家与 Boss 状态、部件、弹幕、运动方向、地形边界和当前可用动作。移动选择表达**方向及水平、竖直幅度**，由当前装备对应的执行方式支撑，例如普通移动、跳跃、二段跳、钩爪或坐骑。瞄准、动作时序和可用性检查由执行层处理。
 
-其他种子有的能跑通，有的还会卡。世界生成的随机性太大。**"所有种子都通"不是这个项目的当前目标**。目前的做法是：遇到卡住就读日志、定位、修掉那一类结构性问题，而不是给某个种子打补丁。
+Boss 策略文本位于 [Jev/Fight/BossBook.cs](Jev/Fight/BossBook.cs)，可通过配置中的 `BossPlaybook` 调整。上方视频展示了 Jev 在大师模式肉前 Boss 战中的表现。
 
-为了避开一些复杂的机制/增加成功率/提升全程的观感，对原版逻辑采取的修改措施：
-- 常驻鱼鳃，光芒buff
-- 掉到岩浆上方，会将最表层的接触格转化为格子；岩浆内能够在脚下放方块
-- 新建的玩家自带无限木材，4根火把用于初始房屋的建造
-- 地狱把向导捅入岩浆的时候加长挖掘范围
-- 下方的dragonlens修改
+普通战斗与 PvP 也有移动、射界、武器和弹道处理。Agent 的 JavaScript 可通过 `jev_judge` 接入快速判断；候选移动可结合物理推演，并在执行前复核当前状态。
 
-### 依赖 DragonLens
+### 开始使用
 
-**跑这套流程目前离不开 [DragonLens](https://github.com/ScalarVector1/DragonLens)。** 它提供的这些功能是流程能跑完的前提：
+当前开发目标为 Terraria 1.4.4.9 对应的 tModLoader。
 
-| 用途 | 说明 |
-|------|------|
-| 关闭刷怪 | 怪物造成的影响过多 |
-| 无敌 | 当前 milestone 不处理战斗生存，只求全程动作可行 |
-| 倍速 | 一趟完整流程很长，调试时靠它压缩时间 |
-| 坐标显示 | 对日志里的格坐标时用 |
+1. 安装 Terraria 与对应版本的 tModLoader，启用 TerraBlind。
+2. 在模组配置的“内置 Agent”中选择后端：本机 **Codex**，或支持工具调用的 **OpenAI 兼容 API**。
+3. 使用 Jev 时配置 **TypeSafe API Key**，并开启所需的战斗功能。
+4. 进入世界，在聊天框输入 `/tb` 指令。
 
+~~~text
+/tb 帮我制作一个工作台
+/tb 去丛林寻找生命水晶，顺路搜刮箱子
+/tb /goal 收集材料制作荆棘旋刃，然后召唤并击败蜂王
+/tb /goal status
+/tb /goal pause
+/tb /goal resume
+/tb stop
+~~~
 
-### 流程长什么样
+这些是任务输入示例，复杂任务的完成情况取决于装备、世界与当前执行能力。`/goal` 保存长期目标，宿主按任务状态调度后续执行。
 
-```
-/start
-  ├─ Torch     凑火把（当前无用）
-  ├─ Site      选地表房址
-  ├─ GotoSite  走过去
-  ├─ House     盖房（21×10）
-  ├─ Descend   规划一条穿过箱子与生命水晶的下降路线（主要是丛林主入口），一路采集到地狱
-  └─ Hell      交给地狱段
-       ├─ goto   走到桥的开工点
-       ├─ house  在岩浆上方盖单间 NPC 房
-       ├─ deck   沿算好的线铺 190 格桥面
-       ├─ wof    买雷管 → 把向导换进房 → 挖他脚下 → 让他掉进岩浆
-       └─ fight  肉山出现，边退边扔雷管
-```
+Codex 后端由 mod 自动启动本机 `codex app-server`。API 后端在配置中填写 Key、Base URL 和模型名。后端配置、AI 玩家绑定及工具说明见 [内置 Agent 文档](Agent/README.md)。
 
-### 怎么跑
+Jev Key 的读取顺序是：模组配置 → 仓库根目录 `.env` → 环境变量 `TYPESAFE_API_KEY`。参考 [.env.example](.env.example)。
 
-**只想用**：下载 release 里的 `.tmod`，丢进 `tModLoader/Mods/`，在游戏的模组列表里启用。
+### 早期固定流程：速通肉山
 
-**要改源码**：
+`/start` 是项目早期手工编排的流程：建房 → 前往丛林并寻找下降路线 → 沿途采集 → 地狱搭桥与建房 → 引入 NPC、购买雷管 → 挑战肉山。在种子 `1.1.2.38154567` 上完成过完整演示。
 
-1. 把仓库放进 `tModLoader/ModSources/TerraBlind/`
-2. 改完先跑 `./check.sh` 本地类型检查（不打包，游戏开着也能跑，约 1 秒）
-3. 游戏主界面 → 创意工坊 → 开发模组 → 构建并重新加载（TerraBlind）
+该流程的早期演示使用了常驻鱼鳃与光芒、木材补给、部分岩浆与交互范围辅助，以及 [DragonLens](https://github.com/ScalarVector1/DragonLens) 的关闭刷怪、无敌和倍速功能。相关配置与修改应随演示一起披露。
 
-进世界后 HTTP 服务自动起在 `http://127.0.0.1:17878`。
+### 开发与验证
 
-触发主线（二选一）：
+源码放在 `tModLoader/ModSources/TerraBlind/`。独立开发客户端可使用：
 
-- 游戏内快捷键 / 聊天命令
-- 配套 Python 仓库后[Terraria-Agent](https://github.com/Reisenbug/Tairaria) 使用 `/tb `。**Python 主要负责触发。**（尚未完工）
+~~~sh
+dotnet run --project tests/Agent/AgentTests.csproj
+python3 scripts/dev_client.py build --role agent
+python3 scripts/dev_client.py run --role agent
+~~~
 
-### 调试
+脚本输出独立保存目录、日志位置和 HTTP 端口。普通客户端默认接口地址为 `http://127.0.0.1:17878`，独立 Agent 客户端默认端口为 `17879`。
 
-| 东西 | 说明 |
-|------|------|
-| `/vis on` / `/vis off` | 调试图层总开关。桥线、房址框、宝藏框会画出来；录像前关掉 |
-| `TerraBlindLogs/latest/` | 最近一局的日志，`latest` 是指向带时间戳目录的软链 |
-| `latest/jump_trace.log` | 主时间线：规划、派发、每一步的决策 |
-| `latest/events/*.log` | 按类分流：`plan` / `place` / `fail` / `exec` / `sentinel` |
-| `latest/runs/<起点>__<终点>.log` | 单次导航的独立日志 |
-| `./check.sh` | 本地类型检查，过了再进游戏构建 |
-
-日志里的关键判断都会打出**当时用来判断的那个数**，而不只是结论。不然出问题只能靠猜。
-
-### AI 辅助开发的工作流
-
-这个项目是在 AI 辅助下写的，仓库里有几样东西专为此存在。
-
-| 环节 | 做法 |
-|------|------|
-| 编译自验 | `./check.sh` 只做类型检查不打包，约 1 秒。游戏开着也能跑，改完立刻知道编译过没过 |
-| 定位自验 | 三层日志 + 一条规矩：**每个判断都要打出它依据的那个数**，不只打结论。有了实测值才能定位，没有就只能猜 |
-| 机器下限 | `stuck_contract.sh` 检查每个原语是否交出了失败现场；`dup.sh` 查同一件事有没有两份实现 |
-| 写码约束 | `.claude/hooks/` 里挂了两条：注释块不许超长、标点必须 ASCII。|
-
-真正花时间的是**判断哪个环节出了问题**。上面这套的意义就是把"读日志找原因"这一步也变成 AI 能独立做完的事。
-
-### 代码结构
-
-159 个 `.cs`，按职责分目录（namespace 统一是 `TerraBlind`，不跟目录走）：
+验证分为独立逻辑检查、真实引擎场景和完整实机任务。任务效果同时看完成结果、停留时间、受伤与死亡、动作衔接和模型调用开销。
 
 | 目录 | 内容 |
-|------|------|
-| `Core/` | 判据与共享概念：够不着的四把尺子、格子分类、失败原因、光标瞄准、动作执行 |
-| `Perception/` | 眼睛：状态快照、物理模拟器、建造录制、差分 |
-| `Nav/` | 寻路：距离场、贪心逐步、状态空间 A\*、陷阱逃逸、可视化 |
-| `Actions/` | 原语：放置、挖掘、柱子、平台梯、走位、合成、购物、脱困栈 |
-| `Build/` | 建造：地狱线规划、桥面铺设、房屋、桥起点 |
-| `Flow/` | 流程编排：`/start` 主链、地狱段、肉山准备与战斗、顺路采集 |
-| `Jev/` | 模型那一层：走位意图、boss 背板、威胁扫描、请求与降级、HUD 与日志环 |
-| `Infra/` | HTTP 服务、日志、聊天输出 |
-| `Debug/` | 录制回放、卡死哨兵、冻结、可视化命令 |
+| --- | --- |
+| `Agent/` | 模型后端、任务 DAG、脚本运行时、技能、事件观察与恢复 |
+| `Jev/` | 决策模型、Boss 策略、快速战斗判断和显示 |
+| `Perception/` | 游戏状态、地形观测、物理状态与推演 |
+| `Nav/` | 导航、移动规划、执行衔接与生存辅助 |
+| `Actions/` | 挖掘、放置、使用物品、合成等动作 |
+| `Flow/`、`Build/` | 固定流程、战斗协调与建造 |
+| `Infra/`、`Debug/` | HTTP 接口、配置、日志和调试显示 |
 
-设计上的一条硬规则：**"卡住"必须在结构上不可能**。每个原语失败时都要交出可被上层处理的失败现场（`Blocker`），而不是静默 `return`。这条由 `check.sh` 里的契约检查强制。
+常用日志：`TerraBlindLogs/latest/jump_trace.log` 为主时间线，`events/` 按类别记录，`runs/` 保存单次导航现场。`/vis on`、`/vis off` 控制调试图层。
 
-### 文档
+更多资料：[Agent 文档](Agent/README.md) · [能力清单](CAPABILITIES.md) · [搭桥边界情况](docs/BRIDGE_CASES.md)
 
-| 文件 | 内容 |
-|------|------|
-| [`CAPABILITIES.md`](CAPABILITIES.md) | 已有能力清单。写新动作前先查，别重复造 |
-| [`BRIDGE_CASES.md`](docs/BRIDGE_CASES.md) | 碰撞箱与搭桥的边界情形 |
-
-### HTTP 接口
-
-152 个端点，完整清单见 [`CAPABILITIES.md`](CAPABILITIES.md)。主线只要这几个：
-
-| 端点 | 作用 |
-|------|------|
-| `POST /start_run` | 起整条主线 |
-| `GET /start_run_status` | 当前相位与结果 |
-| `GET /start_run_stop` | 停 |
-| `POST /hell_run` | 只跑地狱段（桥 + 房 + 肉山） |
-| `GET /state` | 完整游戏状态快照 |
-| `GET /health` | 连通性检查 |
-
-> 地址一律用 `127.0.0.1`，**不要用 `localhost`**。它会走 `::1`，前缀匹配不上，表现得像端点没注册。
-
-### 环境
-
-- Terraria 1.4.4.9
-- tModLoader（对应 1.4.4.9 的版本）
-- DragonLens（见上）
+项目全程使用 AI 编程工具辅助开发；需求定义、方案审查、方向调整与实机测试由作者负责。
 
 ### License
 
@@ -211,181 +163,86 @@ MIT
 
 ## English
 
-### What this is
+### The problem
 
-Everything in TerraBlind is a **tool**: pathfinding, aiming, using items, opening chests, placing platforms, building houses, and so on.
+Model reasoning takes time while a live game keeps changing every frame. TerraBlind explores **how slower planning can drive continuous, timely action that adapts to the situation**.
 
-`/start` is **one pipeline wired by hand** out of those tools, aimed at beating the Wall of Flesh on Classic difficulty.
+A player gives a natural-language objective. The agent investigates the world and recipes, plans dependencies, writes executable behavior, and observes and revises it during execution. The current focus is continuity, contextual decisions and efficiency. Reliability, survival and recovery in complex tasks remain under active development.
 
-> **Previous milestone: beat the Wall of Flesh with code only, no AI. Done.**
->
-> **Current milestone: let a model fight.** Boss fights are driven by [Jev](https://docs.typesafe.ai); see below.
+### Architecture and Code as Policies
 
-### Jev fights the bosses
+| Component | Responsibility |
+| --- | --- |
+| **LLM agent** | Understand objectives, query knowledge, build task DAGs, write JavaScript, prepare successors and recovery |
+| **Jev decision model** | Make fast typed choices for boss movement and script-driven local tactics, weapons and opportunities |
+| **Game runtime** | Observe the world, navigate, forecast movement, mine, place, collect, aim, coordinate input and verify outcomes |
 
-[Jev](https://docs.typesafe.ai) is TypeSafe's System One model. It does not generate text -- it returns typed judgments with probabilities.
+The slow loop investigates and prepares behavior. The fast loop executes prepared behavior inside the game and handles local events. Background actions can keep running while the agent prepares changes; the host schedules saved successors after checking their prerequisites and completion conditions.
 
-Two layers:
+The agent uses `run_script` to execute JavaScript, composing game capabilities through `tool(...)`. Programs can contain loops, conditions, inventory checks and event handlers. The runtime provides task DAGs, background action handles, `step(...)` checkpoints, `on(...)` reactions, task-wide policies and a versioned JavaScript skill library.
 
-- **Jev answers every ~300ms** (measured: median 300ms, min 252, p90 402). One state, all questions asked at once; parallel evaluation costs no extra latency.
-- **A reflex layer turns that into keystrokes every frame** (60Hz): aiming, distance, the double-tap timing for dashes, hook anchor search, the one-frame release a jump needs, intent expiry. All code.
+Failed actions retain evidence for inspection and recovery. The host verifies task completion against actual game state. See [Agent/README.md](Agent/README.md) for the interfaces and configuration.
 
-Movement intent is **two orthogonal axes**, not a nine-way enum:
+### Jev-driven combat
 
-| Axis | Values | Question |
-| --- | --- | --- |
-| `horizontal` | `Away` / `Hold` / `Near` | how the distance to the boss should change |
-| `vertical` | `Rise` / `Level` / `Drop` | how altitude should change |
+[Jev](https://docs.typesafe.ai) makes choices from structured candidates. Boss observations include the player, boss parts, projectiles, motion, terrain boundaries and available actions. Movement decisions express a direction and a magnitude for each axis; execution uses the available movement abilities and equipment. Code handles aiming, timing and availability checks.
 
-One answer from each gives nine directions, diagonals included for free. **Rotation is not a third axis** -- orbiting the boss is a combination of these two. The earlier design was nine discrete intents (`Keep`/`Back`/`Close`/`Evade`/`Up`/`Float`/`Grapple`/`Orbit`/`Dive`); it could not express diagonals, and each option had to describe two things at once, so the criteria fought each other.
+Boss instructions live in [Jev/Fight/BossBook.cs](Jev/Fight/BossBook.cs) and can be adjusted through `BossPlaybook` in the mod config. The video above demonstrates Master-mode pre-Hardmode boss fights.
 
-Alongside those: a five-level `danger` score and several nouls -- `should_dash_now`, `should_grapple_now`, `should_jump_now`.
+Ordinary combat and PvP also include movement, line-of-fire, weapon and projectile handling. Agent scripts can call `jev_judge` for contextual decisions, combine candidates with movement forecasts, and revalidate before execution.
 
-**Intent is separated from means**: Jev says what to achieve; which of jump / double-jump / wings / grapple gets used is computed, since availability is deterministic and not worth asking a model. Dash stays at the decision layer because its invincibility frames and timing need to be read from the situation.
+### Getting started
 
-Jev answers judgments; the code owns aiming, distance, timing and TTL.
+The current development target is tModLoader for Terraria 1.4.4.9.
 
-Each boss's playbook is **a paragraph of text** (`Jev/Fight/BossBook.cs`), not a branch: how it fights, which intents are banned, how many tiles to keep. Adding a boss is usually just adding a text entry. There are ten: Eye of Cthulhu, King Slime, Brain of Cthulhu, Eater of Worlds, Skeletron, The Twins, Queen Bee, Deerclops, The Hungry, Wall of Flesh -- the last three of those also carry a keep-distance number.
+1. Install Terraria, the matching tModLoader version and TerraBlind.
+2. Configure the built-in agent to use local **Codex** or an **OpenAI-compatible API** with tool calling.
+3. Set a **TypeSafe API Key** and enable the desired combat features for Jev.
+4. Enter a world and send `/tb` commands in chat.
 
-Playbooks are **editable in game**: the `BossPlaybook` list in the mod config is auto-populated with every boss in the game at startup, each entry defaulting to the text from the code and carrying its own on/off toggle.
+~~~text
+/tb Craft a workbench for me
+/tb Explore the jungle for life crystals and loot nearby chests
+/tb /goal Gather materials, craft a Thorn Chakram, then summon and defeat Queen Bee
+/tb /goal status
+/tb /goal pause
+/tb /goal resume
+/tb stop
+~~~
 
-The recorded runs were fought on **Master Mode**.
+These are task examples; complex-task results depend on the world, equipment and current execution capabilities. `/goal` retains a long-running objective for host scheduling.
 
-`/bossbook` switches the playbooks off entirely, leaving only the generic fields, to measure what the knowledge is actually worth.
+The mod starts local `codex app-server` for the Codex backend. The API backend uses the configured key, base URL and model name. Configuration and AI-player binding are documented in [Agent/README.md](Agent/README.md).
 
-A TypeSafe API key is required, read in this order: the mod config screen, then `.env` in the repo root (see `.env.example`; it is in both `.gitignore` and `buildIgnore`), then the `TYPESAFE_API_KEY` environment variable. Without a key the combat layer falls back to a conservative baseline and the main pipeline is unaffected.
+Jev reads its key from the mod config, then the repository `.env`, then `TYPESAFE_API_KEY`. See [.env.example](.env.example).
 
-### How far it gets
+### Earlier code-only milestone
 
-The pipeline completes reliably on seed **`1.1.2.38154567`**: type `/start`, speed-build a 4-room NPC house, head for the jungle and descend to hell through the main entrance where possible, pick a hell site, bridge, build a single-room NPC house, move the Demolitionist in and buy dynamite, move the Guide in and drop him into lava, then blow up the Wall of Flesh with placed dynamite.
+`/start` runs a fixed pipeline: build housing, descend through the jungle, collect resources, build an Underworld bridge and housing, obtain dynamite, and defeat the Wall of Flesh. The recorded run used seed `1.1.2.38154567` and took 14 minutes 15 seconds at 3× speed.
 
-Other seeds sometimes finish and sometimes get stuck. World generation varies enormously. **"Works on every seed" is not the current goal.** The approach is: when it gets stuck, read the log, find the structural cause, fix that class of problem. Never patch one seed.
+That demonstration used Gills and Shine, wood supplies, selected lava and interaction-range assistance, and DragonLens settings for disabled spawns, invincibility and fast-forward. These settings belong with the demonstration results.
 
-Changes to vanilla behaviour, made to sidestep awkward mechanics, raise the success rate, and keep the run watchable:
+### Development
 
-- Gills and Shine buffs are always on
-- Landing above lava turns the surface contact tile into a block; blocks can be placed underfoot inside lava
-- A new player starts with unlimited wood and 4 torches for the first house
-- Reach is extended while digging the Guide into lava
-- The DragonLens toggles below
+Place the source in `tModLoader/ModSources/TerraBlind/`. For an isolated development client:
 
-### DragonLens is required
+~~~sh
+dotnet run --project tests/Agent/AgentTests.csproj
+python3 scripts/dev_client.py build --role agent
+python3 scripts/dev_client.py run --role agent
+~~~
 
-**The pipeline currently depends on [DragonLens](https://github.com/ScalarVector1/DragonLens).** These features are prerequisites:
+The scripts print the isolated save directory, log location and HTTP port. The normal HTTP port is `17878`; the isolated agent client defaults to `17879`.
 
-| Toggle | Why |
-|--------|-----|
-| Disable spawns | Enemies interfere too much |
-| Godmode | This milestone does not handle combat survival, only that every action is feasible |
-| Fast-forward | A full run is long; this compresses debugging time |
-| Coordinate display | For cross-checking tile coordinates against the logs |
+Validation covers isolated logic, native-engine scenarios and complete game runs. Track completion together with stationary time, damage and deaths, action handoffs and model usage.
 
-### The pipeline
+Key directories are `Agent/` for planning and script execution, `Jev/` for typed decisions, `Perception/` for observation and forecasting, `Nav/` for navigation, and `Actions/` for game actions. `Flow/` and `Build/` contain the earlier pipeline and construction; `Infra/` and `Debug/` provide configuration, HTTP access and diagnostics.
 
-```
-/start
-  ├─ Torch     gather torches (currently unused)
-  ├─ Site      choose a surface house site
-  ├─ GotoSite  walk there
-  ├─ House     build it (21x10)
-  ├─ Descend   plan a descent threading chests and life crystals (mainly via the
-  │            jungle main entrance), looting all the way to hell
-  └─ Hell      hand off to the hell stage
-       ├─ goto   walk to the bridge's work point
-       ├─ house  build a single NPC room above lava
-       ├─ deck   lay the 190-tile deck along the planned line
-       ├─ wof    buy dynamite, move the Guide in, dig under him, drop him into lava
-       └─ fight  Wall of Flesh spawns; retreat and throw dynamite
-```
+Main logs are under `TerraBlindLogs/latest/`: `jump_trace.log`, categorized `events/`, and per-navigation `runs/`. Use `/vis on` and `/vis off` for the debug overlay.
 
-### Running it
+Further reading: [Agent documentation](Agent/README.md) · [Capabilities](CAPABILITIES.md) · [Bridge edge cases](docs/BRIDGE_CASES.md).
 
-**Just to play it**: download the `.tmod` from releases, drop it into `tModLoader/Mods/`, enable it in the in-game mod list.
-
-**To change the source**:
-
-1. Put the repo in `tModLoader/ModSources/TerraBlind/`
-2. Run `./check.sh` first (type check only, no packing, works while the game runs, ~1s)
-3. Main menu, Workshop, Develop Mods, Build and Reload (TerraBlind)
-
-The HTTP server starts automatically on `http://127.0.0.1:17878` when a world loads.
-
-Two ways to trigger the pipeline:
-
-- An in-game hotkey or chat command
-- `/tb` from the companion Python repo [Terraria-Agent](https://github.com/Reisenbug/Tairaria). **Python mostly just triggers.** (unfinished)
-
-### Debugging
-
-| Thing | What it is |
-|-------|------------|
-| `/vis on` / `/vis off` | Master switch for the debug overlay. Turn it off before recording |
-| `TerraBlindLogs/latest/` | Most recent run; `latest` symlinks to a timestamped directory |
-| `latest/jump_trace.log` | Main timeline: planning, dispatch, per-step decisions |
-| `latest/events/*.log` | Split by kind: `plan` / `place` / `fail` / `exec` / `sentinel` |
-| `latest/runs/<from>__<to>.log` | Per-navigation log |
-| `./check.sh` | Local type check; pass this before building in-game |
-
-Every significant decision logs **the number it was based on**, not just the verdict. Otherwise diagnosis is guesswork.
-
-### The AI-assisted workflow
-
-This project was written with AI assistance, and a few things in the repo exist for that.
-
-| Step | How |
-|------|-----|
-| Verify it compiles | `./check.sh` type-checks without packing, about 1s. Works while the game is running |
-| Verify what went wrong | Three log layers plus one rule: **every decision prints the number behind it**, not just the verdict. Without measured values there is nothing to diagnose from |
-| Machine-enforced floor | `stuck_contract.sh` checks that every primitive hands up a failure; `dup.sh` looks for the same thing implemented twice |
-| Writing constraints | Two hooks in `.claude/hooks/`: comment blocks may not run long, punctuation must be ASCII. |
-
-The time goes into working out **which part broke**. The point of the above is to make that step something the AI can finish on its own.
-
-### Code layout
-
-159 `.cs` files grouped by responsibility (the namespace is flat `TerraBlind`; it does not follow directories):
-
-| Directory | Contents |
-|-----------|----------|
-| `Core/` | Predicates and shared concepts: the four reach rulers, cell classification, blockers, cursor aiming, action execution |
-| `Perception/` | The eye: state snapshots, physics simulator, build recording, diffing |
-| `Nav/` | Pathfinding: distance field, greedy stepping, state-space A\*, trap escape, visualization |
-| `Actions/` | Primitives: place, mine, pillar, platform ladder, settle, craft, shop, the unstick stack |
-| `Build/` | Building: hell line planning, deck laying, houses, bridge start |
-| `Flow/` | Orchestration: the `/start` chain, hell stage, WoF prep and fight, opportunistic looting |
-| `Jev/` | The model layer: dodge intents, boss playbooks, threat scan, requests and fallback, HUD and log ring |
-| `Infra/` | HTTP server, logging, chat output |
-| `Debug/` | Record/replay, stuck sentinel, freeze, visualization commands |
-
-One hard rule: **getting stuck must be structurally impossible.** Every primitive must hand a usable failure (`Blocker`) up the stack rather than silently `return`ing. `check.sh` enforces this contract.
-
-### Docs
-
-| File | Contents |
-|------|----------|
-| [`CAPABILITIES.md`](CAPABILITIES.md) | Inventory of existing capabilities. Check before writing a new action |
-| [`BRIDGE_CASES.md`](docs/BRIDGE_CASES.md) | Hitbox and bridge-placement edge cases |
-
-### HTTP API
-
-152 endpoints; the full list is in [`CAPABILITIES.md`](CAPABILITIES.md). The pipeline only needs these:
-
-| Endpoint | Purpose |
-|----------|---------|
-| `POST /start_run` | Start the whole pipeline |
-| `GET /start_run_status` | Current phase and outcome |
-| `GET /start_run_stop` | Stop |
-| `POST /hell_run` | Hell stage only (bridge + house + WoF) |
-| `GET /state` | Full game state snapshot |
-| `GET /health` | Connectivity check |
-
-> Always use `127.0.0.1`, **never `localhost`**. It resolves to `::1`, the prefix does not match, and it looks like the endpoint was never registered.
-
-### Requirements
-
-- Terraria 1.4.4.9
-- tModLoader (matching 1.4.4.9)
-- DragonLens (see above)
+The project is developed with AI coding tools. The author defines requirements, reviews designs, steers development and tests in game.
 
 ### License
 
