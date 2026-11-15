@@ -1188,7 +1188,15 @@ public static partial class AgentTools
                 ["detail"] = "事件中直接调用nav_to/gather/use_item等，宿主交接并恢复原动作。任务句柄控制交回Agent执行。" }.ToJsonString();
         if (name == "act" && args["combat_candidate"] != null)
         {
+            var requested = args;
             args = await CombatForecast.Refresh(args, () => CombatAssessment(25), token);
+            if (Text(args, "error") == "combat_candidate_no_handoff_prefix"
+                && reactions?.Handling == true && reactions.BeforeAction != null)
+            {
+                await reactions.BeforeAction(name, requested, token);
+                DiagLog.Write("[combat_handoff_pause] " + requested["combat_candidate"].ToJsonString());
+                args = await CombatForecast.Refresh(requested, () => CombatAssessment(25), token);
+            }
             if (Rejected(args)) return args.ToJsonString();
         }
         if (reactions?.Handling == true && AgentControlSession.ActionTool(name) && reactions.BeforeAction != null)

@@ -77,9 +77,11 @@ static class ScriptTests
         await ReactiveHostIntegration(itemUse: true);
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
+        await ReactiveHostIntegration(candidateMode: "no_prefix");
+        await ReactiveHostIntegration(candidateMode: "no_prefix_rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=53 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=55 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -2378,6 +2380,8 @@ static class ScriptTests
         await CombatApproach();
         await ReactiveHostIntegration(candidateMode: "ready");
         await ReactiveHostIntegration(candidateMode: "rejected");
+        await ReactiveHostIntegration(candidateMode: "no_prefix");
+        await ReactiveHostIntegration(candidateMode: "no_prefix_rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
         await AtomicActionPolicy();
@@ -3878,7 +3882,8 @@ static class ScriptTests
         var actedDuringAnimation = new List<bool>();
         string original = null;
         int refreshes = 0;
-        bool rejected = candidateMode == "rejected";
+        bool missingPrefix = candidateMode?.StartsWith("no_prefix") == true;
+        bool rejected = candidateMode is "rejected" or "no_prefix_rejected";
         try
         {
             AgentTools.NewTask(); AgentTools.Plan.Reset();
@@ -3889,11 +3894,17 @@ static class ScriptTests
                 {
                     if (args["combat_candidate"]["forecast_id"].GetValue<int>() == 2) return args;
                     refreshes++;
-                    Check(RecedingNav.Active && stops == 0 && AgentTools.ControlSession.Tool == "nav_to",
-                        "candidate recomputation paused navigation before receiving its proof");
-                    await Task.Delay(30, token);
-                    Check(RecedingNav.Active && stops == 0 && AgentTools.ControlSession.Tool == "nav_to",
-                        "candidate recomputation lost the original movement owner");
+                    if (refreshes == 1)
+                    {
+                        Check(RecedingNav.Active && stops == 0 && AgentTools.ControlSession.Tool == "nav_to",
+                            "candidate recomputation paused navigation before receiving its proof");
+                        await Task.Delay(30, token);
+                        Check(RecedingNav.Active && stops == 0 && AgentTools.ControlSession.Tool == "nav_to",
+                            "candidate recomputation lost the original movement owner");
+                        if (missingPrefix) return new JsonObject { ["error"] = "combat_candidate_no_handoff_prefix" };
+                    }
+                    else Check(missingPrefix && refreshes == 2 && !RecedingNav.Active && stops == 1
+                        && AgentTools.ControlSession.Tool == null, "missing-prefix retry lacked an actual navigation handoff");
                     if (rejected) return new JsonObject { ["error"] = "fixture_candidate_rejected" };
                     var refreshed = args.DeepClone().AsObject();
                     refreshed["combat_candidate"]["forecast_id"] = 2;
@@ -3962,11 +3973,11 @@ static class ScriptTests
             }
             var result = JsonNode.Parse(await task);
             Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["done"]?.GetValue<bool>() == true
-                && starts == (rejected ? 1 : 2) && readingWhileMoving && actingAfterStop == !rejected,
+                && starts == (missingPrefix || !rejected ? 2 : 1) && readingWhileMoving && actingAfterStop == !rejected,
                 "production reaction dispatch failed query/movement handoff: " + result + " starts=" + starts + " stops=" + stops);
             Check(actedDuringAnimation.SequenceEqual(rejected ? Array.Empty<bool>() : itemUse ? new[] { true, false } : new[] { true }),
                 "reaction movement waited for attack animation or item use interrupted it: itemUse=" + itemUse);
-            Check(refreshes == (candidateMode == null ? 0 : 1), "candidate proof was repeated or skipped");
+            Check(refreshes == (candidateMode == null ? 0 : missingPrefix ? 2 : 1), "candidate proof was repeated or skipped");
             var action = AgentTools.Actions.Summary().First(a => a["handle"]?.ToString() == original);
             Check(action["attempt"].GetValue<int>() == 1 && action["status"].ToString() == "completed" && !AgentTools.ControlSession.Active,
                 "reaction replaced the original action or leaked its controls");
