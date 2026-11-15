@@ -36,9 +36,16 @@ public sealed class ScriptProgress
     internal static bool Failed(JsonObject result) => result["error"] != null || result["ok"]?.ToString() == "false"
         || result["outcome"]?.ToString() is "interrupted" or "interrupted_by_death" or "no_progress";
 
+    internal bool IntentContinuationReady(string source)
+    {
+        lock (gate) return !running && executedSource == source && intentMemory != null && last?["error"] == null
+            && last?["value"] is JsonObject value && value["status"]?.ToString() == "continue"
+            && value["reason"]?.ToString() == "intent_segment_complete" && value["wake"] == null;
+    }
+
     internal bool HasPreparedContinuation(string source)
     {
-        lock (gate) return !running && executedSource != null && source != executedSource
+        lock (gate) return IntentContinuationReady(source) || !running && executedSource != null && source != executedSource
             && last?["error"] == null && last?["failure"] == null
             && last?["value"] is JsonObject value && value["status"]?.ToString() == "yield" && value["wake"] == null;
     }

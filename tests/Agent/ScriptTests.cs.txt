@@ -28,6 +28,7 @@ static class ScriptTests
     public static async Task Decisions()
     {
         await IntentContracts();
+        await IntentHostContinuation();
         await TestDecisionChannels();
         await TestDecisionTravel();
         await TestJointDecision();
@@ -67,7 +68,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=41 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=42 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -1088,6 +1089,62 @@ static class ScriptTests
         Console.WriteLine("PASS: navigation intent selects separation, expires, respects ownership and permissions, and publishes without movement handoff");
     }
 
+    static async Task IntentHostContinuation()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var http = HttpServerSystem.Handler;
+        var player = Terraria.Main.LocalPlayer;
+        int health = player.statLife, starts = 0;
+        bool dead = player.dead;
+        async Task Pump(Task task)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            { Check(clock.Elapsed.TotalSeconds < 5, "intent host continuation stalled"); agent.PostUpdateEverything(); await Task.Delay(1); }
+            await task;
+        }
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.ControlSession.Reset();
+            player.dead = false; player.statLife = 80;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/nav_recede")
+                {
+                    starts++; player.statLife++;
+                    if (starts == 1) return (200, "{\"error\":\"fixture_blocked\"}");
+                }
+                return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{\"accepted\":true}");
+            };
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"continue prepared intentions","mode":"dag","steps":[{"id":"local","description":"local intentions",
+                  "depends_on":[],"conditions":[{"kind":"permanent_health","count":9999}],
+                  "script":"return intents({max_actions:1,observe:()=>tool('get_state',{fields:['health_dynamics']}),done:s=>s.health_dynamics.hp>=83,candidates:s=>[{id:'step_'+s.health_dynamics.hp,description:'Prepared local action',baseline:true,run:()=>tool('nav_to',{x:12,y:34}),verify:(r,b,a)=>!r.error&&a.health_dynamics.hp>b.health_dynamics.hp}]});"}]}
+                """).AsObject(), AgentTaskEvidence.Measure);
+            string workflow = AgentTools.Plan.Script("local")["workflow"].ToString();
+            var first = AgentTools.Execute("run_script", new JsonObject { ["task_node"] = "local" }, default);
+            await Pump(first);
+            Check(starts == 1 && AgentTools.Workflows[workflow].HasPreparedContinuation(AgentTools.Plan.Script("local")["code"].ToString()),
+                "handled failed leaf lost its intent continuation; starts=" + starts + " result=" + await first);
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (starts < 3 || AgentTools.Workflows[workflow].Running)
+            {
+                Check(timer.Elapsed.TotalSeconds < 5, "host required a model turn between intent segments: " + AgentTools.LastContinuation);
+                AgentTools.ContinuePreparedNode(default); agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+            Check(AgentTools.Workflows[workflow].Segment == 3 && AgentTools.Plan.Incomplete && starts == 3,
+                "intent segments repeated actions or invented DAG completion");
+            await Pump((Task)typeof(AgentTools).GetField("continuation", System.Reflection.BindingFlags.Static
+                | System.Reflection.BindingFlags.NonPublic).GetValue(null));
+            Console.WriteLine($"INTENT_HOST_CONTINUOUS segments=3 starts=3 model_calls=0 handoff_ms={timer.ElapsedMilliseconds}");
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
+            HttpServerSystem.Handler = http; player.statLife = health; player.dead = dead; agent.Unload();
+        }
+    }
+
     static async Task IntentContracts()
     {
         Check(AgentScript.ContainsInput("return intents({});") && !AgentScript.PreparationOnly("return intents({});"),
@@ -1167,15 +1224,19 @@ static class ScriptTests
         Task<string> SegmentTool(string name, JsonObject args, CancellationToken token) => Task.FromResult(name switch {
             "get_state" => new JsonObject { ["count"] = collectedRuns }.ToJsonString(),
             "jev_judge" => "{\"status\":\"pending\"}",
-            "mine" => ++blockedRuns > 0 ? "{\"done\":true}" : "{}",
+                "mine" => ++blockedRuns > 0 ? "{\"error\":\"blocked_source\"}" : "{}",
             "collect_treasure" => ++collectedRuns > 0 ? "{\"got\":1}" : "{}", _ => "{}"
         });
         var firstSegment = await AgentScript.Run(segmented, 10, (_, _) => { }, SegmentTool, _ => Task.CompletedTask, default, cursor);
         Check(firstSegment["value"]["status"].ToString() == "continue" && !cursor.Yielded && !cursor.ReviewRequested,
             "intent segment unnecessarily yielded to Agent instead of preserving host continuation");
+        Check(cursor.IntentContinuationReady(segmented) && cursor.HasPreparedContinuation(segmented)
+            && !cursor.IntentContinuationReady(segmented + " ") && firstSegment["failure"] != null,
+            "handled local failure prevented prepared continuation or accepted a changed script");
         var secondSegment = await AgentScript.Run(segmented, 10, (_, _) => { }, SegmentTool, _ => Task.CompletedTask, default, cursor);
         Check(secondSegment["value"]["status"].ToString() == "completed" && blockedRuns == 1 && collectedRuns == 1,
             "intent segment lost the blocked-source cursor or failed to continue its prepared alternative");
+        Check(!cursor.IntentContinuationReady(segmented), "completed intent script kept requesting continuation");
         var counts = new Dictionary<int, int> { [101] = 0, [102] = 0 };
         int resourceRequests = 0, chestLoots = 0;
         bool arrived = false;
@@ -1995,6 +2056,7 @@ static class ScriptTests
             Console.WriteLine("PASS: JS Jev judgments preserve typed facts, reject invalid choices and propagate cancellation without fallback actions");
         }
         await IntentContracts();
+        await IntentHostContinuation();
         await TestDecisionChannels();
         await TestDecisionTravel();
         await TestJointDecision();

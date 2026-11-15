@@ -483,12 +483,15 @@ public static partial class AgentTools
                         ReportExecutionGap(report, "script_requires_review");
                     else if (!Actions.HasPrimaryControl)
                     {
+                        var script = Plan.Script(next);
+                        bool continuing = Workflows.TryGetValue(script["workflow"].ToString(), out var workflow)
+                            && workflow.IntentContinuationReady(script["code"].ToString());
                         var plan = Plan.Snapshot();
                         if (plan["ready_steps"].AsArray().Any(n => n?.ToString() == next))
                             plan = Plan.Advance(next, AgentTaskEvidence.Measure);
                         if (plan["steps"].AsArray().Any(n => n["id"]?.ToString() == next && n["status"]?.ToString() == "completed"))
                             pendingNode = plan["current_step"]?.ToString();
-                        else ReportExecutionGap(report, "script_returned_without_action_or_completion");
+                        else if (!continuing) ReportExecutionGap(report, "script_returned_without_action_or_completion");
                     }
                     DiagLog.Write($"[dag-continuation] after={handle} node={next} result={result}");
                     return true;
