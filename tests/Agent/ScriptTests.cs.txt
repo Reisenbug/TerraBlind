@@ -27,6 +27,7 @@ static class ScriptTests
 
     public static async Task Decisions()
     {
+        await ObservationAfterDeath();
         await IntentContracts();
         await IntentHostContinuation();
         CoverCandidateContracts();
@@ -1257,6 +1258,49 @@ static class ScriptTests
                 "verified cover redundantly woke the Agent to prepare terrain already handled locally");
         }
         Console.WriteLine("PASS: cover selection works during forecast preparation, refreshes legality and verifies every placed cell");
+    }
+
+    static async Task ObservationAfterDeath()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var player = Terraria.Main.LocalPlayer;
+        bool dead = player.dead;
+        var args = JsonNode.Parse("""{"targets":[{"item_type":331,"count":12}]}""").AsObject();
+        async Task<JsonObject> Observe()
+        {
+            var task = AgentTools.Execute("gather_observe", args, default);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            {
+                Check(clock.Elapsed.TotalSeconds < 5, "observation after death stalled");
+                agent.PostUpdateEverything(); await Task.Delay(1);
+            }
+            return JsonNode.Parse(await task).AsObject();
+        }
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
+            player.dead = true;
+            for (int i = 0; i < 4; i++)
+                Check((await Observe())["error"]?.ToString() == "interrupted_by_death",
+                    "repeated death observations lost their current facts");
+            player.dead = false;
+            var recovered = await Observe();
+            Check(recovered["error"] == null && recovered["candidates"] is JsonArray
+                && recovered["counts"]?["331"] != null,
+                "death failure history blocked fresh observation after respawn");
+            for (int i = 0; i < 3; i++) AgentTools.Recovery.Record("nav_to", args, "{\"error\":\"fixture_blocked\"}");
+            var action = AgentTools.Execute("nav_to", args, default);
+            while (!action.IsCompleted) { agent.PostUpdateEverything(); await Task.Delay(1); }
+            Check(JsonNode.Parse(await action)["error"]?.ToString() == "repeated_failure_blocked",
+                "observation recovery disabled repeated action failure protection");
+        }
+        finally
+        {
+            player.dead = dead;
+            AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); agent.Unload();
+        }
+        Console.WriteLine("PASS: death observations remain readable after repeated failures and respawn; failed actions stay guarded");
     }
 
     static async Task IntentHostContinuation()

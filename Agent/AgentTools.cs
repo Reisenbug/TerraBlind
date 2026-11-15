@@ -1022,7 +1022,8 @@ public static partial class AgentTools
                 return observed.ToJsonString();
             }
         }
-        if (Recovery.Revision > 0 && await NativeAgent.OnMain(() => Recovery.Denied(name, args), token))
+        if (!ObservationTool(name) && Recovery.Revision > 0
+            && await NativeAgent.OnMain(() => Recovery.Denied(name, args), token))
             return new JsonObject { ["error"] = "repeated_failure_blocked", ["detail"] = "相同参数已失败3次，必须修正方案。",
                 ["recovery"] = await NativeAgent.OnMain(Recovery.Snapshot, token) }.ToJsonString();
         bool needsLivingPlayer = AgentControlSession.ActionTool(name)
