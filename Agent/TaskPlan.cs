@@ -259,11 +259,25 @@ public sealed class AgentTaskPlan
                 || index < 0 || index >= step["conditions"].AsArray().Count)
                 throw new InvalidOperationException("只能修正未完成步骤的有效且不重复条件。");
             var before = step["conditions"][index].AsObject();
-            int type = node["type"]?.GetValue<int>() ?? 0;
-            if (before["kind"]?.ToString() is not ("item" or "equipped" or "npc_alive") || type <= 0
-                || before["type"]?.GetValue<int>() != node["expected_type"]?.GetValue<int>() || before["type"].GetValue<int>() == type)
-                throw new InvalidOperationException("仅允许纠正item/equipped/npc_alive的type；不得修改数量、完成步骤或击杀基线。");
-            var after = (JsonObject)before.DeepClone(); after["type"] = type;
+            var after = (JsonObject)before.DeepClone();
+            if (_dag && before["kind"]?.ToString() == "position")
+            {
+                int x = node["x"]?.GetValue<int>() ?? -1, y = node["y"]?.GetValue<int>() ?? -1;
+                if (!_steps.Any(s => s["depends_on"].AsArray().Any(d => d.ToString() == id))
+                    || before["x"]?.GetValue<int>() != node["expected_x"]?.GetValue<int>()
+                    || before["y"]?.GetValue<int>() != node["expected_y"]?.GetValue<int>()
+                    || x < 0 || y < 0 || x == before["x"].GetValue<int>() && y == before["y"].GetValue<int>())
+                    throw new InvalidOperationException("中间路点修正需要原expected_x/y及新的x/y；末端位置要求保持原样。");
+                after["x"] = x; after["y"] = y;
+            }
+            else
+            {
+                int type = node["type"]?.GetValue<int>() ?? 0;
+                if (before["kind"]?.ToString() is not ("item" or "equipped" or "npc_alive") || type <= 0
+                    || before["type"]?.GetValue<int>() != node["expected_type"]?.GetValue<int>() || before["type"].GetValue<int>() == type)
+                    throw new InvalidOperationException("仅允许纠正item/equipped/npc_alive的type或中间位置路点；数量和击杀基线保持原样。");
+                after["type"] = type;
+            }
             edits.Add((step, index, (JsonObject)before.DeepClone(), after, measure(after)));
         }
         foreach (var edit in edits)

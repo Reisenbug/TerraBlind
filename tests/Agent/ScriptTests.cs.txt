@@ -41,6 +41,7 @@ static class ScriptTests
         await PreparedGapHandoff();
         await PreparedGapHandoff(danger: true);
         await CancelledNavigationContinuation();
+        WaypointCorrections();
         BuiltinDiscovery();
         await CombatIntentContinuation();
         CoverCandidateContracts();
@@ -87,7 +88,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "no_prefix_rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=61 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=62 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -1388,6 +1389,51 @@ static class ScriptTests
         Console.WriteLine("PASS: initial model instructions expose callable skill names and purposes without inlining source; chars=" + index.Length);
     }
 
+    static void WaypointCorrections()
+    {
+        var plan = new AgentTaskPlan();
+        int Measure(JsonObject c) => c["kind"]?.ToString() switch {
+            "permanent_health" => 140, "npc_kills" => 7,
+            "position" => c["x"]?.GetValue<int>() == 2700 && c["y"]?.GetValue<int>() == 495 ? 1 : 0, _ => 0 };
+        plan.Create(JsonNode.Parse("""
+            {"goal":"reach the destination after an intermediate waypoint","mode":"dag","steps":[
+              {"id":"prepared","description":"prepared","depends_on":[],"script":"return {};",
+               "conditions":[{"kind":"permanent_health","count":140}]},
+              {"id":"entry","description":"intermediate route","depends_on":["prepared"],"script":"return {};",
+               "conditions":[{"kind":"position","count":1,"x":3026,"y":218,"radius":12}]},
+              {"id":"finish","description":"required destination and kill","depends_on":["entry"],"script":"return {};",
+               "conditions":[{"kind":"position","count":1,"x":500,"y":500},{"kind":"npc_kills","type":222,"count":1}]}]}
+            """).AsObject(), Measure);
+        plan.Advance("prepared", Measure);
+        var before = plan.Snapshot();
+        JsonObject Edit(string id, int expectedX, int x) => new() { ["step"] = id, ["condition"] = 0,
+            ["expected_x"] = expectedX, ["expected_y"] = id == "entry" ? 218 : 500, ["x"] = x, ["y"] = 495 };
+        JsonObject Patch(JsonArray edits) => new() { ["expected_revision"] = before["revision"].DeepClone(),
+            ["reason"] = "use the observed alternate route", ["changes"] = edits };
+        foreach (var edits in new[] { new JsonArray(Edit("entry", 3027, 2700)),
+            new JsonArray(Edit("entry", 3026, 2700), Edit("finish", 500, 540)) })
+        {
+            try { plan.Patch(Patch(edits), Measure); throw new Exception("stale or terminal waypoint was changed"); }
+            catch (InvalidOperationException) { }
+            Check(JsonNode.DeepEquals(before, plan.Snapshot()), "rejected waypoint correction partially changed the plan");
+        }
+        var args = Patch(new JsonArray(Edit("entry", 3026, 2700)));
+        var agent = new NativeAgent(); agent.Load();
+        try { NativeAgent.ValidateTool("task_plan_patch", args); }
+        finally { agent.Unload(); }
+        var corrected = plan.Patch(args, Measure);
+        Check(corrected["verified"]?.GetValue<bool>() == false && corrected["steps"][1]["status"]?.ToString() == "active"
+            && corrected["steps"][1]["conditions"][0]["radius"]?.GetValue<int>() == 12
+            && corrected["steps"][0]["status"]?.ToString() == "completed"
+            && JsonNode.DeepEquals(before["steps"][1]["workflow"], corrected["steps"][1]["workflow"])
+            && JsonNode.DeepEquals(before["steps"][2]["conditions"], corrected["steps"][2]["conditions"]),
+            "waypoint correction changed completed progress, radius or final requirements");
+        Check(plan.Advance("entry", Measure)["verified"]?.GetValue<bool>() == true
+            && !plan.VerifyFinal(Measure)["verified"].GetValue<bool>(),
+            "corrected waypoint bypassed host verification or completed the final goal");
+        Console.WriteLine("PASS: intermediate waypoint corrections preserve workflows, completed work and terminal requirements");
+    }
+
     static async Task CancelledNavigationContinuation()
     {
         foreach (string mode in new[] { "navigation", "item_use", "mixed" })
@@ -2582,6 +2628,7 @@ static class ScriptTests
     public static async Task Run()
     {
         await CancelledNavigationContinuation();
+        WaypointCorrections();
         await QuietObservation();
         await MixedBiomeObservation();
         await ReactiveHandlers();

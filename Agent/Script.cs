@@ -256,6 +256,13 @@ public static class AgentScript
 
     public static void DescribePrograms(JsonArray tools)
     {
+        var planPatch = tools.First(t => t["function"]?["name"]?.ToString() == "task_plan_patch")["function"];
+        var correction = planPatch["parameters"]["properties"]["changes"]["items"];
+        correction["required"] = new JsonArray("step", "condition");
+        foreach (string coordinate in new[] { "expected_x", "expected_y", "x", "y" })
+            correction["properties"][coordinate] = new JsonObject { ["type"] = "integer", ["minimum"] = 0 };
+        planPatch["description"] = planPatch["description"].ToString()
+            + "中间位置路点可用changes:[{step,condition,expected_x,expected_y,x,y}]修正，保留半径和修正记录，仍需task_step实际验收。末端位置要求保持原样。";
         var useItem = tools.First(t => t["function"]?["name"]?.ToString() == "use_item")["function"];
         useItem["description"] = useItem["description"].ToString()
             + "途中反应消费当前gather目标时返回deferred_consumption，先让采集验收库存，采集结束后再使用；其它物品照常可用。";
@@ -423,6 +430,7 @@ public static class AgentScript
         + "接近期间可用navigate_until(navArgs,()=>只读条件)。条件必须返回boolean；开始前及导航tick检查，满足后停止接近，返回condition_met:true，随后直接执行并核验下一步。用于实际可制作、可操作等就绪条件；坐标到达仍由done:true表示。主脚本调用，条件内只允许查询。"
         + "每step结果限8000字符，return限16000字符；print每条限1000字符，log_truncations记录截断。只返回决策字段，完整执行轨迹按report_id用script_report查询。tool_counts表示请求次数，效果用真实状态核验。"
         + "\nDAG执行：第一步目的地与验收明确后建立最小计划，从ready节点后台启动；最终要求从初始conditions保留，末端包含仍需持有物品。调查、后继script和on_failure在行进期间补齐，前置通过宿主验收后自动派发。依赖表示已验收，输入互斥由执行器管理。"
+        + "中间路点随实际路线修正时，task_plan_patch changes提供expected_x/y和新的x/y，保留依赖及已完成进度；任务末端的位置要求保持原样。"
         + "\n途中反应：先用on(kind,event=>{...;return {handled:true};})注册本次脚本的处理函数，再执行主任务。watch订阅nearby_tile/nearby_chest/nearby_drop/nearby_npc_killed/inventory_full等现场事件；tick每250ms提供一次本地检查机会，适合检查受伤、威胁和武器，combat_assess提供事实。导航及gather内部导航会执行处理函数，原脚本和主动作句柄保持；只读和背包操作保持路线运行，需要移动/挖掘/放置时交接控制，结束后按当前位置重启原目的地。处理函数可调用tool/skill/step，步骤与主任务隔离。返回handled:false交回Agent；未注册事件沿用原交付。注册仅本次脚本有效，重新执行源码会使用新处理函数。"
         + "宿主已启用默认策略skill('safety_reactions',0);，含Jev联合自保、回城和局部障碍恢复。先get当前task_policy；扩展时保留技能调用，用on(kind,handler,{append:true})组合资源和背包反应；局部调整用patch，完整策略重写用set。节点script推进主任务，局部on处理该节点的特别情况。task_policy覆盖当前节点、后继节点、恢复脚本和独立后台动作。event.execution给出实际工具及args，event.task_node为所属节点，可据此决定顺路采集与返回。赶路时更新策略，初始化期间当前动作继续。task_reactions模板可用于整趟任务，reactive_travel用于单段。"
         + "快速现场判断可在tick里用jev_judge的channel/context后台发起，读取ready中的request_id、input_state和result后按现场执行，等待期间原动作继续。script_program example decision_reactions提供weapon/movement/opportunity三个可独立启停的可编辑示例，decisions数组选择维度，instruction给当前意图；保存为技能后可在task_policy中用skill调用。"
