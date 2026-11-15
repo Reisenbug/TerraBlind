@@ -189,7 +189,9 @@ public class NativeAgent : ModSystem
         int frameWaiters = FrameQueue.Count;
         for (int i = 0; i < frameWaiters && FrameQueue.TryDequeue(out var waiter); i++) waiter();
         while (MainQueue.TryDequeue(out var action)) action();
-        if (!Main.gameMenu && _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false)
+        bool runtimeActive = _cancel?.IsCancellationRequested == false
+            && Status is not ("needs_repair" or "budgetLimited" or "failed");
+        if (!Main.gameMenu && runtimeActive)
         {
             AgentTools.ObserveBossControl(Processing);
             AgentTools.ContinuePreparedNode(_cancel.Token);
@@ -197,7 +199,7 @@ public class NativeAgent : ModSystem
             AgentTools.LootPassingChest();
         }
         if (!Main.gameMenu && (AgentTools.Watches.LocalDelivery || AgentTools.Watches.HasScriptHandlers
-                || _running?.IsCompleted == false && _cancel?.IsCancellationRequested == false)
+                || runtimeActive)
             && AgentTools.Watches.Armed && DateTime.UtcNow - _lastWatch >= TimeSpan.FromMilliseconds(250))
         {
             _lastWatch = DateTime.UtcNow;
@@ -225,7 +227,7 @@ public class NativeAgent : ModSystem
                 ["actions"] = AgentTools.Actions.Summary() });
             if (AgentTools.Watches.Samples % 20 == 0)
                 DiagLog.Write("[agent_observe] " + AgentTools.Watches.LastObservation.ToJsonString());
-            if (_running?.IsCompleted == false && _cancel?.IsCancellationRequested == false && _idleReaction.IsCompleted)
+            if (runtimeActive && _idleReaction.IsCompleted)
                 _idleReaction = AgentTools.ReactWhileIdle(_cancel.Token);
             if (_codex != null && Processing && _dangerDelivery.IsCompleted)
             {

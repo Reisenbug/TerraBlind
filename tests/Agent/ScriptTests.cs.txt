@@ -30,6 +30,7 @@ static class ScriptTests
         await ObservationAfterDeath();
         await IntentContracts();
         await IntentHostContinuation();
+        await IntentHostContinuation(stop: true);
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();
@@ -72,7 +73,7 @@ static class ScriptTests
         await ReactiveHostIntegration(candidateMode: "rejected");
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=45 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=47 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -1303,9 +1304,14 @@ static class ScriptTests
         Console.WriteLine("PASS: death observations remain readable after repeated failures and respawn; failed actions stay guarded");
     }
 
-    static async Task IntentHostContinuation()
+    static async Task IntentHostContinuation(bool stop = false)
     {
         var agent = new NativeAgent(); agent.Load();
+        using var lifetime = new CancellationTokenSource();
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        typeof(NativeAgent).GetField("_cancel", flags).SetValue(agent, lifetime);
+        typeof(NativeAgent).GetField("_running", flags).SetValue(agent, Task.CompletedTask);
+        NativeAgent.Progress("fixture model turn ended", "idle", false);
         var http = HttpServerSystem.Handler;
         var player = Terraria.Main.LocalPlayer;
         int health = player.statLife, starts = 0;
@@ -1340,11 +1346,19 @@ static class ScriptTests
             await Pump(first);
             Check(starts == 1 && AgentTools.Workflows[workflow].HasPreparedContinuation(AgentTools.Plan.Script("local")["code"].ToString()),
                 "handled failed leaf lost its intent continuation; starts=" + starts + " result=" + await first);
+            if (stop)
+            {
+                NativeAgent.Stop();
+                for (int i = 0; i < 20; i++) { agent.PostUpdateEverything(); await Task.Delay(1); }
+                Check(starts == 1, "explicit stop resumed a prepared intent after its model turn ended");
+                Console.WriteLine("PASS: explicit stop prevents prepared host continuation while the model is idle");
+                return;
+            }
             var timer = System.Diagnostics.Stopwatch.StartNew();
             while (starts < 3 || AgentTools.Workflows[workflow].Running)
             {
                 Check(timer.Elapsed.TotalSeconds < 5, "host required a model turn between intent segments: " + AgentTools.LastContinuation);
-                AgentTools.ContinuePreparedNode(default); agent.PostUpdateEverything(); await Task.Delay(1);
+                agent.PostUpdateEverything(); await Task.Delay(1);
             }
             Check(AgentTools.Workflows[workflow].Segment == 3 && AgentTools.Plan.Incomplete && starts == 3,
                 "intent segments repeated actions or invented DAG completion");
@@ -2271,7 +2285,9 @@ static class ScriptTests
             Console.WriteLine("PASS: JS Jev judgments preserve typed facts, reject invalid choices and propagate cancellation without fallback actions");
         }
         await IntentContracts();
+        await ObservationAfterDeath();
         await IntentHostContinuation();
+        await IntentHostContinuation(stop: true);
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();
