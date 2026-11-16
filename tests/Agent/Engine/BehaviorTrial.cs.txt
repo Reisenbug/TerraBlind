@@ -5649,6 +5649,19 @@ public sealed partial class BehaviorTrial : ModSystem
     {
         if (Environment.GetEnvironmentVariable("TB_DECISION_COMPARE") is string comparison)
         { await DecisionComparison(comparison); return; }
+        if(Environment.GetEnvironmentVariable("TB_DESCENT_QUERY_PROBE") == "1")
+        {
+            long first=await OnMain(() => { Main.LocalPlayer.immune=true;Main.LocalPlayer.immuneTime=600;return (long)Main.GameUpdateCount; });
+            var queryClock=Stopwatch.StartNew();
+            var query=await Call("find_descent",new JsonObject { ["name"]="jungle" });
+            long last=await OnMain(() => (long)Main.GameUpdateCount);
+            var proof=new JsonObject { ["elapsed_ms"]=queryClock.ElapsedMilliseconds,["advanced_frames"]=last-first,["result"]=query.DeepClone() };
+            File.WriteAllText(Path.Combine(Main.SavePath,"descent-query-native.json"),proof.ToJsonString());
+            if(query["found"]?.GetValue<bool>()!=true||last-first<30)
+                throw new Exception("Cold descent query blocked the game or lost its result: "+proof);
+            Console.WriteLine("DESCENT_QUERY_NATIVE_PASS "+proof.ToJsonString());
+            return;
+        }
         if (string.IsNullOrEmpty(QueenResumeRoot)) await OnMain(() =>
         {
             var player = Main.LocalPlayer;

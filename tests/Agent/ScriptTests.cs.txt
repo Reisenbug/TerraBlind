@@ -46,6 +46,7 @@ static class ScriptTests
         BuiltinDiscovery();
         await CombatIntentContinuation();
         await FeedbackCombatContracts();
+        await BackgroundDescentContract();
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();
@@ -93,7 +94,7 @@ static class ScriptTests
         await PendingCombatNavigation(ownerEnded: true);
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=67 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=68 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -1398,6 +1399,43 @@ static class ScriptTests
                 "pending physics was marked executed or extended its decision lifetime");
         }
         Console.WriteLine("PASS: pending combat judgments retain their bounded intent using current native candidates; expiry, context, rejection and new replies terminate it");
+    }
+
+    static async Task BackgroundDescentContract()
+    {
+        var agent=new NativeAgent();agent.Load();
+        var handler=HttpServerSystem.Handler;
+        var entered=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release=new ManualResetEventSlim();
+        Task<string> query=null;
+        try
+        {
+            AgentTools.NewTask();AgentTools.Plan.Reset();AgentTools.Actions.Reset();
+            HttpServerSystem.Handler=(path,_)=>
+            {
+                if(path!="/find_descent")return (200,"{}");
+                entered.TrySetResult(true);
+                if(!release.Wait(TimeSpan.FromSeconds(5)))return (500,"{\"error\":\"query_blocked_frame_pump\"}");
+                return (200,"{\"found\":true,\"x\":50,\"y\":20}");
+            };
+            query=AgentTools.Execute("find_descent",new JsonObject { ["name"]="jungle" },default);
+            var clock=System.Diagnostics.Stopwatch.StartNew();
+            while(!entered.Task.IsCompleted)
+            { Check(clock.Elapsed.TotalSeconds<5,"descent query did not start");agent.PostUpdateEverything();await Task.Delay(1); }
+            for(int frame=0;frame<20;frame++){agent.PostUpdateEverything();await Task.Delay(1);}
+            Check(!query.IsCompleted&&AgentTools.QueriesInFlight>0,"descent lookup blocked the frame pump or lost query ownership");
+            release.Set();
+            while(!query.IsCompleted){agent.PostUpdateEverything();await Task.Delay(1);}
+            Check(JsonNode.Parse(await query)["found"]?.GetValue<bool>()==true&&AgentTools.QueriesInFlight==0,
+                "background descent result or query ownership was lost");
+        }
+        finally
+        {
+            release.Set();
+            if(query!=null)try{await query;}catch{}
+            HttpServerSystem.Handler=handler;AgentTools.Stop();agent.Unload();
+        }
+        Console.WriteLine("PASS: descent queries retain observation ownership and complete while the game frame pump remains available");
     }
 
     static async Task FeedbackCombatContracts()
@@ -3012,6 +3050,7 @@ static class ScriptTests
         BuiltinDiscovery();
         await CombatIntentContinuation();
         await FeedbackCombatContracts();
+        await BackgroundDescentContract();
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();

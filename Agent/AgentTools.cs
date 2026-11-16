@@ -1049,6 +1049,7 @@ public static partial class AgentTools
     internal static int QueriesInFlight;
     static readonly AsyncLocal<long> scriptInvocation = new();
     static bool ObservationTool(string name) => name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
+        or "find_descent" or "find_biome"
         or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "jev_judge" or "item_info" or "wiki_search" or "wiki_page"
         or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status" or "action_query";
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
@@ -2208,7 +2209,13 @@ public static partial class AgentTools
             case "descent_route":
                 result = await DescentRoute(args, token);
                 break;
-            case "item_info": case "find_biome": case "find_descent":
+            case "find_descent":
+                string descentQuery=args.ToJsonString(ModelJson);
+                var descentResponse=await Task.Run(() => HttpServerSystem.Dispatch("/find_descent",descentQuery),token);
+                result=JsonNode.Parse(descentResponse.Body).AsObject();
+                if(descentResponse.Status>=400&&result["error"]==null) result["error"]="status "+descentResponse.Status;
+                break;
+            case "item_info": case "find_biome":
             case "tile_names": case "recipe":
                 result = await Call("/" + name, args, token);
                 break;
