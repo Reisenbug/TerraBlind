@@ -441,12 +441,18 @@ namespace TerraBlind
 		ulong _primaryWeaponTraceTick;
 		public override void SetControls()
 		{
+			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On && Main.hasFocus
+				&& ((Main.mouseItem != null && !Main.mouseItem.IsAir)
+					|| Player.mouseInterface && (Main.mouseLeft || Main.mouseRight)))
+			{
+				Player.controlUseItem = Player.controlUseTile = false;
+				return;
+			}
 			bool beforePrimary = Player.controlUseItem;
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On
 				&& (AgentTools.AutonomyActive || FightCoordinator.IsActive))
 			{
 				Player.controlUseItem = false;
-				Main.mouseLeft = Main.mouseRight = false;
 			}
 			ApplyPrimaryControls();
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On)

@@ -5627,18 +5627,57 @@ public sealed partial class BehaviorTrial : ModSystem
             var player = Main.LocalPlayer;
             var npcs = Main.npc;
             bool manual = Manual.On, use = player.controlUseItem;
+            bool focused = Main.hasFocus, combat = Combat.Enabled;
+            var ui = (player.mouseInterface, player.delayUseItem, player.controlUseTile, Main.mouseItem);
             var mouseButtons = (Main.mouseLeft, Main.mouseRight);
             var controls = (player.controlLeft, player.controlRight, player.controlJump, player.selectedItem, Main.mouseX, Main.mouseY);
             try
             {
                 Main.npc = Enumerable.Range(0, Main.maxNPCs).Select(_ => new NPC()).ToArray();
                 Manual.On = false;
+                player.mouseInterface = player.delayUseItem = false;
+                Main.mouseItem = new Item();
                 FightCoordinator.Start(20);
                 player.controlUseItem = true;
                 Main.mouseLeft = Main.mouseRight = true;
                 player.GetModPlayer<StateSnapshotPlayer>().SetControls();
-                if (player.controlUseItem || Main.mouseLeft || Main.mouseRight)
-                    throw new Exception("agent input ownership retained raw weapon or inventory mouse input");
+                Console.WriteLine($"UI_INPUT_WORLD use={player.controlUseItem} left={Main.mouseLeft} right={Main.mouseRight}");
+                if (player.controlUseItem || !Main.mouseLeft || !Main.mouseRight)
+                    throw new Exception("agent input ownership swallowed UI mouse buttons or retained raw weapon use");
+                Main.hasFocus = true;
+                Combat.Enabled = true;
+                foreach (bool right in new[] { false, true })
+                {
+                    Main.mouseLeft = !right; Main.mouseRight = right;
+                    player.mouseInterface = player.delayUseItem = true;
+                    player.controlUseItem = player.controlUseTile = true;
+                    player.GetModPlayer<StateSnapshotPlayer>().SetControls();
+                    Console.WriteLine($"UI_INPUT_CLICK right={right} use={player.controlUseItem} tile={player.controlUseTile} interface={player.mouseInterface} delay={player.delayUseItem} left={Main.mouseLeft} right_button={Main.mouseRight}");
+                    if (player.controlUseItem || player.controlUseTile || !player.mouseInterface || !player.delayUseItem
+                        || Main.mouseLeft != !right || Main.mouseRight != right)
+                        throw new Exception("autonomous controls consumed an interface click");
+                }
+                Main.mouseLeft = Main.mouseRight = false;
+                Main.mouseItem = new Item(ItemID.Wood);
+                player.mouseInterface = false;
+                player.delayUseItem = true;
+                player.controlUseItem = true;
+                player.GetModPlayer<StateSnapshotPlayer>().SetControls();
+                if (player.controlUseItem || !player.delayUseItem)
+                    throw new Exception("autonomous controls interrupted an item drag");
+                Main.mouseItem = new Item();
+                foreach (bool hasFocus in new[] { true, false })
+                {
+                    Main.hasFocus = hasFocus;
+                    Main.mouseLeft = Main.mouseRight = !hasFocus;
+                    player.mouseInterface = player.delayUseItem = true;
+                    player.controlUseItem = true;
+                    player.GetModPlayer<StateSnapshotPlayer>().SetControls();
+                    if (player.controlUseItem || player.mouseInterface || player.delayUseItem)
+                        throw new Exception("passive inventory hover or background input blocked automation");
+                }
+                Main.hasFocus = focused; Combat.Enabled = combat;
+                player.mouseInterface = player.delayUseItem = false;
                 FightCoordinator.Stop();
                 player.controlUseItem = true;
                 Main.mouseLeft = Main.mouseRight = true;
@@ -5655,6 +5694,8 @@ public sealed partial class BehaviorTrial : ModSystem
             finally
             {
                 FightCoordinator.Stop(); Main.npc = npcs; Manual.On = manual; player.controlUseItem = use;
+                Main.hasFocus = focused; Combat.Enabled = combat;
+                (player.mouseInterface, player.delayUseItem, player.controlUseTile, Main.mouseItem) = ui;
                 (Main.mouseLeft, Main.mouseRight) = mouseButtons;
                 (player.controlLeft, player.controlRight, player.controlJump, player.selectedItem, Main.mouseX, Main.mouseY) = controls;
             }
