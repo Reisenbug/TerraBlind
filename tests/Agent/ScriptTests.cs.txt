@@ -45,6 +45,7 @@ static class ScriptTests
         await GatherObservationPolicy();
         BuiltinDiscovery();
         await CombatIntentContinuation();
+        await FeedbackCombatContracts();
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();
@@ -92,7 +93,7 @@ static class ScriptTests
         await PendingCombatNavigation(ownerEnded: true);
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=66 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=67 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -1386,6 +1387,106 @@ static class ScriptTests
                 "pending physics was marked executed or extended its decision lifetime");
         }
         Console.WriteLine("PASS: pending combat judgments retain their bounded intent using current native candidates; expiry, context, rejection and new replies terminate it");
+    }
+
+    static async Task FeedbackCombatContracts()
+    {
+        foreach (string scenario in new[] { "pending", "move", "retain", "expired", "clear", "blocked", "keep", "right", "jump" })
+        {
+            int observed = 0, acted = 0, judged = 0;
+            var input = new JsonObject { ["context"] = "feedback-fixture", ["last_request"] = 1 };
+            if (scenario is "retain" or "expired") input["intent"] = new JsonObject
+            {
+                ["context"] = "feedback-fixture", ["choice"] = "left",
+                ["expires"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + (scenario == "expired" ? -1000 : 10000)
+            };
+            var scene = JsonNode.Parse("""
+                {"player":{"hp":100},"targets":[{"who":1,"contact_damage":20,"weapons":[{"type":279,"name":"Knife","has_ammo":true,"mana_available":true}]}],
+                 "projectiles":[],"terrain":{"rows":["....","####"]}}
+                """).AsObject();
+            var report = await AgentScript.Run("const input=" + input.ToJsonString() + ";\n"
+                + ScriptLibrary.Example("feedback_combat")["code"], 5, (_, _) => { }, (name, args, _) =>
+                {
+                    JsonObject result;
+                    if (name == "combat_assess")
+                    {
+                        Check(args["forecast"] == null, "feedback controller still waited for offline physics");
+                        result = scene.DeepClone().AsObject(); observed++;
+                        if (scenario == "clear") result["targets"] = new JsonArray();
+                    }
+                    else if (name == "jev_judge")
+                    {
+                        judged++;
+                        Check(args["state"]["terrain"] != null && args["questions"]["movement"] != null && args["questions"]["jump"] != null,
+                            "feedback judgment lost real terrain or input semantics");
+                        result = scenario is "pending" or "retain" or "expired"
+                            ? new JsonObject { ["status"] = "pending" }
+                            : new JsonObject { ["status"] = "ready", ["request_id"] = judged + 1, ["request_age_ms"] = 100,
+                                ["result"] = new JsonObject { ["elapsed_ms"] = 90, ["answers"] = new JsonObject {
+                                    ["movement"] = new JsonObject { ["choice"] = scenario == "keep" ? "keep_current"
+                                        : scenario == "right" ? "right" : "left" },
+                                    ["jump"] = new JsonObject { ["noul"] = scenario == "jump" ? .9 : .1 },
+                                    ["weapon"] = new JsonObject { ["choice"] = "item_279" } } } };
+                    }
+                    else
+                    {
+                        Check(name == "set_combat" && args["movement_intent"] != null,
+                            "feedback policy still waited for finite action completion");
+                        if (args["movement_intent"]["active"]?.GetValue<bool>() != false)
+                        {
+                            Check(args["movement_intent"]["keys"][0].ToString() == (scenario == "right" ? "right" : "left")
+                                && args["movement_intent"]["expires_ms"].GetValue<int>() <= 2000,
+                                "feedback policy submitted a stale or incorrect movement");
+                            Check(args["movement_intent"]["keys"].AsArray().Any(k => k.ToString() == "jump") == (scenario == "jump"),
+                                "feedback policy lost the independent jump judgment");
+                            acted++;
+                        }
+                        result = scenario == "blocked" ? new JsonObject { ["error"] = "fixture_rejected" }
+                            : new JsonObject { ["movement_intent"] = args["movement_intent"].DeepClone() };
+                    }
+                    return Task.FromResult(result.ToJsonString());
+                }, _ => Task.CompletedTask, default);
+            int expected = scenario is "move" or "retain" or "right" or "blocked" or "jump" ? 1 : 0;
+            Check(report["ok"].GetValue<bool>() && acted == expected && observed == 1,
+                "feedback controller repeated a rejection, missed observation, or lost a retained input: " + scenario + " " + report);
+        }
+        var player = Terraria.Main.LocalPlayer;
+        var controls = (player.controlLeft, player.controlRight, player.controlJump);
+        bool manual = Manual.On, dodge = AgentPermissions.Dodge;
+        try
+        {
+            Manual.On = false; AgentPermissions.Dodge = true;
+            FeedbackControl.Set(JsonNode.Parse("""{"context":"motor","request_id":1,"keys":["right"],"expires_ms":2000}""").AsObject());
+            for (int frame = 0; frame < 30; frame++)
+            {
+                Terraria.Main.GameUpdateCount++;
+                player.controlRight = false;
+                FeedbackControl.Apply(player);
+                Check(player.controlRight && FeedbackControl.IsApplying,
+                    "feedback motor released input while script/model was not running");
+            }
+            Manual.On = true; player.controlRight = false;
+            Terraria.Main.GameUpdateCount++; FeedbackControl.Apply(player);
+            Check(!player.controlRight && !FeedbackControl.IsApplying, "feedback motor overrode manual input");
+            Manual.On = false; AgentPermissions.Dodge = false;
+            FeedbackControl.Apply(player);
+            Check(!player.controlRight, "feedback motor bypassed movement permissions");
+            AgentPermissions.Dodge = true;
+            AgentTools.ControlSession.Begin("act", null, out long ticket);
+            FeedbackControl.Apply(player);
+            Check(!player.controlRight, "feedback motor overrode an explicit movement action");
+            AgentTools.ControlSession.End(ticket);
+            FeedbackControl.Set(JsonNode.Parse("""{"context":"expiry","request_id":2,"keys":["right"],"expires_ms":1}""").AsObject());
+            await Task.Delay(5);
+            FeedbackControl.Apply(player);
+            Check(!player.controlRight && !FeedbackControl.Snapshot()["active"].GetValue<bool>(), "feedback motor outlived its decision");
+        }
+        finally
+        {
+            FeedbackControl.Clear(); Manual.On = manual; AgentPermissions.Dodge = dodge;
+            (player.controlLeft, player.controlRight, player.controlJump) = controls;
+        }
+        Console.WriteLine("PASS: feedback motor holds input across model waits, expires and yields to manual control, permissions and explicit actions");
     }
 
     static void BuiltinDiscovery()
@@ -2875,6 +2976,7 @@ static class ScriptTests
         await CraftBatchContracts();
         BuiltinDiscovery();
         await CombatIntentContinuation();
+        await FeedbackCombatContracts();
         CoverCandidateContracts();
         await CoverDecisionContracts();
         await LocalPlacementContracts();

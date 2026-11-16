@@ -67,6 +67,7 @@ public static partial class AgentTools
 
     internal static void ClearTaskPolicy(bool resetRevision = false)
     {
+        FeedbackControl.Clear();
         ClearCombatPreparation();
         if (resetRevision) AgentScript.ResetIntents();
         AgentNavigationIntent.Reset();
@@ -2183,7 +2184,13 @@ public static partial class AgentTools
                     if (args["auto_dodge"] != null) AgentPermissions.Dodge = Bool(args, "auto_dodge");
                     if (args["auto_attack"] != null) AgentPermissions.Attack = Bool(args, "auto_attack");
                     if (!AgentPermissions.Attack) { Combat.Stop(); FightCoordinator.Stop(); PlayerCombat.Stop(); }
+                    if (args["movement_intent"] is JsonObject movementIntent)
+                    {
+                        var applied = FeedbackControl.Set(movementIntent);
+                        if (applied["error"] != null) return applied;
+                    }
                     return new JsonObject { ["auto_dodge"] = AgentPermissions.Dodge, ["auto_attack"] = AgentPermissions.Attack,
+                        ["movement_intent"] = FeedbackControl.Snapshot(),
                         ["weapon_type"] = CombatLoadout.PreferredType,
                         ["boss_control"] = BossStatus(fresh: true) };
                 }, token);
@@ -2886,6 +2893,7 @@ public static partial class AgentTools
             && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) <= radius * 16)
             .OrderBy(n => Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center)).Take(8);
         return new JsonObject { ["tick"] = Main.GameUpdateCount, ["recent_damage"] = LastDamage?.DeepClone(),
+            ["movement_intent"] = FeedbackControl.Snapshot(),
             ["fall_forecast"] = NavigationSurvival.AssessFall(p),
             ["cover_candidates"] = CoverCandidates(p, radius),
             ["preferred_weapon_type"] = CombatLoadout.PreferredType,

@@ -702,6 +702,17 @@
       "parameters": {
         "type": "object",
         "properties": {
+          "movement_intent": {
+            "type": "object",
+            "description": "实验性短程持续按键，由逐帧控制器执行。active:false撤销；否则需要context、request_id、keys、expires_ms（1..2000）。只在没有其他主移动/施工/挖掘动作时生效，遵守移动权限；任务策略清理时撤销。combat_assess返回实际执行反馈。",
+            "properties": {
+              "active": { "type": "boolean" },
+              "context": { "type": "string" },
+              "request_id": { "type": ["string", "integer"] },
+              "keys": { "type": "array", "items": { "type": "string", "enum": ["left", "right", "jump"] } },
+              "expires_ms": { "type": "integer", "minimum": 1, "maximum": 2000 }
+            }
+          },
           "boss_control": {
             "type": "boolean"
           },

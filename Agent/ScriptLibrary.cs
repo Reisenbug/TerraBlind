@@ -11,8 +11,8 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch" };
-    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch", "feedback_combat" };
+    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch", "feedback_combat" };
     internal static string BuiltinIndex => string.Join("\n", BuiltIns.Select(name =>
         name + "@0: " + Example(name)["detail"].ToString().Split('。')[0]));
 
@@ -25,6 +25,54 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "feedback_combat") return Template(name,
+            "实验性持续反馈控制。input含context、destination、instruction和上次intent/last_request。Jev判断移动意图和武器，逐帧执行器持续按键，脚本异步更新；现场事实包括实际生效帧数及受阻帧数。每个意图最多2秒，显式动作和手动输入优先。这一路径没有完整落地安全证明，需以实际受伤和推进效果评估。",
+            """
+            const keys={left:['left'],right:['right']};
+            let intent=input.intent,request=input.last_request;
+            const stop=status=>{
+              tool('set_combat',{movement_intent:{active:false}});
+              return {status,request_id:request,intent:null};
+            };
+              const c=tool('combat_assess',{radius:20,terrain_radius:8}),p=c.player;
+              if(c.boss_present||p.hp<=0)return stop('inactive');
+              if(!c.targets.some(n=>n.contact_damage>0)&&!c.projectiles.length)
+                return stop('no_threat');
+              const weapons=[...new Map(c.targets.flatMap(n=>n.weapons).filter(w=>w.has_ammo&&w.mana_available)
+                .map(w=>[w.type,w])).values()];
+              const weaponChoices={keep:'Keep the current weapon selection',...Object.fromEntries(weapons.map(w=>['item_'+w.type,w.name]))};
+              const questions={movement:{type:'choice',instructions:
+                'Which horizontal input best handles the incoming enemies and projectiles while advancing the task? Read actual terrain rows, velocity, weapon reach and destination. The motor continuously holds horizontal input until updated, for at most two seconds. movement_intent reports actual applied_frames and consecutive stalled_frames. Jumping is judged independently. Choose keep_current when the existing route or native reflex is better. Terrain is current observation, not a predicted safe landing.',
+                criteria:{keep_current:'Keep the current navigation or native reflex',left:'Hold left',right:'Hold right'}},
+                jump:{type:'noul',instructions:
+                  'Would pressing jump now clear the immediate obstacle or reduce an imminent collision with enemies or stingers? Judge the benefit using current vertical motion, overhead terrain, jump availability, landing hazards and useful route progress. The press lasts 250ms, followed by release.'}};
+              if(weapons.length)questions.weapon={type:'choice',instructions:
+                'Which available weapon can practically hit these enemies from the current terrain and distance? Account for projectile collision, reach, ammo and attack speed.',criteria:weaponChoices};
+              const r=tool('jev_judge',{channel:'feedback_combat',context:input.context,interval_ms:input.interval_ms??250,
+                max_age_ms:input.max_age_ms??1000,questions,state:{instruction:input.instruction,destination:input.destination,
+                  player:p,targets:c.targets.map(({weapons,...n})=>n),projectiles:c.projectiles,weapons,
+                  terrain:c.terrain,recent_damage:c.recent_damage,fall_forecast:c.fall_forecast,movement_intent:c.movement_intent,
+                  coordinates:'Player pos and velocity use world pixels and pixels/frame. Enemy/projectile positions and destination use tiles, 16 pixels/tile. x increases right; y increases down.'}});
+              if(r.status==='failed')return {...stop('failed'),error:r.result.error};
+              if(r.status==='ready'&&r.request_id!==request){
+                request=r.request_id;
+                intent={context:input.context,choice:r.result.answers.movement.choice,
+                  jump:(r.result.answers.jump?.noul??0)>.5,
+                  weapon:r.result.answers.weapon?.choice,expires:Date.now()+Math.max(0,(input.max_age_ms??1000)-(r.request_age_ms??0))};
+                print({decision:'feedback_combat',request,choice:intent.choice,jump:intent.jump,weapon:intent.weapon,model_ms:r.result.elapsed_ms});
+              }
+              if(!intent||intent.context!==input.context||Date.now()>=intent.expires)
+                return stop(r.status);
+              const desired=[...(keys[intent.choice]??[]),...(intent.jump?['jump']:[])];
+              const settings={movement_intent:desired.length?{context:input.context,request_id:request,
+                keys:desired,expires_ms:Math.min(2000,Math.max(1,Math.floor(intent.expires-Date.now())))}:{active:false}};
+              if(intent.weapon?.startsWith('item_')){
+                const type=Number(intent.weapon.slice(5));
+                if(weapons.some(w=>w.type===type))settings.weapon_type=type;
+              }
+              const result=tool('set_combat',settings);
+              return {status:result.error?'blocked':'submitted',request_id:request,intent:result.error?null:intent,evidence:result.movement_intent};
+            """);
         if (name == "craft_batch") return Template(name,
             "连续制作并核验库存。input.items为1..8项{item_type,count}，count是期望随身库存总数；可选station:{x,y}为Agent选定的实际制作站坐标。先检查原生可制作状态，需要时到站后刷新，接着连续制作；已有数量跳过，部分成果保留。站位、材料或制作结果受阻时返回needs_review和证据。仍执行整趟安全策略。",
             """

@@ -5202,8 +5202,9 @@ public sealed partial class BehaviorTrial : ModSystem
 
     async Task FightDecisionComparison(string variant)
     {
-        if (variant is not ("baseline" or "combat")) throw new ArgumentException("Fight comparison expects baseline or combat");
-        bool model = variant == "combat";
+        if (variant is not ("baseline" or "combat" or "feedback")) throw new ArgumentException("Fight comparison expects baseline, combat or feedback");
+        bool model = variant != "baseline";
+        string combatSkill = variant == "feedback" ? "feedback_combat" : "joint_combat";
         bool retainIntent = Environment.GetEnvironmentVariable("TB_DECISION_KEEP_INTENT") == "1";
         bool codeDodge = model || Environment.GetEnvironmentVariable("TB_DECISION_IDLE_BASELINE") != "1";
         int duration = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_SECONDS") ?? "40");
@@ -5223,6 +5224,30 @@ public sealed partial class BehaviorTrial : ModSystem
         }
         warmup.Stop();
         Console.WriteLine("DECISION_FIGHT_WORKER_READY warmup_ms=" + warmup.ElapsedMilliseconds);
+        if (Environment.GetEnvironmentVariable("TB_FEEDBACK_MOTOR_CHECK") == "1")
+        {
+            int observed = 0, released = 0;
+            await OnMain(() =>
+            {
+                FeedbackControl.Set(JsonNode.Parse("""{"context":"native-motor-check","request_id":1,"keys":["left"],"expires_ms":1500}""").AsObject());
+                BoundaryInputPlayer.ObserveInput = p => { observed++; if (!p.controlLeft || p.controlRight) released++; };
+                return true;
+            });
+            await Task.Delay(600);
+            await OnMain(() =>
+            {
+                BoundaryInputPlayer.ObserveInput = null;
+                var p = Main.LocalPlayer;
+                var proof = new JsonObject { ["frames"] = observed, ["released_frames"] = released,
+                    ["distance_pixels"] = Vector2.Distance(start, p.position), ["motor"] = FeedbackControl.Snapshot() };
+                FeedbackControl.Clear(); p.position = start; p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = (int)start.Y / 16;
+                File.WriteAllText(Path.Combine(Main.SavePath, "feedback-motor-native.json"), proof.ToJsonString());
+                if (observed < 20 || released != 0) throw new Exception("Native motor released input while its script was inactive: " + proof);
+                Console.WriteLine("FEEDBACK_MOTOR_NATIVE " + proof.ToJsonString());
+                return true;
+            });
+        }
         if (Environment.GetEnvironmentVariable("TB_DECISION_DAMAGE_CHECK") == "1") { await CheckCombatDamage(); return; }
         var anchor = await OnMain(() =>
         {
@@ -5240,8 +5265,8 @@ public sealed partial class BehaviorTrial : ModSystem
             throw new Exception("Decision comparison must permit native movement candidates");
         if (model)
         {
-            var helper = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "joint_combat",
-                ["expected_revision"] = 0, ["code"] = ScriptLibrary.Example("joint_combat")["code"].DeepClone() });
+            var helper = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = combatSkill,
+                ["expected_revision"] = 0, ["code"] = ScriptLibrary.Example(combatSkill)["code"].DeepClone() });
             if (helper["error"] != null) throw new Exception("Joint fight skill rejected: " + helper);
             var input = new JsonObject { ["context"] = "native-hornet-fight", ["interval_ms"] = 750, ["max_age_ms"] = 2000,
                 ["destination"] = new JsonObject { ["x"] = anchor.X / 16, ["y"] = anchor.Y / 16 },
@@ -5249,7 +5274,7 @@ public sealed partial class BehaviorTrial : ModSystem
             var policy = await Call("task_policy", new JsonObject { ["operation"] = "get" });
             var registered = await Call("task_policy", new JsonObject { ["operation"] = "set",
                 ["expected_revision"] = policy["revision"].DeepClone(),
-                ["code"] = "const config=" + input.ToJsonString() + ";let last=null,intent=null;on('tick',()=>{const r=skill('joint_combat',"
+                ["code"] = "const config=" + input.ToJsonString() + ";let last=null,intent=null;on('tick',()=>{const r=skill('" + combatSkill + "',"
                     + helper["revision"] + ",{...config,last_request:last,intent:" + (retainIntent ? "intent" : "null")
                     + "},'combat');if(r.request_id)last=r.request_id;intent=r.intent??null;return {handled:true};});" });
             if (registered["error"] != null) throw new Exception("Joint fight policy rejected: " + registered);
@@ -5285,7 +5310,9 @@ public sealed partial class BehaviorTrial : ModSystem
                         }
                     return new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["tick"] = Main.GameUpdateCount,
                         ["hp"] = p.statLife, ["dead"] = p.dead, ["x"] = p.position.X, ["y"] = p.position.Y,
-                        ["decision_control_active"] = ((AgentControlSession)SessionField.GetValue(null)).Tool == "act" && ActExecutor.IsActive,
+                        ["decision_control_active"] = (FeedbackControl.Snapshot()["remaining_ms"]?.GetValue<double>() > 0
+                            && FeedbackControl.Snapshot()["applied_frames"]?.GetValue<int>() > 0)
+                            || ((AgentControlSession)SessionField.GetValue(null)).Tool == "act" && ActExecutor.IsActive,
                         ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["attack"] = p.controlUseItem,
                         ["item_animation"] = p.itemAnimation, ["held_type"] = p.HeldItem.type,
                         ["selected_slot"] = p.selectedItem, ["mouse_interface"] = p.mouseInterface,
@@ -7484,5 +7511,7 @@ public sealed partial class BehaviorTrial : ModSystem
 public sealed class BoundaryInputPlayer : ModPlayer
 {
     public static Action<Player> Drive;
+    public static Action<Player> ObserveInput;
     public override void SetControls() { if (Player.whoAmI == Main.myPlayer) Drive?.Invoke(Player); }
+    public override void PreUpdateMovement() { if (Player.whoAmI == Main.myPlayer) ObserveInput?.Invoke(Player); }
 }
