@@ -48,8 +48,7 @@ namespace TerraBlind
 								{
 									if (!Predicates.InBounds(left + i, bottom)) continue;
 									var support = Main.tile[left + i, bottom];
-									if (support.HasUnactuatedTile && Main.tileSolid[support.TileType]
-										&& support.Slope == SlopeType.Solid && !support.IsHalfBlock)
+									if (support.HasUnactuatedTile && Main.tileSolid[support.TileType])
 									{ prepared = (x, y); preparation = blocker; break; }
 								}
 							}
