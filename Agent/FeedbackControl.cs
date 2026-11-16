@@ -12,12 +12,14 @@ public static class FeedbackControl
     static bool left, right, jump;
     static long started, updated;
     static int duration, appliedFrames, stalledFrames;
+    static string blockedReason;
     static uint appliedTick;
     public static bool IsApplying => context != null && appliedFrames > 0 && appliedTick == Main.GameUpdateCount;
 
     public static void Clear()
     {
         context = request = null;
+        blockedReason = null;
         appliedFrames = stalledFrames = 0;
     }
 
@@ -46,10 +48,13 @@ public static class FeedbackControl
         if (context == null) return;
         if (player.dead || Stopwatch.GetElapsedTime(updated).TotalMilliseconds >= duration)
         { Clear(); return; }
+        if (AgentTools.Control.HasRegion(ControlBehavior.Dodge))
+        { blockedReason = "regional_controller_required"; return; }
+        blockedReason = null;
         if (Manual.On || !AgentNetwork.CanAutomate || PvpDuel.Active || PlayerCombat.Active
             || AgentTools.ContactEscapeActive || !AgentPermissions.CanDodge(delegated: true)
             || FightCoordinator.HoldingFallProtection(player)
-            || AgentTools.Control.HasClaims || AgentTools.ControlSession.OwnsDirectMovement
+            || AgentTools.ControlSession.OwnsDirectMovement
             || AgentTools.ControlSession.Tool is not (null or "fight")
             || Main.npc.Any(n => n is { active: true, boss: true })) return;
         player.controlLeft = left; player.controlRight = right;
@@ -62,6 +67,7 @@ public static class FeedbackControl
     {
         ["active"] = context != null, ["context"] = context, ["request_id"] = request,
         ["applied_frames"] = appliedFrames, ["stalled_frames"] = stalledFrames,
+        ["blocked_reason"] = blockedReason,
         ["remaining_ms"] = context == null ? 0 : Math.Max(0, duration - Stopwatch.GetElapsedTime(updated).TotalMilliseconds)
     };
 }

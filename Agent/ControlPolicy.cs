@@ -131,6 +131,8 @@ public sealed class AgentControlPolicy
         return true;
     }
 
+    internal bool HasRegion(ControlBehavior behavior) => spatialRules.Any(rule => rule.Behaviors.Contains(behavior));
+
     JsonObject Denied(Rule rule, string error, ControlBehavior behavior) => new()
     {
         ["error"] = error, ["behavior"] = behavior.ToString().ToLowerInvariant(),

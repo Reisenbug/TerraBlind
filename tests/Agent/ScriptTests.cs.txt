@@ -1472,6 +1472,30 @@ static class ScriptTests
             FeedbackControl.Apply(player);
             Check(!player.controlRight, "feedback motor bypassed movement permissions");
             AgentPermissions.Dodge = true;
+            string itemClaim = AgentTools.Control.Claim(ControlChannels.ItemUse, ControlLifetime.Task, null, "inventory fixture");
+            try
+            {
+                FeedbackControl.Apply(player);
+                Check(player.controlRight, "inventory input ownership unnecessarily stopped movement");
+            }
+            finally { AgentTools.Control.Release(itemClaim); }
+            player.controlRight = false;
+            string movementClaim = AgentTools.Control.Claim(ControlChannels.Movement, ControlLifetime.Task, null, "movement fixture");
+            try
+            {
+                FeedbackControl.Apply(player);
+                Check(!player.controlRight, "feedback motor bypassed movement ownership");
+            }
+            finally { AgentTools.Control.Release(movementClaim); }
+            string region = AgentTools.Control.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task, null,
+                "region fixture", (0, 0, 10, 10), outside: true);
+            try
+            {
+                FeedbackControl.Apply(player);
+                Check(!player.controlRight && FeedbackControl.Snapshot()["blocked_reason"]?.ToString() == "regional_controller_required",
+                    "feedback motor bypassed a spatial movement restriction");
+            }
+            finally { AgentTools.Control.Release(region); }
             AgentTools.ControlSession.Begin("act", null, out long ticket);
             FeedbackControl.Apply(player);
             Check(!player.controlRight, "feedback motor overrode an explicit movement action");
