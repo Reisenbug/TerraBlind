@@ -101,6 +101,7 @@ namespace Terraria
     }
     public class Player
     {
+        public static int tileTargetX, tileTargetY;
         public Item trashItem = new();
         public Item[] armor = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
         public bool IsItemSlotUnlockedAndUsable(int slot) => slot < 8 || slot >= 10 && slot < 18;
@@ -451,12 +452,15 @@ namespace TerraBlind
 
     public static class RecedingNav
     {
+        public enum Mode { Reach, Snap }
         public static bool Active;
         public static bool FieldReady = true;
         public static string LastStop = "";
         public static int Interrupts;
         internal static void InterruptForSurvival() => Interrupts++;
-        public static void Start(int x, int y) => Active = true;
+        public static int Starts;
+        public static Mode LastMode;
+        public static void Start(int x, int y, Mode mode = Mode.Reach) { Active = true; Starts++; LastMode = mode; }
         public static void Stop() => Active = false;
     }
     public static class MazeWand

@@ -445,6 +445,7 @@ namespace TerraBlind
 				&& ((Main.mouseItem != null && !Main.mouseItem.IsAir)
 					|| Player.mouseInterface && (Main.mouseLeft || Main.mouseRight)))
 			{
+				FrameProgram.YieldToInterface();
 				Player.controlUseItem = Player.controlUseTile = false;
 				return;
 			}

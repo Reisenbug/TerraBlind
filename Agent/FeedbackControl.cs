@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Text.Json.Nodes;
@@ -131,10 +132,22 @@ public static class FrameProgram
     static JsonObject data = new(), memory = new();
     static string error, blocked;
     static long frames, idleFrames;
-    static double maxMilliseconds;
+    static double maxMilliseconds, totalMilliseconds;
+    static bool navigationOwned;
+    static int navigationX, navigationY;
+    static string navigationMode;
+    static readonly Dictionary<int, (Item Item, long Generation)> trackedDrops = new();
+    static long dropGeneration;
     public static bool Active => engine != null;
+    public static void YieldToInterface() { if (Active) blocked = "user_interface"; }
 
-    public static void Clear() { engine = previousEngine = null; data = new(); memory = new(); }
+    public static void Clear()
+    {
+        if (navigationOwned) RecedingNav.Stop();
+        navigationOwned = false;
+        trackedDrops.Clear();
+        engine = previousEngine = null; data = new(); memory = new();
+    }
 
     public static JsonObject Set(JsonObject args)
     {
@@ -145,7 +158,8 @@ public static class FrameProgram
             candidate.Execute(code.GetValue<string>() + "\nfunction __frame(encoded){return JSON.stringify(tick(JSON.parse(encoded)));}");
             if (candidate.Evaluate("typeof tick").AsString() != "function")
                 throw new ArgumentException("frame_program requires function tick(state)");
-            previousEngine = engine; engine = candidate; error = blocked = null; frames = idleFrames = 0; maxMilliseconds = 0;
+            previousEngine = engine; engine = candidate; error = blocked = null; frames = idleFrames = 0; maxMilliseconds = totalMilliseconds = 0;
+            FeedbackControl.Clear();
         }
         if (args["data"] is JsonObject input) data = input.DeepClone().AsObject();
         return Snapshot();
@@ -164,47 +178,101 @@ public static class FrameProgram
             blocked = null;
             if (NavigationSurvival.Apply(p)) { frames++; return true; }
             int cx = (int)(p.Center.X / 16), cy = (int)((p.position.Y + p.height - 1) / 16);
+            foreach (var entry in trackedDrops.ToArray())
+                if (!entry.Value.Item.active || !ReferenceEquals(Main.item[entry.Key], entry.Value.Item)) trackedDrops.Remove(entry.Key);
+            for (int i = 0; i < Main.item.Length; i++)
+            {
+                var item = Main.item[i];
+                if (item == null || !item.active || item.IsAir
+                    || Microsoft.Xna.Framework.Vector2.Distance(item.Center, p.Center) > 20 * 16 || trackedDrops.ContainsKey(i)) continue;
+                trackedDrops[i] = (item, ++dropGeneration);
+            }
             var tiles = new JsonArray();
-            for (int x = cx - 5; x <= cx + 5; x++) for (int y = cy - 5; y <= cy + 4; y++)
+            for (int x = cx - 8; x <= cx + 8; x++) for (int y = cy - 8; y <= cy + 7; y++)
             {
                 if (!WorldGen.InWorld(x, y)) continue;
                 var tile = Main.tile[x, y];
                 if (tile.HasTile || tile.LiquidAmount > 0) tiles.Add(new JsonObject {
                     ["x"] = x, ["y"] = y, ["type"] = tile.HasTile ? (int)tile.TileType : -1,
+                    ["frame_x"] = (int)tile.TileFrameX, ["frame_y"] = (int)tile.TileFrameY,
                     ["solid"] = tile.HasUnactuatedTile && Main.tileSolid[tile.TileType],
                     ["platform"] = tile.HasTile && Main.tileSolidTop[tile.TileType],
                     ["liquid"] = tile.LiquidAmount, ["liquid_type"] = tile.LiquidType,
-                    ["mineable"] = tile.HasTile && DigTable.CostFrames(x, y) < DigTable.Unmineable });
+                    ["mineable"] = tile.HasTile && DigTable.CostFrames(x, y) < DigTable.Unmineable,
+                    ["reachable"] = Reach.CanMine(p, x, y) });
             }
             var state = new JsonObject { ["tick"] = Main.GameUpdateCount, ["data"] = data.DeepClone(), ["memory"] = memory.DeepClone(),
                 ["player"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y, ["width"] = p.width,
-                    ["height"] = p.height, ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["hp"] = p.statLife,
-                    ["item_animation"] = p.itemAnimation, ["selected_slot"] = p.selectedItem }, ["tiles"] = tiles };
+                    ["height"] = p.height, ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["hp"] = p.statLife, ["max_hp"] = p.statLifeMax,
+                    ["item_animation"] = p.itemAnimation, ["item_time"] = p.itemTime,
+                    ["release_use"] = p.releaseUseItem, ["selected_slot"] = p.selectedItem }, ["tiles"] = tiles,
+                ["inventory"] = new JsonArray(p.inventory.Take(50).Select((item, slot) => (item, slot))
+                    .Where(entry => !entry.item.IsAir).Select(entry => (JsonNode)new JsonObject {
+                        ["slot"] = entry.slot, ["type"] = entry.item.type, ["stack"] = entry.item.stack,
+                        ["pick"] = entry.item.pick, ["damage"] = entry.item.damage, ["create_tile"] = entry.item.createTile }).ToArray()),
+                ["drops"] = new JsonArray(trackedDrops.OrderBy(entry => Microsoft.Xna.Framework.Vector2.Distance(entry.Value.Item.Center, p.Center)).Take(32)
+                    .Select(entry => (JsonNode)new JsonObject { ["id"] = entry.Key, ["generation"] = entry.Value.Generation,
+                        ["type"] = entry.Value.Item.type, ["stack"] = entry.Value.Item.stack,
+                        ["x"] = entry.Value.Item.Center.X, ["y"] = entry.Value.Item.Center.Y,
+                        ["vx"] = entry.Value.Item.velocity.X, ["vy"] = entry.Value.Item.velocity.Y }).ToArray()),
+                ["enemies"] = new JsonArray(Main.npc.Where(n => n != null && n.active && !n.friendly && n.damage > 0
+                        && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) <= 20 * 16).Take(8)
+                    .Select(n => (JsonNode)new JsonObject { ["type"] = n.type, ["x"] = n.Center.X, ["y"] = n.Center.Y,
+                        ["vx"] = n.velocity.X, ["vy"] = n.velocity.Y, ["hp"] = n.life, ["damage"] = n.damage }).ToArray()),
+                ["navigation"] = new JsonObject { ["owned"] = navigationOwned, ["active"] = RecedingNav.Active,
+                    ["result"] = RecedingNav.LastStop, ["x"] = navigationX, ["y"] = navigationY, ["mode"] = navigationMode } };
             var output = JsonNode.Parse(engine.Invoke("__frame", state.ToJsonString()).AsString()).AsObject();
             if (output["done"]?.GetValue<bool>() == true) { Clear(); return false; }
+            if (output["memory"] is JsonObject saved) memory = saved.DeepClone().AsObject();
+            if (output["navigate"] is JsonObject navigation)
+            {
+                if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All))
+                    throw new InvalidOperationException("navigation_permission");
+                int x = navigation["x"].GetValue<int>(), y = navigation["y"].GetValue<int>();
+                string mode = navigation["mode"]?.GetValue<string>() ?? "interact";
+                if (mode is not ("interact" or "pickup")) throw new ArgumentException("navigation mode needs interact or pickup");
+                if (!navigationOwned || x != navigationX || y != navigationY || mode != navigationMode || navigation["restart"]?.GetValue<bool>() == true)
+                {
+                    RecedingNav.Start(x, y, mode == "pickup" ? RecedingNav.Mode.Snap : RecedingNav.Mode.Reach);
+                    navigationX = x; navigationY = y; navigationMode = mode; navigationOwned = true;
+                }
+            }
+            if (output["follow_navigation"]?.GetValue<bool>() == true)
+            {
+                frames++; totalMilliseconds += clock.Elapsed.TotalMilliseconds;
+                maxMilliseconds = Math.Max(maxMilliseconds, clock.Elapsed.TotalMilliseconds);
+                return false;
+            }
+            if (navigationOwned) { RecedingNav.Stop(); navigationOwned = false; }
             var keys = output["keys"]?.AsArray().Select(k => k.GetValue<string>()).ToArray() ?? Array.Empty<string>();
             if (keys.Any(k => k is not ("left" or "right" or "jump" or "down" or "up")))
                 throw new ArgumentException("unsupported frame key");
             p.controlLeft = keys.Contains("left"); p.controlRight = keys.Contains("right");
             p.controlJump = keys.Contains("jump"); p.controlDown = keys.Contains("down"); p.controlUp = keys.Contains("up");
-            if (output["slot"] is JsonValue slot && p.itemAnimation == 0 && p.itemTime == 0)
+            bool slotReady = true;
+            if (output["slot"] is JsonValue slot)
             {
                 int index = slot.GetValue<int>();
                 if (index < 0 || index >= 50) throw new ArgumentException("slot needs 0..49");
-                p.selectedItem = index;
+                if (index != p.selectedItem)
+                {
+                    if (p.itemAnimation == 0 && p.itemTime == 0) p.selectedItem = index;
+                    else slotReady = false;
+                }
             }
-            p.controlUseItem = output["use"]?.GetValue<bool>() == true;
+            p.controlUseItem = slotReady && output["use"]?.GetValue<bool>() == true;
+            if (p.controlUseItem) p.delayUseItem = p.mouseInterface = false;
             if (output["aim"] is JsonObject aim)
             {
                 int x = aim["x"].GetValue<int>(), y = aim["y"].GetValue<int>();
                 Cursor.AimTile(x, y);
-                var behavior = p.HeldItem.pick > 0 ? ControlBehavior.Mining
-                    : p.HeldItem.createTile >= 0 ? ControlBehavior.Placement : ControlBehavior.Attack;
-                if (!AgentTools.ControlAllows(behavior, ControlChannels.ItemUse)
-                    || AgentTools.Control.ForbiddenAt(behavior, x, y)) p.controlUseItem = false;
             }
-            if (output["memory"] is JsonObject saved) memory = saved.DeepClone().AsObject();
+            var behavior = p.HeldItem.pick > 0 ? ControlBehavior.Mining
+                : p.HeldItem.createTile >= 0 ? ControlBehavior.Placement : CombatLoadout.Usable(p.HeldItem) ? ControlBehavior.Attack : ControlBehavior.Direct;
+            if (!AgentTools.ControlAllows(behavior, ControlChannels.ItemUse)
+                || AgentTools.Control.ForbiddenAt(behavior, Player.tileTargetX, Player.tileTargetY)) p.controlUseItem = false;
             frames++; if (keys.Length == 0 && !p.controlUseItem) idleFrames++;
+            totalMilliseconds += clock.Elapsed.TotalMilliseconds;
             maxMilliseconds = Math.Max(maxMilliseconds, clock.Elapsed.TotalMilliseconds);
             return true;
         }
@@ -217,5 +285,6 @@ public static class FrameProgram
     }
 
     public static JsonObject Snapshot() => new() { ["active"] = Active, ["frames"] = frames, ["idle_output_frames"] = idleFrames,
-        ["max_execution_ms"] = maxMilliseconds, ["error"] = error, ["blocked"] = blocked, ["memory"] = memory.DeepClone() };
+        ["max_execution_ms"] = maxMilliseconds, ["mean_execution_ms"] = frames == 0 ? 0 : totalMilliseconds / frames,
+        ["error"] = error, ["blocked"] = blocked, ["memory"] = memory.DeepClone() };
 }

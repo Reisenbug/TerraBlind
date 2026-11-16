@@ -530,7 +530,8 @@ public sealed partial class BehaviorTrial : ModSystem
     }
     public override void PreUpdatePlayers()
     {
-        if (!enabled || Main.gameMenu || Manual.On || FullQueenRun) return;
+        if (!enabled || Main.gameMenu || Manual.On
+            || FullQueenRun && Environment.GetEnvironmentVariable("TB_ISOLATE_PHYSICAL_INPUT") != "1") return;
         if (Environment.GetEnvironmentVariable("TB_IDLE_INPUT_PROBE") == "1")
         {
             Terraria.GameInput.PlayerInput.Triggers.Current.MouseLeft = true;
@@ -5650,6 +5651,157 @@ public sealed partial class BehaviorTrial : ModSystem
         }
     }
 
+    async Task FrameResourceTrial()
+    {
+        var found = await Call("find_tiles", new JsonObject { ["name"] = "Heart", ["n"] = 100, ["max_dist"] = 600 });
+        var setup = await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            int origin = (int)(p.Center.X / 16);
+            var hearts = found["tiles"].AsArray().Select(t =>
+            {
+                int x = t["x"].GetValue<int>(), y = t["y"].GetValue<int>(); var tile = Main.tile[x, y];
+                return new Point(x - tile.TileFrameX % 36 / 18, y - tile.TileFrameY % 36 / 18);
+            }).Distinct().Where(t => Math.Abs(t.X - origin) < 250 && t.Y > Main.worldSurface && t.Y < Main.worldSurface + 350).ToArray();
+            var pairs = (from a in hearts from b in hearts where a.X < b.X || a.X == b.X && a.Y < b.Y
+                orderby Vector2.DistanceSquared(a.ToVector2(), b.ToVector2()) select (a, b)).ToArray();
+            Point[] selected = null; Vector2 stand = Vector2.Zero;
+            foreach (var pair in pairs)
+            {
+                if (Vector2.Distance(pair.a.ToVector2(), pair.b.ToVector2()) > 60) continue;
+                for (int d = 5; d <= 12 && selected == null; d++)
+                    for (int dx = -d; dx <= d && selected == null; dx++)
+                        for (int dy = -d; dy <= d; dy++)
+                        {
+                            if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != d) continue;
+                            int x = pair.a.X + dx, y = pair.a.Y + dy;
+                            if (!WorldGen.InWorld(x, y + 1, 20)) continue;
+                            var ground = Main.tile[x, y + 1];
+                            var position = new Vector2(x * 16 + 8 - p.width / 2f, (y + 1) * 16 - p.height);
+                            if (!ground.HasUnactuatedTile || !Main.tileSolid[ground.TileType]
+                                || Collision.SolidCollision(position, p.width, p.height)) continue;
+                            selected = new[] { pair.a, pair.b }; stand = position; break;
+                        }
+                if (selected != null) break;
+            }
+            if (selected == null) throw new Exception("No nearby natural crystal pair and existing standing position found");
+            p.Teleport(stand); p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(stand.Y / 16);
+            p.inventory[0].SetDefaults(ItemID.CopperPickaxe); p.selectedItem = 0;
+            p.inventory[4].SetDefaults(ItemID.Starfury);
+            foreach (var item in p.inventory.Where(i => i.type == ItemID.LifeCrystal)) item.TurnToAir();
+            Combat.Enabled = Dodge.Enabled = false; FightCoordinator.Stop();
+            return new JsonObject { ["resources"] = new JsonArray(selected.Select(t => (JsonNode)new JsonObject {
+                    ["x"] = t.X, ["y"] = t.Y, ["tile_type"] = TileID.Heart, ["item_type"] = ItemID.LifeCrystal }).ToArray()),
+                ["start_x"] = stand.X, ["start_y"] = stand.Y, ["target_health"] = 140,
+                ["pick_slot"] = 0, ["defense_slot"] = 4, ["terrain_edits"] = 0, ["supplied_crystals"] = 0 };
+        });
+        var timer = Stopwatch.StartNew(); var samples = new JsonArray(); var phases = new JsonArray();
+        int frames = 0, wait = 0, longest = 0, streak = 0, navWait = 0, consumed = 0, removed = 0;
+        string phase = null; Vector2 previous = Vector2.Zero; long began = -1, lastProgress = 0;
+        FrameProgram.Set(new JsonObject { ["data"] = setup.DeepClone() });
+        await OnMain(() =>
+        {
+            previous = Main.LocalPlayer.position;
+            BoundaryInputPlayer.ObserveInput = p =>
+            {
+                if (!FrameProgram.Active) return;
+                if (began < 0) began = lastProgress = timer.ElapsedMilliseconds;
+                frames++;
+                int missing = setup["resources"].AsArray().Count(t => !Main.tile[t["x"].GetValue<int>(), t["y"].GetValue<int>()].HasTile);
+                int count = p.inventory.Where(i => i.type == ItemID.LifeCrystal).Sum(i => i.stack) + p.ConsumedLifeCrystals;
+                bool moving = Vector2.Distance(p.position, previous) > .01f;
+                if (moving || count > consumed || missing > removed) lastProgress = timer.ElapsedMilliseconds;
+                consumed = count; removed = missing;
+                bool mining = p.controlUseItem && p.HeldItem.pick > 0 && WorldGen.InWorld(Player.tileTargetX, Player.tileTargetY)
+                    && Main.tile[Player.tileTargetX, Player.tileTargetY].HasTile;
+                bool waiting = !moving && !mining && p.itemAnimation == 0;
+                if (waiting) { wait++; streak++; longest = Math.Max(longest, streak); if (RecedingNav.Active) navWait++; } else streak = 0;
+                previous = p.position;
+                var memory = FrameProgram.Snapshot()["memory"];
+                string next = memory?["phase"]?.ToString();
+                if (next != phase)
+                {
+                    phase = next;
+                    phases.Add(new JsonObject { ["elapsed_ms"] = timer.ElapsedMilliseconds, ["phase"] = next,
+                        ["memory"] = memory?.DeepClone(), ["x"] = p.position.X, ["y"] = p.position.Y,
+                        ["max_hp"] = p.statLifeMax, ["collected"] = count });
+                }
+                if (frames % 15 == 0) samples.Add(new JsonObject { ["elapsed_ms"] = timer.ElapsedMilliseconds,
+                    ["x"] = p.position.X, ["y"] = p.position.Y, ["hp"] = p.statLife, ["max_hp"] = p.statLifeMax,
+                    ["slot"] = p.selectedItem, ["animation"] = p.itemAnimation, ["item_time"] = p.itemTime,
+                    ["use"] = p.controlUseItem, ["target_x"] = Player.tileTargetX, ["target_y"] = Player.tileTargetY,
+                    ["mouse_interface"] = p.mouseInterface, ["delay_use"] = p.delayUseItem,
+                    ["mouse_item_type"] = Main.mouseItem.type, ["focused"] = Main.hasFocus,
+                    ["mouse_left"] = Main.mouseLeft, ["mouse_right"] = Main.mouseRight,
+                    ["void_crystals"] = p.bank4.item.Where(i => i.type == ItemID.LifeCrystal).Sum(i => i.stack),
+                    ["mouse_crystals"] = Main.mouseItem.type == ItemID.LifeCrystal ? Main.mouseItem.stack : 0,
+                    ["crystal_drops"] = new JsonArray(Main.item.Where(i => i != null && i.active && i.type == ItemID.LifeCrystal)
+                        .Select(i => (JsonNode)new JsonObject { ["x"] = i.Center.X, ["y"] = i.Center.Y,
+                            ["vx"] = i.velocity.X, ["vy"] = i.velocity.Y, ["stack"] = i.stack }).ToArray()),
+                    ["collected"] = count, ["removed"] = missing, ["navigation"] = RecedingNav.Active,
+                    ["phase"] = next, ["controller"] = FrameProgram.Snapshot() });
+            };
+            return true;
+        });
+        using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        string outcome = "unknown";
+        string repair = "";
+        if (Environment.GetEnvironmentVariable("TB_FRAME_RESOURCE_REPAIR") is string repairPath)
+        {
+            var prior = JsonNode.Parse(File.ReadAllText(repairPath));
+            repair = "\n修订上一版策略：" + prior["calls"].AsArray().Last()["code"];
+            if (Environment.GetEnvironmentVariable("TB_FRAME_RESOURCE_EVIDENCE") is string evidencePath)
+            {
+                var evidence = JsonNode.Parse(File.ReadAllText(evidencePath));
+                repair += "\n实际失败证据：" + new JsonObject { ["outcome"] = evidence["outcome"]?.DeepClone(),
+                    ["collected"] = evidence["collected"]?.DeepClone(), ["max_hp"] = evidence["max_hp"]?.DeepClone(),
+                    ["last_observation"] = evidence["samples"].AsArray().Last().DeepClone() }.ToJsonString();
+            }
+        }
+        try
+        {
+            if (Environment.GetEnvironmentVariable("TB_FRAME_RESOURCE_REPLAY") is string replay)
+            {
+                var authored = JsonNode.Parse(File.ReadAllText(replay));
+                await Call("set_combat", new JsonObject { ["frame_program"] = new JsonObject {
+                    ["code"] = authored["calls"].AsArray().Last()["code"].DeepClone() } });
+            }
+            else await AuthorFrameProgram("", lifetime.Token, "为天然资源采集编写逐帧反馈策略。请调用install安装完整tick(s)，安装后程序自主运行。"
+                + "s.data.resources按顺序给出两颗真实生命水晶的x/y格坐标、tile_type和item_type；s.data.target_health=140。"
+                + "目标是靠近、挖掉、拾取、使用两颗水晶，直到player.max_hp达到目标。每步以真实tiles、drops、inventory和max_hp验证，memory.phase明确记录当前阶段。"
+                + "s.player含x/y/width/height/vx/vy/hp/max_hp/item_animation/item_time/release_use/selected_slot；inventory含slot/type/stack/pick/damage。"
+                + "tiles为附近17x16格的非空方块，含x/y/type/reachable/mineable；drops含type/stack和像素x/y；enemies含像素x/y、vx/vy、hp、damage。"
+                + "输出keys方向键、slot、use、aim格坐标、memory，完成时done:true。可以边移动边使用，物品切换由执行器在动画结束后完成。"
+                + "输出navigate:{x,y},follow_navigation:true发起后台导航，同一目标持续沿用，navigation.active/result给真实状态；"
+                + "navigate.mode默认interact，只到交互范围；mode:pickup会沿用原生落脚导航走近掉落物。navigation.mode返回当前语义。"
+                + "观察到的drops提供id/generation和vx/vy，离开近身范围后继续跟踪到失效。移动目标需要稳定路线，避免每帧更换导航点。"
+                + "结束导航后输出直接keys/use接管近身操作。交互距离和拾取距离不同，请以实际掉落物位置与背包核验拾取。"
+                + "s.data.pick_slot是铜镐，defense_slot是星怒；应对近敌时继续推进采集。人物像素左上角，方块每格16像素，y向下。"
+                + "JavaScript函数每帧同步执行，直接使用所给观察，保存进度到memory。数据：" + setup.ToJsonString() + repair);
+            while (timer.Elapsed.TotalSeconds < 180 && FrameProgram.Active && !Main.LocalPlayer.dead)
+            {
+                if (began >= 0 && timer.ElapsedMilliseconds - lastProgress > 12000) { outcome = "no_progress_12s"; break; }
+                await Task.Delay(100);
+            }
+            if (outcome == "unknown") outcome = Main.LocalPlayer.dead ? "death" : Main.LocalPlayer.statLifeMax >= 140 ? "completed" : "incomplete";
+        }
+        finally
+        {
+            var proof = await OnMain(() =>
+            {
+                BoundaryInputPlayer.ObserveInput = null; var p = Main.LocalPlayer;
+                var result = new JsonObject { ["outcome"] = outcome, ["elapsed_ms"] = timer.ElapsedMilliseconds,
+                    ["preparation_ms"] = began, ["frames"] = frames, ["waiting_frames"] = wait, ["max_wait_streak_frames"] = longest,
+                    ["navigation_wait_frames"] = navWait, ["collected"] = consumed, ["removed"] = removed,
+                    ["hp"] = p.statLife, ["max_hp"] = p.statLifeMax, ["dead"] = p.dead,
+                    ["setup"] = setup.DeepClone(), ["controller"] = FrameProgram.Snapshot(), ["phases"] = phases, ["samples"] = samples };
+                FrameProgram.Clear(); return result;
+            });
+            File.WriteAllText(Path.Combine(Main.SavePath, "frame-resource-proof.json"), proof.ToJsonString());
+            Console.WriteLine("FRAME_RESOURCE_RECORDED outcome=" + outcome + " frames=" + frames + " max_wait=" + longest);
+        }
+    }
+
     async Task FrameProgramTrial()
     {
         int observed = 0, stalled = 0, maximum = 0, streak = 0;
@@ -5716,7 +5868,7 @@ public sealed partial class BehaviorTrial : ModSystem
         }
     }
 
-    async Task AuthorFrameProgram(string current, CancellationToken token)
+    async Task AuthorFrameProgram(string current, CancellationToken token, string request = null)
     {
         using var author = new CodexAgent();
         var timer = Stopwatch.StartNew(); var calls = new JsonArray();
@@ -5726,12 +5878,12 @@ public sealed partial class BehaviorTrial : ModSystem
             """).AsArray();
         try
         {
-            await author.RunAsync("改进正在执行的Terraria行进策略。目标由s.data.direction和s.data.target像素x提供。"
+            await author.RunAsync(request ?? ("改进正在执行的Terraria行进策略。目标由s.data.direction和s.data.target像素x提供。"
                 + "人物正穿越天然地形。保证每帧都有合理操作，利用跳跃和必要挖掘，减少撞墙。slot=0是铜镐。"
                 + "tick(s)每帧同步运行，无工具调用，返回{keys,slot,use,aim:{x,y},memory,done}。"
                 + "s.player含x/y/width/height/vx/vy/hp/item_animation/selected_slot；s.tiles含世界格x/y/type/solid/platform/liquid/liquid_type/mineable。"
                 + "人物像素坐标左上角，地图每格16像素，y向下。memory可保留状态。只需调用install安装完整函数。"
-                + "现有策略在你思考时继续运行。\n" + current,
+                + "现有策略在你思考时继续运行。\n" + current),
                 Config.I.AgentCodexPath, Path.Combine(Main.SavePath, "TerraBlindAgent"), "gpt-6.1-sol",
                 "你编写实时反馈控制程序。每帧依据新观测给出操作，保持策略通用，目标通过data传入。",
                 schema, async (name, args, ct) =>
@@ -5752,6 +5904,8 @@ public sealed partial class BehaviorTrial : ModSystem
 
     async Task QueenGoalTrial()
     {
+        if (Environment.GetEnvironmentVariable("TB_FRAME_RESOURCE_TRIAL") == "1")
+        { await FrameResourceTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_FRAME_PROGRAM_TRIAL") == "1")
         { await FrameProgramTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_DECISION_COMPARE") is string comparison)

@@ -1465,6 +1465,38 @@ static class ScriptTests
                 "a bad policy replacement interrupted the last working control program");
             bool frameManual = Manual.On; Manual.On = true;
             Check(!FrameProgram.Apply(framePlayer), "frame policy overrode manual input"); Manual.On = frameManual;
+            var savedItem = framePlayer.inventory[7];
+            int savedSlot = framePlayer.selectedItem;
+            try
+            {
+                framePlayer.inventory[7] = new Terraria.Item { type = 29, stack = 1, healLife = 20 };
+                framePlayer.selectedItem = 0; framePlayer.itemAnimation = framePlayer.itemTime = 12;
+                FrameProgram.Set(new JsonObject { ["code"] = "function tick(s){if(!s.inventory.some(i=>i.type===29))throw new Error('missing inventory');return {keys:['right'],slot:7,use:true};}" });
+                Check(FrameProgram.Apply(framePlayer) && framePlayer.controlRight && !framePlayer.controlUseItem
+                    && framePlayer.selectedItem == 0, "a pending slot switch restarted the previous item's animation");
+                framePlayer.itemAnimation = framePlayer.itemTime = 0;
+                framePlayer.mouseInterface = framePlayer.delayUseItem = true;
+                Check(FrameProgram.Apply(framePlayer) && framePlayer.selectedItem == 7 && framePlayer.controlUseItem,
+                    "completed animation did not hand item use to the requested slot");
+                Check(!framePlayer.mouseInterface && !framePlayer.delayUseItem,
+                    "passive interface hover swallowed frame-policy item use");
+                int starts = RecedingNav.Starts;
+                FrameProgram.Set(new JsonObject { ["code"] = "function tick(s){return {navigate:{x:20,y:30},follow_navigation:true,memory:{phase:'travel'}};}" });
+                for (int i = 0; i < 60; i++) Check(!FrameProgram.Apply(framePlayer) && RecedingNav.Active,
+                    "native navigation did not retain frame-level execution ownership");
+                Check(RecedingNav.Starts == starts + 1 && FrameProgram.Snapshot()["memory"]["phase"].ToString() == "travel",
+                    "the frame policy restarted navigation on every observation");
+                FrameProgram.Set(new JsonObject { ["code"] = "function tick(s){return {navigate:{x:20,y:30,mode:'pickup'},follow_navigation:true};}" });
+                FrameProgram.Apply(framePlayer);
+                Check(RecedingNav.LastMode == RecedingNav.Mode.Snap && RecedingNav.Starts == starts + 2,
+                    "pickup navigation reused the interaction-distance arrival condition");
+                FrameProgram.Clear(); Check(!RecedingNav.Active, "stopping the policy left its navigation running");
+            }
+            finally
+            {
+                framePlayer.inventory[7] = savedItem; framePlayer.selectedItem = savedSlot;
+                framePlayer.itemAnimation = framePlayer.itemTime = 0;
+            }
         }
         finally { FrameProgram.Clear(); }
         foreach (string scenario in new[] { "pending", "move", "retain", "expired", "clear", "blocked", "keep", "right", "jump" })
@@ -2049,6 +2081,7 @@ static class ScriptTests
             HttpServerSystem.Handler = (path, _) =>
             {
                 if (path == "/act") actions++;
+                if (path == "/act_status" && release && actions == 2) Manual.On = true;
                 return (200, path == "/act_status"
                     ? (release ? "{\"active\":false,\"outcome\":\"done\"}" : "{\"active\":true}") : "{}");
             };
@@ -2069,7 +2102,8 @@ static class ScriptTests
             var result = JsonNode.Parse(await main);
             Check(result["ok"]?.GetValue<bool>() == true && result["value"]?["outcome"]?.ToString() == "done"
                 && actions == 2 && !AgentTools.ControlSession.PrimaryActive,
-                "foreground handoff replayed idle work or leaked control: " + result);
+                "foreground handoff replayed idle work or leaked control: actions=" + actions
+                    + " primary=" + AgentTools.ControlSession.PrimaryActive + " " + result);
             await idle;
         }
         finally
