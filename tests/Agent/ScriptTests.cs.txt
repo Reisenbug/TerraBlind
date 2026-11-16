@@ -180,12 +180,13 @@ static class ScriptTests
         finally { AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); agent.Unload(); }
     }
 
-    static async Task SurvivalCombatPolicy(bool feedbackIdle = false)
+    static async Task SurvivalCombatPolicy(bool feedbackIdle = false, bool feedbackNavigation = false)
     {
         foreach (string scenario in new[] { "navigation", "idle", "idle_after_place", "gather_scan", "fight", "boss", "unchaseable_enemy", "projectile_only", "fall_only", "quiet", "equipment_review", "ranged_review", "progress_review", "progress_stale" })
         {
             bool boss = scenario == "boss", idle = scenario is "idle" or "idle_after_place" or "fight" or "gather_scan";
-            bool feedbackScope=feedbackIdle&&idle&&scenario!="gather_scan";
+            bool feedbackScope=(feedbackIdle&&idle&&scenario!="gather_scan" || feedbackNavigation&&!idle)
+                &&scenario!="fall_only";
             bool progress = scenario.StartsWith("progress_");
             int decisions = 0, updates = 0, reviews = 0, phase = 0;
             var combat = JsonNode.Parse("""
@@ -202,7 +203,8 @@ static class ScriptTests
             if (scenario == "projectile_only") combat["projectiles"] = new JsonArray(new JsonObject { ["damage"] = 20 });
             if (scenario == "fall_only") combat["fall_forecast"] = new JsonObject { ["damage"] = 50, ["frames"] = 20 };
             var result = await AgentScript.Run("let clock=100000;Date.now=()=>clock+=" + (progress ? "2000" : "0") + ";(function(input){" + ScriptLibrary.Example("safety_reactions")["code"]
-                + "})({feedback_idle:" + (feedbackIdle ? "true" : "false") + "});return tool('nav_to');", 5, (_, _) => { }, async (name, args, token) =>
+                + "})({feedback_idle:" + (feedbackIdle ? "true" : "false")
+                + ",feedback_navigation:" + (feedbackNavigation ? "true" : "false") + "});return tool('nav_to');", 5, (_, _) => { }, async (name, args, token) =>
                 {
                     if (name == "nav_to")
                     {
@@ -241,7 +243,10 @@ static class ScriptTests
                             Check(feedbackScope, "feedback motor replaced a navigation-owned controller");
                             return decisions == 1 ? "{\"status\":\"pending\"}" : new JsonObject {
                                 ["status"] = "ready", ["request_id"] = 9, ["request_age_ms"] = 100,
-                                ["result"] = JsonNode.Parse("""{"elapsed_ms":20,"answers":{"movement":{"choice":"left"},"jump":{"noul":0.1}}}""") }.ToJsonString();
+                                ["result"] = new JsonObject { ["elapsed_ms"] = 20, ["answers"] = new JsonObject {
+                                    ["movement"] = new JsonObject { ["choice"] = "left" }, ["jump"] = new JsonObject { ["noul"] = .1 },
+                                    ["attention"] = new JsonObject { ["choice"] = scenario == "equipment_review" ? "equipment"
+                                        : scenario == "ranged_review" ? "ranged_weapon" : "continue" } } } }.ToJsonString();
                         }
                         if (progress)
                         {
@@ -270,7 +275,9 @@ static class ScriptTests
                                 + (scenario == "equipment_review" ? "equipment" : scenario == "ranged_review" ? "ranged_weapon" : "continue") + "\"}}}") }.ToJsonString();
                     }
                     if(name == "set_combat" && args["movement_intent"] != null)
-                    { Check(feedbackScope, "movement intent escaped idle/fight scope"); updates++; return "{}"; }
+                    { Check(feedbackScope && (args["movement_intent"]["active"]?.GetValue<bool>() == false
+                        || args["movement_intent"]["allow_navigation"]?.GetValue<bool>() == feedbackNavigation),
+                        "movement intent escaped its configured scope"); updates++; return "{}"; }
                     Check(name == "act" && args["combat_candidate"]?["plan_id"]?.ToString() == "avoid", "combat policy lost native candidate validation");
                     updates++; return "{}";
                 }, _ => Task.CompletedTask, default,
@@ -278,10 +285,12 @@ static class ScriptTests
             bool inactive = boss || scenario == "quiet";
             Check(result["ok"].GetValue<bool>() && decisions == (inactive ? 0 : 3) && updates == (inactive || progress ? 0 : feedbackScope ? 3 : scenario == "idle_after_place" ? 1 : 2)
                 && reviews == (scenario is "equipment_review" or "ranged_review" or "progress_review" ? 1 : 0),
-                "default combat policy blocked pending navigation, repeated a response or touched boss movement: " + result);
+                "default combat policy blocked pending navigation, repeated a response or touched boss movement: "
+                    + scenario + " feedback=" + feedbackIdle + "/" + feedbackNavigation + " decisions=" + decisions + " updates=" + updates + " " + result);
         }
         Console.WriteLine("PASS: default survival uses shared combat candidates during navigation and idle, deduplicates execution and preserves boss control");
         if(!feedbackIdle) await SurvivalCombatPolicy(feedbackIdle: true);
+        else if(!feedbackNavigation) await SurvivalCombatPolicy(feedbackIdle: true, feedbackNavigation: true);
     }
 
     static async Task DefaultControlScope()
@@ -1564,6 +1573,43 @@ static class ScriptTests
             Check(!player.controlRight && FeedbackControl.Snapshot()["blocked_reason"]?.ToString() == "primary_action:act",
                 "feedback motor overrode an explicit movement action or hid its owner");
             AgentTools.ControlSession.End(ticket);
+            AgentTools.ControlSession.Begin("nav_to", null, out long navigationTicket);
+            RecedingNav.Active = true;
+            int interrupted = RecedingNav.Interrupts, reset = VanillaNavBridge.Resets;
+            var navigationIntent = JsonNode.Parse("""{"context":"navigation","request_id":3,"keys":["right"],"expires_ms":2000}""").AsObject();
+            FeedbackControl.Set(navigationIntent);
+            Check(!FeedbackControl.ApplyNavigation(player) && RecedingNav.Interrupts == interrupted,
+                "feedback motor took navigation without explicit delegation");
+            navigationIntent["allow_navigation"] = true;
+            FeedbackControl.Set(navigationIntent);
+            StateSpacePlanner.ReservesItemUse = true;
+            Check(!FeedbackControl.ApplyNavigation(player) && RecedingNav.Interrupts == interrupted,
+                "feedback motor interrupted a planned placement");
+            StateSpacePlanner.ReservesItemUse = false;
+            StateSpacePlanner.MovementControls = new[] { (int)(VanillaKeys.Right | VanillaKeys.Jump) };
+            player.controlJump = true;
+            Check(!FeedbackControl.ApplyNavigation(player) && player.controlJump
+                && RecedingNav.Interrupts == interrupted
+                && FeedbackControl.Snapshot()["blocked_reason"]?.ToString() == "following_navigation",
+                "matching horizontal feedback discarded the route's queued jump");
+            StateSpacePlanner.MovementControls = Array.Empty<int>();
+            for (int frame = 0; frame < 30; frame++)
+            {
+                Terraria.Main.GameUpdateCount++;
+                player.controlRight = false;
+                Check(FeedbackControl.ApplyNavigation(player) && player.controlRight,
+                    "navigation feedback released input between model responses");
+                Check(RecedingNav.Active && AgentTools.ControlSession.NavigationExecution == navigationTicket,
+                    "feedback replaced the original navigation action");
+            }
+            Check(RecedingNav.Interrupts == interrupted + 1 && VanillaNavBridge.Resets == reset + 1,
+                "navigation feedback repeatedly discarded planning state");
+            FeedbackControl.Clear();
+            Check(!FeedbackControl.ApplyNavigation(player) && RecedingNav.Active
+                && !FeedbackControl.Snapshot()["navigation_interrupted"].GetValue<bool>(),
+                "feedback release failed to hand back the retained navigation");
+            AgentTools.ControlSession.End(navigationTicket); RecedingNav.Active = false;
+            player.controlRight = false;
             FeedbackControl.Set(JsonNode.Parse("""{"context":"expiry","request_id":2,"keys":["right"],"expires_ms":1}""").AsObject());
             await Task.Delay(5);
             FeedbackControl.Apply(player);
@@ -1572,6 +1618,8 @@ static class ScriptTests
         finally
         {
             FeedbackControl.Clear(); Manual.On = manual; AgentPermissions.Dodge = dodge;
+            StateSpacePlanner.ReservesItemUse = false; RecedingNav.Active = false;
+            StateSpacePlanner.MovementControls = Array.Empty<int>();
             (player.controlLeft, player.controlRight, player.controlJump) = controls;
         }
         Console.WriteLine("PASS: feedback motor holds input across model waits, expires and yields to manual control, permissions and explicit actions");

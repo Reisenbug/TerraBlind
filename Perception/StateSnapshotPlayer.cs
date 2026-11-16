@@ -454,10 +454,12 @@ namespace TerraBlind
 			{
 				Player.controlUseItem = false;
 			}
-			ApplyPrimaryControls();
+			bool feedbackNavigation = Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On
+				&& FeedbackControl.ApplyNavigation(Player);
+			if (!feedbackNavigation) ApplyPrimaryControls();
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On)
 			{
-				FeedbackControl.Apply(Player);
+				if (!feedbackNavigation) FeedbackControl.Apply(Player);
 				if ((NativeAgent.Processing || FightCoordinator.IsActive) && (Player.controlUseItem || beforePrimary)
 					&& Player.itemAnimation == 0 && Player.itemTime == 0 && CombatLoadout.Usable(Player.HeldItem)
 					&& Main.GameUpdateCount - _primaryWeaponTraceTick >= 16)

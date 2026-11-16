@@ -26,10 +26,10 @@ public sealed class ScriptLibrary
     public static JsonObject Example(string name)
     {
         if (name == "feedback_combat") return Template(name,
-            "实验性持续反馈控制。input含context、destination、instruction和上次intent/last_request。Jev判断移动意图和武器，逐帧执行器持续按键，脚本异步更新；现场事实包括实际生效帧数及受阻帧数。每个意图最多2秒，显式动作和手动输入优先。这一路径没有完整落地安全证明，需以实际受伤和推进效果评估。",
+            "实验性持续反馈控制。input含context、destination、instruction和上次intent/last_request；allow_navigation允许临时接管行进。Jev判断移动意图和武器，逐帧执行器持续按键，脚本异步更新；现场事实包括实际生效帧数、受阻帧数和已排队的导航按键。导航已满足移动意图时保留原轨迹。每个意图最多2秒，手动输入优先。需以实际受伤和推进效果评估。",
             """
             const keys={left:['left'],right:['right']};
-            let intent=input.intent,request=input.last_request;
+            let intent=input.intent,request=input.last_request,agentReview=null;
             const stop=status=>{
               tool('set_combat',{movement_intent:{active:false}});
               return {status,request_id:request,intent:null};
@@ -42,16 +42,21 @@ public sealed class ScriptLibrary
                 .map(w=>[w.type,w])).values()];
               const weaponChoices={keep:'Keep the current weapon selection',...Object.fromEntries(weapons.map(w=>['item_'+w.type,w.name]))};
               const questions={movement:{type:'choice',instructions:
-                'Which horizontal input best handles the incoming enemies and projectiles while advancing the task? Read actual terrain rows, velocity, weapon reach and destination. The motor continuously holds horizontal input until updated, for at most two seconds. movement_intent reports actual applied_frames and consecutive stalled_frames. Jumping is judged independently. Choose keep_current when the existing route or native reflex is better. Terrain is current observation, not a predicted safe landing.',
+                'Which horizontal input best handles the incoming enemies and projectiles while advancing the task? navigation_controls shows already queued route inputs, including jumps and drop-through. Choose keep_current to retain that trajectory when it already handles the encounter. A left/right choice can replace the trajectory with continuous direct steering for at most two seconds. Read terrain rows, velocity, weapon reach and destination. movement_intent reports actual applied_frames and consecutive stalled_frames. Jumping is judged independently. Terrain is current observation, not a predicted safe landing.',
                 criteria:{keep_current:'Keep the current navigation or native reflex',left:'Hold left',right:'Hold right'}},
                 jump:{type:'noul',instructions:
-                  'Would pressing jump now clear the immediate obstacle or reduce an imminent collision with enemies or stingers? Judge the benefit using current vertical motion, overhead terrain, jump availability, landing hazards and useful route progress. The press lasts 250ms, followed by release.'}};
+                  'Would pressing jump now clear the immediate obstacle or reduce an imminent collision with enemies or stingers? Judge the benefit using current vertical motion, overhead terrain, jump availability, landing hazards and useful route progress. The press lasts 250ms, followed by release.'},
+                attention:{type:'choice',instructions:
+                  'Do current equipment and local terrain permit useful progress? Request Agent review when a change in preparation is worthwhile. Movement and attacks continue during review.',
+                  criteria:{continue:'Continue with current preparation.',ranged_weapon:'Prepare a practical ranged attack and usable ammunition.',
+                    equipment:'Improve or equip armor, weapons or supplies.',terrain:'Change local terrain or the approach plan.'}}};
               if(weapons.length)questions.weapon={type:'choice',instructions:
                 'Which available weapon can practically hit these enemies from the current terrain and distance? Account for projectile collision, reach, ammo and attack speed.',criteria:weaponChoices};
               const r=tool('jev_judge',{channel:'feedback_combat',context:input.context,interval_ms:input.interval_ms??250,
                 max_age_ms:input.max_age_ms??1000,questions,state:{instruction:input.instruction,destination:input.destination,
                   player:p,execution:input.execution,targets:c.targets.map(({weapons,...n})=>n),projectiles:c.projectiles,weapons,
                   terrain:c.terrain,recent_damage:c.recent_damage,fall_forecast:c.fall_forecast,movement_intent:c.movement_intent,
+                  navigation_controls:c.navigation_controls,
                   coordinates:'Player pos and velocity use world pixels and pixels/frame. Enemy/projectile positions and destination use tiles, 16 pixels/tile. x increases right; y increases down.'}});
               if(r.status==='failed')return {...stop('failed'),error:r.result.error};
               if(r.status==='ready'&&r.request_id!==request){
@@ -59,19 +64,26 @@ public sealed class ScriptLibrary
                 intent={context:input.context,choice:r.result.answers.movement.choice,
                   jump:(r.result.answers.jump?.noul??0)>.5,
                   weapon:r.result.answers.weapon?.choice,expires:Date.now()+Math.max(0,(input.max_age_ms??1000)-(r.request_age_ms??0))};
+                const attention=r.result.answers.attention?.choice;
+                if(attention&&attention!=='continue')agentReview={
+                  key:attention+':'+(attention==='terrain'?input.context:weapons.map(w=>w.type+':'+w.has_ammo).sort().join(',')),
+                  reason:attention==='ranged_weapon'?'Prepare a practical ranged attack and usable ammunition':'Decision model requests '+attention+' preparation',
+                  evidence:{request_id:request,tick:c.tick,player:p,weapons,targets:c.targets.map(({weapons,...n})=>n),terrain:c.terrain}};
                 print({decision:'feedback_combat',request,choice:intent.choice,jump:intent.jump,weapon:intent.weapon,model_ms:r.result.elapsed_ms});
               }
               if(!intent||intent.context!==input.context||Date.now()>=intent.expires)
                 return stop(r.status);
               const desired=[...(keys[intent.choice]??[]),...(intent.jump?['jump']:[])];
               const settings={movement_intent:desired.length?{context:input.context,request_id:request,
-                keys:desired,expires_ms:Math.min(2000,Math.max(1,Math.floor(intent.expires-Date.now())))}:{active:false}};
+                keys:desired,allow_navigation:input.allow_navigation===true,
+                expires_ms:Math.min(2000,Math.max(1,Math.floor(intent.expires-Date.now())))}:{active:false}};
               if(intent.weapon?.startsWith('item_')){
                 const type=Number(intent.weapon.slice(5));
                 if(weapons.some(w=>w.type===type))settings.weapon_type=type;
               }
               const result=tool('set_combat',settings);
-              return {status:result.error?'blocked':'submitted',request_id:request,intent:result.error?null:intent,evidence:result.movement_intent};
+              return {status:result.error?'blocked':'submitted',request_id:request,intent:result.error?null:intent,
+                agent_review:agentReview,evidence:result.movement_intent};
             """);
         if (name == "craft_batch") return Template(name,
             "连续制作并核验库存。input.items为1..8项{item_type,count}，count是期望随身库存总数；可选station:{x,y}为Agent选定的实际制作站坐标。先检查原生可制作状态，需要时到站后刷新，接着连续制作；已有数量跳过，部分成果保留。站位、材料或制作结果受阻时返回needs_review和证据。仍执行整趟安全策略。",
@@ -223,6 +235,7 @@ public sealed class ScriptLibrary
             """
             let survivalRequest=null,movementRequest=null,movementIntent=null,movementProgram=null,idleDestination=null,loadoutRequest=null,loadoutProgram=null;
             const feedbackIdle=typeof input!=='undefined'&&input?.feedback_idle===true;
+            const feedbackNavigation=typeof input!=='undefined'&&input?.feedback_navigation===true;
             let movementProgramName=null;
             let progressRequest=null,progressPollAt=0,lastProgressReview=null;
             const movementContext='survival-combat:'+Date.now();
@@ -248,14 +261,17 @@ public sealed class ScriptLibrary
               if(!c.boss_present&&(destination||idle)&&(c.targets?.some(n=>n.contact_damage>0&&n.distance_tiles<12)
                   ||c.projectiles?.length||(c.fall_forecast?.damage??0)>0)){
                 if(idle) destination=idleDestination??={x:Math.floor(p.pos.x/16),y:Math.floor(p.pos.y/16)};
-                const selectedProgram=idle&&feedbackIdle&&event.execution?.tool!=='gather'?'feedback_combat':'joint_combat';
+                const useFeedback=(idle&&feedbackIdle&&event.execution?.tool!=='gather'
+                  ||feedbackNavigation&&event.execution?.tool==='nav_to')
+                  &&(c.targets?.some(n=>n.contact_damage>0)||c.projectiles?.length);
+                const selectedProgram=useFeedback?'feedback_combat':'joint_combat';
                 if(movementProgramName!==selectedProgram){
                   movementProgram=tool('script_program',{operation:'get',name:selectedProgram});
                   movementProgramName=selectedProgram;movementRequest=null;movementIntent=null;
                 }
                 const goal=tool('get_state',{fields:['codex_goal']}).codex_goal;
                 const intent=skill(selectedProgram,movementProgram.revision,{context:movementContext+':'+(idle?'idle:':'route:')+destination.x+':'+destination.y,
-                  destination,execution:event.execution,allow_cover:!construction,
+                  destination,execution:event.execution,allow_cover:!construction,allow_navigation:feedbackNavigation,
                   instruction:goal?.native?.objective??'Continue the current task while staying alive.',last_request:movementRequest,intent:movementIntent});
                 movementRequest=intent.request_id??movementRequest;
                 movementIntent=intent.intent??null;

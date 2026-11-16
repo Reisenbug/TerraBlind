@@ -352,7 +352,14 @@ namespace TerraBlind
     public static class PlaceAction { public static bool IsRunning; }
     public static class PlaceCoordinator { public static bool IsActive; }
     public static class PlaceWalls { public static bool IsRunning; }
-    public static class StateSpacePlanner { public static bool PreserveTerrain, ReservesItemUse; }
+    public enum VanillaKeys { None = 0, Left = 1, Right = 2, Jump = 4, Up = 8, Down = 16 }
+    public static class StateSpacePlanner
+    {
+        public static bool PreserveTerrain, ReservesItemUse;
+        public static int[] MovementControls = Array.Empty<int>();
+        internal static int[] PeekMovementControls(int maxFrames, bool traceUnavailable = true) => MovementControls.Take(maxFrames).ToArray();
+        internal static (int Direction, float TargetX, float ArrivalPixels)? PeekWalkIntent() => null;
+    }
     public static class CombatForecast
     {
         public static bool ReservesRoutePrefix;
@@ -365,7 +372,15 @@ namespace TerraBlind
         public static Task<JsonObject> Refresh(JsonObject args, Func<JsonObject> observe, CancellationToken token) => RefreshHandler?.Invoke(args, token) ?? Task.FromResult(args);
         public static JsonObject Receipt(JsonObject args, JsonObject result) => result;
     }
-    public static class VanillaNavBridge { public static bool Enabled; public static string Stage = "Moving"; }
+    public static class VanillaNavBridge
+    {
+        public static bool Enabled, TerrainOwned;
+        public static string Stage = "Moving";
+        public static int Resets;
+        public static void Reset() => Resets++;
+    }
+    public static class StuckSentinel { public static int Resets; public static void Reset() => Resets++; }
+    public static class MineCoordinator { public static bool IsActive; }
     public sealed class GameWoodHarvest : IWoodHarvestWorld
     {
         public System.Threading.Tasks.Task<System.Text.Json.Nodes.JsonObject> Observe(System.Threading.CancellationToken token) => throw new NotSupportedException("Game adapter requires engine");
@@ -436,6 +451,8 @@ namespace TerraBlind
         public static bool Active;
         public static bool FieldReady = true;
         public static string LastStop = "";
+        public static int Interrupts;
+        internal static void InterruptForSurvival() => Interrupts++;
         public static void Start(int x, int y) => Active = true;
         public static void Stop() => Active = false;
     }

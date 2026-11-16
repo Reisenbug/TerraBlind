@@ -2901,6 +2901,11 @@ public static partial class AgentTools
             .OrderBy(n => Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center)).Take(8);
         return new JsonObject { ["tick"] = Main.GameUpdateCount, ["recent_damage"] = LastDamage?.DeepClone(),
             ["movement_intent"] = FeedbackControl.Snapshot(),
+            ["navigation_controls"] = new JsonObject {
+                ["next_frames"] = new JsonArray(StateSpacePlanner.PeekMovementControls(12, traceUnavailable: false)
+                    .Select(keys => (JsonNode)JsonValue.Create(keys)).ToArray()),
+                ["walk_direction"] = StateSpacePlanner.PeekWalkIntent()?.Direction,
+                ["keys"] = "Bitmask: 1=left, 2=right, 4=jump, 8=up, 16=down. These are queued route inputs, not newly simulated predictions." },
             ["fall_forecast"] = NavigationSurvival.AssessFall(p),
             ["cover_candidates"] = CoverCandidates(p, radius),
             ["preferred_weapon_type"] = CombatLoadout.PreferredType,

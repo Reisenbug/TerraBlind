@@ -5361,9 +5361,10 @@ public sealed partial class BehaviorTrial : ModSystem
         if (Environment.GetEnvironmentVariable("TB_DECISION_FIGHT_TRIAL") == "1") { await FightDecisionComparison(variant); return; }
         bool intents = variant is "intent" or "intent_baseline";
         bool maneuvers = variant is "maneuver" or "maneuver_baseline";
+        bool survival = variant is "feedback" or "survival";
         bool tactics = intents || maneuvers || variant is "tactics" or "tactics_baseline";
         string[] dimensions = variant is "baseline" or "tactics_baseline" or "maneuver_baseline" or "intent_baseline" ? Array.Empty<string>() : variant.Split(',');
-        if (dimensions.Any(d => d is not ("weapon" or "movement" or "opportunity" or "combat" or "tactics" or "maneuver" or "intent")))
+        if (dimensions.Any(d => d is not ("weapon" or "movement" or "opportunity" or "combat" or "tactics" or "maneuver" or "intent" or "feedback" or "survival")))
             throw new ArgumentException("Unknown comparison dimension: " + variant);
         bool strongWeapon = Environment.GetEnvironmentVariable("TB_DECISION_STRONG_WEAPON") == "1";
         int startIndex = int.Parse(Environment.GetEnvironmentVariable("TB_DECISION_ROUTE_START") ?? "-1");
@@ -5455,6 +5456,8 @@ public sealed partial class BehaviorTrial : ModSystem
         bool candidateSmoke = Environment.GetEnvironmentVariable("TB_DECISION_CANDIDATE_SMOKE") == "1";
         if (candidateSmoke) await Call("set_combat", new JsonObject { ["auto_attack"] = true, ["weapon_type"] = ItemID.ThrowingKnife });
         string policyCode = "skill('comparison_reactions'," + program["revision"] + "," + initialConfig.ToJsonString() + ",'journey');";
+        if (survival) policyCode = "skill('safety_reactions',0,{feedback_idle:true,feedback_navigation:"
+            +(variant=="feedback"?"true":"false")+"});";
         if (candidateSmoke) policyCode = """
             let attempts=0;const used=new Set();
             const pose=p=>({x:p.pos.x,y:p.pos.y,vx:p.velocity.x,vy:p.velocity.y,hp:p.hp});
@@ -5526,6 +5529,8 @@ public sealed partial class BehaviorTrial : ModSystem
                     return new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["tick"] = Main.GameUpdateCount,
                         ["hp"] = p.statLife, ["dead"] = p.dead, ["x"] = p.position.X, ["y"] = p.position.Y,
                         ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["attack"] = p.controlUseItem,
+                        ["movement_intent"] = FeedbackControl.Snapshot(),
+                        ["execution"] = ((AgentControlSession)SessionField.GetValue(null)).Snapshot(),
                         ["item_animation"] = p.itemAnimation, ["held_type"] = p.HeldItem.type,
                         ["enemies"] = new JsonArray(Main.npc.Where(n => n.active && !n.friendly && n.damage > 0
                             && Vector2.Distance(n.Center, p.Center) < 400).Select(n => (JsonNode)new JsonObject
@@ -5909,15 +5914,17 @@ public sealed partial class BehaviorTrial : ModSystem
             NativeAgent.Submit(prompt);
             return true;
         });
-        if(Environment.GetEnvironmentVariable("TB_FEEDBACK_IDLE") == "1")
+        if(Environment.GetEnvironmentVariable("TB_FEEDBACK_IDLE") == "1"
+            ||Environment.GetEnvironmentVariable("TB_FEEDBACK_NAVIGATION") == "1")
         {
             JsonObject policy;
             do { await Task.Delay(16); policy = await Call("task_policy", new JsonObject { ["operation"] = "get" }); }
             while(policy["active"]?.GetValue<bool>() != true);
             var changed = await Call("task_policy", new JsonObject { ["operation"] = "set",
-                ["expected_revision"] = policy["revision"].DeepClone(), ["code"] = "skill('safety_reactions',0,{feedback_idle:true});" });
+                ["expected_revision"] = policy["revision"].DeepClone(), ["code"] = "skill('safety_reactions',0,{feedback_idle:true,feedback_navigation:"
+                    +(Environment.GetEnvironmentVariable("TB_FEEDBACK_NAVIGATION")=="1"?"true":"false")+"});" });
             if(changed["error"] != null) throw new Exception("Feedback policy setup failed: " + changed);
-            Console.WriteLine("QUEEN_FEEDBACK_IDLE_ENABLED");
+            Console.WriteLine("QUEEN_FEEDBACK_ENABLED navigation="+Environment.GetEnvironmentVariable("TB_FEEDBACK_NAVIGATION"));
         }
         File.WriteAllText(Path.Combine(Main.SavePath, "queen-start.json"), new JsonObject
         { ["prompt"] = prompt, ["before"] = before.DeepClone(), ["spawn"] = jungleSpawn?.DeepClone(), ["model"] = trialModel, ["effort"] = "medium",

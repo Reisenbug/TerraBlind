@@ -2224,11 +2224,11 @@ namespace TerraBlind
         internal static (int Direction, float TargetX, float ArrivalPixels)? PeekWalkIntent()
             => _walkActive ? (_walkDir, _walkTargetCx * 16f + 8f, WalkArrivePx) : null;
 
-        internal static int[] PeekMovementControls(int maxFrames)
+        internal static int[] PeekMovementControls(int maxFrames, bool traceUnavailable = true)
         {
             if (_walkActive || _execFrames == null || _airPlace.HasValue || _placeStall > 0 || _jpWaitFrames > 0)
             {
-                DiagLog.Write($"[ss-controls-unavailable] walk={_walkActive} frames={_execFrames?.Count ?? -1} index={_execIdx} air_place={_airPlace.HasValue} place_stall={_placeStall} jump_wait={_jpWaitFrames} steps={StepsActive} phase={_stepPhase}");
+                if (traceUnavailable) DiagLog.Write($"[ss-controls-unavailable] walk={_walkActive} frames={_execFrames?.Count ?? -1} index={_execIdx} air_place={_airPlace.HasValue} place_stall={_placeStall} jump_wait={_jpWaitFrames} steps={StepsActive} phase={_stepPhase}");
                 return Array.Empty<int>();
             }
             var controls = new List<int>();
