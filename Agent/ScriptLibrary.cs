@@ -222,6 +222,8 @@ public sealed class ScriptLibrary
             "默认任务反应：近敌时用原生推演候选联合选择短程走位与武器，覆盖导航和等待模型期间。复核并拆除可达压力板与近身接触伤害物，验证后续接。近期受击且血量下降时，Jev结合当前任务、冷却、敌人与地形判断是否用已有回城道具脱险。遵守权限；可修改此JS并用task_policy替换。",
             """
             let survivalRequest=null,movementRequest=null,movementIntent=null,movementProgram=null,idleDestination=null,loadoutRequest=null,loadoutProgram=null;
+            const feedbackIdle=typeof input!=='undefined'&&input?.feedback_idle===true;
+            let movementProgramName=null;
             let progressRequest=null,progressPollAt=0,lastProgressReview=null;
             const movementContext='survival-combat:'+Date.now();
             on('tick',event=>{
@@ -246,9 +248,13 @@ public sealed class ScriptLibrary
               if(!c.boss_present&&(destination||idle)&&(c.targets?.some(n=>n.contact_damage>0&&n.distance_tiles<12)
                   ||c.projectiles?.length||(c.fall_forecast?.damage??0)>0)){
                 if(idle) destination=idleDestination??={x:Math.floor(p.pos.x/16),y:Math.floor(p.pos.y/16)};
-                movementProgram??=tool('script_program',{operation:'get',name:'joint_combat'});
+                const selectedProgram=idle&&feedbackIdle&&event.execution?.tool!=='gather'?'feedback_combat':'joint_combat';
+                if(movementProgramName!==selectedProgram){
+                  movementProgram=tool('script_program',{operation:'get',name:selectedProgram});
+                  movementProgramName=selectedProgram;movementRequest=null;movementIntent=null;
+                }
                 const goal=tool('get_state',{fields:['codex_goal']}).codex_goal;
-                const intent=skill('joint_combat',movementProgram.revision,{context:movementContext+':'+(idle?'idle:':'route:')+destination.x+':'+destination.y,
+                const intent=skill(selectedProgram,movementProgram.revision,{context:movementContext+':'+(idle?'idle:':'route:')+destination.x+':'+destination.y,
                   destination,execution:event.execution,allow_cover:!construction,
                   instruction:goal?.native?.objective??'Continue the current task while staying alive.',last_request:movementRequest,intent:movementIntent});
                 movementRequest=intent.request_id??movementRequest;

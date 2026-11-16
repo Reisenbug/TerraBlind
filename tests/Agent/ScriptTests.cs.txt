@@ -179,11 +179,12 @@ static class ScriptTests
         finally { AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); agent.Unload(); }
     }
 
-    static async Task SurvivalCombatPolicy()
+    static async Task SurvivalCombatPolicy(bool feedbackIdle = false)
     {
         foreach (string scenario in new[] { "navigation", "idle", "idle_after_place", "gather_scan", "fight", "boss", "unchaseable_enemy", "projectile_only", "fall_only", "quiet", "equipment_review", "ranged_review", "progress_review", "progress_stale" })
         {
             bool boss = scenario == "boss", idle = scenario is "idle" or "idle_after_place" or "fight" or "gather_scan";
+            bool feedbackScope=feedbackIdle&&idle&&scenario!="gather_scan";
             bool progress = scenario.StartsWith("progress_");
             int decisions = 0, updates = 0, reviews = 0, phase = 0;
             var combat = JsonNode.Parse("""
@@ -199,8 +200,8 @@ static class ScriptTests
             if (scenario is "projectile_only" or "fall_only" or "quiet" || progress) combat["targets"] = new JsonArray();
             if (scenario == "projectile_only") combat["projectiles"] = new JsonArray(new JsonObject { ["damage"] = 20 });
             if (scenario == "fall_only") combat["fall_forecast"] = new JsonObject { ["damage"] = 50, ["frames"] = 20 };
-            var result = await AgentScript.Run("let clock=100000;Date.now=()=>clock+=" + (progress ? "2000" : "0") + ";(function(){" + ScriptLibrary.Example("safety_reactions")["code"]
-                + "})();return tool('nav_to');", 5, (_, _) => { }, async (name, args, token) =>
+            var result = await AgentScript.Run("let clock=100000;Date.now=()=>clock+=" + (progress ? "2000" : "0") + ";(function(input){" + ScriptLibrary.Example("safety_reactions")["code"]
+                + "})({feedback_idle:" + (feedbackIdle ? "true" : "false") + "});return tool('nav_to');", 5, (_, _) => { }, async (name, args, token) =>
                 {
                     if (name == "nav_to")
                     {
@@ -234,6 +235,13 @@ static class ScriptTests
                     if (name == "jev_judge")
                     {
                         decisions++;
+                        if (args["questions"]["movement"] != null)
+                        {
+                            Check(feedbackScope, "feedback motor replaced a navigation-owned controller");
+                            return decisions == 1 ? "{\"status\":\"pending\"}" : new JsonObject {
+                                ["status"] = "ready", ["request_id"] = 9, ["request_age_ms"] = 100,
+                                ["result"] = JsonNode.Parse("""{"elapsed_ms":20,"answers":{"movement":{"choice":"left"},"jump":{"noul":0.1}}}""") }.ToJsonString();
+                        }
                         if (progress)
                         {
                             Check(args["channel"].ToString() == "task_progress" && args["interval_ms"].GetValue<int>() == 10000
@@ -260,16 +268,19 @@ static class ScriptTests
                             ["result"] = JsonNode.Parse("{\"elapsed_ms\":20,\"answers\":{\"response\":{\"choice\":\"avoid\"},\"attention\":{\"choice\":\""
                                 + (scenario == "equipment_review" ? "equipment" : scenario == "ranged_review" ? "ranged_weapon" : "continue") + "\"}}}") }.ToJsonString();
                     }
+                    if(name == "set_combat" && args["movement_intent"] != null)
+                    { Check(feedbackScope, "movement intent escaped idle/fight scope"); updates++; return "{}"; }
                     Check(name == "act" && args["combat_candidate"]?["plan_id"]?.ToString() == "avoid", "combat policy lost native candidate validation");
                     updates++; return "{}";
                 }, _ => Task.CompletedTask, default,
                 programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-empty-skills-" + Guid.NewGuid())).Callable());
             bool inactive = boss || scenario == "quiet";
-            Check(result["ok"].GetValue<bool>() && decisions == (inactive ? 0 : 3) && updates == (inactive || progress ? 0 : scenario == "idle_after_place" ? 1 : 2)
+            Check(result["ok"].GetValue<bool>() && decisions == (inactive ? 0 : 3) && updates == (inactive || progress ? 0 : feedbackScope ? 3 : scenario == "idle_after_place" ? 1 : 2)
                 && reviews == (scenario is "equipment_review" or "ranged_review" or "progress_review" ? 1 : 0),
                 "default combat policy blocked pending navigation, repeated a response or touched boss movement: " + result);
         }
         Console.WriteLine("PASS: default survival uses shared combat candidates during navigation and idle, deduplicates execution and preserves boss control");
+        if(!feedbackIdle) await SurvivalCombatPolicy(feedbackIdle: true);
     }
 
     static async Task DefaultControlScope()

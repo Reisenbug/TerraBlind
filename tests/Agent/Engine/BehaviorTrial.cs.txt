@@ -5737,6 +5737,29 @@ public sealed partial class BehaviorTrial : ModSystem
             bool site = PlaceSpot.FindSpot(player, ItemID.WorkBench, out int benchX, out int benchY);
             bool ready = site && PlaceSpot.Check(ItemID.WorkBench, benchX, benchY, PlaceSpot.Fill.Block, out _);
             Console.WriteLine($"QUEEN_NATIVE_WORKBENCH_SITE found={site} ready={ready} x={benchX} y={benchY}");
+            if(Environment.GetEnvironmentVariable("TB_PLACEMENT_SITE_PROBE") == "1")
+            {
+                var data = Terraria.ObjectData.TileObjectData.GetTileData(TileID.WorkBenches, 0);
+                var candidates = new JsonArray();
+                for(int dx=-4;dx<=4;dx++) for(int dy=-3;dy<=3;dy++)
+                {
+                    int wx=x+dx, wy=y+dy;
+                    if(!Reach.CanPlace(player,wx,wy)) continue;
+                    bool valid=PlaceSpot.Check(ItemID.WorkBench,wx,wy,PlaceSpot.Fill.Block,out var blocker);
+                    var support=new JsonArray(); int occupied=0;
+                    for(int ix=0;ix<data.Width;ix++)
+                    {
+                        int tx=wx-data.Origin.X+ix,ty=wy-data.Origin.Y+data.Height;
+                        for(int iy=0;iy<data.Height;iy++) if(PlaceSpot.Blocks(tx,wy-data.Origin.Y+iy)) occupied++;
+                        var t=Main.tile[tx,ty];
+                        support.Add(new JsonObject { ["x"]=tx,["y"]=ty,["tile"]=t.HasTile?(int)t.TileType:-1,
+                            ["slope"]=(int)t.Slope,["half"]=t.IsHalfBlock });
+                    }
+                    if(occupied==0) candidates.Add(new JsonObject { ["x"]=wx,["y"]=wy,["valid"]=valid,
+                        ["blocker"]=blocker.ToString(),["support"]=support });
+                }
+                File.WriteAllText(Path.Combine(Main.SavePath,"placement-sites.json"),candidates.ToJsonString());
+            }
             bool lead = Combat.UseLead, meleeAim = true;
             try
             {
@@ -5770,6 +5793,20 @@ public sealed partial class BehaviorTrial : ModSystem
             Console.WriteLine("QUEEN_NATIVE_EXPLOSIVE_RANGE_VERIFIED close_self_damage_rejected=true");
             return true;
         });
+        if (Environment.GetEnvironmentVariable("TB_PLACEMENT_SITE_TRIAL") == "1")
+        {
+            await Call("craft",new JsonObject { ["name"]="WorkBench",["amount"]=1 });
+            var placementClock=Stopwatch.StartNew();
+            var result=await Call("place_at",new JsonObject { ["item"]="36" });
+            var sword=await Call("craft",new JsonObject { ["name"]="WoodenSword",["amount"]=1 });
+            var proof=new JsonObject { ["placement_ms"]=placementClock.ElapsedMilliseconds,
+                ["placement"]=result.DeepClone(),["craft"]=sword.DeepClone() };
+            File.WriteAllText(Path.Combine(Main.SavePath,"placement-site-native.json"),proof.ToJsonString());
+            if(result["placed"]?.GetValue<int>()!=1||sword["crafted"]?.GetValue<int>()!=1)
+                throw new Exception("Natural placement site was not repaired into a usable station: "+proof);
+            Console.WriteLine("PLACEMENT_SITE_NATIVE_PASS elapsed_ms="+placementClock.ElapsedMilliseconds);
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_QUEEN_NATIVE_CHECK_ONLY") == "1") return;
         if (Environment.GetEnvironmentVariable("TB_LOCAL_INTENT_TRIAL") == "1") { await LocalIntentTrial(); return; }
         var before = await Call("get_state", new JsonObject());
@@ -5859,6 +5896,16 @@ public sealed partial class BehaviorTrial : ModSystem
             NativeAgent.Submit(prompt);
             return true;
         });
+        if(Environment.GetEnvironmentVariable("TB_FEEDBACK_IDLE") == "1")
+        {
+            JsonObject policy;
+            do { await Task.Delay(16); policy = await Call("task_policy", new JsonObject { ["operation"] = "get" }); }
+            while(policy["active"]?.GetValue<bool>() != true);
+            var changed = await Call("task_policy", new JsonObject { ["operation"] = "set",
+                ["expected_revision"] = policy["revision"].DeepClone(), ["code"] = "skill('safety_reactions',0,{feedback_idle:true});" });
+            if(changed["error"] != null) throw new Exception("Feedback policy setup failed: " + changed);
+            Console.WriteLine("QUEEN_FEEDBACK_IDLE_ENABLED");
+        }
         File.WriteAllText(Path.Combine(Main.SavePath, "queen-start.json"), new JsonObject
         { ["prompt"] = prompt, ["before"] = before.DeepClone(), ["spawn"] = jungleSpawn?.DeepClone(), ["model"] = trialModel, ["effort"] = "medium",
             ["mining_speed_multiplier"] = Config.I.FastMining ? ConcessionSpeed.MiningSpeedMultiplier : 1,
