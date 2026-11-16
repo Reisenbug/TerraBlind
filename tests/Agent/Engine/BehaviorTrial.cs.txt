@@ -5650,8 +5650,110 @@ public sealed partial class BehaviorTrial : ModSystem
         }
     }
 
+    async Task FrameProgramTrial()
+    {
+        int observed = 0, stalled = 0, maximum = 0, streak = 0;
+        Vector2 previous = Vector2.Zero;
+        var start = await OnMain(() =>
+        {
+            var p = Main.LocalPlayer; previous = p.position;
+            p.inventory[0].SetDefaults(ItemID.CopperPickaxe); p.selectedItem = 0;
+            Combat.Enabled = Dodge.Enabled = false; FightCoordinator.Stop();
+            BoundaryInputPlayer.ObserveInput = actor =>
+            {
+                observed++;
+                bool mining = actor.controlUseItem && actor.HeldItem.pick > 0
+                    && WorldGen.InWorld(Player.tileTargetX, Player.tileTargetY) && Main.tile[Player.tileTargetX, Player.tileTargetY].HasTile;
+                bool waiting = Vector2.Distance(actor.position, previous) < .01f && !mining;
+                if (waiting) { stalled++; streak++; maximum = Math.Max(maximum, streak); } else streak = 0;
+                previous = actor.position;
+            };
+            return p.position.X;
+        });
+        const string code = """
+            function tick(s){
+              const p=s.player,dir=s.data.direction;
+              if((dir<0&&p.x<=s.data.target)||(dir>0&&p.x>=s.data.target))return {done:true};
+              const front=Math.floor((p.x+(dir>0?p.width+3:-3))/16),feet=Math.floor((p.y+p.height-1)/16);
+              const top=Math.floor(p.y/16),at=(x,y)=>s.tiles.find(t=>t.x===x&&t.y===y&&t.solid);
+              const blockers=[];for(let y=top;y<=feet;y++){const t=at(front,y);if(t)blockers.push(t);}
+              const keys=[dir<0?'left':'right'];let use=false,aim;
+              if(blockers.length){
+                if(blockers.length===1&&blockers[0].y===feet&&p.vy===0&&!at(Math.floor(p.x/16),top-1))keys.push('jump');
+                else {const t=blockers.find(t=>t.mineable);if(t){use=true;aim={x:t.x,y:t.y};}}
+              }
+              return {keys,slot:0,use,aim,memory:{ticks:(s.memory.ticks??0)+1}};
+            }
+            """;
+        var timer = Stopwatch.StartNew();
+        await Call("set_combat", new JsonObject { ["frame_program"] = new JsonObject { ["code"] = code,
+            ["data"] = new JsonObject { ["direction"] = -1,
+                ["target"] = start - (Environment.GetEnvironmentVariable("TB_FRAME_PROGRAM_AUTHOR") == "1" ? 4800 : 1600) } } });
+        using var authorLifetime = new CancellationTokenSource();
+        var authorTask = Environment.GetEnvironmentVariable("TB_FRAME_PROGRAM_AUTHOR") == "1"
+            ? AuthorFrameProgram(code, authorLifetime.Token) : Task.CompletedTask;
+        try
+        {
+            while (timer.Elapsed.TotalSeconds < 75 && FrameProgram.Active && !Main.LocalPlayer.dead) await Task.Delay(100);
+        }
+        finally
+        {
+            authorLifetime.Cancel();
+            try { await authorTask; } catch (OperationCanceledException) { }
+            var report = await OnMain(() =>
+            {
+                BoundaryInputPlayer.ObserveInput = null;
+                var p = Main.LocalPlayer;
+                var proof = new JsonObject { ["elapsed_ms"] = timer.ElapsedMilliseconds, ["observed_frames"] = observed,
+                    ["stationary_without_work_frames"] = stalled, ["max_streak_frames"] = maximum,
+                    ["progress_tiles"] = (start - p.position.X) / 16, ["hp"] = p.statLife, ["dead"] = p.dead,
+                    ["controller"] = FrameProgram.Snapshot() };
+                FrameProgram.Clear();
+                return proof;
+            });
+            File.WriteAllText(Path.Combine(Main.SavePath, "frame-program-proof.json"), report.ToJsonString());
+            Console.WriteLine("FRAME_PROGRAM_RECORDED " + report.ToJsonString());
+        }
+    }
+
+    async Task AuthorFrameProgram(string current, CancellationToken token)
+    {
+        using var author = new CodexAgent();
+        var timer = Stopwatch.StartNew(); var calls = new JsonArray();
+        var schema = JsonNode.Parse("""
+            [{"type":"function","function":{"name":"install","description":"在线替换正在逐帧运行的JS策略，保留data和memory。",
+              "parameters":{"type":"object","properties":{"code":{"type":"string"}},"required":["code"]}}}]
+            """).AsArray();
+        try
+        {
+            await author.RunAsync("改进正在执行的Terraria行进策略。目标由s.data.direction和s.data.target像素x提供。"
+                + "人物正穿越天然地形。保证每帧都有合理操作，利用跳跃和必要挖掘，减少撞墙。slot=0是铜镐。"
+                + "tick(s)每帧同步运行，无工具调用，返回{keys,slot,use,aim:{x,y},memory,done}。"
+                + "s.player含x/y/width/height/vx/vy/hp/item_animation/selected_slot；s.tiles含世界格x/y/type/solid/platform/liquid/liquid_type/mineable。"
+                + "人物像素坐标左上角，地图每格16像素，y向下。memory可保留状态。只需调用install安装完整函数。"
+                + "现有策略在你思考时继续运行。\n" + current,
+                Config.I.AgentCodexPath, Path.Combine(Main.SavePath, "TerraBlindAgent"), "gpt-6.1-sol",
+                "你编写实时反馈控制程序。每帧依据新观测给出操作，保持策略通用，目标通过data传入。",
+                schema, async (name, args, ct) =>
+                {
+                    if (name != "install") throw new InvalidOperationException("Unknown author tool");
+                    var installed = await OnMain(() => { ct.ThrowIfCancellationRequested(); return FrameProgram.Set(args); });
+                    calls.Add(new JsonObject { ["elapsed_ms"] = timer.ElapsedMilliseconds,
+                        ["code"] = args["code"]?.DeepClone(), ["result"] = installed.DeepClone() });
+                    return installed.ToJsonString();
+                }, _ => { }, token);
+        }
+        finally
+        {
+            File.WriteAllText(Path.Combine(Main.SavePath, "frame-program-author.json"), new JsonObject {
+                ["elapsed_ms"] = timer.ElapsedMilliseconds, ["calls"] = calls, ["usage"] = author.TokenUsage }.ToJsonString());
+        }
+    }
+
     async Task QueenGoalTrial()
     {
+        if (Environment.GetEnvironmentVariable("TB_FRAME_PROGRAM_TRIAL") == "1")
+        { await FrameProgramTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_DECISION_COMPARE") is string comparison)
         { await DecisionComparison(comparison); return; }
         if(Environment.GetEnvironmentVariable("TB_DESCENT_QUERY_PROBE") == "1")

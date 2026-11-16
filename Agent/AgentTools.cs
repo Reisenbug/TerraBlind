@@ -68,6 +68,7 @@ public static partial class AgentTools
     internal static void ClearTaskPolicy(bool resetRevision = false)
     {
         FeedbackControl.Clear();
+        FrameProgram.Clear();
         ClearCombatPreparation();
         if (resetRevision) AgentScript.ResetIntents();
         AgentNavigationIntent.Reset();
@@ -2190,7 +2191,9 @@ public static partial class AgentTools
                         var applied = FeedbackControl.Set(movementIntent);
                         if (applied["error"] != null) return applied;
                     }
+                    if (args["frame_program"] is JsonObject frameProgram) FrameProgram.Set(frameProgram);
                     return new JsonObject { ["auto_dodge"] = AgentPermissions.Dodge, ["auto_attack"] = AgentPermissions.Attack,
+                        ["frame_program"] = FrameProgram.Snapshot(),
                         ["movement_intent"] = FeedbackControl.Snapshot(),
                         ["weapon_type"] = CombatLoadout.PreferredType,
                         ["boss_control"] = BossStatus(fresh: true) };

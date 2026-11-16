@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text.Json.Nodes;
 using Terraria;
+using Jint;
 
 namespace TerraBlind;
 
@@ -122,4 +123,99 @@ public static class FeedbackControl
         ["blocked_reason"] = blockedReason,
         ["remaining_ms"] = context == null ? 0 : Math.Max(0, duration - Stopwatch.GetElapsedTime(updated).TotalMilliseconds)
     };
+}
+
+public static class FrameProgram
+{
+    static Engine engine, previousEngine;
+    static JsonObject data = new(), memory = new();
+    static string error, blocked;
+    static long frames, idleFrames;
+    static double maxMilliseconds;
+    public static bool Active => engine != null;
+
+    public static void Clear() { engine = previousEngine = null; data = new(); memory = new(); }
+
+    public static JsonObject Set(JsonObject args)
+    {
+        if (args["active"]?.GetValue<bool>() == false) { Clear(); return Snapshot(); }
+        if (args["code"] is JsonValue code)
+        {
+            var candidate = new Engine(options => options.Strict().MaxStatements(10000).LimitMemory(8_000_000));
+            candidate.Execute(code.GetValue<string>() + "\nfunction __frame(encoded){return JSON.stringify(tick(JSON.parse(encoded)));}");
+            if (candidate.Evaluate("typeof tick").AsString() != "function")
+                throw new ArgumentException("frame_program requires function tick(state)");
+            previousEngine = engine; engine = candidate; error = blocked = null; frames = idleFrames = 0; maxMilliseconds = 0;
+        }
+        if (args["data"] is JsonObject input) data = input.DeepClone().AsObject();
+        return Snapshot();
+    }
+
+    public static bool Apply(Player p)
+    {
+        if (!Active) return false;
+        if (p.dead || Manual.On || !AgentNetwork.CanAutomate || AgentTools.ControlSession.PrimaryActive
+            || !AgentTools.ControlAllows(ControlBehavior.Direct, ControlChannels.All)
+            || AgentTools.Control.HasRegion(ControlBehavior.Navigation) || AgentTools.Control.HasRegion(ControlBehavior.Dodge))
+        { blocked = "other_input_owner"; return false; }
+        var clock = Stopwatch.StartNew();
+        try
+        {
+            blocked = null;
+            if (NavigationSurvival.Apply(p)) { frames++; return true; }
+            int cx = (int)(p.Center.X / 16), cy = (int)((p.position.Y + p.height - 1) / 16);
+            var tiles = new JsonArray();
+            for (int x = cx - 5; x <= cx + 5; x++) for (int y = cy - 5; y <= cy + 4; y++)
+            {
+                if (!WorldGen.InWorld(x, y)) continue;
+                var tile = Main.tile[x, y];
+                if (tile.HasTile || tile.LiquidAmount > 0) tiles.Add(new JsonObject {
+                    ["x"] = x, ["y"] = y, ["type"] = tile.HasTile ? (int)tile.TileType : -1,
+                    ["solid"] = tile.HasUnactuatedTile && Main.tileSolid[tile.TileType],
+                    ["platform"] = tile.HasTile && Main.tileSolidTop[tile.TileType],
+                    ["liquid"] = tile.LiquidAmount, ["liquid_type"] = tile.LiquidType,
+                    ["mineable"] = tile.HasTile && DigTable.CostFrames(x, y) < DigTable.Unmineable });
+            }
+            var state = new JsonObject { ["tick"] = Main.GameUpdateCount, ["data"] = data.DeepClone(), ["memory"] = memory.DeepClone(),
+                ["player"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y, ["width"] = p.width,
+                    ["height"] = p.height, ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["hp"] = p.statLife,
+                    ["item_animation"] = p.itemAnimation, ["selected_slot"] = p.selectedItem }, ["tiles"] = tiles };
+            var output = JsonNode.Parse(engine.Invoke("__frame", state.ToJsonString()).AsString()).AsObject();
+            if (output["done"]?.GetValue<bool>() == true) { Clear(); return false; }
+            var keys = output["keys"]?.AsArray().Select(k => k.GetValue<string>()).ToArray() ?? Array.Empty<string>();
+            if (keys.Any(k => k is not ("left" or "right" or "jump" or "down" or "up")))
+                throw new ArgumentException("unsupported frame key");
+            p.controlLeft = keys.Contains("left"); p.controlRight = keys.Contains("right");
+            p.controlJump = keys.Contains("jump"); p.controlDown = keys.Contains("down"); p.controlUp = keys.Contains("up");
+            if (output["slot"] is JsonValue slot && p.itemAnimation == 0 && p.itemTime == 0)
+            {
+                int index = slot.GetValue<int>();
+                if (index < 0 || index >= 50) throw new ArgumentException("slot needs 0..49");
+                p.selectedItem = index;
+            }
+            p.controlUseItem = output["use"]?.GetValue<bool>() == true;
+            if (output["aim"] is JsonObject aim)
+            {
+                int x = aim["x"].GetValue<int>(), y = aim["y"].GetValue<int>();
+                Cursor.AimTile(x, y);
+                var behavior = p.HeldItem.pick > 0 ? ControlBehavior.Mining
+                    : p.HeldItem.createTile >= 0 ? ControlBehavior.Placement : ControlBehavior.Attack;
+                if (!AgentTools.ControlAllows(behavior, ControlChannels.ItemUse)
+                    || AgentTools.Control.ForbiddenAt(behavior, x, y)) p.controlUseItem = false;
+            }
+            if (output["memory"] is JsonObject saved) memory = saved.DeepClone().AsObject();
+            frames++; if (keys.Length == 0 && !p.controlUseItem) idleFrames++;
+            maxMilliseconds = Math.Max(maxMilliseconds, clock.Elapsed.TotalMilliseconds);
+            return true;
+        }
+        catch (Exception failure)
+        {
+            error = failure.Message; engine = previousEngine; previousEngine = null;
+            DiagLog.Write("[frame_program_failed] " + error);
+            return Active && Apply(p);
+        }
+    }
+
+    public static JsonObject Snapshot() => new() { ["active"] = Active, ["frames"] = frames, ["idle_output_frames"] = idleFrames,
+        ["max_execution_ms"] = maxMilliseconds, ["error"] = error, ["blocked"] = blocked, ["memory"] = memory.DeepClone() };
 }

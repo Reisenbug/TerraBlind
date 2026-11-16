@@ -1449,6 +1449,24 @@ static class ScriptTests
 
     static async Task FeedbackCombatContracts()
     {
+        var framePlayer = Terraria.Main.LocalPlayer;
+        FrameProgram.Set(new JsonObject { ["code"] = "function tick(s){return {keys:[s.data.direction],memory:{n:(s.memory.n??0)+1}};}",
+            ["data"] = new JsonObject { ["direction"] = "right" } });
+        try
+        {
+            for (int i = 0; i < 120; i++) Check(FrameProgram.Apply(framePlayer) && framePlayer.controlRight,
+                "frame policy failed to run continuously without a model or tool response");
+            FrameProgram.Set(new JsonObject { ["data"] = new JsonObject { ["direction"] = "left" } });
+            Check(FrameProgram.Apply(framePlayer) && framePlayer.controlLeft
+                && FrameProgram.Snapshot()["memory"]["n"].GetValue<int>() == 121,
+                "live policy data update reset progress or delayed the next control frame");
+            FrameProgram.Set(new JsonObject { ["code"] = "function tick(s){throw new Error('bad revision');}" });
+            Check(FrameProgram.Apply(framePlayer) && framePlayer.controlLeft && FrameProgram.Active,
+                "a bad policy replacement interrupted the last working control program");
+            bool frameManual = Manual.On; Manual.On = true;
+            Check(!FrameProgram.Apply(framePlayer), "frame policy overrode manual input"); Manual.On = frameManual;
+        }
+        finally { FrameProgram.Clear(); }
         foreach (string scenario in new[] { "pending", "move", "retain", "expired", "clear", "blocked", "keep", "right", "jump" })
         {
             int observed = 0, acted = 0, judged = 0;

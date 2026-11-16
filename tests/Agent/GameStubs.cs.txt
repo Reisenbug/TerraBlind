@@ -392,7 +392,9 @@ namespace TerraBlind
     {
         public static float X, Y;
         public static void AimPx(float x, float y) { X = x; Y = y; Terraria.Main.mouseX = (int)x; Terraria.Main.mouseY = (int)y; }
+        public static void AimTile(int x, int y) => AimPx(x * 16 + 8, y * 16 + 8);
     }
+    public static class DigTable { public const int Unmineable = 100000; public static int CostFrames(int x, int y) => 1; }
     public static class Halt
     {
         public static int Stops;
@@ -438,6 +440,7 @@ namespace TerraBlind
     }
     public static class NavigationSurvival
     {
+        public static bool Apply(Terraria.Player player) => false;
         public static JsonObject AssessFall(Terraria.Player player) => new() { ["damage"] = FallSafety.Damage };
     }
     public static class FallSafety

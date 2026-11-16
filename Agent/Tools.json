@@ -702,6 +702,11 @@
       "parameters": {
         "type": "object",
         "properties": {
+          "frame_program": {
+            "type": "object",
+            "description": "实验性逐帧JS策略。code定义function tick(state)，接收player像素坐标/速度、附近tiles格坐标、data和上次返回的memory；每帧返回{keys:['left'|'right'|'jump'|'down'|'up'],slot:0..49,use:boolean,aim:{x,y},memory:{},done:boolean}。策略持续运行，后台模型可只更新data或替换code；active:false停止。现有独立动作、人工操作与权限优先。",
+            "properties": { "active": { "type": "boolean" }, "code": { "type": "string" }, "data": { "type": "object" } }
+          },
           "movement_intent": {
             "type": "object",
             "description": "实验性短程持续按键，由逐帧控制器执行。active:false撤销；否则需要context、request_id、keys、expires_ms（1..2000）。默认在空闲或fight时生效。allow_navigation:true允许在nav_to行进中临时接管：保留目标与动作句柄，撤下旧轨迹，结束后从实际位置继续规划；正在挖掘或放置时等待。遵守移动权限；有区域移动约束时返回regional_controller_required。任务策略清理时撤销。combat_assess返回实际执行反馈。",
