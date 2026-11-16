@@ -48,19 +48,27 @@ public static class FeedbackControl
         if (context == null) return;
         if (player.dead || Stopwatch.GetElapsedTime(updated).TotalMilliseconds >= duration)
         { Clear(); return; }
-        if (AgentTools.Control.HasRegion(ControlBehavior.Dodge))
-        { blockedReason = "regional_controller_required"; return; }
-        blockedReason = null;
-        if (Manual.On || !AgentNetwork.CanAutomate || PvpDuel.Active || PlayerCombat.Active
-            || AgentTools.ContactEscapeActive || !AgentPermissions.CanDodge(delegated: true)
-            || FightCoordinator.HoldingFallProtection(player)
-            || AgentTools.ControlSession.OwnsDirectMovement
-            || AgentTools.ControlSession.Tool is not (null or "fight")
-            || Main.npc.Any(n => n is { active: true, boss: true })) return;
+        blockedReason = Blocked(player);
+        if (blockedReason != null) return;
         player.controlLeft = left; player.controlRight = right;
         player.controlJump = jump && Stopwatch.GetElapsedTime(started).TotalMilliseconds < 250;
         appliedTick = Main.GameUpdateCount; appliedFrames++;
         stalledFrames = (left || right) && Math.Abs(player.velocity.X) < .1f ? stalledFrames + 1 : 0;
+    }
+
+    static string Blocked(Player player)
+    {
+        if (AgentTools.Control.HasRegion(ControlBehavior.Dodge)) return "regional_controller_required";
+        if (Manual.On) return "manual_control";
+        if (!AgentNetwork.CanAutomate) return "automation_disabled";
+        if (PvpDuel.Active || PlayerCombat.Active) return "other_combat_controller";
+        if (AgentTools.ContactEscapeActive || FightCoordinator.HoldingFallProtection(player)) return "survival_control";
+        if (!AgentPermissions.CanDodge(delegated: true)) return "movement_permission";
+        if (AgentTools.ControlSession.OwnsDirectMovement || AgentTools.ControlSession.Tool is not (null or "fight"))
+            return "primary_action:" + AgentTools.ControlSession.Tool;
+        if (Main.npc.Any(n => n is { active: true, boss: true }
+            && Microsoft.Xna.Framework.Vector2.Distance(n.Center, player.Center) < 3200)) return "boss_control";
+        return null;
     }
 
     public static JsonObject Snapshot() => new()

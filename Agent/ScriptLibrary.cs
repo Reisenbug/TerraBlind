@@ -50,7 +50,7 @@ public sealed class ScriptLibrary
                 'Which available weapon can practically hit these enemies from the current terrain and distance? Account for projectile collision, reach, ammo and attack speed.',criteria:weaponChoices};
               const r=tool('jev_judge',{channel:'feedback_combat',context:input.context,interval_ms:input.interval_ms??250,
                 max_age_ms:input.max_age_ms??1000,questions,state:{instruction:input.instruction,destination:input.destination,
-                  player:p,targets:c.targets.map(({weapons,...n})=>n),projectiles:c.projectiles,weapons,
+                  player:p,execution:input.execution,targets:c.targets.map(({weapons,...n})=>n),projectiles:c.projectiles,weapons,
                   terrain:c.terrain,recent_damage:c.recent_damage,fall_forecast:c.fall_forecast,movement_intent:c.movement_intent,
                   coordinates:'Player pos and velocity use world pixels and pixels/frame. Enemy/projectile positions and destination use tiles, 16 pixels/tile. x increases right; y increases down.'}});
               if(r.status==='failed')return {...stop('failed'),error:r.result.error};

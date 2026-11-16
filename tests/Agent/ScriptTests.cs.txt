@@ -1516,7 +1516,8 @@ static class ScriptTests
             }
             Manual.On = true; player.controlRight = false;
             Terraria.Main.GameUpdateCount++; FeedbackControl.Apply(player);
-            Check(!player.controlRight && !FeedbackControl.IsApplying, "feedback motor overrode manual input");
+            Check(!player.controlRight && !FeedbackControl.IsApplying
+                && FeedbackControl.Snapshot()["blocked_reason"]?.ToString() == "manual_control", "feedback motor overrode manual input or hid its owner");
             Manual.On = false; AgentPermissions.Dodge = false;
             FeedbackControl.Apply(player);
             Check(!player.controlRight, "feedback motor bypassed movement permissions");
@@ -1545,9 +1546,23 @@ static class ScriptTests
                     "feedback motor bypassed a spatial movement restriction");
             }
             finally { AgentTools.Control.Release(region); }
+            var npcs=Terraria.Main.npc;
+            try
+            {
+                Terraria.Main.npc=new[] { new Terraria.NPC { active=true,boss=true,
+                    position=new Microsoft.Xna.Framework.Vector2(player.position.X+10000,player.position.Y+10000) } };
+                FeedbackControl.Apply(player);
+                Check(player.controlRight, "a distant boss blocked unrelated local control");
+                Terraria.Main.npc[0].position=new Microsoft.Xna.Framework.Vector2(player.position.X,player.position.Y); player.controlRight=false;
+                FeedbackControl.Apply(player);
+                Check(!player.controlRight && FeedbackControl.Snapshot()["blocked_reason"]?.ToString()=="boss_control",
+                    "feedback motor conflicted with nearby boss control");
+            }
+            finally { Terraria.Main.npc=npcs; }
             AgentTools.ControlSession.Begin("act", null, out long ticket);
             FeedbackControl.Apply(player);
-            Check(!player.controlRight, "feedback motor overrode an explicit movement action");
+            Check(!player.controlRight && FeedbackControl.Snapshot()["blocked_reason"]?.ToString() == "primary_action:act",
+                "feedback motor overrode an explicit movement action or hid its owner");
             AgentTools.ControlSession.End(ticket);
             FeedbackControl.Set(JsonNode.Parse("""{"context":"expiry","request_id":2,"keys":["right"],"expires_ms":1}""").AsObject());
             await Task.Delay(5);
