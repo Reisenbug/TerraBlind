@@ -529,6 +529,11 @@ public sealed partial class BehaviorTrial : ModSystem
         queue.Enqueue(() => { try { done.SetResult(body()); } catch (Exception error) { done.SetException(error); } });
         return done.Task;
     }
+    public override void UpdateUI(GameTime gameTime)
+    {
+        if (enabled && Main.gamePaused)
+            while (queue.TryDequeue(out var action)) action();
+    }
     public override void PreUpdatePlayers()
     {
         if (!enabled || Main.gameMenu || Manual.On
@@ -859,6 +864,7 @@ public sealed partial class BehaviorTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_THINKING_PAUSE_TRIAL") == "1") { await ThinkingPauseTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_SKILL_LEARNING") == "1") { await SkillLearningRun(); return; }
         if (Environment.GetEnvironmentVariable("TB_QUEEN_MINING_REPLAY") == "1") { await QueenMiningReplay(); return; }
         if (Environment.GetEnvironmentVariable("TB_WORKSTATION_REPLAY") == "1") { await WorkstationReplay(); return; }
@@ -4807,6 +4813,9 @@ public sealed partial class BehaviorTrial : ModSystem
     sealed class ExperienceMeter
     {
         readonly Stopwatch clock = Stopwatch.StartNew();
+        readonly double frozenAtStart = ThinkingPause.FrozenMilliseconds;
+        double FrozenMs => Math.Max(0, ThinkingPause.FrozenMilliseconds - frozenAtStart);
+        double ActiveMs => Math.Max(0, clock.Elapsed.TotalMilliseconds - FrozenMs);
         readonly JsonArray idle = new(), stationary = new();
         Vector2 previous;
         double last, idleSince = -1, stationarySince = -1;
@@ -4816,7 +4825,7 @@ public sealed partial class BehaviorTrial : ModSystem
 
         public void Observe(Player p)
         {
-            double now = clock.Elapsed.TotalMilliseconds;
+            double now = ActiveMs;
             maxUpdate = Math.Max(maxUpdate, now - last); last = now; frames++;
             bool moving = initialized && Vector2.DistanceSquared(previous, p.position) > .0025f;
             bool working = p.itemAnimation > 0 || p.itemTime > 0;
@@ -4838,7 +4847,7 @@ public sealed partial class BehaviorTrial : ModSystem
 
         public JsonObject Snapshot()
         {
-            double now = clock.Elapsed.TotalMilliseconds;
+            double now = ActiveMs;
             JsonArray Stops(JsonArray completed, double since)
             {
                 var copy = (JsonArray)completed.DeepClone();
@@ -4847,11 +4856,170 @@ public sealed partial class BehaviorTrial : ModSystem
                 return copy;
             }
             var idleStops = Stops(idle, idleSince); var stationaryStops = Stops(stationary, stationarySince);
-            return new JsonObject { ["elapsed_ms"] = now, ["frames"] = frames, ["deaths"] = deaths,
+            return new JsonObject { ["elapsed_ms"] = clock.Elapsed.TotalMilliseconds,
+                ["active_elapsed_ms"] = now, ["frozen_ms"] = FrozenMs, ["frames"] = frames, ["deaths"] = deaths,
                 ["hp_lost"] = damage, ["max_update_ms"] = maxUpdate,
                 ["actionless_over_2s_ms"] = idleStops.Sum(s => s["duration_ms"].GetValue<double>()),
                 ["actionless_stops"] = idleStops, ["stationary_stops"] = stationaryStops,
                 ["definition"] = "Actionless: living, displacement <=0.05 pixels per update, itemAnimation and itemTime both zero. Stationary also includes actual item work; active navigation alone does not count as work." };
+        }
+    }
+
+    async Task ThinkingPauseTrial()
+    {
+        var measurements = new JsonArray();
+        var agent = ModContent.GetInstance<NativeAgent>();
+        var runningField = typeof(NativeAgent).GetField("_running", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var cancelField = typeof(NativeAgent).GetField("_cancel", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        using var lifetime = new CancellationTokenSource();
+        var modelWait = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int eye = -1, arrow = -1, origin = 0, floorY = 0;
+        async Task Until(Func<bool> condition, string label)
+        {
+            var timeout = Stopwatch.StartNew();
+            while (!await OnMain(condition))
+            {
+                if (timeout.Elapsed.TotalSeconds > 6) throw new Exception("freeze acceptance stalled: " + label);
+                await Task.Delay(15);
+            }
+        }
+        JsonObject Sample() => new() { ["tick"] = Main.GameUpdateCount, ["time"] = Main.time,
+            ["player"] = new JsonArray(Main.LocalPlayer.position.X, Main.LocalPlayer.position.Y),
+            ["npc"] = new JsonArray(Main.npc[eye].position.X, Main.npc[eye].position.Y),
+            ["projectile"] = new JsonArray(Main.projectile[arrow].position.X, Main.projectile[arrow].position.Y),
+            ["pause"] = ThinkingPause.Snapshot() };
+        void Record(string name, JsonObject before, JsonObject after)
+        {
+            measurements.Add(new JsonObject { ["case"] = name, ["before"] = before, ["after"] = after });
+            File.WriteAllText(Path.Combine(Main.SavePath, "thinking-pause-check.json"), measurements.ToJsonString());
+            Console.WriteLine("THINKING_PAUSE_CASE " + name);
+        }
+        try
+        {
+            await OnMain(() =>
+            {
+                NativeAgent.Stop(); Halt.All(); AgentTools.NewTask();
+                Config.I.AgentEnabled = true; Manual.On = false;
+                Main.autoPause = false; Main.playerInventory = true;
+                AgentPermissions.Attack = AgentPermissions.Dodge = false;
+                Combat.Enabled = Dodge.Enabled = false;
+                var player = Main.LocalPlayer;
+                origin = (int)player.Center.X / 16; floorY = (int)player.Bottom.Y / 16 + 4;
+                for (int x = origin - 15; x <= origin + 40; x++)
+                for (int y = floorY - 15; y <= floorY + 2; y++)
+                {
+                    var tile = Main.tile[x, y]; tile.ClearEverything();
+                    if (y >= floorY) { tile.HasTile = true; tile.TileType = TileID.Dirt; }
+                }
+                player.position = new Vector2(origin * 16, floorY * 16 - player.height);
+                player.velocity = Vector2.Zero; player.fallStart = player.fallStart2 = (int)(player.position.Y / 16);
+                player.immune = true; player.immuneTime = 3000;
+                foreach (var item in player.inventory) item.TurnToAir();
+                player.inventory[0].SetDefaults(ItemID.CopperPickaxe); player.selectedItem = 0;
+                eye = NPC.NewNPC(player.GetSource_Misc("thinking-pause-check"), (int)player.Center.X + 120, (int)player.Center.Y - 90, NPCID.DemonEye);
+                arrow = Projectile.NewProjectile(player.GetSource_Misc("thinking-pause-check"), player.Center + new Vector2(160, -120),
+                    new Vector2(2, 0), ProjectileID.WoodenArrowHostile, 1, 0, player.whoAmI);
+                runningField.SetValue(agent, modelWait.Task); cancelField.SetValue(agent, lifetime);
+                typeof(NativeAgent).GetProperty("Status").SetValue(null, "freeze_acceptance");
+                return true;
+            });
+            await Until(() => ThinkingPause.Frozen, "initial model wait");
+            var frozenBefore = await OnMain(Sample);
+            await Task.Delay(1200);
+            var frozenAfter = await OnMain(Sample);
+            foreach (string field in new[] { "tick", "time", "player", "npc", "projectile" })
+                if (!JsonNode.DeepEquals(frozenBefore[field], frozenAfter[field])) throw new Exception("world advanced during model wait: " + field);
+            Record("model_wait_freezes_world", frozenBefore, frozenAfter);
+
+            var queryClock = Stopwatch.StartNew();
+            var query = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("inventory_counts") }).WaitAsync(TimeSpan.FromSeconds(2));
+            if (!ThinkingPause.Frozen || query["inventory_counts"] == null) throw new Exception("frozen main queue failed");
+            Record("readonly_query_while_frozen", new JsonObject(), new JsonObject { ["elapsed_ms"] = queryClock.ElapsedMilliseconds, ["result"] = query });
+
+            var actionBefore = await OnMain(Sample);
+            var action = await Call("act", new JsonObject { ["steps"] = new JsonArray(new JsonObject { ["keys"] = new JsonArray("right"),
+                ["until"] = new JsonObject { ["frames"] = 36 } }) }).WaitAsync(TimeSpan.FromSeconds(8));
+            await Until(() => ThinkingPause.Frozen, "freeze after movement");
+            var actionAfter = await OnMain(Sample);
+            if (actionAfter["player"][0].GetValue<float>() <= actionBefore["player"][0].GetValue<float>() + 20)
+                throw new Exception("action did not resume physical movement: " + action);
+            Record("action_resumes_then_refreezes", actionBefore, actionAfter);
+
+            var restBefore = await OnMain(Sample);
+            await Call("act", new JsonObject { ["steps"] = new JsonArray(new JsonObject {
+                ["until"] = new JsonObject { ["frames"] = 30 } }) }).WaitAsync(TimeSpan.FromSeconds(8));
+            await Until(() => ThinkingPause.Frozen, "explicit timed rest");
+            var restAfter = await OnMain(Sample);
+            if (restAfter["tick"].GetValue<uint>() - restBefore["tick"].GetValue<uint>() < 30
+                || !JsonNode.DeepEquals(restBefore["player"], restAfter["player"])) throw new Exception("purposeful timed wait was frozen");
+            Record("explicit_wait_advances_world", restBefore, restAfter);
+
+            await OnMain(() => { Main.LocalPlayer.itemAnimation = 12; Main.LocalPlayer.itemTime = 12; return true; });
+            await Until(() => !ThinkingPause.Frozen, "item animation release");
+            await Until(() => ThinkingPause.Frozen, "item animation completes");
+            if (await OnMain(() => Main.LocalPlayer.itemAnimation > 0 || Main.LocalPlayer.itemTime > 0))
+                throw new Exception("freeze interrupted the item animation");
+            Record("item_animation_completes", new JsonObject(), await OnMain(Sample));
+
+            int mineX = await OnMain(() =>
+            {
+                int x = (int)Main.LocalPlayer.Center.X / 16 + 2;
+                WorldGen.PlaceTile(x, floorY - 2, TileID.Stone, mute: true, forced: true);
+                if (!Main.tile[x, floorY - 2].HasTile) throw new Exception("mining fixture placement failed");
+                return x;
+            });
+            var mined = await Call("use_item", new JsonObject { ["x"] = mineX, ["y"] = floorY - 2, ["slot"] = 0 })
+                .WaitAsync(TimeSpan.FromSeconds(8));
+            if (await OnMain(() => Main.tile[mineX, floorY - 2].HasTile)) throw new Exception("frozen mining failed: " + mined);
+            await Until(() => ThinkingPause.Frozen, "native mining completes");
+            Record("actual_mining_completes", new JsonObject(), new JsonObject { ["result"] = mined, ["after"] = await OnMain(Sample) });
+
+            var chest = await OnMain(() =>
+            {
+                int x = (int)Main.LocalPlayer.Center.X / 16 + 3;
+                int id = WorldGen.PlaceChest(x, floorY - 1, TileID.Containers, false, 0);
+                if (id < 0) throw new Exception("chest fixture placement failed");
+                Main.chest[id].item[0].SetDefaults(ItemID.CopperOre); Main.chest[id].item[0].stack = 3;
+                return (Id: id, X: Main.chest[id].x, Y: Main.chest[id].y);
+            });
+            var openedChest = await Call("interact", new JsonObject { ["x"] = chest.X, ["y"] = chest.Y }).WaitAsync(TimeSpan.FromSeconds(4));
+            if (await OnMain(() => Main.LocalPlayer.chest != chest.Id)) throw new Exception("queued chest opening stayed frozen: " + openedChest);
+            await Call("loot_all", new JsonObject()).WaitAsync(TimeSpan.FromSeconds(4));
+            if (await OnMain(() => Main.LocalPlayer.inventory.Where(i => i.type == ItemID.CopperOre).Sum(i => i.stack)) != 3)
+                throw new Exception("queued loot did not reach real inventory");
+            await OnMain(() => { Main.LocalPlayer.chest = -1; return true; });
+            await Until(() => ThinkingPause.Frozen, "chest handoff");
+            Record("queued_chest_and_loot_complete", new JsonObject(), await OnMain(Sample));
+
+            var navigationBefore = await OnMain(Sample);
+            var navigated = await Call("nav_to", new JsonObject { ["x"] = origin + 20, ["y"] = floorY - 1 })
+                .WaitAsync(TimeSpan.FromSeconds(20));
+            if (await OnMain(() => Main.LocalPlayer.Center.X / 16) < origin + 18) throw new Exception("navigation did not resume: " + navigated);
+            await Until(() => ThinkingPause.Frozen, "navigation handoff");
+            Record("navigation_completes", navigationBefore, await OnMain(Sample));
+
+            await OnMain(() => { Main.autoPause = true; Main.playerInventory = true; NativeAgent.Stop(); return true; });
+            await Task.Delay(150);
+            var manualBefore = await OnMain(Sample);
+            await Task.Delay(350);
+            var manualAfter = await OnMain(Sample);
+            if (ThinkingPause.Frozen || !JsonNode.DeepEquals(manualBefore["tick"], manualAfter["tick"]))
+                throw new Exception("stop overrode the player's original autopause");
+            Record("stop_preserves_external_pause", manualBefore, manualAfter);
+
+            await OnMain(() => { Main.autoPause = false; return true; });
+            var stoppedBefore = await OnMain(Sample);
+            await Task.Delay(350);
+            var stoppedAfter = await OnMain(Sample);
+            if (ThinkingPause.Frozen || stoppedAfter["tick"].GetValue<uint>() <= stoppedBefore["tick"].GetValue<uint>())
+                throw new Exception("stop left the world frozen");
+            Record("stop_releases_owned_pause", stoppedBefore, stoppedAfter);
+            Console.WriteLine("THINKING_PAUSE_NATIVE_PASS model_calls=0 cases=" + measurements.Count);
+        }
+        finally
+        {
+            await OnMain(() => { NativeAgent.Stop(); Halt.All(); Main.autoPause = false; Manual.On = false; return true; });
+            modelWait.TrySetResult(true);
         }
     }
 

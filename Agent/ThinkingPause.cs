@@ -14,8 +14,12 @@ public sealed class ThinkingPause : ModSystem
     static int worldFrames, transitions;
     static string reason;
     static readonly JsonArray history = new();
+    static Vector2 previousPosition;
+    static int uncoveredFrames, uncoveredRun, longestUncoveredRun;
+    static bool positionKnown;
     bool manualSwitch;
     public static bool Frozen => frozenAt != 0;
+    public static double FrozenMilliseconds => FrozenDuration.TotalMilliseconds;
     static TimeSpan FrozenDuration => TimeSpan.FromSeconds((frozenTicks
         + (Frozen ? Stopwatch.GetTimestamp() - frozenAt : 0)) / (double)Stopwatch.Frequency);
 
@@ -39,6 +43,8 @@ public sealed class ThinkingPause : ModSystem
         worldFrames = transitions = 0;
         reason = null; manualSwitch = false;
         history.Clear(); started = Stopwatch.GetTimestamp();
+        uncoveredFrames = uncoveredRun = longestUncoveredRun = 0;
+        positionKnown = false;
         AgentTools.WorldFramesRequired = 0;
     }
 
@@ -61,6 +67,19 @@ public sealed class ThinkingPause : ModSystem
     {
         worldFrames++;
         if (AgentTools.WorldFramesRequired > 0) AgentTools.WorldFramesRequired--;
+        var player = Main.LocalPlayer;
+        bool stationary = positionKnown && Vector2.DistanceSquared(previousPosition, player.position) <= .0025f;
+        bool uncovered = !Main.gameMenu && !Manual.On && !player.dead
+            && (NativeAgent.WorkPending || AgentTools.Actions.HasActive || AgentTools.ControlSession.Active)
+            && stationary && player.itemAnimation == 0 && player.itemTime == 0 && player.reuseDelay == 0
+            && !ActExecutor.IsActive && !FightCoordinator.IsActive && !PvpDuel.Active && !PlayerCombat.Active
+            && NativeAgent.WorldWaiters == 0 && AgentTools.WorldFramesRequired == 0;
+        uncoveredRun = uncovered ? uncoveredRun + 1 : 0;
+        if (uncovered) uncoveredFrames++;
+        longestUncoveredRun = Math.Max(longestUncoveredRun, uncoveredRun);
+        if (uncoveredRun == 7)
+            DiagLog.Write($"[agent_uncovered_frames] tick={Main.GameUpdateCount} run={uncoveredRun} tool={AgentTools.ControlSession.Tool} nav={RecedingNav.Active} field_ready={RecedingNav.FieldReady} mine={MineCoordinator.IsActive} use_item={ItemUseCoordinator.IsActive} status={NativeAgent.Status}");
+        previousPosition = player.position; positionKnown = true;
     }
 
     bool CanPause(On_Main.orig_CanPauseGame original)
@@ -81,7 +100,7 @@ public sealed class ThinkingPause : ModSystem
         if (player == null || !player.active || player.dead) return null;
         if (!NativeAgent.WorkPending && !AgentTools.Actions.HasActive && !AgentTools.ControlSession.Active) return null;
         if (player.itemAnimation > 0 || player.itemTime > 0 || player.reuseDelay > 0
-            || player.velocity != Vector2.Zero || AgentTools.WorldFramesRequired > 0
+            || player.velocity.Y != 0 || Math.Abs(player.velocity.X) > .05f || AgentTools.WorldFramesRequired > 0
             || NativeAgent.WorldWaiters > 0 || ActExecutor.IsActive) return null;
         if (RecedingNav.Active && (!RecedingNav.FieldReady || StateSpacePlanner.Computing
             || LegacyNativePrediction.Computing)) return "navigation_compute";
@@ -89,8 +108,6 @@ public sealed class ThinkingPause : ModSystem
             || PlaceAnywhere.IsRunning || TreasureGrab.IsRunning || HouseBuilder.IsRunning
             || FightCoordinator.IsActive || PvpDuel.Active || PlayerCombat.Active || FrameProgram.Active
             || AgentTools.ContactEscapeActive) return null;
-        if (AgentTools.ControlSession.Tool is "interact" or "loot_all" or "inventory_swap" or "craft"
-            or "equip_item" or "open_item" or "use_item") return null;
         return NativeAgent.WorkPending ? "agent_thinking" : "script_handoff";
     }
 
@@ -115,6 +132,7 @@ public sealed class ThinkingPause : ModSystem
         ["supported"] = Main.netMode == 0, ["frozen"] = Frozen, ["reason"] = reason,
         ["elapsed_ms"] = started == 0 ? 0 : Stopwatch.GetElapsedTime(started).TotalMilliseconds,
         ["frozen_ms"] = FrozenDuration.TotalMilliseconds, ["world_frames"] = worldFrames,
+        ["uncovered_stationary_frames"] = uncoveredFrames, ["longest_uncovered_run_frames"] = longestUncoveredRun,
         ["transitions"] = transitions, ["recent"] = history.DeepClone()
     };
 

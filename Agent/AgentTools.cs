@@ -739,7 +739,7 @@ public static partial class AgentTools
         var result = JsonNode.Parse(response.Body) as JsonObject
             ?? throw new InvalidOperationException($"{path} 未返回 JSON 对象。");
         if (response.Status >= 400 && result["error"] == null) result["error"] = $"status {response.Status}";
-        if (response.Status < 400 && path is "/interact" or "/loot_all" or "/swap" or "/quick_heal")
+        if (response.Status < 400 && path is "/interact" or "/loot_all" or "/swap" or "/quick_heal" or "/craft")
             WorldFramesRequired = Math.Max(WorldFramesRequired, 2);
         return result;
     }, token);
