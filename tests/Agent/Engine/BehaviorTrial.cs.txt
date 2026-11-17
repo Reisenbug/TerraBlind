@@ -4868,6 +4868,20 @@ public sealed partial class BehaviorTrial : ModSystem
     async Task ThinkingPauseTrial()
     {
         var measurements = new JsonArray();
+        var usefulLength = typeof(RecedingNav).Assembly.GetType("TerraBlind.LegacyMovementLookahead")
+            .GetMethod("UsefulLength", HiddenStatic);
+        JsonObject Frame(float x, float vx, float vy = 0, bool grounded = true) => new()
+        { ["x"] = x, ["y"] = 100f, ["vx"] = vx, ["vy"] = vy, ["grounded"] = grounded };
+        var suffix = new JsonArray(Frame(0, 1), Frame(1, 1));
+        for (int i = 0; i < 180; i++) suffix.Add(Frame(2, 0));
+        int Useful(JsonArray frames) => (int)usefulLength.Invoke(null, new object[] { frames });
+        if (Useful(suffix) != 4) throw new Exception("idle movement suffix was not trimmed to two confirmation frames");
+        foreach (var tail in new[] { Frame(2, 1), Frame(2, 0, .1f), Frame(2, 0, 0, false), Frame(3, 0) })
+        {
+            var moving = (JsonArray)suffix.DeepClone(); moving[^1] = tail;
+            if (Useful(moving) != moving.Count) throw new Exception("movement trimming removed motion or an airborne state");
+        }
+        Console.WriteLine("THINKING_PAUSE_SUFFIX_PASS idle=182->4 moving_and_airborne=preserved");
         var agent = ModContent.GetInstance<NativeAgent>();
         var runningField = typeof(NativeAgent).GetField("_running", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         var cancelField = typeof(NativeAgent).GetField("_cancel", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
@@ -5014,14 +5028,38 @@ public sealed partial class BehaviorTrial : ModSystem
             if (ThinkingPause.Frozen || stoppedAfter["tick"].GetValue<uint>() <= stoppedBefore["tick"].GetValue<uint>())
                 throw new Exception("stop left the world frozen");
             Record("stop_releases_owned_pause", stoppedBefore, stoppedAfter);
+
+            var replay = await OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                var area = new Rectangle((int)p.Center.X / 16 - 12, (int)p.Center.Y / 16 - 10, 25, 21);
+                var controls = new JsonArray();
+                for (int i = 0; i < 210; i++) controls.Add(i < 30 ? 2 : 0);
+                var request = new JsonObject { ["command"] = "replay", ["snapshot"] = VanillaFrame.Capture(p, area, true),
+                    ["controls"] = controls, ["detailed"] = false, ["stop_on_damage"] = true };
+                return (Task<JsonObject>)typeof(VanillaNavigationDemo).GetMethod("Observe",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                    .Invoke(VanillaNavigationDemo.Instance, new object[] { request, CancellationToken.None });
+            });
+            var predicted = await replay.WaitAsync(TimeSpan.FromSeconds(100));
+            var forecastFrames = predicted["frames"].AsArray();
+            int retained = Useful(forecastFrames);
+            if (predicted["outcome"]?.ToString() != "complete" || forecastFrames.Count - retained < 100
+                || !JsonNode.DeepEquals(forecastFrames[retained - 1]["x"], forecastFrames[^1]["x"])
+                || !JsonNode.DeepEquals(forecastFrames[retained - 1]["y"], forecastFrames[^1]["y"]))
+                throw new Exception("real engine idle suffix was not trimmed safely: " + predicted);
+            Record("real_forecast_idle_suffix_trimmed", new JsonObject { ["frames"] = forecastFrames.Count },
+                new JsonObject { ["retained_frames"] = retained, ["discarded_frames"] = forecastFrames.Count - retained });
             Console.WriteLine("THINKING_PAUSE_NATIVE_PASS model_calls=0 cases=" + measurements.Count);
         }
         finally
         {
-            await OnMain(() => { NativeAgent.Stop(); Halt.All(); Main.autoPause = false; Manual.On = false; return true; });
+            await OnMain(() => { NativeAgent.Stop(); Halt.All(); VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+                Main.autoPause = false; Manual.On = false; return true; });
             modelWait.TrySetResult(true);
         }
     }
+
 
     async Task ExperienceSkillCheck()
     {

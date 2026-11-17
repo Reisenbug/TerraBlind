@@ -89,14 +89,15 @@ internal static class LegacyMovementLookahead
                 || !VanillaFrame.ContextMatches(context, player, out _, samples)
                 || samples.Any(frame => frame["dead"].GetValue<bool>()
                     || frame["hp"].GetValue<int>() < anchor["hp"].GetValue<int>())) return null;
-            var last = samples[^1];
+            int useful = UsefulLength(samples);
+            var last = samples[useful - 1];
             var from = StateSpacePlanner.StandCell(player.position.X, player.position.Y);
             var cell = StateSpacePlanner.StandCell(last["x"].GetValue<float>(), last["y"].GetValue<float>());
             var field = MazeWand.PeekFieldOrNull(goalX, goalY);
             if (field == null || MazeWand.FieldPickStale() || !field.TryGetValue(from, out int before)
                 || !field.TryGetValue(cell, out int after) || after >= before) return null;
             var frames = new List<PhysicsSimulator.ControlInput>();
-            for (int i = 0; i < samples.Count; i++)
+            for (int i = 0; i < useful; i++)
             {
                 int keys = controls[i].GetValue<int>();
                 frames.Add(new PhysicsSimulator.ControlInput { Left = (keys & 1) != 0, Right = (keys & 2) != 0,
@@ -109,10 +110,22 @@ internal static class LegacyMovementLookahead
                 GoalWx = cell.Item1, GoalWy = cell.Item2, CostFrames = frames.Count, ExecFrames = frames };
             next.Steps.Add(new StateSpacePlanner.ExecStep { TargetCx = cell.Item1, TargetCy = cell.Item2,
                 Frames = frames, LandPx = frames[^1].Px, LandPy = frames[^1].Py });
-            DiagLog.Write($"[recede-lookahead-hit] frames={frames.Count} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###} compute_ms={result["request_compute_ms"]}");
+            DiagLog.Write($"[recede-lookahead-hit] frames={frames.Count} trimmed_idle_frames={samples.Count - useful} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###} compute_ms={result["request_compute_ms"]}");
             return next;
         }
         catch (Exception error) { DiagLog.Write("[recede-lookahead-miss] " + error.Message); return null; }
         finally { Reset(); }
+    }
+
+    internal static int UsefulLength(JsonArray samples)
+    {
+        bool Settled(JsonNode frame) => frame["grounded"]?.GetValue<bool>() == true
+            && frame["vx"].GetValue<float>() == 0 && frame["vy"].GetValue<float>() == 0;
+        bool Same(JsonNode a, JsonNode b) => a["x"].GetValue<float>() == b["x"].GetValue<float>()
+            && a["y"].GetValue<float>() == b["y"].GetValue<float>();
+        int count = samples.Count;
+        while (count > 2 && Settled(samples[count - 1]) && Settled(samples[count - 2]) && Settled(samples[count - 3])
+            && Same(samples[count - 1], samples[count - 2]) && Same(samples[count - 2], samples[count - 3])) count--;
+        return count;
     }
 }
