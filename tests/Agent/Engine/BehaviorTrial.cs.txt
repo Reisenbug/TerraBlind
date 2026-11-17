@@ -4855,6 +4855,40 @@ public sealed partial class BehaviorTrial : ModSystem
         }
     }
 
+    async Task ExperienceSkillCheck()
+    {
+        string brokenPath = Environment.GetEnvironmentVariable("TB_EXPERIENCE_CHECK_BROKEN");
+        string fixedPath = Environment.GetEnvironmentVariable("TB_EXPERIENCE_CHECK_FIXED");
+        string directory = Path.Combine(Main.SavePath, "TerraBlindAgent", "programs");
+        Directory.CreateDirectory(directory);
+        var trials = new JsonArray();
+        foreach (var entry in new[] { (Path: brokenPath, Name: "reproduce"), (Path: fixedPath, Name: "repair"), (Path: fixedPath, Name: "reuse") })
+        {
+            var source = JsonNode.Parse(File.ReadAllText(entry.Path));
+            string name = source["name"].GetValue<string>();
+            var syntax = new ScriptLibrary(Path.Combine(Main.SavePath, "syntax-" + entry.Name)).Save(name, source["code"].GetValue<string>(), 0);
+            if (syntax["error"] != null) throw new Exception("skill check rejected syntax: " + syntax);
+            File.WriteAllText(Path.Combine(directory, name + ".json"), source.ToJsonString());
+            int before = await OnMain(() => Main.LocalPlayer.inventory.Where(i => i.type == ItemID.WorkBench).Sum(i => i.stack));
+            int wanted = entry.Name == "reuse" ? before : before + 1;
+            var result = await Call("run_script", new JsonObject { ["workflow"] = "experience-contract-" + entry.Name,
+                ["code"] = "return skill(" + JsonValue.Create(name).ToJsonString() + "," + source["revision"]
+                    + ",{items:[{item_type:" + ItemID.WorkBench + ",count:" + wanted + "}]});" });
+            int after = await OnMain(() => Main.LocalPlayer.inventory.Where(i => i.type == ItemID.WorkBench).Sum(i => i.stack));
+            bool verified = entry.Name == "reproduce"
+                ? result["ok"]?.GetValue<bool>() == false && result["detail"]?.ToString().Contains("get_state.error") == true && before == after
+                : result["ok"]?.GetValue<bool>() == true && result["value"]?["status"]?.ToString() == "completed"
+                    && after >= wanted && (entry.Name != "reuse" || before == after);
+            var proof = new JsonObject { ["case"] = entry.Name, ["revision"] = source["revision"].DeepClone(),
+                ["source_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(source["code"].ToString()))),
+                ["before"] = before, ["wanted"] = wanted, ["after"] = after, ["verified"] = verified, ["result"] = result };
+            trials.Add(proof);
+            File.WriteAllText(Path.Combine(Main.SavePath, "experience-contract-check.json"), trials.ToJsonString());
+            if (!verified) throw new Exception("native experience skill contract check failed: " + proof);
+        }
+        Console.WriteLine("EXPERIENCE_SKILL_CONTRACT_PASS reproduced=true repaired=true reused=true model_calls=0");
+    }
+
     async Task ExperienceCollectionTrial()
     {
         string stage = Environment.GetEnvironmentVariable("TB_EXPERIENCE_STAGE");
@@ -6096,6 +6130,8 @@ public sealed partial class BehaviorTrial : ModSystem
 
     async Task QueenGoalTrial()
     {
+        if (Environment.GetEnvironmentVariable("TB_EXPERIENCE_CHECK_FIXED") != null)
+        { await ExperienceSkillCheck(); return; }
         if (Environment.GetEnvironmentVariable("TB_EXPERIENCE_STAGE") != null)
         { await ExperienceCollectionTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_FRAME_RESOURCE_TRIAL") == "1")
