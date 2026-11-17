@@ -4888,6 +4888,7 @@ public sealed partial class BehaviorTrial : ModSystem
             + "收集材料制作一把荆棘旋刃。途中顺路搜刮值得拿的箱子，拾取有用掉落物，处理背包与怪物。"
             + "已有基础工具、星怒和足量木头，持续鱼鳃和光芒效果；天然地形与怪物正常运行。"
             + "根据当前工具和现场自主执行、验证、恢复，保持有用行动连续。可通过script_program检索、编写和调用可复用技能。";
+        prompt += "\n当前保存的技能索引（源码、入参和适用条件通过script_program get查阅）：" + importedSkills.ToJsonString();
         var before = await Call("get_state", new JsonObject());
         var start = new JsonObject { ["stage"] = stage, ["seed"] = Main.ActiveWorldFileData.SeedText,
             ["prompt"] = prompt, ["before"] = before.DeepClone(), ["imported_skills"] = importedSkills,
