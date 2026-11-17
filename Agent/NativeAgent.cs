@@ -46,6 +46,15 @@ public class NativeAgent : ModSystem
     public static string Status { get; private set; } = "idle";
     internal static bool Processing => _instance?._running?.IsCompleted == false
         && _instance._cancel?.IsCancellationRequested == false && _instance._answer == null;
+    internal static bool WorkPending => _instance?._pending != null || Processing;
+    internal static Func<TimeSpan> FrozenTime = () => TimeSpan.Zero;
+    internal static int WorldWaiters;
+    internal static async Task WaitForWorld(int milliseconds, CancellationToken token)
+    {
+        Interlocked.Increment(ref WorldWaiters);
+        try { await Task.Delay(milliseconds, token); }
+        finally { Interlocked.Decrement(ref WorldWaiters); }
+    }
 
     internal static JsonArray ObserveTiles(Player player)
     {
@@ -179,6 +188,14 @@ public class NativeAgent : ModSystem
     }
 
     public override void PostUpdateEverything()
+        => UpdateAgent(true);
+
+    public override void UpdateUI(Microsoft.Xna.Framework.GameTime gameTime)
+    {
+        if (Main.gamePaused) UpdateAgent(false);
+    }
+
+    void UpdateAgent(bool worldAdvanced)
     {
         if (Main.dedServ) return;
         if (!Config.I.AgentEnabled || !AgentNetwork.CanAutomate)
@@ -194,12 +211,15 @@ public class NativeAgent : ModSystem
             && Status is not ("needs_repair" or "budgetLimited" or "failed");
         if (!Main.gameMenu && runtimeActive)
         {
-            AgentTools.ObserveBossControl(Processing);
             AgentTools.ContinuePreparedNode(_cancel.Token);
             AgentTools.ObserveContinuity();
-            AgentTools.LootPassingChest();
+            if (worldAdvanced)
+            {
+                AgentTools.ObserveBossControl(Processing);
+                AgentTools.LootPassingChest();
+            }
         }
-        if (!Main.gameMenu && (AgentTools.Watches.LocalDelivery || AgentTools.Watches.HasScriptHandlers
+        if (worldAdvanced && !Main.gameMenu && (AgentTools.Watches.LocalDelivery || AgentTools.Watches.HasScriptHandlers
                 || runtimeActive)
             && AgentTools.Watches.Armed && DateTime.UtcNow - _lastWatch >= TimeSpan.FromMilliseconds(250))
         {
@@ -255,7 +275,7 @@ public class NativeAgent : ModSystem
         if (!Main.gameMenu && runtimeActive && AgentTools.Watches.HasScriptHandlers && _idleReaction.IsCompleted)
             _idleReaction = AgentTools.ReactWhileIdle(_cancel.Token);
         if (Status == "后台动作执行中" && !AgentTools.Actions.HasActive) Status = "idle";
-        if (PvpDuel.Active) PvpDuel.Update(Main.LocalPlayer);
+        if (worldAdvanced && PvpDuel.Active) PvpDuel.Update(Main.LocalPlayer);
         if (_running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false
             && _answer == null && DateTime.UtcNow - _lastFeedback >= TimeSpan.FromSeconds(30))
             Progress("任务仍在处理中：" + Status + "。可用 /tb stop 停止。", Status, !PvpDuel.Active);
@@ -423,7 +443,9 @@ public class NativeAgent : ModSystem
                     if (canContinue && (progressed || discovered && preparationContinuations++ < 4 || noProgressContinuations++ < 1))
                     {
                         input = "计划未完成或脚本yield：结合当前workflow续写并执行剩余步骤，uncertain先核对。"
-                            + "新查证资料仅允许最多4轮准备续接，重复查询不增加准备机会；没有新资料或实际进展时仅额外续接一次。请执行采集、移动或制作；无可执行办法则明确报告阻塞，不再yield空转。\n现状："
+                            + (goalOptions == null ? "新查证资料仅允许最多4轮准备续接；没有新资料或实际进展时仅额外续接一次。"
+                                : "长期goal持续续接，不因普通指令的轮数限制结束；利用recovery.failure_history改变失败方案，不只查询和空yield。")
+                            + "请执行采集、移动或制作；缺少可执行办法时保留真实阻塞并调查替代方案。\n现状："
                             + await Context();
                         continue;
                     }

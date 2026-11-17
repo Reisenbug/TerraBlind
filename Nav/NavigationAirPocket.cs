@@ -13,6 +13,7 @@ public static class NavigationAirPocket
     static bool active, sealedPocket;
     static int slot, blockSlot, savedSlot, idle, elapsed, retry;
     static float destinationX;
+    static int plannedFrames;
     public static int Recoveries { get; private set; }
 
     public static void Reset(Player player)
@@ -38,7 +39,7 @@ public static class NavigationAirPocket
             RecedingNav.InterruptForSurvival();
             savedSlot = player.selectedItem;
             active = true; idle = elapsed = 0;
-            DiagLog.Write($"[survival-air] start breath={player.breath} target_x={destinationX} tiles={dig.Count} seal={seal.Count}");
+            DiagLog.Write($"[survival-air] start breath={player.breath} target_x={destinationX} tiles={dig.Count} seal={seal.Count} planned_frames={plannedFrames} budget_frames={BreathBudget(player)} pick={player.inventory[slot].pick}");
         }
         player.controlLeft = player.controlRight = player.controlJump = player.controlDown = player.controlUp = player.controlUseItem = false;
         if (player.breath >= player.breathMax)
@@ -59,7 +60,7 @@ public static class NavigationAirPocket
             Reset(player);
             return true;
         }
-        if (++elapsed > 900 || ++idle > 180)
+        if (++elapsed > plannedFrames || ++idle > 180)
         {
             DiagLog.Write($"[survival-air] stalled remaining={dig.Count} breath={player.breath}");
             Reset(player); retry = 60;
@@ -84,8 +85,8 @@ public static class NavigationAirPocket
         if (dig.Count > 0)
         {
             var target = dig.Peek();
-            if (!LavaSafety.CanMine(target.X, target.Y) || !Reach.CanMine(player, target.X, target.Y)
-                || !WorldGen.CanKillTile(target.X, target.Y))
+            if (!CanDig(player, target.X, target.Y)
+                || DigTable.CostFrames(target.X, target.Y, player, player.inventory[slot]) + 60 > BreathBudget(player))
             { Reset(player); retry = 60; return true; }
             player.selectedItem = slot;
             player.delayUseItem = false; player.mouseInterface = false;
@@ -121,7 +122,7 @@ public static class NavigationAirPocket
             for (int y = floor - 5; y <= floor; y++)
             {
                 if (!SolidSeal(x, y) || !LavaSafety.CanMine(x, y)
-                    || y < floor && (!Reach.CanMine(player, x, y) || !WorldGen.CanKillTile(x, y))) valid = false;
+                    || y < floor && !CanDig(player, x, y)) valid = false;
             }
             if (!valid) continue;
             for (int y = floor - 3; y < floor; y++) dig.Enqueue(new Point(entrance, y));
@@ -130,7 +131,8 @@ public static class NavigationAirPocket
             for (int y = floor - 2; y < floor; y++)
             for (int x = pocketLeft; x < pocketLeft + 2; x++) dig.Enqueue(new Point(x, y));
             destinationX = pocketLeft * 16 + (32 - player.width) / 2f;
-            return true;
+            if (FitsBudget(player)) return true;
+            dig.Clear(); seal.Clear();
         }
         return false;
     }
@@ -157,7 +159,7 @@ public static class NavigationAirPocket
                 bool shell = x == left - 1 || x == left + 2 || y == floor + candidate;
                 var tile = Main.tile[x, y];
                 if ((shell || tile.HasTile) && !SolidSeal(x, y) || !LavaSafety.CanMine(x, y)
-                    || !shell && tile.HasTile && !WorldGen.CanKillTile(x, y)) valid = false;
+                    || !shell && tile.HasTile && !CanDig(player, x, y)) valid = false;
                 if (!shell) water += tile.LiquidAmount;
             }
             if (valid && water <= ((3 + candidate) * 2 - 3) * 255) depth = candidate;
@@ -175,9 +177,47 @@ public static class NavigationAirPocket
         for (int y = floor; y < floor + depth; y++)
         for (int x = left; x <= left + 1; x++) dig.Enqueue(new Point(x, y));
         destinationX = player.position.X;
+        if (!FitsBudget(player)) { dig.Clear(); seal.Clear(); return false; }
         sealedPocket = true;
         DiagLog.Write($"[survival-air] sealed_depth={depth} left={left} floor={floor}");
         return true;
+    }
+
+    static int BreathBudget(Player player) => Math.Max(0, player.breath - 1) * 6;
+
+    static bool CanDig(Player player, int x, int y)
+        => Reach.CanMine(player, x, y, player.inventory[slot])
+            && LavaSafety.CanMine(x, y) && DigTable.MineableWith(x, y, player.inventory[slot].pick);
+
+    static bool FitsBudget(Player player)
+    {
+        int frames = 120;
+        var visited = new HashSet<Point>();
+        foreach (var tile in dig)
+        {
+            if (!visited.Add(tile)) continue;
+            if (!CanDig(player, tile.X, tile.Y)) return false;
+            frames += DigTable.CostFrames(tile.X, tile.Y, player, player.inventory[slot]) + 2;
+            if (frames > BreathBudget(player)) return false;
+        }
+        if (seal.Count > 0)
+        {
+            var block = player.inventory[blockSlot];
+            if (block.stack < seal.Count) return false;
+            int previousSlot = player.selectedItem;
+            try
+            {
+                player.selectedItem = blockSlot;
+                foreach (var tile in seal)
+                {
+                    if (!Reach.CanPlace(player, tile.X, tile.Y) || !LavaSafety.CanMine(tile.X, tile.Y)) return false;
+                    frames += Math.Max(1, block.useTime) + 2;
+                }
+            }
+            finally { player.selectedItem = previousSlot; }
+        }
+        plannedFrames = frames;
+        return frames <= BreathBudget(player);
     }
 
     static bool SolidSeal(int x, int y)

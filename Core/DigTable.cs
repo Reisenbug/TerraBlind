@@ -152,7 +152,14 @@ namespace TerraBlind
             for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { slot = i; break; } }
             if (slot < 0) return Unmineable;
             var pick = p.inventory[slot];
+            return CostFrames(x, y, p, pick);
+        }
+
+        public static int CostFrames(int x, int y, Player p, Item pick)
+        {
+            if (p == null || pick == null || pick.pick <= 0 || !LavaSafety.CanMine(x, y)) return Unmineable;
             var tile = Main.tile[x, y];
+            if (!tile.HasTile) return 0;
             if (IsForbidden(tile.TileType)) return Unmineable;
             int dmg = GetPickaxeDamage(x, y, pick.pick, tile);
             if (Main.getGoodWorld) dmg *= 2;

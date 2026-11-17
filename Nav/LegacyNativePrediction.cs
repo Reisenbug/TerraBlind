@@ -11,6 +11,7 @@ namespace TerraBlind;
 internal static class LegacyNativePrediction
 {
     static Task<JsonObject> pending;
+    internal static bool Computing => pending is { IsCompleted: false };
     static CancellationTokenSource cancellation;
     static StateSpacePlanner.SSResult plan;
     static JsonObject snapshot, anchor;

@@ -72,6 +72,31 @@ static class WatchTests
         recovery.Record("find_tiles", new JsonObject { ["name"] = "Heart" }, "{\"tiles\":[{\"x\":1,\"y\":2}]}");
         Check(recovery.Snapshot()["latest"] == null && !recovery.Exhausted, "corrected query retained stale failure");
         Console.WriteLine("PASS: recovery deduplicates wake requests, bounds identical failures and clears corrected query evidence");
+        recovery.Reset();
+        recovery.Record("gather", new JsonObject { ["count"] = 2 }, "{\"ok\":false,\"outcome\":\"ambiguous_tile_name\",\"source_error\":{\"error\":\"ambiguous_tile_name\",\"name_candidates\":[{\"internal\":\"ActualPlant\"}]}}");
+        Check(recovery.Snapshot()["latest"]["evidence"]["source_error"]["name_candidates"][0]["internal"].ToString() == "ActualPlant",
+            "gather source correction disappeared from recovery input");
+        recovery.Record("gather", new JsonObject { ["count"] = 2 }, "{\"ok\":true}");
+        Check(recovery.Snapshot()["latest"] == null && recovery.Snapshot()["failure_history"].AsArray().Count == 1,
+            "a later success erased past strategy evidence");
+        for (int i = 0; i < 8; i++)
+            recovery.Record("nav_to", new JsonObject { ["x"] = i, ["y"] = 5 }, "{\"done\":false,\"status\":\"failed\",\"reason\":\"blocked\"}");
+        var failures = recovery.Snapshot()["failure_history"].AsArray();
+        Check(failures.Count == 4 && failures[0]["args"]["x"].GetValue<int>() == 4,
+            "failure memory lost recency or grew without bound");
+        recovery.Record("nav_to", new JsonObject { ["x"] = 7, ["y"] = 5 }, "{\"error\":\"blocked\"}");
+        Check(recovery.Snapshot()["failure_history"].AsArray().Count == 4
+            && recovery.Snapshot()["failure_history"][3]["attempts"].GetValue<int>() == 2,
+            "same failed strategy duplicated history instead of updating its count");
+        recovery.Reset();
+        for (int i = 0; i < 4; i++)
+            recovery.Record("nav_to", new JsonObject { ["x"] = i, ["instructions"] = new string('x', 4000) },
+                new JsonObject { ["error"] = "blocked", ["detail"] = new string('y', 10000) }.ToJsonString());
+        Check(recovery.Snapshot()["failure_history"].ToJsonString().Length < 10000
+            && recovery.Snapshot()["latest"]["evidence"]["detail"].ToString().Length == 10000,
+            "history bloated default context or truncated current repair evidence");
+        recovery.Reset();
+        Console.WriteLine("PASS: recovery retains bounded failed strategies and nested source evidence across later queries");
         var watch = new AgentWatch();
         var config = JsonNode.Parse("{\"events\":[\"nearby_chest\",\"action_finished\",\"low_health\"]}").AsObject();
         watch.Configure(config);

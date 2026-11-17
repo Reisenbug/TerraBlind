@@ -9,6 +9,69 @@ using TerraBlind;
 
 static class PlanRepairModel
 {
+    public static async Task Replanning(bool withoutHistory)
+    {
+        var names = new[] { "get_state", "find_tiles", "nav_to", "run_script", "say" };
+        var schemas = new JsonArray(JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray()
+            .Where(tool => names.Contains(tool["function"]["name"].ToString())).Select(tool => tool.DeepClone()).ToArray());
+        var recovery = new AgentRecovery();
+        foreach (int x in new[] { 20, 30 })
+            recovery.Record("nav_to", new JsonObject { ["x"] = x, ["y"] = 10 },
+                "{\"done\":false,\"status\":\"failed\",\"reason\":\"blocked_without_world_change\"}");
+        int badMoves = 0, goodMoves = 0;
+        var events = new JsonArray();
+        JsonObject State()
+        {
+            var remembered = recovery.Snapshot();
+            if (withoutHistory) remembered.Remove("failure_history");
+            return new JsonObject { ["mock_world"] = true, ["recovery"] = remembered,
+                ["player"] = new JsonObject { ["hp"] = 100, ["pos"] = new JsonObject { ["x"] = 10 * 16, ["y"] = 10 * 16 } } };
+        }
+        void Validate(string name, JsonObject args)
+        {
+            var schema = schemas.FirstOrDefault(tool => tool["function"]["name"].ToString() == name)
+                ?? throw new ArgumentException("unknown tool " + name);
+            foreach (var field in schema["function"]["parameters"]?["required"]?.AsArray() ?? new JsonArray())
+                if (args[field.ToString()] == null) throw new ArgumentException("missing " + field);
+        }
+        async Task<string> Execute(string name, JsonObject args, CancellationToken token)
+        {
+            Validate(name, args);
+            events.Add(new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
+            JsonObject result;
+            switch (name)
+            {
+                case "get_state": result = State(); break;
+                case "find_tiles":
+                    result = new JsonObject { ["tiles"] = new JsonArray(new[] { 20, 30, 40 }.Select(x => (JsonNode)new JsonObject
+                        { ["x"] = x, ["y"] = 10, ["dist"] = x - 10 }).ToArray()) }; break;
+                case "nav_to":
+                    bool available = args["x"].GetValue<int>() == 40 && args["y"].GetValue<int>() == 10;
+                    if (available) goodMoves++; else badMoves++;
+                    result = new JsonObject { ["done"] = available, ["status"] = available ? "done" : "failed",
+                        ["reason"] = available ? null : "blocked_without_world_change" };
+                    recovery.Record(name, args, result.ToJsonString()); break;
+                case "run_script":
+                    result = await AgentScript.Run(args["code"].ToString(), 120, Validate, Execute, _ => Task.CompletedTask, token); break;
+                default: result = new JsonObject { ["ok"] = true }; break;
+            }
+            return result.ToJsonString();
+        }
+        string root = Path.Combine(Path.GetTempPath(), "terrablind-replanning-" + Guid.NewGuid().ToString("N"));
+        using var codex = new CodexAgent();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        for (int round = 0; round < 2 && goodMoves == 0; round++)
+            await codex.RunAsync("这是模拟工具的单步重规划测试。目标：选择一个可达的资源点并实际调用nav_to到达。"
+                + "先用find_tiles查询候选来源；结合恢复记录选择，地形没有发生改变。移动立即返回，不使用后台任务，不需要采集、战斗或查询知识。不要只说计划。现状：" + State().ToJsonString(),
+                "", root, "gpt-6-luna", AgentScript.Instructions(File.ReadAllText("Agent/System.txt"), schemas),
+                AgentScript.EntryTools(schemas), Execute, text => events.Add(new JsonObject { ["text"] = text }), timeout.Token);
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "result.json"), new JsonObject { ["without_history"] = withoutHistory,
+            ["good_moves"] = goodMoves, ["bad_moves"] = badMoves, ["events"] = events, ["usage"] = codex.TokenUsage }.ToJsonString());
+        Console.WriteLine($"REPLANNING_MODEL_COMPLETE actual_model=true mock_world=true history={!withoutHistory} good={goodMoves} bad={badMoves} report={root}/result.json");
+        if (!withoutHistory && (goodMoves != 1 || badMoves != 0)) throw new Exception("model failed to use prior failure evidence for replanning");
+    }
+
     public static async Task Run()
     {
         var schemas = JsonNode.Parse(File.ReadAllText("Agent/Tools.json")).AsArray();

@@ -68,7 +68,7 @@ namespace Terraria
 {
     public static class Main
     {
-        public static bool dedServ, gameMenu, playerInventory;
+        public static bool dedServ, gameMenu, gamePaused, playerInventory;
         public static string SavePath = "/tmp/terrablind-agent-test-world";
         public static string worldName = "test";
         public static int worldID;
@@ -303,6 +303,7 @@ namespace Terraria.ModLoader
         public virtual void OnWorldLoad() { }
         public virtual void OnWorldUnload() { }
         public virtual void PostUpdateEverything() { }
+        public virtual void UpdateUI(Microsoft.Xna.Framework.GameTime gameTime) { }
     }
     public class ModPlayer
     {

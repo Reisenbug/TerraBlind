@@ -119,6 +119,7 @@ public sealed class ControlTrial : ModSystem
             p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
             p.inventory[1].SetDefaults(ItemID.Starfury);
             p.inventory[2].SetDefaults(ItemID.DirtBlock); p.inventory[2].stack = 999;
+            p.inventory[3].SetDefaults(ItemID.Wood); p.inventory[3].stack = 50;
             p.selectedItem = 0;
             int x = (int)p.Center.X / 16;
             floor = (int)p.Bottom.Y / 16 + 3; sandX = x + 4;
@@ -133,6 +134,7 @@ public sealed class ControlTrial : ModSystem
             p.position = new Vector2(x * 16, floor * 16 - p.height); p.velocity = Vector2.Zero;
             p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
             Console.WriteLine($"CONTROL_FIXTURE sand=({sandX},{floor - 7})..({sandX + 3},{floor - 1}) player={p.position}");
+            Console.WriteLine($"CONTROL_MATERIALS platform_slot={NavCoordinator.FindPlatformSlot(p)} wood={p.inventory[3].stack} dirt={p.inventory[2].stack}");
             return true;
         });
         var action = await Call("action_start", new JsonObject { ["tool"] = "nav_to",
@@ -180,6 +182,10 @@ public sealed class ControlTrial : ModSystem
             ["behaviors"] = new JsonArray("mining"), ["reason"] = "do not undermine this sand wall",
             ["region"] = new JsonObject { ["x"] = sandX, ["y"] = floor - 7, ["width"] = 4, ["height"] = 7 } });
         Check(localVeto["status"]?.ToString() == "ready", "local excavation veto not ready");
+        var crafted = await Call("craft", new JsonObject { ["name"] = "WoodPlatform", ["amount"] = 20, ["control_claim"] = claimId });
+        Check(crafted["ok"]?.ToString() == "true", "could not prepare platforms for the alternate route");
+        await OnMain(() =>
+        { Check(NavCoordinator.FindPlatformSlot(Main.LocalPlayer) >= 0, "crafted platforms absent from real inventory"); return true; });
         await Call("control", new JsonObject { ["operation"] = "release", ["id"] = claimId });
         int picksBeforeResume = await OnMain(() => sandPickAttempts);
         var retried = await Call("nav_to", new JsonObject { ["x"] = sandX + 8, ["y"] = floor - 1 }).WaitAsync(TimeSpan.FromSeconds(60));

@@ -739,8 +739,12 @@ public static partial class AgentTools
         var result = JsonNode.Parse(response.Body) as JsonObject
             ?? throw new InvalidOperationException($"{path} 未返回 JSON 对象。");
         if (response.Status >= 400 && result["error"] == null) result["error"] = $"status {response.Status}";
+        if (response.Status < 400 && path is "/interact" or "/loot_all" or "/swap" or "/quick_heal")
+            WorldFramesRequired = Math.Max(WorldFramesRequired, 2);
         return result;
     }, token);
+
+    internal static int WorldFramesRequired;
 
     public static Task<string> State(CancellationToken token, bool includeTiles = false, bool includeWatchHistory = false) =>
         State(token, includeTiles, includeWatchHistory, null);
@@ -984,7 +988,9 @@ public static partial class AgentTools
         try
         {
             var timer = Stopwatch.StartNew();
-            while (seconds <= 0 || timer.Elapsed.TotalSeconds < seconds)
+            var frozenAtStart = NativeAgent.FrozenTime();
+            double Elapsed() => (timer.Elapsed - (NativeAgent.FrozenTime() - frozenAtStart)).TotalSeconds;
+            while (seconds <= 0 || Elapsed() < seconds)
             {
                 await NativeAgent.NextUpdate(token);
                 if (await NativeAgent.OnMain(() => Main.LocalPlayer.dead, token))
@@ -1014,14 +1020,14 @@ public static partial class AgentTools
                             return;
                         }
                         if (completed != null) return;
-                        int remaining = seconds <= 0 ? 0 : Math.Max(1, (int)Math.Ceiling(seconds - timer.Elapsed.TotalSeconds));
+                        int remaining = seconds <= 0 ? 0 : Math.Max(1, (int)Math.Ceiling(seconds - Elapsed()));
                         completed = await Wait(path, active, stop, remaining, ct, navigationProgress, onCompleted: onCompleted);
                     }, resume: restart, context: reactionContext);
                     if (completed != null) return completed;
                 }
                 if (navigationProgress != null)
                 {
-                    var stalled = await navigationProgress(timer.Elapsed.TotalSeconds);
+                    var stalled = await navigationProgress(Elapsed());
                     if (stalled != null)
                     {
                         await StopAction();

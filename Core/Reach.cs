@@ -40,6 +40,8 @@ namespace TerraBlind
 		// 挖:vanilla Player.cs:46562 IsTargetTileInItemRange
 		public static bool CanMine(Player p, int tx, int ty) => Box(p, tx, ty, HeldBoost(p), 0);
 
+		public static bool CanMine(Player p, int tx, int ty, Item pick) => Box(p, tx, ty, pick.tileBoost, 0);
+
 		// 放:vanilla Player.cs:38990,比挖多一项 blockRange
 		public static bool CanPlace(Player p, int tx, int ty) => Box(p, tx, ty, HeldBoost(p), p.blockRange);
 

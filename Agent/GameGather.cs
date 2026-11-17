@@ -154,7 +154,7 @@ public sealed class GameGather : IGatherWorld
                 stable = previousPosition.HasValue && (sample.Position - previousPosition.Value).LengthSquared() <= .25f ? stable + 1 : 0;
                 previousPosition = sample.Position;
                 if (stable >= 2) break;
-                await Task.Delay(150, token);
+                await NativeAgent.WaitForWorld(150, token);
             }
             var live = await NativeAgent.OnMain(() =>
             {
@@ -173,12 +173,12 @@ public sealed class GameGather : IGatherWorld
             if (live["moving"] != null) return new JsonObject { ["outcome"] = "drop_still_moving" };
             if (live["near"]?.GetValue<bool>() == true)
             {
-                await Task.Delay(400, token);
+                await NativeAgent.WaitForWorld(400, token);
                 return await NativeAgent.OnMain(PickupBlocked, token) ?? new JsonObject { ["outcome"] = "waited_for_pickup" };
             }
             var result = await AgentTools.Navigate(new JsonObject { ["x"] = live["gx"].DeepClone(),
                 ["y"] = live["gy"].DeepClone(), ["mode"] = "stand" }, token, 12, PickupBlocked);
-            await Task.Delay(400, token);
+            await NativeAgent.WaitForWorld(400, token);
             return await NativeAgent.OnMain(PickupBlocked, token) ?? result;
         }
         bool Valid() => who >= 0 && who < Main.maxNPCs && Main.npc[who].active && !Main.npc[who].friendly

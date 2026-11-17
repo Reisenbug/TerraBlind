@@ -2219,6 +2219,8 @@ namespace TerraBlind
         const int PlaceStallMax = 60;
 
         public static bool IsActive => _execFrames != null || _walkActive;
+        internal static bool Computing => !IsActive && !StepsActive && !_greedyActive
+            && (_asyncPending && _asyncRes == null || _replanPending && _rollBgTask is { IsCompleted: false });
         public static bool ReservesItemUse => _airPlace.HasValue || _execFrames?.Exists(frame => frame.Place) == true;
 
         internal static (int Direction, float TargetX, float ArrivalPixels)? PeekWalkIntent()

@@ -251,6 +251,29 @@ static class RuntimeTests
         Console.WriteLine("PASS: placement yields at the animation boundary and resumes its original target after evasion");
     }
 
+    static void TestRecoveryAfterSuccess()
+    {
+        var recovery = new AgentRecovery();
+        var args = JsonNode.Parse("{\"targets\":[{\"item_type\":29,\"count\":1}]}").AsObject();
+        const string failed = "{\"outcome\":\"source_unavailable\",\"targets\":[{\"item_type\":29,\"actual\":0,\"wanted\":1}]}";
+        const string collected = "{\"outcome\":\"enough\",\"targets\":[{\"item_type\":29,\"actual\":1,\"wanted\":1}]}";
+        recovery.Record("gather", args, failed); recovery.Record("gather", args, failed);
+        recovery.Offer();
+        recovery.Record("gather", args, collected);
+        recovery.Record("gather", args, failed);
+        Check(!recovery.Denied("gather", args) && recovery.Snapshot()["latest"]["attempts"].GetValue<int>() == 1
+            && recovery.Snapshot()["repair_rounds"].GetValue<int>() == 0,
+            "a successful collection failed to reset its earlier consecutive failures");
+        recovery.Record("gather", args, failed); recovery.Record("gather", args, failed);
+        Check(recovery.Denied("gather", args), "three consecutive collection failures were allowed to repeat indefinitely");
+        var different = JsonNode.Parse("{\"targets\":[{\"item_type\":209,\"count\":1}]}").AsObject();
+        recovery.Record("gather", different, "{\"outcome\":\"enough\",\"targets\":[{\"item_type\":209,\"actual\":1,\"wanted\":1}]}");
+        recovery.Record("recipe", new JsonObject { ["name"] = "fixture" }, "{\"recipes\":[]}");
+        Check(recovery.Denied("gather", args) && !recovery.Denied("gather", different),
+            "success on another request or a read-only query erased the actual failing request's retry limit");
+        Console.WriteLine("PASS: successful actions reset only their own consecutive failures while real repeated failures remain blocked");
+    }
+
     static void TestPassiveOpportunityWake()
     {
         long now = 0;
@@ -915,7 +938,7 @@ static class RuntimeTests
                 var request = asProgram ? new JsonObject { ["program"] = "cancelled", ["expected_revision"] = 1 }
                     : new JsonObject { ["code"] = "return skill('cancelled',1);" };
                 var running = AgentTools.Execute("run_script", request, cancellation.Token);
-                await PumpUntil(() => AgentChat.Messages.Count > before);
+                await PumpUntil(() => AgentChat.Messages.Skip(before).Contains("skill cancellation fixture entered"));
                 cancellation.Cancel();
                 bool cancelled = false;
                 try { await Execute(running); } catch (OperationCanceledException) { cancelled = true; }
@@ -1259,6 +1282,7 @@ static class RuntimeTests
         await QueryHandoff();
         await TestPlacementReaction();
         TestHoneyNotice();
+        TestRecoveryAfterSuccess();
         TestPassiveOpportunityWake();
         TestInventoryNotice();
         TestActionNotices();

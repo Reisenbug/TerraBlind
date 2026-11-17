@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Nodes;
 
 namespace TerraBlind;
@@ -8,6 +9,7 @@ public sealed class AgentRecovery
 {
     readonly Dictionary<string, int> attempts = new();
     readonly Dictionary<string, int> gatherBest = new();
+    readonly List<(string Key, JsonObject Value)> history = new();
     JsonObject latest;
     int revision, offered, rounds;
     public int Revision => revision;
@@ -25,7 +27,8 @@ public sealed class AgentRecovery
             || result["outcome"]?.ToString() is "source_unavailable" or "no_progress" or "stalled" or "stuck" or "timeout";
         if (!failed)
         {
-            if (latest?["tool"]?.ToString() == tool) latest = null;
+            attempts.Remove(tool + ":" + args.ToJsonString());
+            if (latest?["tool"]?.ToString() == tool) { latest = null; rounds = 0; }
             return;
         }
         string key = tool + ":" + args.ToJsonString();
@@ -44,9 +47,7 @@ public sealed class AgentRecovery
         }
         int count = attempts.GetValueOrDefault(key) + 1;
         attempts[key] = count;
-        var evidence = new JsonObject();
-        foreach (string field in new[] { "error", "detail", "outcome", "status", "reason", "requested_name", "name_candidates", "targets", "state", "dist" })
-            if (result[field] != null) evidence[field] = result[field].DeepClone();
+        var evidence = Evidence(result);
         latest = new JsonObject { ["tool"] = tool, ["args"] = args.DeepClone(), ["evidence"] = evidence,
             ["attempts"] = count, ["revision"] = ++revision };
         if (result["source_error"] is JsonObject sourceError)
@@ -54,6 +55,27 @@ public sealed class AgentRecovery
         foreach (string field in new[] { "placed", "wanted" })
             if (result[field] != null) evidence[field] = result[field].DeepClone();
         if (result["cells"] is JsonArray cells && cells.Count > 0) evidence["last_cell"] = cells[^1]?.DeepClone();
+        int previous = history.FindIndex(entry => entry.Key == key);
+        if (previous >= 0) history.RemoveAt(previous);
+        var remembered = (JsonObject)latest.DeepClone();
+        string argumentText = args.ToJsonString(), evidenceText = evidence.ToJsonString();
+        if (argumentText.Length > 512)
+        { remembered.Remove("args"); remembered["args_excerpt"] = argumentText[..512]; }
+        if (evidenceText.Length > 1536)
+        { remembered.Remove("evidence"); remembered["evidence_excerpt"] = evidenceText[..1536]; }
+        history.Add((key, remembered));
+        if (history.Count > 4) history.RemoveAt(0);
+    }
+
+    static JsonObject Evidence(JsonObject result, int depth = 0)
+    {
+        var evidence = new JsonObject();
+        foreach (string field in new[] { "error", "detail", "outcome", "status", "reason", "requested_name", "name_candidates", "targets", "state", "dist", "candidate", "contact_escape", "trap_tiles" })
+            if (result[field] != null) evidence[field] = result[field].DeepClone();
+        if (depth < 3)
+            foreach (string field in new[] { "navigation", "source_error", "last_result", "result" })
+                if (result[field] is JsonObject nested) evidence[field] = Evidence(nested, depth + 1);
+        return evidence;
     }
 
     public bool Offer()
@@ -63,6 +85,7 @@ public sealed class AgentRecovery
     }
 
     public JsonObject Snapshot() => new() { ["latest"] = latest?.DeepClone(), ["revision"] = revision,
+        ["failure_history"] = new JsonArray(history.Select(entry => (JsonNode)entry.Value.DeepClone()).ToArray()),
         ["repair_rounds"] = rounds, ["exhausted"] = Exhausted };
-    public void Reset() { attempts.Clear(); gatherBest.Clear(); latest = null; revision = offered = rounds = 0; }
+    public void Reset() { attempts.Clear(); gatherBest.Clear(); history.Clear(); latest = null; revision = offered = rounds = 0; }
 }
