@@ -144,20 +144,18 @@ namespace TerraBlind
         // 真实挖掘帧数:swings=ceil(100/伤害),再乘 useTime 和 pickSpeed。伤害 0 或 CanKillTile 假 = 挖不动
         public static int CostFrames(int x, int y)
         {
-            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return Unmineable;
-            if (!LavaSafety.CanMine(x, y)) return Unmineable;
             var p = Main.LocalPlayer;
             if (p == null) return Unmineable;
             int slot = -1;
             for (int i = 0; i < 10; i++) { var it = p.inventory[i]; if (it != null && !it.IsAir && it.pick > 0) { slot = i; break; } }
             if (slot < 0) return Unmineable;
-            var pick = p.inventory[slot];
-            return CostFrames(x, y, p, pick);
+            return CostFrames(x, y, p, p.inventory[slot]);
         }
 
         public static int CostFrames(int x, int y, Player p, Item pick)
         {
-            if (p == null || pick == null || pick.pick <= 0 || !LavaSafety.CanMine(x, y)) return Unmineable;
+            if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return Unmineable;
+            if (!LavaSafety.CanMine(x, y) || p == null || pick == null || pick.IsAir || pick.pick <= 0) return Unmineable;
             var tile = Main.tile[x, y];
             if (!tile.HasTile) return 0;
             if (IsForbidden(tile.TileType)) return Unmineable;

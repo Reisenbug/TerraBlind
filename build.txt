@@ -1,6 +1,6 @@
 displayName = TerraBlind
 author = Stardust
-version = 1.0
+version = 2.0.0
 dllReferences = Jint, Acornima
 homepage = https://github.com/Reisenbug/TerraBlind
 includeSource = true
