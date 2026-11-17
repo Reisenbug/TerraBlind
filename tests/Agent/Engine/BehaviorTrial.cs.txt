@@ -81,6 +81,7 @@ public sealed partial class BehaviorTrial : ModSystem
     bool queenPositionTracked, queenStationaryWarned;
     readonly JsonArray queenGaps = new();
     JsonObject jungleSpawn, firstJungleAction;
+    ExperienceMeter experienceMeter;
     string progressionStage;
     int mechanicalSkulls;
     long lastProgressionDamage = -1;
@@ -605,6 +606,7 @@ public sealed partial class BehaviorTrial : ModSystem
             for (int i = 0; i < Main.maxNPCs; i++)
                 if (i != target || collectingStingers && Main.npc[i].type != NPCID.Hornet) Main.npc[i].active = false;
         var p = Main.LocalPlayer;
+        experienceMeter?.Observe(p);
         if (FullQueenRun)
         {
             if (queenPreviouslyDead && !p.dead) Main.playerInventory = true;
@@ -4802,6 +4804,188 @@ public sealed partial class BehaviorTrial : ModSystem
         Console.WriteLine("OPPORTUNITY_COMPLETE native_engine=true model_calls=0 teleports_after_start=0");
     }
 
+    sealed class ExperienceMeter
+    {
+        readonly Stopwatch clock = Stopwatch.StartNew();
+        readonly JsonArray idle = new(), stationary = new();
+        Vector2 previous;
+        double last, idleSince = -1, stationarySince = -1;
+        int health, frames, damage, deaths;
+        bool dead, initialized;
+        double maxUpdate;
+
+        public void Observe(Player p)
+        {
+            double now = clock.Elapsed.TotalMilliseconds;
+            maxUpdate = Math.Max(maxUpdate, now - last); last = now; frames++;
+            bool moving = initialized && Vector2.DistanceSquared(previous, p.position) > .0025f;
+            bool working = p.itemAnimation > 0 || p.itemTime > 0;
+            if (initialized && !dead && p.statLife < health) damage += health - Math.Max(0, p.statLife);
+            if (p.dead && !dead) deaths++;
+            void Track(bool waiting, ref double since, JsonArray stops)
+            {
+                if (waiting && since < 0) since = now;
+                if (!waiting && since >= 0)
+                {
+                    if (now - since >= 2000) stops.Add(new JsonObject { ["start_ms"] = since, ["duration_ms"] = now - since });
+                    since = -1;
+                }
+            }
+            Track(!p.dead && !moving && !working, ref idleSince, idle);
+            Track(!p.dead && !moving, ref stationarySince, stationary);
+            previous = p.position; health = p.statLife; dead = p.dead; initialized = true;
+        }
+
+        public JsonObject Snapshot()
+        {
+            double now = clock.Elapsed.TotalMilliseconds;
+            JsonArray Stops(JsonArray completed, double since)
+            {
+                var copy = (JsonArray)completed.DeepClone();
+                if (since >= 0 && now - since >= 2000)
+                    copy.Add(new JsonObject { ["start_ms"] = since, ["duration_ms"] = now - since });
+                return copy;
+            }
+            var idleStops = Stops(idle, idleSince); var stationaryStops = Stops(stationary, stationarySince);
+            return new JsonObject { ["elapsed_ms"] = now, ["frames"] = frames, ["deaths"] = deaths,
+                ["hp_lost"] = damage, ["max_update_ms"] = maxUpdate,
+                ["actionless_over_2s_ms"] = idleStops.Sum(s => s["duration_ms"].GetValue<double>()),
+                ["actionless_stops"] = idleStops, ["stationary_stops"] = stationaryStops,
+                ["definition"] = "Actionless: living, displacement <=0.05 pixels per update, itemAnimation and itemTime both zero. Stationary also includes actual item work; active navigation alone does not count as work." };
+        }
+    }
+
+    async Task ExperienceCollectionTrial()
+    {
+        string stage = Environment.GetEnvironmentVariable("TB_EXPERIENCE_STAGE");
+        string imported = Environment.GetEnvironmentVariable("TB_EXPERIENCE_IMPORT");
+        var importedSkills = new JsonArray();
+        if (!string.IsNullOrEmpty(imported))
+        {
+            var library = new ScriptLibrary(Path.Combine(Main.SavePath, "TerraBlindAgent", "programs"));
+            foreach (string file in Directory.EnumerateFiles(imported, "*.json"))
+            {
+                var source = JsonNode.Parse(File.ReadAllText(file));
+                string name = source["name"].GetValue<string>();
+                var saved = library.Save(name, source["code"].GetValue<string>(), 0);
+                if (saved["error"] != null) throw new Exception("experience import rejected: " + saved);
+                importedSkills.Add(new JsonObject { ["name"] = name, ["revision"] = saved["revision"].DeepClone(),
+                    ["sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(source["code"].ToString()))) });
+            }
+        }
+        await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            if (Main.GameMode != 0 || p.statLifeMax != 100 || !p.ZoneJungle || p.ZoneCrimson || p.ZoneCorrupt)
+                throw new Exception("experience trial requires a fresh classic jungle spawn");
+            p.inventory[4].SetDefaults(ItemID.Starfury);
+            Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = "gpt-6.1-sol";
+            return true;
+        });
+        string prompt = "/goal --tokens 600000 从当前丛林地表进入丛林地下，收集并使用生命水晶达到300点永久生命上限，"
+            + "收集材料制作一把荆棘旋刃。途中顺路搜刮值得拿的箱子，拾取有用掉落物，处理背包与怪物。"
+            + "已有基础工具、星怒和足量木头，持续鱼鳃和光芒效果；天然地形与怪物正常运行。"
+            + "根据当前工具和现场自主执行、验证、恢复，保持有用行动连续。可通过script_program检索、编写和调用可复用技能。";
+        var before = await Call("get_state", new JsonObject());
+        var start = new JsonObject { ["stage"] = stage, ["seed"] = Main.ActiveWorldFileData.SeedText,
+            ["prompt"] = prompt, ["before"] = before.DeepClone(), ["imported_skills"] = importedSkills,
+            ["package_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(Main.SavePath, "Mods", "TerraBlind.tmod")))) };
+        File.WriteAllText(Path.Combine(Main.SavePath, "experience-start.json"), start.ToJsonString());
+        var events = new JsonArray(); var plans = new JsonArray();
+        string previousFacts = "", previousPlan = "";
+        var clock = Stopwatch.StartNew();
+        int seconds = int.TryParse(Environment.GetEnvironmentVariable("TB_EXPERIENCE_SECONDS"), out int configured) ? configured : 1500;
+        await OnMain(() => { experienceMeter = new ExperienceMeter(); queenClock = clock; NativeAgent.Submit(prompt); return true; });
+        JsonObject report = null;
+        using var journal = new StreamWriter(Path.Combine(Main.SavePath, "experience-samples.jsonl")) { AutoFlush = true };
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(1000);
+                var state = await Call("get_state", new JsonObject());
+                var measured = await OnMain(() => new JsonObject { ["metrics"] = experienceMeter.Snapshot(),
+                    ["used_crystals"] = Main.LocalPlayer.ConsumedLifeCrystals,
+                    ["underground_jungle"] = Main.LocalPlayer.ZoneJungle && Main.LocalPlayer.Center.Y / 16 > Main.worldSurface,
+                    ["plan"] = state["task_plan"]?.DeepClone(), ["programs"] = new ScriptLibrary(Path.Combine(Main.SavePath, "TerraBlindAgent", "programs")).List() });
+                var sample = new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["state"] = state.DeepClone(), ["measured"] = measured.DeepClone() };
+                journal.WriteLine(sample.ToJsonString());
+                string facts = new JsonObject { ["health"] = state["permanent_max_health"]?.DeepClone(),
+                    ["inventory"] = state["inventory_counts"]?.DeepClone(), ["dead"] = state["player"]?["dead"]?.DeepClone() }.ToJsonString();
+                if (facts != previousFacts)
+                {
+                    previousFacts = facts;
+                    events.Add(new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["facts"] = JsonNode.Parse(facts),
+                        ["position"] = state["player"]?["pos"]?.DeepClone(), ["last_damage"] = state["last_damage"]?.DeepClone(),
+                        ["last_death"] = state["last_death"]?.DeepClone() });
+                }
+                string plan = measured["plan"].ToJsonString();
+                if (plan != previousPlan)
+                {
+                    previousPlan = plan;
+                    plans.Add(new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["plan"] = measured["plan"].DeepClone() });
+                }
+                bool actual = state["permanent_max_health"]?.GetValue<int>() >= 300
+                    && (state["inventory_counts"]?[ItemID.ThornChakram.ToString()]?.GetValue<int>() ?? 0) >= 1
+                    && state["player"]?["dead"]?.GetValue<bool>() == false;
+                bool complete = actual && state["task_plan"]?["status"]?.ToString() == "completed"
+                    && state["goal_verification"]?["verified"]?.GetValue<bool>() == true;
+                string reason = complete ? "host_verified" : clock.Elapsed.TotalSeconds >= seconds ? "time_budget"
+                    : measured["metrics"]["deaths"].GetValue<int>() >= 2 ? "second_death"
+                    : NativeAgent.Status is "failed" or "idle" or "paused" or "needs_repair" or "budgetLimited" ? NativeAgent.Status : null;
+                report = new JsonObject { ["complete"] = complete, ["reason"] = reason, ["stage"] = stage,
+                    ["seed"] = start["seed"].DeepClone(), ["elapsed_ms"] = clock.ElapsedMilliseconds,
+                    ["metrics"] = measured["metrics"].DeepClone(), ["after"] = state.DeepClone(),
+                    ["used_crystals"] = measured["used_crystals"].DeepClone(), ["programs"] = measured["programs"].DeepClone(),
+                    ["imported_skills"] = importedSkills.DeepClone(), ["events"] = events.DeepClone() };
+                File.WriteAllText(Path.Combine(Main.SavePath, "experience-result.json"), report.ToJsonString());
+                if (reason != null) break;
+            }
+        }
+        finally
+        {
+            await OnMain(() => { NativeAgent.Stop(); queenClock = null; experienceMeter = null;
+                Player.SavePlayer(Main.ActivePlayerFileData); WorldFile.SaveWorld(false); return true; });
+            File.WriteAllText(Path.Combine(Main.SavePath, "experience-plans.json"), plans.ToJsonString());
+        }
+        Console.WriteLine("EXPERIENCE_RECORDED " + new JsonObject { ["stage"] = stage, ["reason"] = report["reason"]?.DeepClone(),
+            ["complete"] = report["complete"].DeepClone(), ["elapsed_ms"] = report["elapsed_ms"].DeepClone(), ["metrics"] = report["metrics"].DeepClone() });
+        if (stage == "learning") await LearnFromExperience(report, plans);
+    }
+
+    async Task LearnFromExperience(JsonObject report, JsonArray plans)
+    {
+        ModLoader.TryGetMod("TerraBlind", out var mod);
+        var schemas = JsonNode.Parse(Encoding.UTF8.GetString(mod.GetFileBytes("Agent/Tools.json"))).AsArray();
+        var entries = new JsonArray(schemas.Where(s => s["function"]["name"]?.ToString() is "script_program" or "game_api").Select(s => s.DeepClone()).ToArray());
+        var evidence = (JsonObject)report.DeepClone();
+        evidence["plans"] = new JsonArray(plans.TakeLast(6).Select(p => p.DeepClone()).ToArray());
+        var calls = new JsonArray(); var replies = new JsonArray(); var timer = Stopwatch.StartNew();
+        using var author = new CodexAgent();
+        using var limit = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        string failure = null;
+        try
+        {
+            await author.RunAsync("根据这次真实任务的执行记录，提炼最多三个可跨地图复用的JS技能，或修订已有技能。"
+                + "保存时使用script_program，代码通过input接收本次目标、坐标或句柄，现场事实在执行时重新观察。"
+                + "每个技能在返回结构中说明适用条件与可验证效果。最终解释经历证据、修改依据及待验证假设。"
+                + "本轮只分析并保存代码；技能的有效性将在后续新地图实际执行中检验。最多12次工具调用。\n"
+                + evidence.ToJsonString(), Config.I.AgentCodexPath, Path.Combine(Main.SavePath, "TerraBlindAgent"), "gpt-6.1-sol",
+                "你根据真实执行反馈改进游戏Agent的可复用能力。学习结果是待验证的代码和经验。\n"
+                + AgentScript.RuntimeInstructions, entries, async (name, args, token) =>
+                {
+                    if (calls.Count >= 12 || name is not ("script_program" or "game_api")) throw new InvalidOperationException("experience review scope exceeded");
+                    string output = await AgentTools.Execute(name, args, token);
+                    calls.Add(new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["result"] = JsonNode.Parse(output) });
+                    return output;
+                }, text => replies.Add(text), limit.Token);
+        }
+        catch (Exception error) { failure = error.ToString(); }
+        File.WriteAllText(Path.Combine(Main.SavePath, "experience-learning.json"), new JsonObject { ["elapsed_ms"] = timer.ElapsedMilliseconds,
+            ["calls"] = calls, ["replies"] = replies, ["usage"] = author.TokenUsage, ["failure"] = failure }.ToJsonString());
+        Console.WriteLine("EXPERIENCE_LEARNING_RECORDED calls=" + calls.Count + " failed=" + (failure != null));
+    }
+
     async Task ShortJungleCollectionTrial(string stage = null)
     {
         string prefix = stage == null ? "jungle-collection" : "progression-" + stage;
@@ -5904,6 +6088,8 @@ public sealed partial class BehaviorTrial : ModSystem
 
     async Task QueenGoalTrial()
     {
+        if (Environment.GetEnvironmentVariable("TB_EXPERIENCE_STAGE") != null)
+        { await ExperienceCollectionTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_FRAME_RESOURCE_TRIAL") == "1")
         { await FrameResourceTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_FRAME_PROGRAM_TRIAL") == "1")
