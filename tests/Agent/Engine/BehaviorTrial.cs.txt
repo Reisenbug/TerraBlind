@@ -4869,6 +4869,8 @@ public sealed partial class BehaviorTrial : ModSystem
                 string name = source["name"].GetValue<string>();
                 var saved = library.Save(name, source["code"].GetValue<string>(), 0);
                 if (saved["error"] != null) throw new Exception("experience import rejected: " + saved);
+                saved["revision"] = source["revision"].DeepClone();
+                File.WriteAllText(Path.Combine(Main.SavePath, "TerraBlindAgent", "programs", name + ".json"), saved.ToJsonString());
                 importedSkills.Add(new JsonObject { ["name"] = name, ["revision"] = saved["revision"].DeepClone(),
                     ["sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(source["code"].ToString()))) });
             }
@@ -4882,7 +4884,7 @@ public sealed partial class BehaviorTrial : ModSystem
             Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = "gpt-6.1-sol";
             return true;
         });
-        string prompt = "/goal --tokens 600000 从当前丛林地表进入丛林地下，收集并使用生命水晶达到300点永久生命上限，"
+        string prompt = "/goal 从当前丛林地表进入丛林地下，收集并使用生命水晶达到300点永久生命上限，"
             + "收集材料制作一把荆棘旋刃。途中顺路搜刮值得拿的箱子，拾取有用掉落物，处理背包与怪物。"
             + "已有基础工具、星怒和足量木头，持续鱼鳃和光芒效果；天然地形与怪物正常运行。"
             + "根据当前工具和现场自主执行、验证、恢复，保持有用行动连续。可通过script_program检索、编写和调用可复用技能。";
@@ -4904,6 +4906,9 @@ public sealed partial class BehaviorTrial : ModSystem
             {
                 await Task.Delay(1000);
                 var state = await Call("get_state", new JsonObject());
+                state["inventory_counts"] = new JsonObject(state["inventory_slots"].AsArray()
+                    .Where(i => i["type"].GetValue<int>() > 0 && i["stack"].GetValue<int>() > 0)
+                    .GroupBy(i => i["type"].GetValue<int>()).Select(g => new KeyValuePair<string, JsonNode>(g.Key.ToString(), JsonValue.Create(g.Sum(i => i["stack"].GetValue<int>())))));
                 var measured = await OnMain(() => new JsonObject { ["metrics"] = experienceMeter.Snapshot(),
                     ["used_crystals"] = Main.LocalPlayer.ConsumedLifeCrystals,
                     ["underground_jungle"] = Main.LocalPlayer.ZoneJungle && Main.LocalPlayer.Center.Y / 16 > Main.worldSurface,
@@ -4930,8 +4935,10 @@ public sealed partial class BehaviorTrial : ModSystem
                     && state["player"]?["dead"]?.GetValue<bool>() == false;
                 bool complete = actual && state["task_plan"]?["status"]?.ToString() == "completed"
                     && state["goal_verification"]?["verified"]?.GetValue<bool>() == true;
+                string goalStatus = state["codex_goal"]?["native"]?["status"]?.ToString();
                 string reason = complete ? "host_verified" : clock.Elapsed.TotalSeconds >= seconds ? "time_budget"
                     : measured["metrics"]["deaths"].GetValue<int>() >= 2 ? "second_death"
+                    : goalStatus is "budgetLimited" or "usageLimited" or "paused" or "blocked" ? goalStatus
                     : NativeAgent.Status is "failed" or "idle" or "paused" or "needs_repair" or "budgetLimited" ? NativeAgent.Status : null;
                 report = new JsonObject { ["complete"] = complete, ["reason"] = reason, ["stage"] = stage,
                     ["seed"] = start["seed"].DeepClone(), ["elapsed_ms"] = clock.ElapsedMilliseconds,
