@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
@@ -68,6 +69,48 @@ namespace TerraBlind
 		// 掏箱子前要腾几格。箱子 40 格但大多是零头,腾太多等于把建材白删了
 		const int LootRoom = 8;
 		private static volatile bool _quickHealRequested;
+
+		internal static JsonObject InteractAt(int x, int y)
+		{
+			var p = Main.LocalPlayer;
+			if (p == null || !p.active || p.dead)
+			{
+				LastInteract = "no_living_player";
+				return new JsonObject { ["error"] = LastInteract, ["outcome"] = LastInteract };
+			}
+			var anchor = Terraria.ObjectData.TileObjectData.TopLeft(x, y);
+			int chest = TreasureGrab.OpenAt(x, y, out string reason);
+			string outcome = chest >= 0 ? "opened" : reason;
+			LastInteract = outcome;
+			var result = new JsonObject { ["outcome"] = outcome, ["x"] = anchor.X >= 0 ? anchor.X : x,
+				["y"] = anchor.Y >= 0 ? anchor.Y : y, ["chest"] = chest };
+			if (outcome == "pending") result["world_id"] = Main.worldID;
+			if (chest < 0 && outcome != "pending") result["error"] = outcome;
+			return result;
+		}
+
+		internal static JsonObject LootOpenChest()
+		{
+			var p = Main.LocalPlayer;
+			if (p == null || !p.active || p.dead) return new JsonObject { ["error"] = "no_living_player" };
+			int chest = p.chest;
+			var contents = chest switch
+			{
+				-2 => p.bank.item, -3 => p.bank2.item, -4 => p.bank3.item, -5 => p.bank4.item,
+				>= 0 when chest < Main.chest.Length => Main.chest[chest]?.item,
+				_ => null
+			};
+			if (contents == null) return new JsonObject { ["error"] = "no_open_chest" };
+			int before = 0;
+			foreach (var item in contents) if (!item.IsAir) before += item.stack;
+			KeepList.MakeRoom(LootRoom);
+			Terraria.UI.ChestUI.LootAll();
+			int remaining = 0, stacks = 0;
+			foreach (var item in contents)
+				if (!item.IsAir) { remaining += item.stack; stacks++; }
+			return new JsonObject { ["ok"] = true, ["outcome"] = remaining > 0 ? "partial" : "looted",
+				["chest"] = chest, ["transferred_items"] = before - remaining, ["remaining_stacks"] = stacks };
+		}
 
 		private static string Prefix
 		{
@@ -156,20 +199,12 @@ namespace TerraBlind
 			}
 			while (_interactQueue.TryDequeue(out var tile))
 			{
-				// 开箱那一套(归一锚点/陷阱箱/锁/占用)只有 TreasureGrab.OpenAt 一份
-				// 这儿原来自己抄了一遍,两份判据各改各的迟早分叉。
-				LastInteract = TreasureGrab.OpenAt(tile.tx, tile.ty, out string iw) >= 0 ? "opened" : iw;
+				InteractAt(tile.tx, tile.ty);
 			}
 			if (_lootAllRequested)
 			{
 				_lootAllRequested = false;
-				if (Main.LocalPlayer.chest != -1)
-				{
-					// 背包满了 LootAll 会把塞不下的【原样写回箱子】。人走了,东西还在里面。
-					// 掏之前先按清单删掉没用的:一箱最多 40 件,腾够就不会漏
-					KeepList.MakeRoom(LootRoom);
-					Terraria.UI.ChestUI.LootAll();
-				}
+				LootOpenChest();
 			}
 			if (_quickHealRequested)
 			{
