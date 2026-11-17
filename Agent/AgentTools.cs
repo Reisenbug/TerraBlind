@@ -739,7 +739,7 @@ public static partial class AgentTools
         var result = JsonNode.Parse(response.Body) as JsonObject
             ?? throw new InvalidOperationException($"{path} 未返回 JSON 对象。");
         if (response.Status >= 400 && result["error"] == null) result["error"] = $"status {response.Status}";
-        if (response.Status < 400 && path is "/interact" or "/loot_all" or "/swap" or "/quick_heal" or "/craft")
+        if (response.Status < 400 && path is "/swap" or "/quick_heal" or "/craft")
             WorldFramesRequired = Math.Max(WorldFramesRequired, 2);
         return result;
     }, token);
@@ -2359,16 +2359,33 @@ public static partial class AgentTools
                 if (!Rejected(result)) result = await Wait("/hell_run_status", "running", "/hell_run_stop", 0, token);
                 break;
             case "interact":
-                result = await Call("/interact", new JsonObject { ["tile_x"] = Int(args, "x"), ["tile_y"] = Int(args, "y") }, token);
-                if (!Rejected(result))
+                result = await NativeAgent.OnMain(() => HttpServerSystem.InteractAt(Int(args, "x"), Int(args, "y")), token);
+                if (Text(result, "outcome") == "pending")
                 {
-                    await Task.Delay(200, token);
-                    result = await NativeAgent.OnMain(() => new JsonObject { ["outcome"] = HttpServerSystem.LastInteract }, token);
+                    int x = Int(result, "x"), y = Int(result, "y");
+                    int world = Int(result, "world_id");
+                    JsonObject confirmed = null;
+                    for (int frame = 0; frame < 300 && confirmed == null; frame++)
+                    {
+                        await NativeAgent.NextUpdate(token);
+                        confirmed = await NativeAgent.OnMain(() =>
+                        {
+                            var p = Main.LocalPlayer;
+                            if (Main.gameMenu || Main.worldID != world || !p.active || p.dead)
+                                return new JsonObject { ["error"] = "chest_open_interrupted", ["x"] = x, ["y"] = y };
+                            if (p.chest < 0 || p.chest >= Main.chest.Length || Main.chest[p.chest] == null) return null;
+                            var chest = Main.chest[p.chest];
+                            bool opened = chest.x == x && chest.y == y;
+                            HttpServerSystem.LastInteract = opened ? "opened" : "chest_changed";
+                            return new JsonObject { ["outcome"] = opened ? "opened" : "chest_changed",
+                                ["error"] = opened ? null : "chest_changed", ["chest"] = p.chest, ["x"] = chest.x, ["y"] = chest.y };
+                        }, token);
+                    }
+                    result = confirmed ?? new JsonObject { ["error"] = "chest_open_not_confirmed", ["x"] = x, ["y"] = y };
                 }
                 break;
             case "loot_all":
-                result = await Call("/loot_all", args, token);
-                await Task.Delay(300, token);
+                result = await NativeAgent.OnMain(HttpServerSystem.LootOpenChest, token);
                 break;
             case "craft":
                 var craftArgs = new JsonObject { ["item_name"] = Text(args, "name"), ["amount"] = Int(args, "amount", 1) };

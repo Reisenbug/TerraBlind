@@ -864,7 +864,8 @@ public sealed partial class BehaviorTrial : ModSystem
 
     async Task Run()
     {
-        if (Environment.GetEnvironmentVariable("TB_THINKING_PAUSE_TRIAL") == "1") { await ThinkingPauseTrial(); return; }
+        if (Environment.GetEnvironmentVariable("TB_THINKING_PAUSE_TRIAL") == "1"
+            || Environment.GetEnvironmentVariable("TB_CHEST_RECEIPT_TRIAL") == "1") { await ThinkingPauseTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_SKILL_LEARNING") == "1") { await SkillLearningRun(); return; }
         if (Environment.GetEnvironmentVariable("TB_QUEEN_MINING_REPLAY") == "1") { await QueenMiningReplay(); return; }
         if (Environment.GetEnvironmentVariable("TB_WORKSTATION_REPLAY") == "1") { await WorkstationReplay(); return; }
@@ -4996,14 +4997,76 @@ public sealed partial class BehaviorTrial : ModSystem
                 Main.chest[id].item[0].SetDefaults(ItemID.CopperOre); Main.chest[id].item[0].stack = 3;
                 return (Id: id, X: Main.chest[id].x, Y: Main.chest[id].y);
             });
+            long chestTick = await OnMain(() => (long)Main.GameUpdateCount);
+            var chestClock = Stopwatch.StartNew();
             var openedChest = await Call("interact", new JsonObject { ["x"] = chest.X, ["y"] = chest.Y }).WaitAsync(TimeSpan.FromSeconds(4));
-            if (await OnMain(() => Main.LocalPlayer.chest != chest.Id)) throw new Exception("queued chest opening stayed frozen: " + openedChest);
-            await Call("loot_all", new JsonObject()).WaitAsync(TimeSpan.FromSeconds(4));
+            if (openedChest["outcome"]?.ToString() != "opened" || openedChest["chest"]?.GetValue<int>() != chest.Id
+                || await OnMain(() => Main.LocalPlayer.chest != chest.Id)) throw new Exception("opening receipt did not match the actual chest: " + openedChest);
+            var looted = await Call("loot_all", new JsonObject()).WaitAsync(TimeSpan.FromSeconds(4));
             if (await OnMain(() => Main.LocalPlayer.inventory.Where(i => i.type == ItemID.CopperOre).Sum(i => i.stack)) != 3)
-                throw new Exception("queued loot did not reach real inventory");
+                throw new Exception("loot did not reach real inventory");
+            var receipt = await OnMain(() => new JsonObject { ["elapsed_ms"] = chestClock.Elapsed.TotalMilliseconds,
+                ["world_frames"] = Main.GameUpdateCount - chestTick, ["loot"] = looted.DeepClone() });
+            if (looted["transferred_items"]?.GetValue<int>() != 3 || looted["remaining_stacks"]?.GetValue<int>() != 0
+                || receipt["world_frames"].GetValue<long>() != 0) throw new Exception("opening and looting wasted simulation frames or lost transfer evidence: " + receipt);
+            Record("chest_receipts_complete_without_world_wait", new JsonObject(), receipt);
+
+            var failedOpen = await Call("interact", new JsonObject { ["x"] = chest.X + 200, ["y"] = chest.Y });
+            if (failedOpen["error"]?.ToString() != "out_of_reach" || openedChest["outcome"]?.ToString() != "opened")
+                throw new Exception("later failed interaction overwrote an earlier receipt");
             await OnMain(() => { Main.LocalPlayer.chest = -1; return true; });
+            var closedLoot = await Call("loot_all", new JsonObject());
+            if (closedLoot["error"]?.ToString() != "no_open_chest") throw new Exception("closed chest was reported as looted");
+            Record("chest_failure_receipts", new JsonObject(), new JsonObject { ["open"] = failedOpen, ["loot"] = closedLoot });
+
+            var deadReceipt = await OnMain(() =>
+            {
+                var p = Main.LocalPlayer; p.dead = true;
+                try { return (JsonObject)typeof(HttpServerSystem).GetMethod("InteractAt", HiddenStatic)
+                    .Invoke(null, new object[] { chest.X, chest.Y }); }
+                finally { p.dead = false; }
+            });
+            if (deadReceipt["error"]?.ToString() != "no_living_player" || await OnMain(() => Main.LocalPlayer.chest) != -1)
+                throw new Exception("dead player opened a chest before the receipt");
+            Record("dead_player_operation_rejected", new JsonObject(), deadReceipt);
+
+            await OnMain(() =>
+            {
+                foreach (var item in Main.LocalPlayer.bank.item) item.TurnToAir();
+                Main.LocalPlayer.bank.item[0].SetDefaults(ItemID.TinOre); Main.LocalPlayer.bank.item[0].stack = 2;
+                Main.LocalPlayer.chest = -2; return true;
+            });
+            var bankLoot = await Call("loot_all", new JsonObject());
+            if (bankLoot["transferred_items"]?.GetValue<int>() != 2 || bankLoot["chest"]?.GetValue<int>() != -2
+                || !await OnMain(() => Main.LocalPlayer.bank.item[0].IsAir)) throw new Exception("bank looting regressed: " + bankLoot);
+            Record("bank_loot_receipt", new JsonObject(), bankLoot);
+
+            var savedInventory = await OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                var saved = p.inventory;
+                p.inventory = Enumerable.Range(0, saved.Length).Select(_ => new Item()).ToArray();
+                for (int slot = 0; slot < 50; slot++)
+                { p.inventory[slot].SetDefaults(ItemID.Wood); p.inventory[slot].stack = p.inventory[slot].maxStack; p.inventory[slot].favorited = true; }
+                Main.chest[chest.Id].item[0].SetDefaults(ItemID.Torch); Main.chest[chest.Id].item[0].stack = 3;
+                p.chest = chest.Id; return saved;
+            });
+            try
+            {
+                var partial = await Call("loot_all", new JsonObject());
+                if (partial["outcome"]?.ToString() != "partial" || partial["transferred_items"]?.GetValue<int>() != 0
+                    || partial["remaining_stacks"]?.GetValue<int>() != 1
+                    || await OnMain(() => Main.chest[chest.Id].item[0].stack) != 3)
+                    throw new Exception("full inventory receipt claimed an unperformed transfer: " + partial);
+                Record("full_inventory_keeps_chest_contents", new JsonObject(), partial);
+            }
+            finally { await OnMain(() => { Main.LocalPlayer.inventory = savedInventory; Main.LocalPlayer.chest = -1; return true; }); }
             await Until(() => ThinkingPause.Frozen, "chest handoff");
-            Record("queued_chest_and_loot_complete", new JsonObject(), await OnMain(Sample));
+            if (Environment.GetEnvironmentVariable("TB_CHEST_RECEIPT_TRIAL") == "1")
+            {
+                Console.WriteLine("CHEST_RECEIPT_NATIVE_PASS model_calls=0 cases=" + measurements.Count);
+                return;
+            }
 
             var navigationBefore = await OnMain(Sample);
             var navigated = await Call("nav_to", new JsonObject { ["x"] = origin + 20, ["y"] = floorY - 1 })

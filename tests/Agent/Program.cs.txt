@@ -41,6 +41,7 @@ static class Tests
 
     static async Task Main(string[] args)
     {
+        if (args.Contains("--chest-receipts")) { await RuntimeTests.ChestReceipts(); return; }
         if (args.Contains("--decision-contracts")) { await ScriptTests.Decisions(); return; }
         if (args.Contains("--query-handoff")) { await RuntimeTests.QueryHandoff(); return; }
         if (args.Contains("--input-optimization-model")) { await CodexTests.InputOptimizationModel(); return; }

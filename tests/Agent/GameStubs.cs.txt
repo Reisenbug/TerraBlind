@@ -498,5 +498,15 @@ namespace TerraBlind
         public static Func<string, string, (int, string)> Handler = (_, _) => (200, "{}");
         public static (int Status, string Body) Dispatch(string path, string payload)
         { Calls.Add(path); return Handler(path, payload); }
+        public static System.Text.Json.Nodes.JsonObject InteractAt(int x, int y)
+        {
+            var result = System.Text.Json.Nodes.JsonNode.Parse(Dispatch("/interact",
+                new System.Text.Json.Nodes.JsonObject { ["tile_x"] = x, ["tile_y"] = y }.ToJsonString()).Body).AsObject();
+            result["x"] ??= x; result["y"] ??= y;
+            result["world_id"] ??= Terraria.Main.worldID;
+            return result;
+        }
+        public static System.Text.Json.Nodes.JsonObject LootOpenChest()
+            => System.Text.Json.Nodes.JsonNode.Parse(Dispatch("/loot_all", "{}").Body).AsObject();
     }
 }

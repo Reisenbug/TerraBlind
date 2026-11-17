@@ -16,6 +16,84 @@ using Game = Terraria.Main;
 static class RuntimeTests
 {
     static readonly NativeAgent Agent = new();
+    public static async Task ChestReceipts()
+    {
+        Agent.Load(); NativeAgent.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset();
+        var handler = HttpServerSystem.Handler;
+        var saved = (Game.netMode, Game.worldID, Config.I.AiClient, Game.LocalPlayer.chest, Game.LocalPlayer.dead, Game.chest[0], HttpServerSystem.LastInteract);
+        try
+        {
+            int opened = 0, looted = 0;
+            HttpServerSystem.LastInteract = "unrelated_request_failed";
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/interact") { opened++; return (200, "{\"outcome\":\"opened\",\"chest\":0}"); }
+                Check(path == "/loot_all", "receipt dispatched an unrelated operation");
+                looted++; return (200, "{\"ok\":true,\"outcome\":\"partial\",\"transferred_items\":3,\"remaining_stacks\":1}");
+            };
+            var first = JsonNode.Parse(await Execute(AgentTools.Execute("interact", new JsonObject { ["x"] = 10, ["y"] = 20 }, default)));
+            var loot = JsonNode.Parse(await Execute(AgentTools.Execute("loot_all", new JsonObject(), default)));
+            Check(opened == 1 && first["outcome"].ToString() == "opened"
+                && HttpServerSystem.LastInteract == "unrelated_request_failed", "opening read another request's global outcome");
+            Check(looted == 1 && loot["transferred_items"].GetValue<int>() == 3 && loot["remaining_stacks"].GetValue<int>() == 1,
+                "loot receipt discarded the real transfer or remaining contents");
+            using (var cancelled = new CancellationTokenSource())
+            {
+                var pending = AgentTools.Execute("loot_all", new JsonObject(), cancelled.Token);
+                cancelled.Cancel();
+                bool stopped = false;
+                try { await Execute(pending); } catch (OperationCanceledException) { stopped = true; }
+                Check(stopped && looted == 1, "cancelled queued operation still mutated inventory");
+            }
+
+            Game.netMode = 1; Config.I.AiClient = true;
+            foreach (string scenario in new[] { "ack", "other_chest", "death", "world_change", "cancel", "no_ack" })
+            {
+                AgentTools.Recovery.Reset(); Game.LocalPlayer.chest = -1; Game.LocalPlayer.dead = false; Game.worldID = saved.worldID;
+                int requests = 0;
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    Check(path == "/interact", "network opening sent an unrelated command"); requests++;
+                    return (200, "{\"outcome\":\"pending\",\"x\":100,\"y\":200}");
+                };
+                using var cancellation = new CancellationTokenSource();
+                var pending = AgentTools.Execute("interact", new JsonObject { ["x"] = 100, ["y"] = 200 }, cancellation.Token);
+                await PumpUntil(() => requests == 1);
+                Check(!pending.IsCompleted, "pending server request was reported as an opened chest");
+                if (scenario is "ack" or "other_chest")
+                {
+                    Game.chest[0] = new Terraria.Chest { x = scenario == "ack" ? 100 : 101, y = 200 };
+                    Game.LocalPlayer.chest = 0;
+                }
+                if (scenario == "death") Game.LocalPlayer.dead = true;
+                if (scenario == "world_change") Game.worldID++;
+                if (scenario == "cancel") cancellation.Cancel();
+                if (scenario == "cancel")
+                {
+                    bool stopped = false;
+                    try { await Execute(pending); } catch (OperationCanceledException) { stopped = true; }
+                    Check(stopped, "server acknowledgment wait ignored cancellation");
+                }
+                else
+                {
+                    var reply = JsonNode.Parse(await Execute(pending));
+                    string expected = scenario == "other_chest" ? "chest_changed"
+                        : scenario == "no_ack" ? "chest_open_not_confirmed" : "chest_open_interrupted";
+                    Check(scenario == "ack" ? reply["outcome"]?.ToString() == "opened" && reply["error"] == null
+                        : reply["error"]?.ToString() == expected, "wrong server opening receipt for " + scenario + ": " + reply);
+                }
+                Check(requests == 1 && !AgentTools.ControlSession.PrimaryActive, "opening retry or input ownership leaked after " + scenario);
+            }
+            Console.WriteLine("PASS: chest receipts retain per-request effects, require matching server acknowledgment and cancel without later mutations");
+        }
+        finally
+        {
+            NativeAgent.Stop(); AgentTools.Stop(); AgentTools.Recovery.Reset();
+            (Game.netMode, Game.worldID, Config.I.AiClient, Game.LocalPlayer.chest, Game.LocalPlayer.dead, Game.chest[0], HttpServerSystem.LastInteract) = saved;
+            HttpServerSystem.Handler = handler;
+        }
+    }
+
     static async Task TestCombatReactionPreparation()
     {
         Agent.Load(); AgentTools.NewTask(); AgentTools.Plan.Reset();
@@ -1277,6 +1355,7 @@ static class RuntimeTests
 
     public static async Task Run()
     {
+        await ChestReceipts();
         await TestCombatReactionPreparation();
         await TestIdleReactionScheduling();
         await QueryHandoff();
