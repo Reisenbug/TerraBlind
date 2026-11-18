@@ -51,10 +51,22 @@ public sealed class ScriptProgress
             if (running || executedSource == null || last?["error"] != null
                 || last?["value"] is not JsonObject value || value["status"]?.ToString() != "yield" || value["wake"] != null) return false;
             if (source != executedSource) return last["failure"] == null;
-            return value["continue_after"] is JsonValue expected && expected.TryGetValue<string>(out string handle)
-                && handle == action?["handle"]?.ToString() && action["status"]?.ToString() == "completed"
-                && action["previous_attempt"]?["status"]?.ToString() == "failed"
-                && !steps.Values.Any(step => step["status"]?.ToString() == "uncertain");
+            if (action?["handle"]?.ToString() is not string handle || action["status"]?.ToString() != "completed"
+                || action["previous_attempt"]?["status"]?.ToString() != "failed"
+                || steps.Values.Any(step => step["status"]?.ToString() == "uncertain")) return false;
+            if (value["continue_after"] != null)
+                return value["continue_after"] is JsonValue expected && expected.TryGetValue<string>(out string expectedHandle)
+                    && expectedHandle == handle;
+
+            return value["handle"]?.ToString() == handle && value["reason"]?.ToString() == "navigation_no_progress"
+                && value["collection"] is JsonObject collection && collection["managed_handle"]?.ToString() == handle
+                && collection["outcome"]?.ToString() == "navigation_no_progress"
+                && collection["targets"] is JsonArray { Count: > 0 } targets
+                && targets.All(target => target?["inventory_delta"]?.ToString() == "0")
+                && action["tool"]?.ToString() == "gather" && action["result"]?["outcome"]?.ToString() == "enough"
+                && action["previous_attempt"]?["result"]?["outcome"]?.ToString() == "navigation_no_progress"
+                && last["tool_counts"] is JsonObject calls && calls["gather"]?.ToString() == "1"
+                && calls.All(call => call.Key is "gather" or "find_tiles" or "get_state");
         }
     }
 

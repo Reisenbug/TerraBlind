@@ -1880,6 +1880,25 @@ static class ScriptTests
         count = 1;
         var final = await AgentScript.Run(script, 5, (_, _) => { }, ExecuteTool, _ => Task.CompletedTask, default, progress);
         Check(final["ok"]?.GetValue<bool>() == true && crafted == 1 && used == 1, "recovered script replayed the completed checkpoint");
+        var recoveredGather = JsonNode.Parse("""
+            {"handle":"collection","status":"completed","tool":"gather","result":{"outcome":"enough"},
+             "previous_attempt":{"status":"failed","result":{"outcome":"navigation_no_progress"}}}
+            """).AsObject();
+        foreach (string scenario in new[] { "single_gather", "used_item", "partial_gather", "different_handle" })
+        {
+            var waiting = new ScriptProgress();
+            var report = JsonNode.Parse("""
+                {"value":{"status":"yield","handle":"collection","reason":"navigation_no_progress",
+                   "collection":{"managed_handle":"collection","outcome":"navigation_no_progress","targets":[{"inventory_delta":0}]}},
+                 "tool_counts":{"get_state":2,"find_tiles":1,"gather":1}}
+                """).AsObject();
+            if (scenario == "used_item") report["tool_counts"]["use_item"] = 1;
+            if (scenario == "partial_gather") report["value"]["collection"]["targets"][0]["inventory_delta"] = 1;
+            if (scenario == "different_handle") report["value"]["collection"]["managed_handle"] = "unrelated";
+            waiting.Begin(script); waiting.End(report);
+            Check(waiting.HasPreparedContinuation(script, recoveredGather) == (scenario == "single_gather"),
+                "wrong continuation for an implicitly attached gather: " + scenario);
+        }
         Console.WriteLine("PASS: successful recovery resumes only its waiting script and retains checkpoint effects");
     }
 
