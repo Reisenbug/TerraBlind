@@ -4424,6 +4424,17 @@ static class ScriptTests
             Check(counts.Count == 2 && counts["inventory_counts"].AsObject().Count == expectedCounts.Count
                 && expectedCounts.All(pair => counts["inventory_counts"][pair.Key]?.GetValue<int>() == pair.Value),
                 "inventory count projection disagrees with native bag slots");
+            var optionalError = await Call("run_script", new JsonObject { ["code"] = """
+                const state = tool('get_state',{fields:['inventory_counts']});
+                if (state.error) throw new Error(JSON.stringify(state));
+                return {has_counts:!!state.inventory_counts};
+                """ });
+            var unknownField = await Call("run_script", new JsonObject { ["code"] = """
+                return tool('get_state',{fields:['inventory_counts']}).inventroy_counts;
+                """ });
+            Check(optionalError["ok"]?.GetValue<bool>() == true && optionalError["value"]?["has_counts"]?.GetValue<bool>() == true
+                && unknownField["ok"]?.GetValue<bool>() == false && unknownField["detail"]?.ToString().Contains("inventroy_counts") == true,
+                "get_state must allow checking for errors while still rejecting misspelled fields");
             foreach (bool terminalNotice in new[] { false, true })
             foreach (string tool in new[] { "mine", "use_item", "act" })
             {

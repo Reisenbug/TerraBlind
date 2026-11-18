@@ -767,6 +767,7 @@ public static class AgentScript
                             if (name !== 'get_state' || result === null || typeof result !== 'object') return result;
                             return new Proxy(result, {
                                 get(target, key, receiver) {
+                                    if (key === 'error' && !Reflect.has(target, key)) return null;
                                     if (typeof key === 'string' && key !== 'then' && key !== 'toJSON' && !Reflect.has(target, key))
                                         throw new Error('get_state.' + key + ' 不存在；请使用实际结构，根字段：' + Object.keys(target).join(','));
                                     return Reflect.get(target, key, receiver);
