@@ -3876,6 +3876,7 @@ namespace TerraBlind
 			if (Key("throw")) s.Throw = true;
 			if (Key("hook")) s.Hook = true;
 			if (Key("mount")) s.Mount = true;
+			if (Key("auto_select")) s.AutoSelect = true;
 			s.UseItem = System.Text.RegularExpressions.Regex.IsMatch(o, "\"use\":true");
 
 			var slotM = System.Text.RegularExpressions.Regex.Match(o, "\"slot\":(\\d+)");

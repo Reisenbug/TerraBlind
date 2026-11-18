@@ -14,7 +14,7 @@ namespace TerraBlind
 	// plus invariant_broken for a declared invariant that snapped.
 	public class ActStep
 	{
-		public bool Left, Right, Up, Down, Jump, UseItem, UseTile, Throw, Hook, Mount;
+		public bool Left, Right, Up, Down, Jump, UseItem, UseTile, Throw, Hook, Mount, AutoSelect;
 		public int Slot = -1;                 // 0-57; backpack slots get swapped into the hotbar
 		public bool HasCursor;
 		public int CurDx, CurDy;              // cursor offset in tiles from the ORIGIN CELL
@@ -184,6 +184,7 @@ namespace TerraBlind
 			if (s.Throw) p.controlThrow = true;
 			if (s.Hook) p.controlHook = true;
 			if (s.Mount) p.controlMount = true;
+			if (s.AutoSelect) p.controlTorch = true;
 
 			if (s.UseItem && (p.itemAnimation == 0 || p.HeldItem.channel))
 			{

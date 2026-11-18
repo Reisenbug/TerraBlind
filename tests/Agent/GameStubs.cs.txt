@@ -54,11 +54,24 @@ namespace Terraria.UI
 {
     public static class ItemSlot
     {
+        public static class Context
+        {
+            public const int InventoryItem = 0, InventoryCoin = 1, InventoryAmmo = 2, ChestItem = 3, BankItem = 4;
+            public const int TrashItem = 6, EquipArmor = 8, EquipArmorVanity = 9, EquipAccessory = 10, EquipAccessoryVanity = 11;
+        }
+        public static Action<Terraria.Item[], int, int> LeftClickHandler;
+        public static void LeftClick(Terraria.Item[] items, int context, int slot) => LeftClickHandler?.Invoke(items, context, slot);
         public static Action<Terraria.Item[], int, int> RightClickHandler;
         public static void RightClick(Terraria.Item[] items, int context = 0, int slot = 0) => RightClickHandler?.Invoke(items, context, slot);
     }
     public static class ChestUI
     {
+        public static Terraria.Item[] FixtureBank = new Terraria.Chest().item;
+        public static void GetContainerUsageInfo(out bool sync, out Terraria.Item[] slots)
+        {
+            sync = Terraria.Main.LocalPlayer.chest >= 0;
+            slots = sync ? Terraria.Main.chest[Terraria.Main.LocalPlayer.chest].item : FixtureBank;
+        }
         public static Action LootHandler;
         public static void LootAll() => LootHandler?.Invoke();
     }
@@ -83,6 +96,12 @@ namespace Terraria
         public static Projectile[] projectile = Enumerable.Range(0, 20).Select(i => new Projectile { whoAmI = i }).ToArray();
         public static int maxNPCs = 20, maxItems = 20;
         public static Item mouseItem = new();
+        public static bool mouseLeft, mouseLeftRelease, SmartCursorWanted_Mouse;
+        public static Recipe[] recipe = Array.Empty<Recipe>();
+        public static int[] availableRecipe = Array.Empty<int>();
+        public static int numAvailableRecipes;
+        public static Action<Recipe> CraftHandler;
+        public static void CraftItem(Recipe recipe) => CraftHandler?.Invoke(recipe);
         public static bool mouseRight, mouseRightRelease;
         public static NPC[] npc = Enumerable.Range(0, 20).Select(_ => new NPC()).ToArray();
         public static Item[] item = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
@@ -93,6 +112,11 @@ namespace Terraria
         public static readonly List<string> Chat = new();
         public static void NewText(string text) => Chat.Add(text);
     }
+    public class Recipe
+    {
+        public Item createItem = new();
+        public static void FindRecipes() { }
+    }
     public class Chest
     {
         public int x, y; public bool locked;
@@ -101,6 +125,12 @@ namespace Terraria
     }
     public class Player
     {
+        public int CurrentLoadoutIndex;
+        public void TrySwitchingLoadout(int index) => CurrentLoadoutIndex = index;
+        public void QuickHeal() { }
+        public void QuickMana() { }
+        public void QuickBuff() { }
+        public void AdjTiles() { }
         public static int tileTargetX, tileTargetY;
         public Item trashItem = new();
         public Item[] armor = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
@@ -149,6 +179,8 @@ namespace Terraria
     }
     public class NPC
     {
+        public bool homeless;
+        public int homeTileX, homeTileY;
         public int whoAmI;
         public int type, life = 100, lifeMax = 100, damage = 10, defense, width = 20, height = 20;
         public bool active, friendly, townNPC, boss, dontTakeDamage, immortal, noTileCollide, noGravity, chaseable = true;
@@ -175,7 +207,7 @@ namespace Terraria
         public Microsoft.Xna.Framework.Vector2 position;
         public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
         public string Name = "";
-        public int stack, pick, axe, hammer, ammo, damage, useStyle;
+        public int stack, pick, axe, hammer, ammo, damage, useStyle, maxStack = 9999;
         public int type, prefix, useAmmo;
         public int createTile = -1;
         public void SetDefaults(int itemType) { type = itemType; createTile = -1; }
@@ -206,8 +238,20 @@ namespace Terraria
         public int width = 8, height = 8;
         public Microsoft.Xna.Framework.Vector2 velocity, Center;
     }
-    public static class WorldGen { public static bool InWorld(int x, int y, int margin = 0)
-        => x >= margin && y >= margin && x < Main.maxTilesX - margin && y < Main.maxTilesY - margin; }
+    public static class WorldGen
+    {
+        public static string roomCheckFailureReason = "None";
+        public static bool InWorld(int x, int y, int margin = 0)
+            => x >= margin && y >= margin && x < Main.maxTilesX - margin && y < Main.maxTilesY - margin;
+        public static bool MoveTownNPC(int x, int y, int who) => true;
+        public static bool IsNPCEvictable(int who) => true;
+        public static void moveRoom(int x, int y, int who)
+        {
+            var npc = Main.npc[who];
+            (npc.homeTileX, npc.homeTileY, npc.homeless) = (x, y, false);
+        }
+        public static void kickOut(int who) => Main.npc[who].homeless = true;
+    }
     public static class Collision
     {
         public static bool up, down;
@@ -289,6 +333,7 @@ namespace Terraria.ModLoader
         public static int ItemCount = 6000;
         public static Func<Terraria.Item, bool> RightClickTest;
         public static bool CanRightClick(Terraria.Item item) => RightClickTest?.Invoke(item) == true;
+        public static bool CanStack(Terraria.Item first, Terraria.Item second) => first.type == second.type && first.prefix == second.prefix;
     }
     public static class NPCLoader { public static int NPCCount = 700; }
     public class GlobalNPC { public virtual void OnKill(Terraria.NPC npc) { } }

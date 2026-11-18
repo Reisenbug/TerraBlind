@@ -1,4 +1,10 @@
 [
+{"type":"function","function":{"name":"housing","description":"原版房屋操作。check在x/y检查房间，assign给房间坐标和npc/npc_type，evict对实际NPC撤销分配。联机返回requested时等服务端状态更新。","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["check","assign","evict"]},"x":{"type":"integer"},"y":{"type":"integer"},"npc":{"type":"integer"},"npc_type":{"type":"integer"}},"required":["action"]}}},
+{"type":"function","function":{"name":"game_input","description":"执行一次原版语义快捷操作。hotbar的index是0..9，loadout的index是0..2，inventory与smart_cursor传enabled，其他操作调用原版快捷治疗、回蓝、增益。读取返回的实际状态或用get_state核实效果。","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["hotbar","loadout","inventory","smart_cursor","quick_heal","quick_mana","quick_buff"]},"index":{"type":"integer","minimum":0},"enabled":{"type":"boolean"}},"required":["action"]}}},
+{"type":"function","function":{"name":"slot_state","description":"读取指定槽位与鼠标持物。inventory槽0..49，coin/ammo各0..3，equipment/vanity各0..9，trash用0，container使用当前已打开的箱子或个人储物容器。返回container是当前原版容器ID。","parameters":{"type":"object","properties":{"section":{"type":"string","enum":["inventory","coin","ammo","equipment","vanity","container","trash"]},"slot":{"type":"integer","minimum":0}},"required":["section","slot"]}}},
+{"type":"function","function":{"name":"slot_click","description":"按原版规则左击或右击指定槽位。可拿起、放下、交换、合堆、拆叠、右键开袋或切换物品形态。用slot_state提供expected_item和expected_cursor，容器另传expected_container。返回真实before/after。垃圾槽会采用原版覆盖规则。","parameters":{"type":"object","properties":{"section":{"type":"string","enum":["inventory","coin","ammo","equipment","vanity","container","trash"]},"slot":{"type":"integer","minimum":0},"button":{"type":"string","enum":["left","right"]},"expected_item":{"type":"object","properties":{"type":{"type":"integer"},"prefix":{"type":"integer"},"stack":{"type":"integer"}},"required":["type","prefix","stack"]},"expected_cursor":{"type":"object","properties":{"type":{"type":"integer"},"prefix":{"type":"integer"},"stack":{"type":"integer"}},"required":["type","prefix","stack"]},"expected_container":{"type":"integer"}},"required":["section","slot","button","expected_item","expected_cursor"]}}},
+{"type":"function","function":{"name":"craft_recipes","description":"刷新原版当前可制作配方。可按成品item_type筛选，最多返回40条。输出真实原版配方index，供craft_recipe调用。","parameters":{"type":"object","properties":{"item_type":{"type":"integer","minimum":0},"offset":{"type":"integer","minimum":0}},"required":[]}}},
+{"type":"function","function":{"name":"craft_recipe","description":"按当前可用的原版配方index制作一次，并按expected_type核对成品。保留原版扣料、制作钩子、音效和弹字。成品留在鼠标，请用slot_click存入指定槽。","parameters":{"type":"object","properties":{"index":{"type":"integer","minimum":0},"expected_type":{"type":"integer","minimum":0}},"required":["index","expected_type"]}}},
   {"type":"function","function":{"name":"open_item","description":"在背包slot(0..49)执行原版右键，打开草药袋、宝藏袋、匣子等可打开物品。inventory_review的can_open反映当前游戏与模组钩子的资格；物品用途、收获与钥匙条件需查证。expected精确匹配刚读到的type/prefix/stack。先暂停占用输入的动作。走原版ItemSlot右键及开袋、消耗钩子，钥匙与掉落遵循当前游戏；返回consumed和前后槽位，未消耗时outcome=not_consumed。打开后查真实背包和nearby_drops，再恢复原动作。","parameters":{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"maximum":49},"expected":{"type":"object","properties":{"type":{"type":"integer"},"prefix":{"type":"integer"},"stack":{"type":"integer"}},"required":["type","prefix","stack"]}},"required":["slot","expected"]}}},
   {"type":"function","function":{"name":"hell_run","description":"复用既有地狱肉山流程。从当前地狱位置选施工路线，走到桥起点、建房、搭桥、等待NPC和夜晚、购买雷管、安排向导落入岩浆并用既有肉山战斗行为开打。先查现场、材料、NPC及资金；人物需落地且已到地狱，背包准备平台、木头和火把。消耗真实库存与资金，沿用当前辅助配置；返回原流程实际phase/start_error/wof_outcome/wof_reason。结束后核对hardmode、Boss与实际掉落确认结果。可在后台DAG脚本内执行，供Agent同时规划。","parameters":{"type":"object","properties":{}}}},
   {"type":"function","function":{"name":"house_site","description":"复用既有建房选址器，检查人物附近能容纳原版住房施工的矩形。rooms为1或4，dir为施工方向；返回build_args可直接交给build_house。返回的矩形与施工参数已经换算方向，结合地形、危险和材料选择是否施工。这里只查位置，不移动或建造。","parameters":{"type":"object","properties":{"rooms":{"type":"integer","enum":[1,4],"default":1},"dir":{"type":"integer","enum":[-1,1],"default":1},"from_x":{"type":"integer","minimum":1},"from_y":{"type":"integer","minimum":1},"range":{"type":"integer","minimum":1,"maximum":300,"default":100}}}}},
@@ -604,7 +610,7 @@
                   "items": {
                     "type": "string"
                   },
-                  "description": "同时按住的键:left/right/up/down/jump/use_tile/throw/hook/mount"
+                  "description": "同时按住的键:left/right/up/down/jump/use_tile/throw/hook/mount/auto_select"
                 },
                 "rel": {
                   "type": "array",
@@ -645,6 +651,16 @@
           "timeout_frames": {
             "type": "integer",
             "description": "总超时帧数,默认1800(30秒)"
+          },
+          "expected_cursor": {
+            "type": "object",
+            "description": "使用鼠标持物对世界左击。背包打开，用slot_state观测实际光标；只允许一个带at或rel、use:true、until.frames:1且无slot的step。",
+            "properties": {
+              "type": { "type": "integer" },
+              "prefix": { "type": "integer" },
+              "stack": { "type": "integer" }
+            },
+            "required": ["type", "prefix", "stack"]
           },
           "observe": {
             "type": "boolean",

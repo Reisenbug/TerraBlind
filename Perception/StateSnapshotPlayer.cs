@@ -442,7 +442,7 @@ namespace TerraBlind
 		public override void SetControls()
 		{
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On && Main.hasFocus
-				&& ((Main.mouseItem != null && !Main.mouseItem.IsAir)
+				&& ((Main.mouseItem != null && !Main.mouseItem.IsAir && !AgentTools.CursorWorldInput)
 					|| Player.mouseInterface && (Main.mouseLeft || Main.mouseRight)))
 			{
 				FrameProgram.YieldToInterface();

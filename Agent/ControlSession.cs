@@ -33,7 +33,8 @@ public sealed class AgentControlSession
     public string Tool => tool ?? (attackTicket != 0 ? "fight" : null);
     public static bool ActionTool(string name) => name is "nav_to" or "mine" or "mine_vein" or "chop_wood"
         or "use_item" or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap"
-        or "combat_reposition" or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat" or "fight" or "fight_player";
+        or "combat_reposition" or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat" or "fight" or "fight_player"
+        or "slot_click" or "game_input" or "craft_recipe" or "housing";
 
     public static void DescribeClaims(JsonArray schemas)
     {
@@ -110,6 +111,7 @@ public sealed class AgentControlSession
     public static ControlChannels RequiredChannels(string name, JsonObject args)
     {
         if (name == "fight") return ControlChannels.ItemUse;
+        if (name is "slot_click" or "game_input" or "craft_recipe" or "housing") return ControlChannels.ItemUse;
         if (name != "act") return ControlChannels.All;
         if (args["combat_candidate"] != null) return ControlChannels.Movement;
         var channels = ControlChannels.None;

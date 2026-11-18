@@ -13,6 +13,9 @@ namespace TerraBlind;
 
 public static partial class AgentTools
 {
+    static (int Type, int Prefix)? cursorWorldItem;
+    internal static bool CursorWorldInput => cursorWorldItem is { } expected && Main.playerInventory
+        && !Main.mouseItem.IsAir && Main.mouseItem.type == expected.Type && Main.mouseItem.prefix == expected.Prefix;
     internal static bool AutonomyActive => NativeAgent.Processing || Actions.HasPrimaryControl || ControlSession.Active;
     internal static readonly System.Text.Json.JsonSerializerOptions ModelJson = new(System.Text.Json.JsonSerializerOptions.Default)
     { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
@@ -846,6 +849,102 @@ public static partial class AgentTools
     }
     static string Text(JsonObject args, string key) => args[key]?.GetValue<string>() ?? "";
     static bool Bool(JsonObject args, string key) => args[key]?.GetValue<bool>() ?? false;
+    static JsonObject ApplyGameInput(JsonObject args)
+    {
+        var player = Main.LocalPlayer;
+        if (Main.gameMenu || !player.active || player.dead || player.itemAnimation != 0 || player.itemTime != 0)
+            return new JsonObject { ["error"] = "player_input_busy" };
+        string action = Text(args, "action");
+        int index = Int(args, "index", -1);
+        int healthBefore = player.statLife, manaBefore = player.statMana;
+        switch (action)
+        {
+            case "hotbar" when index is >= 0 and < 10 && Main.mouseItem.IsAir: player.selectedItem = index; break;
+            case "loadout" when index is >= 0 and < 3: player.TrySwitchingLoadout(index); break;
+            case "inventory" when args["enabled"] != null:
+                if (!Bool(args, "enabled") && player.chest != -1) TreasureGrab.CloseChest();
+                Main.playerInventory = Bool(args, "enabled");
+                break;
+            case "smart_cursor" when args["enabled"] != null: Main.SmartCursorWanted_Mouse = Bool(args, "enabled"); break;
+            case "quick_heal": player.QuickHeal(); break;
+            case "quick_mana": player.QuickMana(); break;
+            case "quick_buff": player.QuickBuff(); break;
+            default: return new JsonObject { ["error"] = "invalid_or_blocked_game_input" };
+        }
+        return new JsonObject { ["ok"] = true, ["action"] = action, ["selected_slot"] = player.selectedItem,
+            ["loadout"] = player.CurrentLoadoutIndex, ["inventory_open"] = Main.playerInventory,
+            ["smart_cursor"] = Main.SmartCursorWanted_Mouse, ["health_delta"] = player.statLife - healthBefore,
+            ["mana_delta"] = player.statMana - manaBefore };
+    }
+
+    static JsonObject CraftAtCursor(JsonObject args, bool execute)
+    {
+        var player = Main.LocalPlayer;
+        if (Main.gameMenu || !player.active || player.dead || execute && (player.itemAnimation != 0 || player.itemTime != 0))
+            return new JsonObject { ["error"] = "craft_player_busy" };
+        if (execute && !Main.playerInventory) return new JsonObject { ["error"] = "inventory_closed" };
+        player.AdjTiles();
+        Recipe.FindRecipes();
+        int expectedType = Int(args, execute ? "expected_type" : "item_type", -1);
+        var indices = Main.availableRecipe.Take(Main.numAvailableRecipes);
+        if (!execute)
+        {
+            int offset = Math.Max(0, Int(args, "offset"));
+            var matches = indices.Where(id => expectedType < 0 || Main.recipe[id].createItem.type == expectedType).ToArray();
+            return new JsonObject { ["total"] = matches.Length, ["offset"] = offset,
+                ["recipes"] = new JsonArray(matches.Skip(offset).Take(40).Select(id =>
+                {
+                    var item = Main.recipe[id].createItem;
+                    return (JsonNode)new JsonObject { ["index"] = id, ["type"] = item.type, ["name"] = item.Name, ["stack"] = item.stack };
+                }).ToArray()) };
+        }
+        int index = Int(args, "index", -1);
+        if (index < 0 || !indices.Contains(index) || Main.recipe[index].createItem.type != expectedType)
+            return new JsonObject { ["error"] = "recipe_unavailable" };
+        var output = Main.recipe[index].createItem;
+        var cursor = Main.mouseItem;
+        if (!cursor.IsAir && (!Terraria.ModLoader.ItemLoader.CanStack(cursor, output) || cursor.stack + output.stack > cursor.maxStack))
+            return new JsonObject { ["error"] = "craft_cursor_occupied" };
+        int before = cursor.IsAir ? 0 : cursor.stack;
+        Main.CraftItem(Main.recipe[index]);
+        cursor = Main.mouseItem;
+        int produced = cursor.type == expectedType ? Math.Max(0, cursor.stack - before) : 0;
+        return new JsonObject { ["ok"] = produced > 0, ["outcome"] = produced > 0 ? "crafted" : "craft_not_observed",
+            ["produced"] = produced, ["cursor"] = new JsonObject { ["type"] = cursor.type, ["prefix"] = cursor.prefix, ["stack"] = cursor.stack } };
+    }
+
+    static JsonObject Housing(JsonObject args)
+    {
+        string action = Text(args, "action");
+        int x = Int(args, "x", -1), y = Int(args, "y", -1), who = Int(args, "npc", -1);
+        NPC npc = null;
+        if (action is "assign" or "evict")
+        {
+            if (who < 0 || who >= Main.maxNPCs || Main.npc[who] is not { active: true, townNPC: true } resident
+                || resident.type != Int(args, "npc_type", -1))
+                return new JsonObject { ["error"] = "housing_npc_changed" };
+            npc = resident;
+        }
+        if (action == "evict")
+        {
+            if (npc.homeless || !WorldGen.IsNPCEvictable(who)) return new JsonObject { ["error"] = "housing_banner_unreachable" };
+            WorldGen.kickOut(who);
+        }
+        else
+        {
+            if (action is not ("check" or "assign") || !WorldGen.InWorld(x, y, 10))
+                return new JsonObject { ["error"] = "invalid_housing_target" };
+            bool suitable = WorldGen.MoveTownNPC(x, y, action == "check" ? -1 : who);
+            if (action == "check" || !suitable)
+                return new JsonObject { ["ok"] = true, ["suitable"] = suitable, ["x"] = x, ["y"] = y,
+                    ["room_check"] = WorldGen.roomCheckFailureReason.ToString() };
+            WorldGen.moveRoom(x, y, who);
+        }
+        bool requested = Main.netMode == Terraria.ID.NetmodeID.MultiplayerClient;
+        return new JsonObject { ["ok"] = true, ["outcome"] = requested ? "requested" : "applied",
+            ["npc"] = who, ["homeless"] = npc.homeless, ["home_x"] = npc.homeTileX, ["home_y"] = npc.homeTileY };
+    }
+
     internal static bool Rejected(JsonObject result) => result != null && (result["error"] != null ||
         result["ok"]?.ToString() == "false" || result["accepted"]?.ToString() == "false");
 
@@ -1181,7 +1280,7 @@ public static partial class AgentTools
         or "find_descent" or "find_biome"
         or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "jev_judge" or "item_info" or "wiki_search" or "wiki_page"
         or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status" or "action_query"
-        or "find_descent" or "descent_route";
+        or "find_descent" or "descent_route" or "slot_state" or "craft_recipes";
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
     {
         long id = Interlocked.Increment(ref invocationSequence);
@@ -1235,7 +1334,8 @@ public static partial class AgentTools
         }
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
             or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition"
-            or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat";
+            or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat"
+            or "slot_click" or "game_input" or "craft_recipe" or "housing";
         bool action = external || name is "fight" or "fight_player";
         bool startsPrimary = name == "action_start" && Text(args, "tool") != "fight";
         if ((external || startsPrimary) && string.IsNullOrEmpty(taskNode)
@@ -2232,6 +2332,22 @@ public static partial class AgentTools
                 return (await NativeAgent.OnMain(Equipment.Snapshot, token)).ToJsonString();
             case "inventory_review":
                 return (await NativeAgent.OnMain(PvpInventory.Review, token)).ToJsonString();
+            case "slot_state":
+                return (await NativeAgent.OnMain(() => PvpInventory.Slot(args, click: false), token)).ToJsonString();
+            case "slot_click":
+                result = await NativeAgent.OnMain(() => PvpInventory.Slot(args, click: true), token);
+                break;
+            case "game_input":
+                result = await NativeAgent.OnMain(() => ApplyGameInput(args), token);
+                break;
+            case "craft_recipes":
+                return (await NativeAgent.OnMain(() => CraftAtCursor(args, execute: false), token)).ToJsonString();
+            case "craft_recipe":
+                result = await NativeAgent.OnMain(() => CraftAtCursor(args, execute: true), token);
+                break;
+            case "housing":
+                result = await NativeAgent.OnMain(() => Housing(args), token);
+                break;
             case "equip_item":
                 while (!await NativeAgent.OnMain(() => Main.LocalPlayer.dead
                     || Main.LocalPlayer.itemAnimation == 0 && Main.LocalPlayer.itemTime == 0, token))
@@ -2572,7 +2688,13 @@ public static partial class AgentTools
                 result = await Call("/craft", craftArgs, token);
                 break;
             case "act":
-                if (args["steps"] is JsonArray { Count: 1 } directSteps && directSteps[0] is JsonObject direct
+                bool cursorInput = args["expected_cursor"] is JsonObject;
+                if (cursorInput && (args["steps"] is not JsonArray { Count: 1 } cursorSteps || cursorSteps[0] is not JsonObject cursorStep
+                    || !Bool(cursorStep, "use") || Int(cursorStep["until"] as JsonObject ?? new JsonObject(), "frames") != 1
+                    || cursorStep["slot"] != null || cursorStep["at"] == null && cursorStep["rel"] == null
+                    || args["repeat"] != null || args["combat_candidate"] != null))
+                    return "{\"error\":\"cursor_use_needs_one_aimed_frame\"}";
+                if (!cursorInput && args["steps"] is JsonArray { Count: 1 } directSteps && directSteps[0] is JsonObject direct
                     && direct["at"] is JsonArray { Count: 2 } tileOffset && Bool(direct, "use")
                     && direct["until"]?["frames"] is JsonValue && direct["rel"] == null
                     && (direct["keys"] is null or JsonArray { Count: 0 }) && args["repeat"] == null)
@@ -2604,12 +2726,24 @@ public static partial class AgentTools
                 }
                 try
                 {
+                    if (cursorInput && !await NativeAgent.OnMain(() =>
+                    {
+                        var cursor = Main.mouseItem;
+                        var expected = args["expected_cursor"].AsObject();
+                        if (!Main.playerInventory || cursor.IsAir || Int(expected, "type", -1) != cursor.type
+                            || Int(expected, "prefix", -1) != cursor.prefix || Int(expected, "stack", -1) != cursor.stack) return false;
+                        cursorWorldItem = (cursor.type, cursor.prefix);
+                        return true;
+                    }, token))
+                        return "{\"error\":\"cursor_changed_or_inventory_closed\"}";
                     result = await Call("/act", args, token);
                     if (!Rejected(result)) result = await Wait("/act_status", "active", "/act_stop", 120, token,
                         reactionContext: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
                 }
                 finally
                 {
+                    if (cursorInput)
+                        await NativeAgent.OnMain(() => { cursorWorldItem = null; return true; }, default);
                     if (observe) observation = await NativeAgent.OnMain(EndActObservation, default);
                 }
                 if (observation != null) result["observation"] = observation;

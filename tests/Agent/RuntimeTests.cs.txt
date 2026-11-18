@@ -1455,6 +1455,7 @@ static class RuntimeTests
         await TestInlinePauseResume();
         await TestPreparedFailureRecovery();
         await TestDeferredResourceNode();
+        await TestNativePrimitiveTools();
         await TestScriptAfterRunningRecovery();
         await TestSkillRuntimeEvidence();
         await TestPreparedScriptRevision();
@@ -4232,6 +4233,82 @@ static class RuntimeTests
             Game.LocalPlayer.itemAnimation = animation; Game.LocalPlayer.itemTime = itemTime;
         }
         Console.WriteLine("PASS: navigation completion is checked at the command boundary before checkpointing and subsequent effects");
+    }
+
+    static async Task TestNativePrimitiveTools()
+    {
+        var player = Game.LocalPlayer;
+        int selected = player.selectedItem;
+        var storage = player.inventory[12];
+        var http = HttpServerSystem.Handler;
+        var old = (Game.playerInventory, Game.mouseItem, Game.recipe, Game.availableRecipe, Game.numAvailableRecipes,
+            Game.CraftHandler, Terraria.UI.ItemSlot.LeftClickHandler, Terraria.UI.ItemSlot.RightClickHandler);
+        try
+        {
+            AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask();
+            player.inventory[12] = new Terraria.Item();
+            Game.playerInventory = false;
+            Game.mouseItem = new Terraria.Item();
+            var made = new Terraria.Item { type = 36, stack = 1 };
+            Game.recipe = new[] { new Terraria.Recipe { createItem = made } };
+            Game.availableRecipe = new[] { 0 }; Game.numAvailableRecipes = 1;
+            Game.CraftHandler = recipe => Game.mouseItem = recipe.createItem;
+            Terraria.UI.ItemSlot.LeftClickHandler = (slots, _, slot) =>
+                (slots[slot], Game.mouseItem) = (Game.mouseItem, slots[slot]);
+            var rightContext = -1;
+            Terraria.UI.ItemSlot.RightClickHandler = (slots, context, slot) =>
+            {
+                rightContext = context;
+                slots[slot] = new Terraria.Item { type = 5360, stack = 1 };
+            };
+            async Task<JsonNode> Call(string tool, string args) =>
+                JsonNode.Parse(await Execute(AgentTools.Execute(tool, JsonNode.Parse(args).AsObject(), default)));
+            var hotbar = await Call("game_input", """{"action":"hotbar","index":7}""");
+            Check(hotbar["selected_slot"]?.ToString() == "7", "shortcut did not select the requested hotbar slot");
+            var recipes = await Call("craft_recipes", """{"item_type":36}""");
+            Check(recipes["recipes"][0]["index"]?.ToString() == "0", "native recipe index was not discoverable");
+            var blocked = await Call("craft_recipe", """{"index":0,"expected_type":36}""");
+            Check(blocked["error"]?.ToString() == "inventory_closed" && Game.mouseItem.IsAir, "craft acted with no cursor UI");
+            await Call("game_input", """{"action":"inventory","enabled":true}""");
+            var crafted = await Call("craft_recipe", """{"index":0,"expected_type":36}""");
+            Check(crafted["produced"]?.ToString() == "1" && player.inventory[12].IsAir, "craft did not leave output on the cursor");
+            bool sawCursorInput = false;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/act") sawCursorInput = AgentTools.CursorWorldInput;
+                return (200, "{\"outcome\":\"done\",\"active\":false}");
+            };
+            var cursorAct = await Call("act", """
+                {"expected_cursor":{"type":36,"prefix":0,"stack":1},"steps":[{"at":[1,0],"use":true,"until":{"frames":1}}]}
+                """);
+            Check(sawCursorInput && cursorAct["outcome"]?.ToString() == "done" && !AgentTools.CursorWorldInput,
+                "cursor use did not acquire and release its scoped input");
+            var address = """{"section":"inventory","slot":12}""";
+            var observed = await Call("slot_state", address);
+            var args = JsonNode.Parse(address).AsObject();
+            args["button"] = "left";
+            args["expected_item"] = observed["item"].DeepClone(); args["expected_cursor"] = observed["cursor"].DeepClone();
+            var deposited = await Call("slot_click", args.ToJsonString());
+            Check(deposited["outcome"]?.ToString() == "changed" && Game.mouseItem.IsAir && player.inventory[12].type == 36,
+                "cursor item did not transfer to the requested slot");
+            var stale = await Call("slot_click", args.ToJsonString());
+            Check(stale["error"]?.ToString() == "stale_slot", "slot click accepted stale observations");
+            player.inventory[12] = new Terraria.Item { type = 5358, stack = 1 };
+            observed = await Call("slot_state", address);
+            args["button"] = "right";
+            args["expected_item"] = observed["item"].DeepClone(); args["expected_cursor"] = observed["cursor"].DeepClone();
+            var transformed = await Call("slot_click", args.ToJsonString());
+            Check(transformed["after"]?["item"]?["type"]?.ToString() == "5360" && rightContext == Terraria.UI.ItemSlot.Context.InventoryItem,
+                "arbitrary vanilla right-click was incorrectly gated as bag opening");
+            Console.WriteLine("PASS: native primitive adapters select a hotbar slot, craft onto the cursor, deposit by click and preserve slot identity");
+        }
+        finally
+        {
+            (Game.playerInventory, Game.mouseItem, Game.recipe, Game.availableRecipe, Game.numAvailableRecipes,
+                Game.CraftHandler, Terraria.UI.ItemSlot.LeftClickHandler, Terraria.UI.ItemSlot.RightClickHandler) = old;
+            HttpServerSystem.Handler = http;
+            player.selectedItem = selected; player.inventory[12] = storage;
+        }
     }
 
     static async Task TestFixedMiningReach()
