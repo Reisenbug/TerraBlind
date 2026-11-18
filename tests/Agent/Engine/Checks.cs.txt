@@ -1400,6 +1400,8 @@ public sealed class HornetTrialNpcs : GlobalNPC
 public sealed class Driver : ModSystem
 {
     bool enabled, opened;
+    int fallTestX, fallTestY, fallTestStart, fallTestTick, webPlacedAt;
+    bool EarlyFallCheck => Environment.GetEnvironmentVariable("TB_EARLY_FALL_CHECK") == "1";
     bool liveRunning;
     DateTime liveStart;
     int phase, ticks;
@@ -1634,7 +1636,7 @@ public sealed class Driver : ModSystem
                 return;
             }
             if (++ticks > (PlanningReadOnly ? 18000 : 7200)) throw new TimeoutException("engine_check_frame_limit");
-            if (!TeleportCheck) { Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60; }
+            if (!TeleportCheck && !EarlyFallCheck) { Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60; }
             if (pending != null && !pending.IsCompleted) return;
             JsonObject result = pending == null ? null : JsonNode.Parse(pending.GetAwaiter().GetResult()).AsObject();
             pending = null;
@@ -1645,6 +1647,31 @@ public sealed class Driver : ModSystem
             {
                 case 0:
                     Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                    if (EarlyFallCheck)
+                    {
+                        Concessions.Enabled = Combat.Enabled = Dodge.Enabled = false;
+                        Manual.On = false;
+                        foreach (var npc in Main.npc) npc.active = false;
+                        foreach (var item in player.armor) item.TurnToAir();
+                        fallTestX = Main.spawnTileX; fallTestY = Main.spawnTileY + 8;
+                        for (int tx = fallTestX - 3; tx <= fallTestX + 3; tx++)
+                        for (int ty = fallTestY - 5; ty <= fallTestY + 17; ty++)
+                        {
+                            Main.tile[tx, ty].ClearEverything();
+                            if (ty == fallTestY + 17) Main.tile[tx, ty].ResetToType(TileID.Stone);
+                            if (ty >= fallTestY + 2 && ty <= fallTestY + 5) Main.tile[tx, ty].WallType = WallID.Stone;
+                        }
+                        player.inventory[5].SetDefaults(ItemID.Cobweb);
+                        player.inventory[5].stack = 2;
+                        player.position = new Vector2(fallTestX * 16 + 2, fallTestY * 16 - player.height);
+                        player.velocity = new Vector2(0, 10);
+                        player.fallStart = player.fallStart2 = fallTestStart = (int)(player.position.Y / 16) - 40;
+                        player.statLife = player.statLifeMax = 100;
+                        player.immune = false; player.immuneTime = player.itemAnimation = player.itemTime = 0;
+                        var forecast = NavigationSurvival.AssessFall(player);
+                        Check(forecast["lethal"].GetValue<bool>() && forecast["frames"].GetValue<int>() > 12, "expected lethal fall beyond late placement window");
+                        RecedingNav.Active = true; fallTestTick = ticks; phase = 92; break;
+                    }
                     if (Environment.GetEnvironmentVariable("TB_DESCENT_ROUTE_CHECK") == "1")
                     {
                         player.inventory[1].SetDefaults(ItemID.CopperPickaxe);
@@ -1999,6 +2026,17 @@ public sealed class Driver : ModSystem
                     bool crafted = result["ok"]?.GetValue<bool>() == true && result["value"]?["status"]?.ToString() == "completed"
                         && player.inventory.Any(item => item.type == ItemID.WorkBench && item.stack == 1);
                     Finish(crafted, crafted ? "AGENT_SAVED_CRAFT_CHECK revision=2 inventory=1 model_calls=0" : result.ToJsonString()); break;
+                case 92:
+                    if (player.inventory[5].stack == 1 && webPlacedAt == 0) webPlacedAt = ticks - fallTestTick;
+                    if (webPlacedAt > 0 && player.fallStart > fallTestStart) RecedingNav.Active = false;
+                    if (player.dead || player.Bottom.Y >= (fallTestY + 17) * 16 - 1 || ticks - fallTestTick > 240)
+                    {
+                        RecedingNav.Active = false;
+                        Finish(!player.dead && player.statLife == 100 && webPlacedAt is > 0 and <= 12
+                            && player.Bottom.Y >= (fallTestY + 17) * 16 - 1,
+                            $"AGENT_EARLY_FALL_CHECK hp={player.statLife} web_at_frame={webPlacedAt} fall_start={player.fallStart} bottom={player.Bottom.Y} model_calls=0");
+                    }
+                    phase = 92; break;
                 case 48:
                     Check(result["found"]?.GetValue<bool>() == true && result["local_biome_tiles"].GetValue<int>() >= SceneMetrics.JungleTileThreshold,
                         "no_verified_jungle_surface");

@@ -10,6 +10,7 @@ public static class NavigationSurvival
     static int heldSlot = -1, previousSlot = -1, stashedSlot = -1;
     static bool holdingPlacement, holdingPotion;
     static int heldType;
+    static int webFallStart;
     static int gravityPhase, gravityTicks;
     static float originalGravity;
     static Point webTarget;
@@ -53,8 +54,13 @@ public static class NavigationSurvival
             player.controlUp = player.releaseUp;
             return true;
         }
-        if (heldSlot >= 0 && holdingPlacement && player.inventory[heldSlot].createTile == TileID.Platforms
-            && player.Bottom.Y > webTarget.Y * 16)
+        if (heldSlot >= 0 && holdingPlacement && heldType == ItemID.Cobweb && player.fallStart > webFallStart)
+        {
+            DiagLog.Write($"[survival-placement] outcome=fall_reset target=({webTarget.X},{webTarget.Y}) fall_start={player.fallStart}");
+            Reset(player);
+        }
+        if (heldSlot >= 0 && holdingPlacement && (heldType == ItemID.Cobweb
+            ? player.position.Y >= (webTarget.Y + 1) * 16 : player.Bottom.Y > webTarget.Y * 16))
         {
             DiagLog.Write($"[survival-placement] outcome=missed target=({webTarget.X},{webTarget.Y}) pos=({player.position.X:0.##},{player.position.Y:0.##}) vx={player.velocity.X:0.##} vy={player.velocity.Y:0.##}");
             Reset(player);
@@ -98,7 +104,20 @@ public static class NavigationSurvival
             Reset(player);
         }
         if (TryPlatformCatch(player)) return true;
-        if (!DangerousLandingSoon(player, out var landing)) return false;
+        if (!DangerousLandingSoon(player, out var landing))
+        {
+            if (player.gravDir != 1 || player.velocity.Y <= 0 || player.AnyExtraJumpUsable()) return false;
+            int cobweb = FindCobweb(player);
+            if (cobweb < 0) return false;
+            var forecast = ProjectLanding(player, 36);
+            if (!forecast.Landed || forecast.Damage < player.statLife) return false;
+            for (int frame = 4; frame < forecast.Frames && frame <= 12; frame += 2)
+            {
+                var intercept = ProjectLanding(player, frame).Position;
+                if (TryPlaceCobweb(player, cobweb, intercept, early: true)) return true;
+            }
+            return false;
+        }
         for (int slot = 0; slot < 50; slot++)
         {
             if (player.inventory[slot].type is not (ItemID.Umbrella or ItemID.TragicUmbrella)) continue;
@@ -127,41 +146,53 @@ public static class NavigationSurvival
                 return true;
             }
             if (player.gravDir != 1) return false;
-            var target = new Point((int)((landing.X + player.width / 2f) / 16), (int)((landing.Y + player.height - 1) / 16));
-            for (int slot = 0; slot < 50; slot++)
-            {
-                if (player.inventory[slot].type != ItemID.Cobweb) continue;
-                Point? placement = null;
-                int previous = player.selectedItem;
-                try
-                {
-                    player.selectedItem = slot;
-                    foreach (int offset in new[] { -1, -2, 0, 1 })
-                    {
-                        foreach (int x in new[] { target.X, (int)(landing.X / 16), (int)((landing.X + player.width - 1) / 16) })
-                        {
-                            var candidate = new Point(x, target.Y + offset);
-                            if (!WorldGen.InWorld(candidate.X, candidate.Y) || !WebCanReplace(candidate)
-                                || !Reach.CanPlace(player, candidate.X, candidate.Y) || !LavaSafety.CanMine(candidate.X, candidate.Y)) continue;
-                            if (Main.tile[candidate.X, candidate.Y].WallType == 0 && !ItemUseCoordinator.HasAnchor(candidate.X, candidate.Y)) continue;
-                            placement = candidate; break;
-                        }
-                        if (placement.HasValue) break;
-                    }
-                }
-                finally { player.selectedItem = previous; }
-                if (!placement.HasValue) return false;
-                HoldItem(player, slot); holdingPlacement = true; webTarget = placement.Value;
-                Interrupt(player, "place_cobweb");
-                player.delayUseItem = false; player.mouseInterface = false;
-                Cursor.AimTile(webTarget.X, webTarget.Y); player.controlUseItem = true;
-                return true;
-            }
-            return false;
+            int cobweb = FindCobweb(player);
+            return cobweb >= 0 && TryPlaceCobweb(player, cobweb, landing, early: false);
         }
         bool press = player.releaseJump;
         Interrupt(player, press ? "extra_jump" : "release_jump");
         player.controlJump = press;
+        return true;
+    }
+
+    static int FindCobweb(Player player)
+    {
+        for (int slot = 0; slot < 50; slot++)
+            if (player.inventory[slot].type == ItemID.Cobweb && !player.inventory[slot].IsAir) return slot;
+        return -1;
+    }
+
+    static bool TryPlaceCobweb(Player player, int slot, Vector2 position, bool early)
+    {
+        int center = (int)((position.X + player.width / 2f) / 16);
+        int bottom = (int)((position.Y + player.height - 1) / 16);
+        Point? placement = null;
+        int previous = player.selectedItem;
+        try
+        {
+            player.selectedItem = slot;
+            foreach (int offset in early ? new[] { 0 } : new[] { -1, -2, 0, 1 })
+            {
+                int y = bottom + offset;
+                if (early && y * 16 < player.Bottom.Y) continue;
+                foreach (int x in new[] { center, (int)(position.X / 16), (int)((position.X + player.width - 1) / 16) })
+                {
+                    var candidate = new Point(x, y);
+                    if (!WorldGen.InWorld(x, y) || !WebCanReplace(candidate) || !Reach.CanPlace(player, x, y)
+                        || !LavaSafety.CanMine(x, y) || AgentTools.Control.ForbiddenAt(ControlBehavior.Placement, x, y)) continue;
+                    if (Main.tile[x, y].WallType == 0 && !ItemUseCoordinator.HasAnchor(x, y)) continue;
+                    placement = candidate; break;
+                }
+                if (placement.HasValue) break;
+            }
+        }
+        finally { player.selectedItem = previous; }
+        if (!placement.HasValue) return false;
+        HoldItem(player, slot); holdingPlacement = true; webTarget = placement.Value;
+        webFallStart = player.fallStart;
+        Interrupt(player, early ? "place_cobweb_early" : "place_cobweb");
+        player.delayUseItem = false; player.mouseInterface = false;
+        Cursor.AimTile(webTarget.X, webTarget.Y); player.controlUseItem = true;
         return true;
     }
 
