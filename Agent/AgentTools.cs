@@ -533,13 +533,13 @@ public static partial class AgentTools
                 string result = await Execute("run_script", args, token);
                 var returned = JsonNode.Parse(result);
                 if (recovery != null && returned?["value"] is JsonObject review
-                    && review["status"]?.ToString() == "needs_review" && review["reason"]?.ToString() == "uncovered_failure")
+                    && review["status"]?.ToString() == "needs_review")
                 {
                     var failure = await Actions.Query(handle, 0, token);
                     var fallback = await NativeAgent.OnMain(() =>
                     {
-                        var source = PrepareCombatRecovery(failure);
-                        if (source != null) report["mode"] = "combat_recovery";
+                        var source = PrepareLocalRecovery(failure, review["reason"]?.ToString());
+                        if (source != null) report["mode"] = "local_recovery";
                         return source;
                     }, token);
                     if (fallback != null)
@@ -599,22 +599,34 @@ public static partial class AgentTools
         }, token);
     }
 
-    static string PrepareCombatRecovery(JsonObject failure)
+    static string PrepareLocalRecovery(JsonObject failure, string reviewReason)
     {
         if (Main.LocalPlayer.dead || Main.LocalPlayer.suffocating || Watches.HasRecoveryBlocker
             || Actions.HasPrimaryControl || ControlSession.PrimaryActive || ContactEscapeActive) return null;
         var root = failure["result"];
-        var evidence = failure["tool"]?.ToString() == "gather" ? root
-            : root?["failure"]?["tool"]?.ToString() == "gather" ? root["failure"]["evidence"] : null;
-        if (evidence?["outcome"]?.ToString() is not ("combat_obstructed" or "combat_out_of_range" or "combat_no_progress")
-            || evidence["recovery_skill"]?["input"] is not JsonObject input
-            || input["npc"] == null || input["npc_type"] == null) return null;
+        var evidence = root?["failure"]?["evidence"] ?? root;
         string handle = failure["handle"].ToString();
-        string key = "combat:" + handle + ":" + input["npc"] + ":" + input["npc_type"];
-        if (!recoveredActions.TryAdd(key, "combat_approach")) return null;
-        return "const r=skill('combat_approach',0," + input.ToJsonString() + ");"
-            + "if(r.status!=='ready')return {status:'needs_review',reason:r.reason,approach:r};"
-            + "return tool('action_control',{command:'resume',handle:" + JsonValue.Create(handle).ToJsonString() + "});";
+        string resume = "return tool('action_control',{command:'resume',handle:" + JsonValue.Create(handle).ToJsonString() + "});";
+        var navigation = evidence?["last_result"]?["result"]?["navigation"] ?? evidence?["navigation"] ?? evidence;
+        if (navigation?["error"]?.ToString() == "navigation_near_trap"
+            && navigation["trap_tiles"] is JsonArray { Count: > 0 } traps
+            && reviewReason is not ("trigger_removal_policy_required" or "mining_forbidden")
+            && traps.All(t => t?["kind"]?.ToString() == "pressure_plate"
+                && Control.CheckAt(ControlBehavior.Mining, Int(t.AsObject(), "x"), Int(t.AsObject(), "y")) == null)
+            && ControlAllows(ControlBehavior.Mining, ControlChannels.ItemUse, delegated: true))
+        {
+            var input = new JsonObject { ["error"] = "navigation_near_trap", ["allow_trigger_removal"] = true,
+                ["traps"] = traps.DeepClone() };
+            if (!recoveredActions.TryAdd("trap:" + handle + ":" + traps.ToJsonString(), "recover_navigation")) return null;
+            return "const r=skill('recover_navigation',0," + input.ToJsonString() + ");"
+                + "if(!r.retry)return {status:'needs_review',reason:r.reason};" + resume;
+        }
+        if (reviewReason != "uncovered_failure"
+            || evidence?["outcome"]?.ToString() is not ("combat_obstructed" or "combat_out_of_range" or "combat_no_progress")
+            || evidence["recovery_skill"]?["input"] is not JsonObject combat || combat["npc"] == null || combat["npc_type"] == null
+            || !recoveredActions.TryAdd("combat:" + handle + ":" + combat["npc"] + ":" + combat["npc_type"], "combat_approach")) return null;
+        return "const r=skill('combat_approach',0," + combat.ToJsonString() + ");"
+            + "if(r.status!=='ready')return {status:'needs_review',reason:r.reason,approach:r};" + resume;
     }
 
     static void ReportExecutionGap(JsonObject report, string reason)

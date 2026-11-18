@@ -625,7 +625,7 @@ public static class AgentScript
                         if (ScriptProgress.Failed(toolResult))
                         {
                             var facts = new JsonObject();
-                            foreach (string field in new[] { "error", "detail", "outcome", "done", "status", "reason", "state", "pos", "progress_idle_seconds", "stationary_seconds", "distance_pixels", "best_distance_pixels", "active_handle", "name_candidates", "requested_name", "targets", "source_rules", "source_error", "last_result", "recovery_skill", "placed", "wanted" })
+                            foreach (string field in new[] { "error", "detail", "outcome", "done", "status", "reason", "state", "pos", "progress_idle_seconds", "stationary_seconds", "distance_pixels", "best_distance_pixels", "active_handle", "name_candidates", "requested_name", "targets", "source_rules", "source_error", "last_result", "navigation", "contact_escape", "trap_tiles", "recovery_skill", "placed", "wanted" })
                                 if (toolResult[field] != null) facts[field] = toolResult[field].DeepClone();
                             if (toolResult["cells"] is JsonArray cells && cells.Count > 0) facts["last_cell"] = cells[^1]?.DeepClone();
                             lastFailure = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["evidence"] = facts };
