@@ -37,6 +37,9 @@ namespace TerraBlind
 		[DefaultValue(true)]
 		public bool AgentEnabled = true;
 
+		[DefaultValue(false)]
+		public bool AgentFreezeWhileThinking;
+
 		[DefaultValue(true)]
 		public bool AgentUseCodex = true;
 

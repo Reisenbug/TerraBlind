@@ -95,7 +95,7 @@ public sealed class ThinkingPause : ModSystem
     static string WaitingReason()
     {
         if (Main.dedServ || Main.netMode != 0 || Main.gameMenu || Manual.On
-            || !Config.I.AgentEnabled || !AgentNetwork.CanAutomate) return null;
+            || !Config.I.AgentEnabled || !Config.I.AgentFreezeWhileThinking || !AgentNetwork.CanAutomate) return null;
         var player = Main.LocalPlayer;
         if (player == null || !player.active || player.dead) return null;
         if (!NativeAgent.WorkPending && !AgentTools.Actions.HasActive && !AgentTools.ControlSession.Active) return null;

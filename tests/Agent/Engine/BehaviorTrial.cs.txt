@@ -4930,12 +4930,14 @@ public sealed partial class BehaviorTrial : ModSystem
             File.WriteAllText(Path.Combine(Main.SavePath, "thinking-pause-check.json"), measurements.ToJsonString());
             Console.WriteLine("THINKING_PAUSE_CASE " + name);
         }
+        bool navigationProbe = Environment.GetEnvironmentVariable("TB_GATHER_NAV_HANDOFF") == "1";
         try
         {
             await OnMain(() =>
             {
                 NativeAgent.Stop(); Halt.All(); AgentTools.NewTask();
                 Config.I.AgentEnabled = true; Manual.On = false;
+                if (!navigationProbe) Config.I.AgentFreezeWhileThinking = true;
                 Main.autoPause = false; Main.playerInventory = true;
                 AgentPermissions.Attack = AgentPermissions.Dodge = false;
                 Combat.Enabled = Dodge.Enabled = false;
@@ -4959,12 +4961,17 @@ public sealed partial class BehaviorTrial : ModSystem
                 typeof(NativeAgent).GetProperty("Status").SetValue(null, "freeze_acceptance");
                 return true;
             });
-            await Until(() => ThinkingPause.Frozen, "initial model wait");
-            if (Environment.GetEnvironmentVariable("TB_GATHER_NAV_HANDOFF") == "1")
+            if (navigationProbe)
             {
+                var initialTick = await OnMain(() => Main.GameUpdateCount);
+                await Until(() => Main.GameUpdateCount >= initialTick + 15, "world keeps running through model wait");
+                if (await OnMain(() => ThinkingPause.Frozen || Main.gamePaused || Config.I.AgentFreezeWhileThinking))
+                    throw new Exception("agent froze the world with the default setting");
+                Record("model_wait_keeps_world_running", new JsonObject { ["tick"] = initialTick }, await OnMain(Sample));
                 await GatherNavigationHandoff(origin, floorY);
                 return;
             }
+            await Until(() => ThinkingPause.Frozen, "initial model wait");
             var frozenBefore = await OnMain(Sample);
             await Task.Delay(1200);
             var frozenAfter = await OnMain(Sample);
@@ -5205,7 +5212,7 @@ public sealed partial class BehaviorTrial : ModSystem
             float startX = player.position.X;
             int slot = Item.NewItem(player.GetSource_Misc("gather-nav-handoff"), player.Center, item);
             Main.item[slot].velocity = Vector2.Zero;
-            Main.item[slot].noGrabDelay = 30;
+            Main.item[slot].noGrabDelay = 90;
             BoundaryInputPlayer.ObserveInput = p =>
             {
                 if (picked == 0 && p.HasItem(item)) { picked = Stopwatch.GetTimestamp(); pickupTick = Main.GameUpdateCount; }
