@@ -14,6 +14,7 @@ static class ActionTests
     {
         await IsolatedNavigationGoal();
         await QueuedActions();
+        await ResumeFromRecovery();
         var history = new ActionTasks((_, args, _) => Task.FromResult(args.ToJsonString()),
             _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
         string firstHandle = null, historyHandle = null;
@@ -355,6 +356,52 @@ static class ActionTests
         }
         Check(allEnded == 2 && !all.HasActive, "global stop failed to release both action scopes");
         Console.WriteLine("PASS: global stop cancels paused originals and active insertions with scope cleanup");
+    }
+
+    static async Task ResumeFromRecovery()
+    {
+        foreach (bool failed in new[] { false, true })
+        {
+            var queuedResume = Signal();
+            var finishRepair = Signal();
+            var resumed = Signal();
+            int executions = 0;
+            string original = null;
+            ActionTasks actions = null;
+            actions = new ActionTasks(async (tool, args, token) =>
+            {
+                if (tool == "run_script")
+                {
+                    var receipt = await actions.Control(original, "resume", new JsonObject { ["count"] = 2 }, token);
+                    Check(receipt["status"].ToString() == "resume_queued", "recovery could not queue the original handle");
+                    queuedResume.TrySetResult(true);
+                    await finishRepair.Task.WaitAsync(token);
+                    return failed ? "{\"ok\":false}" : "{\"ok\":true}";
+                }
+                if (Interlocked.Increment(ref executions) == 1) return "{\"ok\":false}";
+                Check(args["count"]?.GetValue<int>() == 2, "queued resume lost updated arguments");
+                resumed.TrySetResult(true);
+                return "{\"ok\":true}";
+            }, _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
+            ActionTasks.NodeContext.Value = "collect";
+            try
+            {
+                original = actions.Start("gather", new JsonObject { ["count"] = 1 }, default)["handle"].ToString();
+                Check((await actions.Query(original, 1000, default))["status"].ToString() == "failed", "fixture never reached recovery");
+                string repair = actions.Start("run_script", new JsonObject(), default)["handle"].ToString();
+                await queuedResume.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                Check(executions == 1 && actions.ActiveHandle == repair, "original action ran before recovery yielded input");
+                finishRepair.SetResult(true);
+                var receipt = await actions.Query(repair, 1000, default);
+                Check(receipt["status"].ToString() == (failed ? "failed" : "completed"), "recovery did not settle");
+                if (!failed) await resumed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                var next = await actions.Query(original, 1000, default);
+                Check(executions == (failed ? 1 : 2) && next["attempt"].GetValue<int>() == executions,
+                    "recovery did not transfer control exactly once after successful cleanup");
+            }
+            finally { ActionTasks.NodeContext.Value = null; }
+        }
+        Console.WriteLine("PASS: background recovery hands input directly back to the original action after successful cleanup");
     }
 
     static async Task IsolatedNavigationGoal()

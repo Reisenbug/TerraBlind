@@ -14,6 +14,8 @@ public sealed class ActionTasks
     {
         public string Id, Tool, Status = "running", Requested, Node, After;
         public JsonObject Args, Observation, PreviousAttempt, StoppedObservation;
+        public Entry ResumeAfter;
+        public JsonObject ResumeArgs;
         public JsonNode Result;
         public int Attempt;
         public int TaskSerial;
@@ -248,6 +250,16 @@ public sealed class ActionTasks
                         && result?["done"]?.ToString() == "true" && Moved(starting, observed)
                         && arrivals.Add(entry.Args["x"] + "," + entry.Args["y"])) navigationArrivals++;
                     if (entry.Tool == "fight") attack = null; else active = null;
+                    if (entry.ResumeAfter is { } resume && entry.Status == "completed" && active == null
+                        && !handingOff && !entry.Root.IsCancellationRequested && entry.TaskSerial == taskSerial
+                        && resume.Status is "failed" or "paused")
+                    {
+                        if (entry.ResumeArgs != null) resume.Args = entry.ResumeArgs;
+                        resume.Inline = false;
+                        Launch(resume, entry.Root);
+                    }
+                    entry.ResumeAfter = null;
+                    entry.ResumeArgs = null;
                     ContinueQueued(entry);
                 }
                 entry.Cancel.Dispose();
@@ -299,9 +311,22 @@ public sealed class ActionTasks
                 root.ThrowIfCancellationRequested();
                 if (entry.After != null && Find(entry.After).Status != "completed")
                     throw new InvalidOperationException("前置动作尚未完成，不能恢复后续动作。");
-                if (handingOff || (entry.Tool == "fight" ? attack : active) != null) throw new InvalidOperationException("输入尚未释放，不能恢复。");
                 if (entry.Status == "cancelling") throw new InvalidOperationException("取消清理尚未完成，不能恢复。");
                 if (entry.Status == "completed") throw new InvalidOperationException("已完成任务不能恢复，请建立新任务。");
+                if (!handingOff && active is { Tool: "run_script", Node: not null } script
+                    && caller.Value == script.Id && entry.Tool != "fight" && script.Node == entry.Node
+                    && entry.TaskSerial == taskSerial && entry.Status is "failed" or "paused")
+                {
+                    if (script.ResumeAfter != null && script.ResumeAfter != entry)
+                        throw new InvalidOperationException("当前恢复脚本已排队续接另一个动作。");
+                    script.ResumeAfter = entry;
+                    script.ResumeArgs = updatedArgs?.DeepClone().AsObject();
+                    var queued = Snapshot(entry);
+                    queued["status"] = "resume_queued";
+                    queued["resume_after"] = script.Id;
+                    return queued;
+                }
+                if (handingOff || (entry.Tool == "fight" ? attack : active) != null) throw new InvalidOperationException("输入尚未释放，不能恢复。");
                 if (updatedArgs != null) entry.Args = (JsonObject)updatedArgs.DeepClone();
                 entry.Inline = false;
                 Launch(entry, root);
