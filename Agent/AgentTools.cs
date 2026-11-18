@@ -1058,7 +1058,8 @@ public static partial class AgentTools
     static bool ObservationTool(string name) => name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
         or "find_descent" or "find_biome"
         or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "jev_judge" or "item_info" or "wiki_search" or "wiki_page"
-        or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status" or "action_query";
+        or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status" or "action_query"
+        or "find_descent" or "descent_route";
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
     {
         long id = Interlocked.Increment(ref invocationSequence);
@@ -2218,10 +2219,7 @@ public static partial class AgentTools
                 result = await DescentRoute(args, token);
                 break;
             case "find_descent":
-                string descentQuery=args.ToJsonString(ModelJson);
-                var descentResponse=await Task.Run(() => HttpServerSystem.Dispatch("/find_descent",descentQuery),token);
-                result=JsonNode.Parse(descentResponse.Body).AsObject();
-                if(descentResponse.Status>=400&&result["error"]==null) result["error"]="status "+descentResponse.Status;
+                result = await QueryDescent("/find_descent", args, token);
                 break;
             case "item_info": case "find_biome":
             case "tile_names": case "recipe":
@@ -2685,11 +2683,20 @@ public static partial class AgentTools
         return result;
     }
 
+    static Task<JsonObject> QueryDescent(string path, JsonObject args, CancellationToken token) => Task.Run(() =>
+    {
+        token.ThrowIfCancellationRequested();
+        var response = HttpServerSystem.Dispatch(path, args.ToJsonString(ModelJson));
+        var result = JsonNode.Parse(response.Body).AsObject();
+        if (response.Status >= 400 && result["error"] == null) result["error"] = $"status {response.Status}";
+        return result;
+    }, token);
+
     static async Task<JsonObject> DescentRoute(JsonObject args, CancellationToken token)
     {
         int treasureOffset = Int(args, "treasure_offset", 0), treasureLimit = Int(args, "treasure_limit", 16);
         if (treasureOffset < 0 || treasureLimit is < 1 or > 32) throw new ArgumentException("宝藏分页需要非负offset和1..32的limit。");
-        var route = await Call("/descent_main_route", new JsonObject { ["name"] = Text(args, "name"),
+        var route = await QueryDescent("/descent_main_route", new JsonObject { ["name"] = Text(args, "name"),
             ["offset"] = Int(args, "offset", 0), ["limit"] = Int(args, "limit", 256) }, token);
         if (Rejected(route) || route["found"]?.GetValue<bool>() != true) return route;
         var query = new JsonObject { ["name"] = Text(args, "name") };

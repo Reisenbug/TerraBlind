@@ -228,6 +228,13 @@ namespace TerraBlind
 
 		public override void OnWorldUnload()
 		{
+			lock (_ddLock)
+			{
+				_ddKey = null;
+				_ddCache = null;
+				_mainDescentCache.Clear();
+				_ddWorldVersion++;
+			}
 			if (!Config.I.AiClient) Unload();
 		}
 
@@ -3230,17 +3237,11 @@ namespace TerraBlind
 
 		// 地表线 S(x) + 从地狱往上 flood,H 最小的地表格就是最便宜的入口。
 		// 按 biome 签名缓存:它和建场同量级(秒级),盖房前后各调一次就是两次同步卡顿
-		static ushort[] _ddKey;
+		static string _ddKey, _ddWhy;
 		static DescentData _ddCache;
-		static string _ddWhy = "";
+		static readonly System.Collections.Generic.Dictionary<string, (int cost, System.Collections.Generic.List<(int x, int y)> line)> _mainDescentCache = new();
+		static int _ddWorldVersion;
 		static readonly object _ddLock = new object();
-
-		static bool SameSig(ushort[] a, ushort[] b)
-		{
-			if (a == null || b == null || a.Length != b.Length) return false;
-			for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
-			return true;
-		}
 
 		// 后台算好的路线结果,按【biome + 原始请求体】认领 --- 请求体带着 dig_max 这些参数,
 		// 参数不同就是另一条路线,不能混用。取走即清:地形会变,一份结果只服务一次。
@@ -3390,16 +3391,33 @@ namespace TerraBlind
 			int offset = request["offset"]?.GetValue<int>() ?? 0;
 			int limit = request["limit"]?.GetValue<int>() ?? 256;
 			if (offset < 0 || limit < 1 || limit > 512) return new() { ["error"] = "invalid_route_page" };
-			var data = ComputeDescent(sig, out string why);
-			if (data == null) return new() { ["found"] = false, ["reason"] = why };
-			var line = MainDescentLine(data);
+			string key = string.Join(",", sig);
+			(int cost, System.Collections.Generic.List<(int x, int y)> line) cached;
+			int worldVersion;
+			lock (_ddLock)
+			{
+				_mainDescentCache.TryGetValue(key, out cached);
+				worldVersion = _ddWorldVersion;
+			}
+			if (cached.line == null)
+			{
+				var data = ComputeDescent(sig, out string why);
+				if (data == null) return new() { ["found"] = false, ["reason"] = why };
+				var traced = (data.Cost, MainDescentLine(data));
+				lock (_ddLock)
+				{
+					if (worldVersion != _ddWorldVersion) return new() { ["found"] = false, ["reason"] = "world_changed" };
+					if (!_mainDescentCache.TryGetValue(key, out cached)) _mainDescentCache[key] = cached = traced;
+				}
+			}
+			var line = cached.line;
 			var points = new System.Text.Json.Nodes.JsonArray();
 			for (int i = offset; i < line.Count && i < offset + limit; i++)
 				points.Add(new System.Text.Json.Nodes.JsonArray(line[i].x, line[i].y));
 			return new()
 			{
-				["found"] = true, ["line_kind"] = "main_descent", ["cost"] = data.Cost,
-				["entrance"] = new System.Text.Json.Nodes.JsonObject { ["x"] = data.EntX, ["y"] = data.EntY },
+				["found"] = true, ["line_kind"] = "main_descent", ["cost"] = cached.cost,
+				["entrance"] = new System.Text.Json.Nodes.JsonObject { ["x"] = line[0].x, ["y"] = line[0].y },
 				["hell_x"] = line[^1].x, ["hell_y"] = line[^1].y,
 				["line"] = points, ["line_len"] = line.Count, ["line_offset"] = offset,
 				["next_offset"] = offset + points.Count < line.Count ? System.Text.Json.Nodes.JsonValue.Create(offset + points.Count) : null
@@ -3412,6 +3430,7 @@ namespace TerraBlind
 					if (dd == null) return "{\"found\":false,\"reason\":\"" + JsonEsc(why) + "\"}";
 					else
 					{
+						int pickPower = MazeWand.BestPickPower();
 						_descentField = dd.Field;   // kept for /descent_h progress queries
 						// trace the line: strictly-descending greedy on H (Dijkstra guarantees every non-source cell
 						// has a lower-H neighbour, so this terminates at a hell source; coarse but always a real route)
@@ -3538,7 +3557,7 @@ namespace TerraBlind
 								int nDig = 0, nWalk = 0;
 								for (int i = 1; i < bpath.Count; i++)
 								{
-									int c = MazeWand.StepCostPublic(bpath[i - 1].Item1, bpath[i - 1].Item2, bpath[i].Item1, bpath[i].Item2);
+								int c = MazeWand.StepCostPublic(bpath[i - 1].Item1, bpath[i - 1].Item2, bpath[i].Item1, bpath[i].Item2, pickPower);
 									if (c > MazeWand.MaxMoveCost) nDig++; else nWalk++;
 								}
 								// 不在这儿判要不要:硬阈值会切出 199 进、201 不进的悬崖,而且这个判决在出发前就冻结了
@@ -3723,10 +3742,20 @@ namespace TerraBlind
 		}
 		static DescentData ComputeDescent(ushort[] sigTypes, out string failReason)
 		{
+			string key = string.Join(",", sigTypes);
+			int worldVersion;
 			lock (_ddLock)
-				if (SameSig(_ddKey, sigTypes)) { failReason = _ddWhy; return _ddCache; }
+			{
+				if (_ddKey == key) { failReason = _ddWhy; return _ddCache; }
+				worldVersion = _ddWorldVersion;
+			}
 			var r = ComputeDescentRaw(sigTypes, out string why);
-			lock (_ddLock) { _ddKey = sigTypes; _ddCache = r; _ddWhy = why; }
+			lock (_ddLock)
+			{
+				if (worldVersion != _ddWorldVersion) { failReason = "world_changed"; return null; }
+				if (_ddKey == key) { failReason = _ddWhy; return _ddCache; }
+				_ddKey = key; _ddCache = r; _ddWhy = why;
+			}
 			failReason = why;
 			return r;
 		}

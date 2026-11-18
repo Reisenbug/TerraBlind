@@ -319,7 +319,7 @@ namespace TerraBlind
                     long stepStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                     if (!cellPrepared)
                     {
-                        cellCost = PrepareStepCost(cx, cy);
+                        cellCost = PrepareStepCost(cx, cy, _fieldPickPower);
                         cellPrepared = true;
                     }
                     int sc = StepCost(cx, cy, nx, ny, cellCost);
@@ -379,7 +379,7 @@ namespace TerraBlind
         // 比任何一处直挖都便宜。
         public static Dictionary<(int, int), int> BuildFieldMulti(System.Collections.Generic.List<(int x, int y)> sources, int minX, int maxX, int minY, int maxY)
         {
-            _fieldPickPower = BestPickPower();
+            int pickPower = BestPickPower();
 
             var dist = new Dictionary<(int, int), int>();
             var closed = new HashSet<(int, int)>();
@@ -401,7 +401,7 @@ namespace TerraBlind
                     int nx = cx + dxs[i], ny = cy + dys[i];
                     if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
                     if (closed.Contains((nx, ny))) continue;
-                    int sc = StepCost(cx, cy, nx, ny);
+                    int sc = StepCost(cx, cy, nx, ny, PrepareStepCost(cx, cy, pickPower));
                     if (sc == Impassable) continue;   // 挖不动 → 这条边不存在,别入队(直接相加会溢出)
                     // 和 BuildField 同一条:站不住的格不该发 H
                     int stand = StandPenalty(nx, ny);
@@ -419,6 +419,8 @@ namespace TerraBlind
         // exposed for /descent_route to price a traced detour path edge by edge in BOTH directions
         // (going down a chasm is cheap, climbing back out is not, a one-way field hides that).
         public static int StepCostPublic(int cx, int cy, int nx, int ny) => StepCost(cx, cy, nx, ny);
+        public static int StepCostPublic(int cx, int cy, int nx, int ny, int pickPower)
+            => StepCost(cx, cy, nx, ny, PrepareStepCost(cx, cy, pickPower));
 
         // 人要【站在】这一格得先付多少。站得住=0;站不住就得自己造落脚点,那是真代价。
         // 判据只此一份(CellKind),不在这儿另编。
@@ -454,9 +456,9 @@ namespace TerraBlind
         }
 
         static int StepCost(int cx, int cy, int nx, int ny)
-            => StepCost(cx, cy, nx, ny, PrepareStepCost(cx, cy));
+            => StepCost(cx, cy, nx, ny, PrepareStepCost(cx, cy, _fieldPickPower));
 
-        static (int fixedCost, int digCells, bool wall) PrepareStepCost(int cx, int cy)
+        static (int fixedCost, int digCells, bool wall) PrepareStepCost(int cx, int cy, int pickPower)
         {
             for (int row = 0; row < 3; row++)
             {
@@ -496,13 +498,13 @@ namespace TerraBlind
                 if (!solid) continue;
                 digCells++;
                 if (!LavaSafety.CanMine(cx, cy - r)) return (Impassable, 0, false);
-                if (!DigTable.MineableWith(cx, cy - r, _fieldPickPower)) return (Impassable, 0, false);   // 镐挖不动 → 真不可达,不是"贵"
+                if (!DigTable.MineableWith(cx, cy - r, pickPower)) return (Impassable, 0, false);   // 镐挖不动 → 真不可达,不是"贵"
             }
             if (PartialFooting(cx, cy) && SolidAnyShape(cx, cy - 3))
             {
                 digCells++;
                 if (!LavaSafety.CanMine(cx, cy - 3)) return (Impassable, 0, false);
-                if (!DigTable.MineableWith(cx, cy - 3, _fieldPickPower)) return (Impassable, 0, false);
+                if (!DigTable.MineableWith(cx, cy - 3, pickPower)) return (Impassable, 0, false);
             }
             bool wall = digCells > 0;
             // 20px 的身子跨两列:左右邻列都堵的 1 格宽缝身体进不去,按免费算 H 会顺着神庙墙缝往上流
@@ -515,7 +517,7 @@ namespace TerraBlind
                 // 一格宽的缝站得住,只是横着走不动,得靠竖直动作进出。
                 // 一律 Impassable 会把这种格从场里整个抹掉 --- 腐化区被困死就是这样:
                 // 唯一的出口 (1343,232) 探针说 can_stand=True,场却说不可达。
-                if (!ColumnWidenable(cx - 1, cy) && !ColumnWidenable(cx + 1, cy))
+                if (!ColumnWidenable(cx - 1, cy, pickPower) && !ColumnWidenable(cx + 1, cy, pickPower))
                 {
                     if (!CellKind.Stands(cx, cy)) return (Impassable, 0, false);
                     // 【按普通格收费】。挤进去本身不慢,慢的是出来 --- 而出来是下一格的事,
@@ -631,11 +633,11 @@ namespace TerraBlind
         }
 
         // column c can be MINED open at stand height cy: every solid body row is mineable with the field's pick
-        static bool ColumnWidenable(int c, int cy)
+        static bool ColumnWidenable(int c, int cy, int pickPower)
         {
             for (int r = 0; r < 3; r++)
                 if (SolidAnyShape(c, cy - r)
-                    && (!LavaSafety.CanMine(c, cy - r) || !DigTable.MineableWith(c, cy - r, _fieldPickPower))) return false;
+                    && (!LavaSafety.CanMine(c, cy - r) || !DigTable.MineableWith(c, cy - r, pickPower))) return false;
             return true;
         }
 
