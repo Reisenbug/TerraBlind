@@ -550,12 +550,15 @@ public static partial class AgentTools
                 string result = await Execute("run_script", args, token);
                 var returned = JsonNode.Parse(result);
                 if (recovery != null && returned?["value"] is JsonObject review
-                    && review["status"]?.ToString() == "needs_review")
+                    && (review["status"]?.ToString() == "needs_review"
+                        || review["status"]?.ToString() == "yield" && review["wake"] == null
+                        && review["handle"]?.ToString() == handle
+                        && review["blocked"]?.ToString() is "combat_obstructed" or "combat_out_of_range" or "combat_no_progress" or "navigation_near_trap"))
                 {
                     var failure = await Actions.Query(handle, 0, token);
                     var fallback = await NativeAgent.OnMain(() =>
                     {
-                        var source = PrepareLocalRecovery(failure, review["reason"]?.ToString());
+                        var source = PrepareLocalRecovery(failure, (review["reason"] ?? review["blocked"])?.ToString());
                         if (source != null) report["strategy"] = "local_recovery";
                         return source;
                     }, token);
