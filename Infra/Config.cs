@@ -43,8 +43,8 @@ namespace TerraBlind
 		[DefaultValue("")]
 		public string AgentCodexPath = "";
 
-		[DefaultValue("gpt-6-luna")]
-		public string AgentCodexModel = "gpt-6-luna";
+		[DefaultValue("gpt-6.2-sol")]
+		public string AgentCodexModel = "gpt-6.2-sol";
 
 		[DefaultValue("")]
 		public string AgentApiKey = "";
