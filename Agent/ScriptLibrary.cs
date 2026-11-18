@@ -363,9 +363,14 @@ public sealed class ScriptLibrary
               if(!observed){
                 const checked=tool('opportunity_assess',{x:target.x,y:target.y});
                 if(checked.ok&&(!checked.target.has_tile||checked.target.tile_type!==target.type)) continue;
-                return {retry:false,reason:'hazard_evidence_changed'};
+                const atTarget=t=>t.x===target.x&&t.y===target.y;
+                if(!contact||!checked.ok||!Array.isArray(checked.direct_corridor_solid_cells)
+                  ||checked.direct_corridor_solid_cells.some(atTarget)
+                  ||!checked.hazards?.some(t=>atTarget(t)&&t.kind==='contact_damage'&&t.tile_type===target.type)
+                  ||checked.hazards.some(t=>atTarget(t)&&['falling_block','trap_tile','lava'].includes(t.kind)))
+                  return {retry:false,reason:'hazard_evidence_changed'};
               }
-              if(contact&&(!observed.touch_damage||observed.solid||observed.falling))
+              if(contact&&observed&&(!observed.touch_damage||observed.solid||observed.falling))
                 return {retry:false,reason:'hazard_evidence_changed'};
               const action={slot:pick.slot,x:target.x,y:target.y,strict:true};
               if(contact) action.duration_ticks=16;

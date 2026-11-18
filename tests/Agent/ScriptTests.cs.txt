@@ -908,10 +908,11 @@ static class ScriptTests
 
     static async Task NavigationRecoverySkill()
     {
-        foreach (string scenario in new[] { "contact", "plate", "solid", "changed", "absent_removed", "absent_replaced", "absent_unknown", "plate_removed", "failed", "plate_unreached", "unverified", "forbidden", "explosive", "policy_contact", "policy_plate" })
+        foreach (string scenario in new[] { "contact", "contact_offset", "contact_offset_solid", "plate", "solid", "changed", "absent_removed", "absent_replaced", "absent_unknown", "plate_removed", "failed", "plate_unreached", "unverified", "forbidden", "explosive", "policy_contact", "policy_plate" })
         {
             bool contact = scenario is not ("plate" or "plate_removed" or "plate_unreached" or "forbidden" or "explosive" or "policy_plate");
             bool policy = scenario.StartsWith("policy_");
+            bool offset = scenario.StartsWith("contact_offset");
             int uses = 0;
             var target = JsonNode.Parse("{\"x\":10,\"y\":11,\"type\":69,\"frame_x\":0,\"frame_y\":0,\"kind\":\"pressure_plate\",\"touch_damage\":10}");
             if (scenario == "solid") target["solid"] = true;
@@ -931,11 +932,14 @@ static class ScriptTests
                     if (name == "script_program") return ScriptLibrary.Example("recover_navigation").ToJsonString();
                     if (name == "inventory_review") return "{\"inventory\":[{\"slot\":2,\"pick\":35}]}";
                     if (name == "inspect_terrain") return new JsonObject {
-                        [contact ? "near_body_tiles" : "trap_tiles"] = scenario == "changed" || scenario.StartsWith("absent_") || scenario == "plate_removed"
+                        [contact ? "near_body_tiles" : "trap_tiles"] = offset || scenario == "changed" || scenario.StartsWith("absent_") || scenario == "plate_removed"
                             ? new JsonArray() : new JsonArray(target.DeepClone()) }.ToJsonString();
                     if (name == "opportunity_assess") return new JsonObject { ["ok"] = scenario != "absent_unknown",
-                        ["target"] = new JsonObject { ["has_tile"] = scenario is "unverified" or "changed" or "absent_replaced",
-                            ["tile_type"] = scenario == "absent_replaced" ? 1 : 69 } }.ToJsonString();
+                        ["target"] = new JsonObject { ["has_tile"] = offset && uses == 0 || scenario is "unverified" or "changed" or "absent_replaced",
+                            ["tile_type"] = scenario == "absent_replaced" ? 1 : 69 },
+                        ["hazards"] = offset ? JsonNode.Parse("""[{"x":10,"y":11,"kind":"contact_damage","tile_type":69}]""") : new JsonArray(),
+                        ["direct_corridor_solid_cells"] = scenario == "contact_offset_solid"
+                            ? JsonNode.Parse("""[{"x":10,"y":11,"kind":"solid"}]""") : new JsonArray() }.ToJsonString();
                     Check(name == "use_item" && args["strict"].GetValue<bool>()
                         && (contact ? args["duration_ticks"]?.GetValue<int>() == 16 : args["duration_ticks"] == null),
                         "contact clearing must stay local and a pressure plate may be approached with the real mining tool");
@@ -943,8 +947,8 @@ static class ScriptTests
                     return scenario == "failed" ? "{\"error\":\"out_of_reach\"}" : scenario == "plate_unreached"
                         ? "{\"outcome\":\"no_progress\",\"reason\":\"out_of_reach\"}" : "{\"outcome\":\"removed\"}";
                 }, _ => Task.CompletedTask, default, programs: new JsonArray(ScriptLibrary.Example("recover_navigation")));
-            Check(result["ok"].GetValue<bool>() && result["value"]["retry"].GetValue<bool>() == (scenario is "contact" or "plate" or "absent_removed" or "absent_replaced" or "plate_removed" || policy)
-                && uses == (scenario is "contact" or "plate" or "failed" or "plate_unreached" or "unverified" || policy ? 1 : 0),
+            Check(result["ok"].GetValue<bool>() && result["value"]["retry"].GetValue<bool>() == (scenario is "contact" or "contact_offset" or "plate" or "absent_removed" or "absent_replaced" or "plate_removed" || policy)
+                && uses == (scenario is "contact" or "contact_offset" or "plate" or "failed" or "plate_unreached" or "unverified" || policy ? 1 : 0),
                 "local navigation repair retried without verified clearance: " + scenario + " " + result);
         }
         string directory = Path.Combine(Path.GetTempPath(), "terrablind-recovery-skill-" + Guid.NewGuid());
@@ -2022,6 +2026,18 @@ static class ScriptTests
             Check(AgentScript.ContainsInput(code) && !AgentScript.PreparationOnly(code),
                 "conditional navigation bypassed input ownership");
         }
+        var combatReady = await AgentScript.Run("""
+            return navigate_until({x:20,y:10},()=>{
+              const q=tool('npc_combat_observe',{npc:7,npc_type:42});
+              return !q.error&&q.distance_tiles<=25&&q.current_weapon_types.length>0;
+            });
+            """, 5, (_, _) => { }, (name, _, _) =>
+        {
+            Check(name == "npc_combat_observe", "ready combat predicate sent a navigation or attack input");
+            return Task.FromResult("""{"distance_tiles":21,"current_weapon_types":[65]}""");
+        }, _ => Task.CompletedTask, default);
+        Check(combatReady["value"]?["condition_met"]?.GetValue<bool>() == true,
+            "readonly NPC observation could not verify readiness during navigation");
         var agent = new NativeAgent(); agent.Load();
         var http = HttpServerSystem.Handler;
         var p = Terraria.Main.LocalPlayer;
