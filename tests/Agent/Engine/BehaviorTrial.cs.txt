@@ -5194,6 +5194,9 @@ public sealed partial class BehaviorTrial : ModSystem
     async Task GatherNavigationHandoff(int origin, int floor)
     {
         int x = origin + 20, y = floor - 1, item = ItemID.Stinger;
+        int wallHeight = Environment.GetEnvironmentVariable("TB_GATHER_NAV_WALL") switch { "2" => 2, "3" => 3, _ => 0 };
+        bool wall = wallHeight > 0;
+        int wallX = origin + 4;
         string gather = "return step('pickup',()=>tool('gather',{targets:[{item_type:" + item + ",count:1}]}));";
         string navigate = "return step('travel',()=>tool('nav_to',{x:" + x + ",y:" + y + ",mode:'stand'}));";
         var plan = await Call("task_plan", new JsonObject { ["goal"] = "pick up and continue travelling", ["mode"] = "dag",
@@ -5203,12 +5206,15 @@ public sealed partial class BehaviorTrial : ModSystem
                 new JsonObject { ["id"] = "travel", ["description"] = "continue to the next point", ["script"] = navigate, ["depends_on"] = new JsonArray("pickup"),
                     ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "position", ["x"] = x, ["y"] = y, ["radius"] = 2, ["count"] = 1 }) }) });
         if (plan["error"] != null) throw new Exception("handoff plan rejected: " + plan);
-        long picked = 0, accepted = 0, ready = 0, moved = 0;
+        long picked = 0, accepted = 0, ready = 0, moved = 0, crossed = 0;
         uint pickupTick = 0, movementTick = 0;
         var clock = Stopwatch.StartNew();
         await OnMain(() =>
         {
             var player = Main.LocalPlayer;
+            if (wall)
+                for (int dy = 1; dy <= wallHeight; dy++)
+                    Main.tile[wallX, floor - dy].ResetToType(TileID.Stone);
             float startX = player.position.X;
             int slot = Item.NewItem(player.GetSource_Misc("gather-nav-handoff"), player.Center, item);
             Main.item[slot].velocity = Vector2.Zero;
@@ -5218,6 +5224,8 @@ public sealed partial class BehaviorTrial : ModSystem
                 if (picked == 0 && p.HasItem(item)) { picked = Stopwatch.GetTimestamp(); pickupTick = Main.GameUpdateCount; }
                 if (picked != 0 && moved == 0 && Math.Abs(p.position.X - startX) >= 1)
                 { moved = Stopwatch.GetTimestamp(); movementTick = Main.GameUpdateCount; }
+                if (wall && crossed == 0 && p.position.X >= (wallX + 1) * 16)
+                    crossed = Stopwatch.GetTimestamp();
             };
             return true;
         });
@@ -5239,12 +5247,16 @@ public sealed partial class BehaviorTrial : ModSystem
         double? FromPickup(long time) => picked == 0 || time == 0 ? null : Stopwatch.GetElapsedTime(picked, time).TotalMilliseconds;
         var pauses = await OnMain(() => ThinkingPause.Snapshot()["recent"].AsArray()
             .Count(e => e["reason"]?.ToString() == "navigation_compute"));
+        bool wallIntact = wall && await OnMain(() => Enumerable.Range(1, wallHeight)
+            .All(dy => Main.tile[wallX, floor - dy].HasTile && Main.tile[wallX, floor - dy].TileType == TileID.Stone));
         var report = new JsonObject { ["pickup_tick"] = pickupTick, ["movement_tick"] = movementTick,
             ["pickup_to_nav_active_ms"] = FromPickup(accepted), ["pickup_to_field_ready_ms"] = FromPickup(ready),
             ["pickup_to_movement_ms"] = FromPickup(moved), ["elapsed_ms"] = clock.Elapsed.TotalMilliseconds,
+            ["wall_height"] = wallHeight, ["pickup_to_crossing_ms"] = FromPickup(crossed), ["wall_intact"] = wallIntact,
             ["navigation_pauses"] = pauses, ["plan"] = result?["task_plan"]?.DeepClone(), ["model_calls"] = 0 };
         File.WriteAllText(Path.Combine(Main.SavePath, "gather-nav-handoff.json"), report.ToJsonString());
-        if (picked == 0 || accepted == 0 || moved == 0 || pauses != 0 || result?["task_plan"]?["status"]?.ToString() != "completed")
+        if (picked == 0 || accepted == 0 || moved == 0 || pauses != 0 || wall && crossed == 0
+            || result?["task_plan"]?["status"]?.ToString() != "completed")
             throw new Exception("gather-to-navigation did not complete: " + report);
         Console.WriteLine("GATHER_NAV_HANDOFF_PASS " + report);
     }
