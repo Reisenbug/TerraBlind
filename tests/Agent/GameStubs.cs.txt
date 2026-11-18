@@ -74,14 +74,27 @@ namespace Terraria.UI
         }
         public static Action LootHandler;
         public static void LootAll() => LootHandler?.Invoke();
+        public static Action<string> ButtonHandler;
+        public static void DepositAll(Terraria.DataStructures.ContainerTransferContext _) => ButtonHandler?.Invoke("deposit_all");
+        public static void QuickStack(Terraria.DataStructures.ContainerTransferContext _) => ButtonHandler?.Invoke("quick_stack");
+        public static void Restock() => ButtonHandler?.Invoke("restock");
+        public static void RenameChestSubmit(Terraria.Player player)
+            => Terraria.Main.chest[player.chest].name = Terraria.Main.npcChatText == Terraria.Main.defaultChestName ? "" : Terraria.Main.npcChatText;
     }
+    public static class ItemSorting { public static void SortChest() => ChestUI.ButtonHandler?.Invoke("sort_items"); }
+}
+
+namespace Terraria.DataStructures
+{
+    public struct ContainerTransferContext { public static ContainerTransferContext FromUnknown(Terraria.Player player) => default; }
 }
 
 namespace Terraria
 {
     public static class Main
     {
-        public static bool dedServ, gameMenu, gamePaused, playerInventory;
+        public static bool dedServ, gameMenu, gamePaused, playerInventory, editChest;
+        public static string npcChatText = "", defaultChestName = "";
         public static string SavePath = "/tmp/terrablind-agent-test-world";
         public static string worldName = "test";
         public static int worldID;
@@ -121,11 +134,13 @@ namespace Terraria
     public class Chest
     {
         public int x, y; public bool locked;
+        public string name = "";
         public Item[] item = Enumerable.Range(0, 40).Select(_ => new Item()).ToArray();
         public static bool IsLocked(int x, int y) => Main.chest.FirstOrDefault(c => c != null && c.x == x && c.y == y)?.locked == true;
     }
     public class Player
     {
+        public bool IsVoidVaultEnabled;
         public int CurrentLoadoutIndex;
         public int difficulty;
         public void ToggleInv() => Main.playerInventory = !Main.playerInventory;
@@ -196,6 +211,8 @@ namespace Terraria
     }
     public static class Lang
     {
+        public static (string Value, int Id)[] chestType = new[] { ("Chest", 0) }, chestType2 = chestType, dresserType = chestType;
+        public static string GetItemNameValue(int type) => "Item " + type;
         public static string GetNPCNameValue(int type) => "NPC " + type;
         public static Dictionary<int, string> MapLabels = new();
         public static string GetMapObjectName(int id) => MapLabels.GetValueOrDefault(id, "");
@@ -290,7 +307,7 @@ namespace Terraria.ID
 {
     public static class WallID { public const int SpiderUnsafe = 62; }
     public static class ProjAIStyleID { public const int ShortSword = 161, Spear = 19, Explosive = 16; }
-    public static class ItemID { public const int FixtureGoal = 191, Umbrella = 946, TragicUmbrella = 4707; }
+    public static class ItemID { public const int FixtureGoal = 191, Umbrella = 946, DeadMansChest = 3988, TragicUmbrella = 4707; }
     public static class NPCID { public const int FixtureEnemy = 222, Lihzahrd = 198, LihzahrdCrawler = 199, FlyingSnake = 226; }
     public static class ProjectileID
     {
@@ -305,7 +322,7 @@ namespace Terraria.ID
     public static class TileID
     {
         public const int FixtureSource = 1, FixtureOther = 2;
-        public const int Containers = 21, Containers2 = 467;
+        public const int Containers = 21, Dressers = 88, Containers2 = 467;
         public const int PressurePlates = 135, Traps = 137, Boulder = 138, Explosives = 141;
         public const int RollingCactus = 484, BouncyBoulder = 664, LifeCrystalBoulder = 665;
         public static class Sets
@@ -326,6 +343,7 @@ namespace Terraria.ID
 }
 namespace Terraria.ModLoader
 {
+    public static class TileLoader { public static string DefaultContainerName(int type, int x, int y) => ""; }
     public class DamageClass { public static readonly DamageClass Melee = new(); }
     public static class CombinedHooks
     {

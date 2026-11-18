@@ -1339,7 +1339,7 @@ public static partial class AgentTools
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
             or "place_at" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap" or "combat_reposition"
             or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat"
-            or "slot_click" or "game_input" or "craft_recipe" or "housing" or "mod_input";
+            or "slot_click" or "container_action" or "game_input" or "craft_recipe" or "housing" or "mod_input";
         bool action = external || name is "fight" or "fight_player";
         bool startsPrimary = name == "action_start" && Text(args, "tool") != "fight";
         if ((external || startsPrimary) && string.IsNullOrEmpty(taskNode)
@@ -2341,6 +2341,9 @@ public static partial class AgentTools
             case "slot_click":
                 result = await NativeAgent.OnMain(() => PvpInventory.Slot(args, click: true), token);
                 break;
+            case "container_action":
+                result = await NativeAgent.OnMain(() => PvpInventory.ContainerAction(Text(args, "action"), args), token);
+                break;
             case "game_input":
                 result = await NativeAgent.OnMain(() => ApplyGameInput(args), token);
                 break;
@@ -2686,7 +2689,9 @@ public static partial class AgentTools
                 }
                 break;
             case "loot_all":
-                result = await NativeAgent.OnMain(HttpServerSystem.LootOpenChest, token);
+                result = await NativeAgent.OnMain(() => args["expected_container"] != null && Int(args, "expected_container") != Main.LocalPlayer.chest
+                    ? new JsonObject { ["error"] = "container_changed", ["container"] = Main.LocalPlayer.chest }
+                    : HttpServerSystem.LootOpenChest(), token);
                 break;
             case "craft_into_inventory":
                 result = await NativeAgent.OnMain(() =>

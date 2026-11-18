@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Text.Json.Nodes;
 using Terraria;
+using Terraria.DataStructures;
 using Terraria.ID;
 using Terraria.UI;
 
@@ -21,6 +22,73 @@ public static class PvpInventory
 
     static JsonObject ItemState(Item item) => new()
     { ["type"] = item.type, ["prefix"] = item.prefix, ["stack"] = item.stack, ["name"] = item.Name };
+
+    static bool ContainerOpen(int id) => id is >= -5 and <= -2
+        || id >= 0 && id < Main.chest.Length && Main.chest[id] != null;
+
+    internal static JsonObject ContainerAction(string action, JsonObject args)
+    {
+        var player = Main.LocalPlayer;
+        int id = player.chest;
+        if (!ContainerOpen(id)) return new JsonObject { ["error"] = "container_not_open" };
+        if (args["expected_container"]?.GetValue<int>() != id)
+            return new JsonObject { ["error"] = "container_changed", ["container"] = id };
+        if (!Main.playerInventory) return new JsonObject { ["error"] = "inventory_closed" };
+        if (Main.gameMenu || !player.active || player.dead || Main.editChest)
+            return new JsonObject { ["error"] = "inventory_busy" };
+
+        ChestUI.GetContainerUsageInfo(out _, out var contents);
+        static (int, int, int) Fingerprint(Item item) => (item.type, item.prefix, item.stack);
+        var before = contents.Select(Fingerprint).ToArray();
+        var nameBefore = id >= 0 ? Main.chest[id].name : null;
+        bool vacuumBefore = player.IsVoidVaultEnabled;
+        switch (action)
+        {
+            case "deposit_all": ChestUI.DepositAll(ContainerTransferContext.FromUnknown(player)); break;
+            case "quick_stack": ChestUI.QuickStack(ContainerTransferContext.FromUnknown(player)); break;
+            case "restock": ChestUI.Restock(); break;
+            case "sort_items": ItemSorting.SortChest(); break;
+            case "rename":
+                if (id < 0) return new JsonObject { ["error"] = "container_cannot_rename" };
+                if (args["name"]?.GetValue<string>() is not string name || name.Length > 63)
+                    return new JsonObject { ["error"] = "invalid_container_name" };
+                RenameContainer(player, name);
+                break;
+            case "toggle_void_vacuum":
+                if (id != -5) return new JsonObject { ["error"] = "void_vault_not_open" };
+                player.IsVoidVaultEnabled = !vacuumBefore;
+                break;
+            default: return new JsonObject { ["error"] = "invalid_container_action" };
+        }
+        Recipe.FindRecipes();
+        int changed = contents.Where((item, index) => Fingerprint(item) != before[index]).Count();
+        string nameAfter = id >= 0 ? Main.chest[id].name : null;
+        if (changed > 0) PvpDuel.InventoryChanged();
+        return new JsonObject { ["ok"] = true, ["container"] = id, ["changed_slots"] = changed,
+            ["outcome"] = changed > 0 || nameAfter != nameBefore || player.IsVoidVaultEnabled != vacuumBefore ? "changed" : "unchanged",
+            ["name"] = nameAfter, ["void_vacuum_enabled"] = id == -5 ? player.IsVoidVaultEnabled : null };
+    }
+
+    static void RenameContainer(Player player, string name)
+    {
+        var chest = Main.chest[player.chest];
+        var tile = Main.tile[chest.x, chest.y];
+        var saved = (Main.npcChatText, Main.defaultChestName);
+        try
+        {
+            Main.defaultChestName = tile.TileType switch
+            {
+                TileID.Containers => Lang.chestType[tile.TileFrameX / 36].Value,
+                TileID.Containers2 when tile.TileFrameX / 36 == 4 => Lang.GetItemNameValue(ItemID.DeadMansChest),
+                TileID.Containers2 => Lang.chestType2[tile.TileFrameX / 36].Value,
+                TileID.Dressers => Lang.dresserType[tile.TileFrameX / 54].Value,
+                _ => Terraria.ModLoader.TileLoader.DefaultContainerName(tile.TileType, tile.TileFrameX, tile.TileFrameY)
+            };
+            Main.npcChatText = name;
+            ChestUI.RenameChestSubmit(player);
+        }
+        finally { (Main.npcChatText, Main.defaultChestName) = saved; }
+    }
 
     public static JsonObject Slot(JsonObject args, bool click)
     {
@@ -44,8 +112,7 @@ public static class PvpInventory
                     return new JsonObject { ["error"] = "equipment_slot_locked" };
                 break;
             case "container" when index >= 0:
-                if (player.chest < -5 || player.chest == -1
-                    || player.chest >= 0 && (player.chest >= Main.chest.Length || Main.chest[player.chest] == null))
+                if (!ContainerOpen(player.chest))
                     return new JsonObject { ["error"] = "container_not_open" };
                 if (click && args["expected_container"]?.GetValue<int>() != player.chest)
                     return new JsonObject { ["error"] = "container_changed", ["container"] = player.chest };

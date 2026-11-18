@@ -526,13 +526,14 @@
     "type": "function",
     "function": {
       "name": "loot_all",
-      "description": "把当前【已打开】的箱子里的东西全部掏进背包。必须先 interact 开箱,再 loot_all。执行完成即返回transferred_items实际转移数量及remaining_stacks剩余堆数；outcome=partial表示仍有物品留在箱内，可按现场继续处理。",
+      "description": "对当前打开的容器执行原版 Loot All。返回实际转移数量和容器剩余堆数。Use the vanilla Loot All button on the open container. Returns transferred_items and remaining_stacks.",
       "parameters": {
         "type": "object",
-        "properties": {}
+        "properties": {"expected_container":{"type":"integer","description":"Optional container ID from slot_state."}}
       }
     }
   },
+  {"type":"function","function":{"name":"container_action","description":"对当前打开的容器执行原版按钮。先用 slot_state 读取容器 ID。Run a vanilla button on the open container. Read the container ID with slot_state first. Rename takes a name (empty resets it) and applies only to world chests.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["deposit_all","quick_stack","restock","sort_items","rename","toggle_void_vacuum"]},"expected_container":{"type":"integer"},"name":{"type":"string","maxLength":63}},"required":["action","expected_container"]}}},
   {
     "type": "function",
     "function": {

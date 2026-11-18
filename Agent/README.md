@@ -78,6 +78,26 @@ const key = bindings.keys.find(key => key === 'MyMod/ActivateAbility');
 return key ? tool('mod_input', {key, frames: 1}) : {error: 'binding_not_found'};
 ~~~
 
+## 储物容器 / Storage containers
+
+先用原版交互打开容器，再用 `slot_state` 读取其 ID。世界箱子、小猪存钱罐、保险箱、护卫熔炉和虚空袋共用这套接口。Open the container through normal game interaction, then read its ID with `slot_state`. This applies to world chests, Piggy Banks, Safes, Defender's Forges, and Void Vaults.
+
+| 操作 / Operation | 调用 / Call |
+| --- | --- |
+| 全部取出 / Loot All | `loot_all({expected_container})` |
+| 全部存入、快速堆叠、补货、整理 / Deposit All, Quick Stack, Restock, Sort Items | `container_action({action, expected_container})`，`action` 分别是 `deposit_all`、`quick_stack`、`restock`、`sort_items`。 |
+| 重命名世界箱子 / Rename a world chest | `container_action({action:'rename', expected_container, name})`，空字符串恢复默认名称。An empty name resets it. |
+| 切换虚空袋自动拾取 / Toggle Void Vault auto-pickup | `container_action({action:'toggle_void_vacuum', expected_container})` |
+| 单槽操作 / Click an individual slot | `slot_click` with `section:'container'` and the slot, cursor, and container values from `slot_state`. 用对应槽位的原版左右键语义。 |
+
+多人游戏里，改名沿用原版时机，在关闭或切换箱子时提交。In multiplayer, the game sends the new name when the chest is closed or switched, as it does for a manual rename.
+
+~~~javascript
+const open = tool('slot_state', {section: 'container', slot: 0});
+if ('error' in open) return open;
+return tool('container_action', {action: 'quick_stack', expected_container: open.container});
+~~~
+
 ## 验证
 
 ~~~sh

@@ -4319,6 +4319,42 @@ static class RuntimeTests
                 Check(rightContext == Terraria.UI.ItemSlot.Context.VoidItem, "void storage did not use its distinct native slot context");
             }
             finally { Terraria.UI.ChestUI.FixtureBank[0] = bankItem; }
+            var chest = Game.chest[0];
+            var originalButton = Terraria.UI.ChestUI.ButtonHandler;
+            bool vacuumEnabled = player.IsVoidVaultEnabled;
+            try
+            {
+                Game.chest[0] = new Terraria.Chest();
+                player.chest = 0;
+                string pressed = null;
+                Terraria.UI.ChestUI.ButtonHandler = action =>
+                {
+                    pressed = action;
+                    Game.chest[0].item[0] = new Terraria.Item { type = 36, stack = Game.chest[0].item[0].stack + 1 };
+                };
+                foreach (string action in new[] { "deposit_all", "quick_stack", "restock", "sort_items" })
+                {
+                    var receipt = await Call("container_action", new JsonObject { ["action"] = action, ["expected_container"] = 0 }.ToJsonString());
+                    Check(pressed == action && receipt["changed_slots"]?.GetValue<int>() == 1, "container button misrouted or lost its receipt");
+                }
+                var renamed = await Call("container_action", """{"action":"rename","expected_container":0,"name":"Materials"}""");
+                Check(renamed["name"]?.ToString() == "Materials", "world container was not renamed");
+                player.chest = -5;
+                var staleContainer = await Call("container_action", """{"action":"restock","expected_container":0}""");
+                Check(staleContainer["error"]?.ToString() == "container_changed" && pressed == "sort_items", "container command retargeted after a switch");
+                var vacuum = await Call("container_action", """{"action":"toggle_void_vacuum","expected_container":-5}""");
+                Check(vacuum["void_vacuum_enabled"]?.GetValue<bool>() == !vacuumEnabled, "void auto-pickup did not toggle");
+                player.chest = -1;
+                var closed = await Call("container_action", """{"action":"restock","expected_container":0}""");
+                Check(closed["error"]?.ToString() == "container_not_open", "a container button worked after closing it");
+            }
+            finally
+            {
+                Game.chest[0] = chest;
+                player.IsVoidVaultEnabled = vacuumEnabled;
+                Terraria.UI.ChestUI.ButtonHandler = originalButton;
+            }
+            Console.WriteLine("PASS: container buttons dispatch to native adapters and reject a closed or changed container");
             Console.WriteLine("PASS: native primitive adapters select a hotbar slot, craft onto the cursor, deposit by click and preserve slot identity");
         }
         finally

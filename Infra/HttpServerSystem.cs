@@ -89,7 +89,7 @@ namespace TerraBlind
 			return result;
 		}
 
-		internal static JsonObject LootOpenChest()
+		internal static JsonObject LootOpenChest(bool makeRoom = false)
 		{
 			var p = Main.LocalPlayer;
 			if (p == null || !p.active || p.dead) return new JsonObject { ["error"] = "no_living_player" };
@@ -103,8 +103,9 @@ namespace TerraBlind
 			if (contents == null) return new JsonObject { ["error"] = "no_open_chest" };
 			int before = 0;
 			foreach (var item in contents) if (!item.IsAir) before += item.stack;
-			KeepList.MakeRoom(LootRoom);
+			if (makeRoom) KeepList.MakeRoom(LootRoom);
 			Terraria.UI.ChestUI.LootAll();
+			Recipe.FindRecipes();
 			int remaining = 0, stacks = 0;
 			foreach (var item in contents)
 				if (!item.IsAir) { remaining += item.stack; stacks++; }
@@ -204,7 +205,7 @@ namespace TerraBlind
 			if (_lootAllRequested)
 			{
 				_lootAllRequested = false;
-				LootOpenChest();
+				LootOpenChest(makeRoom: true);
 			}
 			if (_quickHealRequested)
 			{
