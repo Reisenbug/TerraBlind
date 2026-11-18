@@ -5197,6 +5197,30 @@ public sealed partial class BehaviorTrial : ModSystem
         int wallHeight = Environment.GetEnvironmentVariable("TB_GATHER_NAV_WALL") switch { "2" => 2, "3" => 3, _ => 0 };
         bool wall = wallHeight > 0;
         int wallX = origin + 4;
+        if (wall && Environment.GetEnvironmentVariable("TB_WALL_JUMP_PROOF") == "1")
+        {
+            await OnMain(() =>
+            {
+                for (int dy = 1; dy <= wallHeight; dy++)
+                    Main.tile[wallX, floor - dy].ResetToType(TileID.Stone);
+                return true;
+            });
+            var proof = await Call("act", new JsonObject { ["steps"] = new JsonArray(
+                new JsonObject { ["keys"] = new JsonArray("right"), ["until"] = new JsonObject { ["frames"] = 24 } },
+                new JsonObject { ["keys"] = new JsonArray("right", "jump"), ["until"] = new JsonObject { ["frames"] = 16 } },
+                new JsonObject { ["keys"] = new JsonArray("right"), ["until"] = new JsonObject { ["frames"] = 35 } }) });
+            await OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                if (p.position.X < (wallX + 1) * 16)
+                    throw new Exception("manual input did not clear the wall: " + proof);
+                Console.WriteLine("WALL_JUMP_PROOF x=" + p.position.X + " far_side=" + ((wallX + 1) * 16) + " result=" + proof);
+                p.position = new Vector2(origin * 16, floor * 16 - p.height); p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+                DiagLog.Trace = true;
+                return true;
+            });
+        }
         string gather = "return step('pickup',()=>tool('gather',{targets:[{item_type:" + item + ",count:1}]}));";
         string navigate = "return step('travel',()=>tool('nav_to',{x:" + x + ",y:" + y + ",mode:'stand'}));";
         var plan = await Call("task_plan", new JsonObject { ["goal"] = "pick up and continue travelling", ["mode"] = "dag",
@@ -5256,6 +5280,7 @@ public sealed partial class BehaviorTrial : ModSystem
             ["navigation_pauses"] = pauses, ["plan"] = result?["task_plan"]?.DeepClone(), ["model_calls"] = 0 };
         File.WriteAllText(Path.Combine(Main.SavePath, "gather-nav-handoff.json"), report.ToJsonString());
         if (picked == 0 || accepted == 0 || moved == 0 || pauses != 0 || wall && crossed == 0
+            || wallHeight == 2 && !wallIntact
             || result?["task_plan"]?["status"]?.ToString() != "completed")
             throw new Exception("gather-to-navigation did not complete: " + report);
         Console.WriteLine("GATHER_NAV_HANDOFF_PASS " + report);

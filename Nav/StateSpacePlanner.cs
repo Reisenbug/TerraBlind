@@ -795,6 +795,11 @@ namespace TerraBlind
                     var (_, segFeetCy) = StandCell(seg.Value.node.Px, seg.Value.node.Py);
                     if (dcy - segFeetCy > vertRise) vertRise = dcy - segFeetCy;
                     yield return (seg.Value.node, seg.Value.frames, seg.Value.frames.Count, false, null);
+                    if (dir == dirToGoal && hold == 0 && RunUpJump(cur, seg.Value.node, dir, holdOptions[^1], ph) is { } runUp)
+                    {
+                        if (RawProgress(ctx, cur, runUp.node)) anyProgress = true;
+                        yield return (runUp.node, runUp.frames, runUp.frames.Count, false, null);
+                    }
                     foreach (var sp in SplitFall(cur, seg.Value.frames, platformTile))
                         yield return (sp.node, sp.frames, sp.cost, false, null);
                 }
@@ -1836,6 +1841,27 @@ namespace TerraBlind
                 };
                 yield return (node, take, take.Count);
             }
+        }
+
+        static (SSNode node, List<PhysicsSimulator.ControlInput> frames)? RunUpJump(
+            SSNode start, SSNode walkEnd, int dir, int hold, PhysicsSimulator.Params ph)
+        {
+            if (!walkEnd.Grounded || MathF.Abs(walkEnd.Py - start.Py) > 1f) return null;
+            float edge = dir > 0 ? walkEnd.Px + PhysicsSimulator.PlayerW : walkEnd.Px;
+            int wall = (int)MathF.Floor((edge + dir) / 16f);
+            int foot = (int)((walkEnd.Py + PhysicsSimulator.PlayerH - 1f) / 16f);
+            if (!DigSolid(wall, foot) && !DigSolid(wall, foot - 1) && !DigSolid(wall, foot - 2)) return null;
+            float distance = dir > 0 ? wall * 16f - start.Px - PhysicsSimulator.PlayerW : start.Px - (wall + 1) * 16f;
+            if (distance < 16f) return null;
+            float takeoff = start.Px + dir * MathF.Min(24f, distance - 12f);
+            var run = SimulateSegment(start, dir, 0, ph, walkStopPx: takeoff);
+            if (!run.HasValue || !run.Value.node.Grounded || MathF.Abs(run.Value.node.Py - start.Py) > 1f) return null;
+            var jump = SimulateSegment(run.Value.node, dir, hold, ph);
+            if (!jump.HasValue || !jump.Value.node.Grounded) return null;
+            float landingEdge = dir > 0 ? jump.Value.node.Px : jump.Value.node.Px + PhysicsSimulator.PlayerW;
+            if (dir * (landingEdge - (dir > 0 ? (wall + 1) * 16f : wall * 16f)) < 0) return null;
+            run.Value.frames.AddRange(jump.Value.frames);
+            return (jump.Value.node, run.Value.frames);
         }
 
         static bool SegDiag;   // when set, SimulateSegment logs why each walk/jump returned null (diagnose EXPAND-EMPTY)
