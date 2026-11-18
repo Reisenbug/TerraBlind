@@ -102,8 +102,6 @@ public sealed class ThinkingPause : ModSystem
         if (player.itemAnimation > 0 || player.itemTime > 0 || player.reuseDelay > 0
             || player.velocity.Y != 0 || Math.Abs(player.velocity.X) > .05f || AgentTools.WorldFramesRequired > 0
             || NativeAgent.WorldWaiters > 0 || ActExecutor.IsActive) return null;
-        if (RecedingNav.Active && (!RecedingNav.FieldReady || StateSpacePlanner.Computing
-            || LegacyNativePrediction.Computing)) return "navigation_compute";
         if (RecedingNav.Active || StateSpacePlanner.ExecRunning || MineCoordinator.IsActive || ItemUseCoordinator.IsActive
             || PlaceAnywhere.IsRunning || TreasureGrab.IsRunning || HouseBuilder.IsRunning
             || FightCoordinator.IsActive || PvpDuel.Active || PlayerCombat.Active || FrameProgram.Active
@@ -139,8 +137,7 @@ public sealed class ThinkingPause : ModSystem
     public override void PostDrawInterface(SpriteBatch batch)
     {
         if (!Frozen || Main.gameMenu) return;
-        string label = reason == "navigation_compute" ? "计算路线" : "思考与交接";
-        Utils.DrawBorderString(batch, $"[TB 冻结] {label}  {Stopwatch.GetElapsedTime(frozenAt).TotalSeconds:0.0}s",
+        Utils.DrawBorderString(batch, $"[TB 冻结] 思考与交接  {Stopwatch.GetElapsedTime(frozenAt).TotalSeconds:0.0}s",
             new Vector2(Math.Max(16, Main.screenWidth - 360), 110), Color.LightSkyBlue, .8f);
     }
 }

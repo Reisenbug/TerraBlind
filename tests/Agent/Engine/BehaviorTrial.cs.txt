@@ -866,7 +866,8 @@ public sealed partial class BehaviorTrial : ModSystem
     {
         if (Environment.GetEnvironmentVariable("TB_THINKING_PAUSE_TRIAL") == "1"
             || Environment.GetEnvironmentVariable("TB_CHEST_RECEIPT_TRIAL") == "1"
-            || Environment.GetEnvironmentVariable("TB_PICKUP_HANDOFF_TRIAL") == "1") { await ThinkingPauseTrial(); return; }
+            || Environment.GetEnvironmentVariable("TB_PICKUP_HANDOFF_TRIAL") == "1"
+            || Environment.GetEnvironmentVariable("TB_GATHER_NAV_HANDOFF") == "1") { await ThinkingPauseTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_SKILL_LEARNING") == "1") { await SkillLearningRun(); return; }
         if (Environment.GetEnvironmentVariable("TB_QUEEN_MINING_REPLAY") == "1") { await QueenMiningReplay(); return; }
         if (Environment.GetEnvironmentVariable("TB_WORKSTATION_REPLAY") == "1") { await WorkstationReplay(); return; }
@@ -4959,6 +4960,11 @@ public sealed partial class BehaviorTrial : ModSystem
                 return true;
             });
             await Until(() => ThinkingPause.Frozen, "initial model wait");
+            if (Environment.GetEnvironmentVariable("TB_GATHER_NAV_HANDOFF") == "1")
+            {
+                await GatherNavigationHandoff(origin, floorY);
+                return;
+            }
             var frozenBefore = await OnMain(Sample);
             await Task.Delay(1200);
             var frozenAfter = await OnMain(Sample);
@@ -5172,10 +5178,68 @@ public sealed partial class BehaviorTrial : ModSystem
         }
         finally
         {
-            await OnMain(() => { NativeAgent.Stop(); Halt.All(); VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+            await OnMain(() => { BoundaryInputPlayer.ObserveInput = null; NativeAgent.Stop(); Halt.All(); VanillaNavigationDemo.Instance.Stop(closeWorker: true);
                 Main.autoPause = false; Manual.On = false; return true; });
             modelWait.TrySetResult(true);
         }
+    }
+
+    async Task GatherNavigationHandoff(int origin, int floor)
+    {
+        int x = origin + 20, y = floor - 1, item = ItemID.Stinger;
+        string gather = "return step('pickup',()=>tool('gather',{targets:[{item_type:" + item + ",count:1}]}));";
+        string navigate = "return step('travel',()=>tool('nav_to',{x:" + x + ",y:" + y + ",mode:'stand'}));";
+        var plan = await Call("task_plan", new JsonObject { ["goal"] = "pick up and continue travelling", ["mode"] = "dag",
+            ["steps"] = new JsonArray(
+                new JsonObject { ["id"] = "pickup", ["description"] = "pick up the stinger", ["script"] = gather, ["depends_on"] = new JsonArray(),
+                    ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "item", ["type"] = item, ["count"] = 1 }) },
+                new JsonObject { ["id"] = "travel", ["description"] = "continue to the next point", ["script"] = navigate, ["depends_on"] = new JsonArray("pickup"),
+                    ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "position", ["x"] = x, ["y"] = y, ["radius"] = 2, ["count"] = 1 }) }) });
+        if (plan["error"] != null) throw new Exception("handoff plan rejected: " + plan);
+        long picked = 0, accepted = 0, ready = 0, moved = 0;
+        uint pickupTick = 0, movementTick = 0;
+        var clock = Stopwatch.StartNew();
+        await OnMain(() =>
+        {
+            var player = Main.LocalPlayer;
+            float startX = player.position.X;
+            int slot = Item.NewItem(player.GetSource_Misc("gather-nav-handoff"), player.Center, item);
+            Main.item[slot].velocity = Vector2.Zero;
+            Main.item[slot].noGrabDelay = 30;
+            BoundaryInputPlayer.ObserveInput = p =>
+            {
+                if (picked == 0 && p.HasItem(item)) { picked = Stopwatch.GetTimestamp(); pickupTick = Main.GameUpdateCount; }
+                if (picked != 0 && moved == 0 && Math.Abs(p.position.X - startX) >= 1)
+                { moved = Stopwatch.GetTimestamp(); movementTick = Main.GameUpdateCount; }
+            };
+            return true;
+        });
+        var first = await Call("run_script", new JsonObject { ["task_node"] = "pickup", ["background"] = true });
+        if (first["error"] != null) throw new Exception("handoff did not start: " + first);
+        JsonObject result = null;
+        while (clock.Elapsed.TotalSeconds < 18)
+        {
+            await OnMain(() =>
+            {
+                if (RecedingNav.Active && accepted == 0) accepted = Stopwatch.GetTimestamp();
+                if (ready == 0 && RecedingNav.Active && (bool)FieldReadyProperty.GetValue(null)) ready = Stopwatch.GetTimestamp();
+                return true;
+            });
+            result = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("task_plan") });
+            if (result["task_plan"]?["status"]?.ToString() == "completed") break;
+            await Task.Delay(15);
+        }
+        double? FromPickup(long time) => picked == 0 || time == 0 ? null : Stopwatch.GetElapsedTime(picked, time).TotalMilliseconds;
+        var pauses = await OnMain(() => ThinkingPause.Snapshot()["recent"].AsArray()
+            .Count(e => e["reason"]?.ToString() == "navigation_compute"));
+        var report = new JsonObject { ["pickup_tick"] = pickupTick, ["movement_tick"] = movementTick,
+            ["pickup_to_nav_active_ms"] = FromPickup(accepted), ["pickup_to_field_ready_ms"] = FromPickup(ready),
+            ["pickup_to_movement_ms"] = FromPickup(moved), ["elapsed_ms"] = clock.Elapsed.TotalMilliseconds,
+            ["navigation_pauses"] = pauses, ["plan"] = result?["task_plan"]?.DeepClone(), ["model_calls"] = 0 };
+        File.WriteAllText(Path.Combine(Main.SavePath, "gather-nav-handoff.json"), report.ToJsonString());
+        if (picked == 0 || accepted == 0 || moved == 0 || pauses != 0 || result?["task_plan"]?["status"]?.ToString() != "completed")
+            throw new Exception("gather-to-navigation did not complete: " + report);
+        Console.WriteLine("GATHER_NAV_HANDOFF_PASS " + report);
     }
 
 
