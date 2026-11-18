@@ -3749,9 +3749,26 @@ public sealed partial class BehaviorTrial : ModSystem
     async Task QueryHandoffTrial()
     {
         using var queryCancellation = new CancellationTokenSource();
+        using var runtime = new CancellationTokenSource();
+        var agent = ModContent.GetInstance<NativeAgent>();
+        var cancelField = typeof(NativeAgent).GetField("_cancel", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         Task<string> observer = null;
         try
         {
+            uint lastRightTick = 0, firstLeftTick = 0;
+            long lastRightTime = 0, firstLeftTime = 0;
+            await OnMain(() =>
+            {
+                cancelField.SetValue(agent, runtime);
+                BoundaryInputPlayer.ObserveInput = p =>
+                {
+                    if (p.controlRight && firstLeftTick == 0)
+                    { lastRightTick = Main.GameUpdateCount; lastRightTime = Stopwatch.GetTimestamp(); }
+                    if (p.controlLeft && firstLeftTick == 0 && lastRightTick != 0)
+                    { firstLeftTick = Main.GameUpdateCount; firstLeftTime = Stopwatch.GetTimestamp(); }
+                };
+                return true;
+            });
             var attack = await Call("action_start", new JsonObject { ["tool"] = "fight", ["args"] = new JsonObject { ["seconds"] = 30d } });
             string first = "step('first',()=>tool('act',{steps:[{keys:['right'],until:{frames:36}}]}));";
             await Call("task_plan", new JsonObject { ["goal"] = "continue movement while observing", ["mode"] = "dag",
@@ -3762,7 +3779,7 @@ public sealed partial class BehaviorTrial : ModSystem
             var state = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("task_plan") });
             await Call("task_plan_patch", new JsonObject { ["expected_revision"] = state["task_plan"]["revision"].DeepClone(),
                 ["reason"] = "prepare a successor before movement ends", ["nodes"] = new JsonArray(new JsonObject {
-                    ["id"] = "travel", ["script"] = first + "step('second',()=>tool('act',{steps:[{keys:['right'],until:{frames:12}}]}));return {status:'yield'};" }) });
+                    ["id"] = "travel", ["script"] = first + "step('second',()=>tool('act',{steps:[{keys:['left'],until:{frames:12}}]}));return {status:'yield'};" }) });
             string workflow = state["task_plan"]["steps"].AsArray().First(n => n["id"].ToString() == "travel")["workflow"].ToString();
             string code = "for(let i=0;i<4;i++)tool('action_query',{handle:"
                 + JsonValue.Create(attack["handle"].ToString()).ToJsonString() + ",wait_ms:1000});return {observed:true};";
@@ -3770,7 +3787,6 @@ public sealed partial class BehaviorTrial : ModSystem
             var clock = Stopwatch.StartNew();
             long? releasedMs = null, resumedMs = null;
             int completed = 0;
-            var dispatch = typeof(AgentTools).GetMethod("ContinuePreparedNode", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
             while (clock.ElapsedMilliseconds < 10000)
             {
                 state = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("action_tasks", "script_workflows", "control_execution") });
@@ -3780,15 +3796,18 @@ public sealed partial class BehaviorTrial : ModSystem
                 if (releasedMs != null && state["control_execution"]?["tool"]?.ToString() == "act")
                     resumedMs ??= clock.ElapsedMilliseconds;
                 if (completed == 2 && active == null) break;
-                await OnMain(() => { dispatch.Invoke(null, new object[] { CancellationToken.None }); return true; });
                 await Task.Delay(10);
             }
             var evidence = await OnMain(() => new JsonObject { ["released_ms"] = releasedMs, ["resumed_ms"] = resumedMs,
                 ["handoff_ms"] = resumedMs - releasedMs, ["observer_pending"] = !observer.IsCompleted,
+                ["last_right_tick"] = lastRightTick, ["first_left_tick"] = firstLeftTick,
+                ["input_gap_frames"] = firstLeftTick == 0 ? null : (int?)(firstLeftTick - lastRightTick - 1),
+                ["input_gap_ms"] = firstLeftTime == 0 ? null : (double?)Stopwatch.GetElapsedTime(lastRightTime, firstLeftTime).TotalMilliseconds,
                 ["completed_steps"] = completed,
                 ["player_x"] = Main.LocalPlayer.position.X, ["model_calls"] = 0, ["fixture_terrain"] = true });
             File.WriteAllText(Path.Combine(Main.SavePath, "query-handoff-native.json"), evidence.ToJsonString());
-            if (releasedMs == null || resumedMs == null || resumedMs - releasedMs >= 500 || observer.IsCompleted
+            if (firstLeftTick == 0 || lastRightTick == 0 || observer.IsCompleted
+                || Stopwatch.GetElapsedTime(lastRightTime, firstLeftTime).TotalMilliseconds >= 500
                 || evidence["completed_steps"].GetValue<int>() != 2)
                 throw new Exception("native prepared movement waited for observation: " + evidence);
             Console.WriteLine("QUERY_HANDOFF_NATIVE_PASS " + evidence);
@@ -3797,7 +3816,7 @@ public sealed partial class BehaviorTrial : ModSystem
         {
             queryCancellation.Cancel();
             if (observer != null) try { await observer; } catch (OperationCanceledException) { }
-            await OnMain(() => { AgentTools.Stop(); return true; });
+            await OnMain(() => { BoundaryInputPlayer.ObserveInput = null; NativeAgent.Stop(); AgentTools.Stop(); return true; });
         }
     }
 
