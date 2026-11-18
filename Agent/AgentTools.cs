@@ -2846,6 +2846,8 @@ public static partial class AgentTools
             result = await Wait("/nav_recede_done", "nav", "/nav_recede_stop", remaining, token,
             async elapsed =>
             {
+                long sampleStarted = Stopwatch.GetTimestamp();
+                var frozenAtSample = NativeAgent.FrozenTime();
                 await ReactAtBoundary(token,
                         async ct =>
                         {
@@ -2862,6 +2864,7 @@ public static partial class AgentTools
                     return new JsonObject { ["outcome"] = "condition_met", ["condition_met"] = true };
                 return await NativeAgent.OnMain(() =>
             {
+                elapsed += (Stopwatch.GetElapsedTime(sampleStarted) - (NativeAgent.FrozenTime() - frozenAtSample)).TotalSeconds;
                 var interrupted = interruption?.Invoke();
                 if (interrupted != null) return interrupted;
                 var player = Main.LocalPlayer;
