@@ -3269,17 +3269,32 @@ static class ScriptTests
             Check(pauses == 1 && detourStarts == 1 && resumes == 1, "detour replayed completed effects or failed to restore route");
             int health = 100, crystals = 3, uses = 0, crystalCollections = 0;
             bool crystalSourceAvailable = true;
+            string interruptionPoint = null;
+            CancellationTokenSource interruptCrystal = null;
+            void CrystalInterrupt(string point, CancellationToken token)
+            {
+                if (interruptionPoint != point) return;
+                interruptCrystal.Cancel();
+                token.ThrowIfCancellationRequested();
+            }
             Task<string> CrystalTool(string name, JsonObject args, CancellationToken token)
             {
                 if (name == "get_state") return Task.FromResult(new JsonObject { ["permanent_max_health"] = health,
                     ["player"] = new JsonObject { ["pos"] = new JsonObject { ["x"] = 160, ["y"] = 320 } },
                     ["inventory_slots"] = new JsonArray(new JsonObject { ["type"] = 29, ["stack"] = crystals, ["slot"] = 7 }) }.ToJsonString());
-                if (name == "use_item") { uses++; crystals--; health += 20; return Task.FromResult("{\"outcome\":\"consumed\",\"verified\":true}"); }
+                if (name == "use_item")
+                {
+                    CrystalInterrupt("before_use", token);
+                    uses++; crystals--; health += 20;
+                    CrystalInterrupt("after_use", token);
+                    return Task.FromResult("{\"outcome\":\"consumed\",\"verified\":true}");
+                }
                 if (name == "gather")
                 {
                     crystalCollections++;
                     if (!crystalSourceAvailable) return Task.FromResult("{\"outcome\":\"source_unavailable\"}");
                     crystals++;
+                    CrystalInterrupt("after_pickup", token);
                     return Task.FromResult("{\"outcome\":\"enough\"}");
                 }
                 throw new Exception("unexpected crystal skill operation " + name);
@@ -3298,6 +3313,28 @@ static class ScriptTests
             var unavailableCrystal = await AgentScript.Run(collectCrystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask, default, new ScriptProgress(), programs: library.Callable());
             Check(unavailableCrystal["value"]?["collection"]?["outcome"]?.ToString() == "source_unavailable"
                 && crystalCollections == 4 && uses == 6, "crystal skill retried an unavailable source or lost collection evidence");
+            crystalSourceAvailable = true;
+            var crystalResumeProgress = new ScriptProgress();
+            foreach (string point in new[] { "after_pickup", "before_use", "after_use" })
+            {
+                using var interrupt = new CancellationTokenSource();
+                interruptCrystal = interrupt;
+                interruptionPoint = point;
+                try
+                {
+                    await AgentScript.Run(collectCrystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask,
+                        interrupt.Token, crystalResumeProgress, programs: library.Callable());
+                    throw new Exception("expected interruption at " + point);
+                }
+                catch (OperationCanceledException) when (interrupt.IsCancellationRequested) { }
+            }
+            interruptionPoint = null;
+            var resumedCrystals = await AgentScript.Run(collectCrystalCode, 30, (_, _) => { }, CrystalTool, _ => Task.CompletedTask,
+                default, crystalResumeProgress, programs: library.Callable());
+            Check(resumedCrystals["value"]?["status"]?.ToString() == "target_met" && health == 220
+                && crystalCollections == 5 && crystals == 0 && uses == 7,
+                "crystal recovery must resume from inventory and health without repeating pickup or consumption");
+            Console.WriteLine("PASS: crystal skill resumes after pickup or consumption without replaying verified effects");
             string recipe = ScriptLibrary.Example("sample_tile_variants")["code"].ToString();
             int recipeCalls = 0, recipeItems = 0, recipeResumes = 0;
             Task<string> RecipeTool(string name, JsonObject args, CancellationToken token)

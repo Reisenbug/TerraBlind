@@ -1107,19 +1107,16 @@ public sealed class ScriptLibrary
               if(!crystal){
                 if(!config.gather_args) return {status:'missing_crystals',permanent_health:state.permanent_max_health,target:config.target_health};
                 const collection=tool('gather',config.gather_args);
-                if(collection.outcome!=='enough') return {status:'needs_review',collection,permanent_health:state.permanent_max_health};
                 state=observe();
+                if(state.permanent_max_health>=config.target_health) break;
                 crystal=state.inventory_slots.find(i=>i.type===29&&i.stack>0);
+                if(!crystal&&collection.outcome!=='enough') return {status:'needs_review',collection,permanent_health:state.permanent_max_health};
                 if(!crystal) return {status:'needs_review',reason:'collection_inventory_changed',collection};
               }
               const before=state.permanent_max_health;
-              step('use_at_health_'+before,()=>{
-                const r=tool('use_item',{slot:crystal.slot,x:Math.floor(state.player.pos.x/16),y:Math.floor(state.player.pos.y/16),duration_ticks:30});
-                if(r.error||r.verified!==true) throw new Error(JSON.stringify(r));
-                return {outcome:r.outcome,verified:r.verified};
-              });
+              const use=tool('use_item',{slot:crystal.slot,x:Math.floor(state.player.pos.x/16),y:Math.floor(state.player.pos.y/16),duration_ticks:30});
               state=observe();
-              if(state.permanent_max_health<=before) return {status:'needs_review',reason:'permanent_health_did_not_increase',before,actual:state.permanent_max_health};
+              if(state.permanent_max_health<=before) return {status:'needs_review',reason:'permanent_health_did_not_increase',before,actual:state.permanent_max_health,use};
             }
             return {status:'target_met',permanent_health:state.permanent_max_health,next:'Verify permanent_health DAG condition'};
             """);
