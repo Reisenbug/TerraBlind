@@ -96,7 +96,7 @@ namespace TerraBlind
         static bool TryEscape(Dictionary<(int, int), int> field, int curCx, int curCy, int curH,
                               int goalWx, int goalWy, bool preferLocalExit)
         {
-            if (Busy) return false;
+            if (Busy || curH < MinDrop) return false;
             // H 比上次卡的时候明显低了 = 中间真出去过,这是个新坑,失败计数重新开始。
             // 不清的话:一趟里前面某个坑用光了 3 次机会,后面所有坑都不再尝试
             if (_lastH != int.MinValue && curH < _lastH - MinDrop) _fails = 0;
