@@ -316,6 +316,7 @@ public static partial class AgentTools
     }
     internal static JsonObject ExecutionContinuity;
     static string lastExecutionNotice;
+    static bool inventoryPreparationNotified;
     internal static string PreparationNotifiedContext { get; private set; }
     static ulong? gapStarted;
     static bool gapReported;
@@ -344,6 +345,22 @@ public static partial class AgentTools
         if (!Plan.Incomplete) return Task.CompletedTask;
         var action = Actions.HasPrimaryControl ? Actions.Summary().FirstOrDefault(item => item["tool"]?.ToString() != "fight"
             && item["status"]?.ToString() == "running") : null;
+        int freeSlots = Main.LocalPlayer.inventory.Take(50).Count(item => item.IsAir);
+        if (freeSlots > 3) inventoryPreparationNotified = false;
+        if (action is JsonObject running && freeSlots <= 3 && !inventoryPreparationNotified
+            && !Watches.LocalDelivery && taskPolicy?.Reactions?.Has("inventory_full") != true)
+            return SendInventoryPreparation(running, freeSlots);
+        async Task SendInventoryPreparation(JsonObject running, int slots)
+        {
+            inventoryPreparationNotified = true;
+            var evidence = new JsonObject { ["free_slots"] = slots,
+                ["handle"] = running["handle"]?.DeepClone(), ["task_node"] = running["task_node"]?.DeepClone() };
+            bool accepted = await codex.Steer(
+                "背包空间不足。保持当前动作运行，在后台用 inventory_review 核对库存，趁行进为 inventory_full 登记有明确保留和丢弃范围的处理逻辑。"
+                + "优先复用 inventory_space，保留任务物资、工具、装备和收藏品。已有合适规则时沿用。"
+                + evidence.ToJsonString(ModelJson), token);
+            DiagLog.Write($"[agent_inventory_preparation] accepted={accepted} free_slots={slots}");
+        }
         string kind = action != null ? "prepare_successor" : "execution_gap";
         if (action == null)
         {
@@ -728,7 +745,7 @@ public static partial class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
+    public static void NewTask() { ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null; inventoryPreparationNotified = false; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
         ClearCombatPreparation();
