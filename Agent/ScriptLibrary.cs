@@ -367,8 +367,10 @@ public sealed class ScriptLibrary
               }
               if(contact&&(!observed.touch_damage||observed.solid||observed.falling))
                 return {retry:false,reason:'hazard_evidence_changed'};
-              const result=tool('use_item',{slot:pick.slot,x:target.x,y:target.y,strict:true,duration_ticks:16});
-              if(result.error) return {retry:false,reason:result.error};
+              const action={slot:pick.slot,x:target.x,y:target.y,strict:true};
+              if(contact) action.duration_ticks=16;
+              const result=tool('use_item',action);
+              if(result.error||result.outcome==='no_progress') return {retry:false,reason:result.error??result.reason??result.outcome};
               const checked=tool('opportunity_assess',{x:target.x,y:target.y});
               if(!checked.ok||checked.target.has_tile&&checked.target.tile_type===target.type)
                 return {retry:false,reason:'hazard_not_removed'};
