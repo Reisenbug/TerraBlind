@@ -6515,7 +6515,8 @@ public sealed partial class BehaviorTrial : ModSystem
             if (selected == null) throw new Exception($"No nearby natural crystal pair and existing standing position found (crystals={hearts.Length}, pairs={pairs.Length})");
             p.Teleport(stand); p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(stand.Y / 16);
             p.inventory[0].SetDefaults(ItemID.CopperPickaxe); p.selectedItem = 0;
-            p.inventory[4].SetDefaults(ItemID.Starfury);
+            p.inventory[4].SetDefaults(dagHandoff ? ItemID.ThrowingKnife : ItemID.Starfury);
+            if (dagHandoff) p.inventory[4].stack = 50;
             foreach (var item in p.inventory.Where(i => i.type == ItemID.LifeCrystal)) item.TurnToAir();
             Combat.Enabled = Dodge.Enabled = false; FightCoordinator.Stop();
             return new JsonObject { ["resources"] = new JsonArray(selected.Select(t => (JsonNode)new JsonObject {
