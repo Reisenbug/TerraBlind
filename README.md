@@ -12,7 +12,19 @@ TerraBlind uses Terraria as an environment for building a real-time game agent. 
 
 ![agent](https://img.shields.io/badge/AI-LLM%20Agent%20%2B%20Jev-brightgreen) ![runtime](https://img.shields.io/badge/runtime-tModLoader-blue)
 
-## Demo
+**[下载 TerraBlind 2.0 Alpha 1 (.tmod) · Download](https://github.com/Reisenbug/TerraBlind/releases/download/v2.0.0-alpha.1/TerraBlind.tmod)** · [发布说明 / Release notes](https://github.com/Reisenbug/TerraBlind/releases/tag/v2.0.0-alpha.1) · [安装](#开始使用) / [Setup](#getting-started)
+
+Alpha 1 构建于 **tModLoader 2026.9.3.1 / Terraria 1.4.4.9**。带 10 个木材进入世界，用 `/tb 帮我制作一个工作台` 试用内置 Agent，完成后在背包中查看工作台。
+
+Alpha 1 was built with **tModLoader 2026.9.3.1 / Terraria 1.4.4.9**. Enter a world with 10 Wood, send `/tb Craft a workbench for me`, then check your inventory.
+
+## Agent 任务 / Agent task
+
+给 Agent 一条采集指令，它可以在执行期间处理沿途机会。一次受控测试中，Agent 收集生命水晶，途中响应箱子事件、搜刮箱子，然后恢复采集。宿主核验了 10 颗水晶和箱中战利品。该测试预置资源与箱子，用传送替代导航。[验证范围](Agent/README.md#验证)
+
+In a controlled run, the agent collected Life Crystals, reacted to a nearby chest, looted it, and resumed gathering. The game host verified all 10 crystals and the chest loot. The fixture placed the resources and chest and used teleportation for navigation. [Validation details](Agent/README.md#验证)
+
+## 战斗与早期流程 / Combat and early automation
 
 **Jev 驱动的 Boss 战 / Jev-driven boss fights**
 
@@ -96,9 +108,7 @@ Boss 策略文本位于 [Jev/Fight/BossBook.cs](Jev/Fight/BossBook.cs)，可通�
 
 ### 开始使用
 
-当前开发目标为 Terraria 1.4.4.9 对应的 tModLoader。
-
-1. 安装 Terraria 与对应版本的 tModLoader，启用 TerraBlind。
+1. 下载 [Alpha 1 的 TerraBlind.tmod](https://github.com/Reisenbug/TerraBlind/releases/download/v2.0.0-alpha.1/TerraBlind.tmod)，放进 tModLoader 的 `Mods` 目录，在模组菜单启用。升级前备份存档。
 2. 在模组配置的“内置 Agent”中选择后端：本机 **Codex**，或支持工具调用的 **OpenAI 兼容 API**。
 3. 使用 Jev 时配置 **TypeSafe API Key**，并开启所需的战斗功能。
 4. 进入世界，在聊天框输入 `/tb` 指令。
@@ -113,7 +123,7 @@ Boss 策略文本位于 [Jev/Fight/BossBook.cs](Jev/Fight/BossBook.cs)，可通�
 /tb stop
 ~~~
 
-这些是任务输入示例，复杂任务的完成情况取决于装备、世界与当前执行能力。`/goal` 保存长期目标，宿主按任务状态调度后续执行。
+这些是任务输入示例，复杂任务的完成情况取决于装备、世界与当前执行能力。Codex 后端支持 `/goal`，宿主按任务状态调度后续执行。
 
 Codex 后端由 mod 自动启动本机 `codex app-server`。API 后端在配置中填写 Key、Base URL 和模型名。后端配置、AI 玩家绑定及工具说明见 [内置 Agent 文档](Agent/README.md)。
 
@@ -193,9 +203,7 @@ Ordinary combat and PvP also include movement, line-of-fire, weapon and projecti
 
 ### Getting started
 
-The current development target is tModLoader for Terraria 1.4.4.9.
-
-1. Install Terraria, the matching tModLoader version and TerraBlind.
+1. Download [TerraBlind.tmod for Alpha 1](https://github.com/Reisenbug/TerraBlind/releases/download/v2.0.0-alpha.1/TerraBlind.tmod), copy it to tModLoader's `Mods` directory, and enable it in the mod menu. Back up your saves before upgrading.
 2. Configure the built-in agent to use local **Codex** or an **OpenAI-compatible API** with tool calling.
 3. Set a **TypeSafe API Key** and enable the desired combat features for Jev.
 4. Enter a world and send `/tb` commands in chat.
@@ -210,7 +218,7 @@ The current development target is tModLoader for Terraria 1.4.4.9.
 /tb stop
 ~~~
 
-These are task examples; complex-task results depend on the world, equipment and current execution capabilities. `/goal` retains a long-running objective for host scheduling.
+Results for complex tasks depend on the world, equipment and current execution capabilities. The Codex backend supports `/goal` for long-running objectives scheduled by the host.
 
 The mod starts local `codex app-server` for the Codex backend. The API backend uses the configured key, base URL and model name. Configuration and AI-player binding are documented in [Agent/README.md](Agent/README.md).
 
