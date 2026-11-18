@@ -264,6 +264,7 @@ public static partial class AgentTools
     internal static readonly Dictionary<string, ScriptProgress> Workflows = new();
     static readonly HashSet<string> continuedActions = new();
     static readonly Dictionary<string, string> recoveredActions = new();
+    static readonly HashSet<(string Workflow, int Revision)> deferredNodes = new();
     static Task continuation = Task.CompletedTask;
     static int executingScripts;
     static int actionScripts;
@@ -505,11 +506,16 @@ public static partial class AgentTools
         }
         continuedActions.Add(attempt);
         if (!verified && !prepared && (workflow == null || workflow.Yielded || workflow.ReviewRequested
-            || action["status"]?.ToString() != "completed")) return;
+            || action["status"]?.ToString() != "completed"))
+        {
+            if (TryDeferNode(owner, action["result"]) is string sibling)
+                StartPreparedNode(sibling, handle, token);
+            return;
+        }
         if (prepared) Watches.AcknowledgeExecutionStart(owner, Main.LocalPlayer.dead, Main.LocalPlayer.suffocating, Actions.Summary());
         Watches.AcknowledgeCompletion(action, nodeVerified: verified);
         plan = Plan.Snapshot();
-        string next = verified ? plan["current_step"]?.ToString() : owner;
+        string next = verified ? NextPreparedNode(plan) : owner;
         if (next == null || !plan["ready_steps"].AsArray().Any(n => n?.ToString() == next)) return;
         if (Watches.HasRecoveryBlocker)
         {
@@ -519,6 +525,38 @@ public static partial class AgentTools
             return;
         }
         StartPreparedNode(next, handle, token);
+    }
+
+    static string NextPreparedNode(JsonObject plan)
+    {
+        bool Deferred(JsonNode node) => deferredNodes.Contains((node["workflow"].ToString(),
+            Plan.ExecutionRevision(node["id"].ToString())));
+        string current = plan["current_step"]?.ToString();
+        var steps = plan["steps"].AsArray();
+        if (current == null || !Deferred(steps.First(node => node["id"]?.ToString() == current))) return current;
+        var ready = plan["ready_steps"].AsArray().Select(node => node.ToString()).ToHashSet();
+        return steps.FirstOrDefault(node => ready.Contains(node["id"].ToString())
+            && node["preparation_only"]?.GetValue<bool>() != true && !Deferred(node)
+            && (!Workflows.TryGetValue(node["workflow"].ToString(), out var workflow)
+                || workflow.HasPreparedContinuation(node["script"].ToString())))?["id"]?.ToString();
+    }
+
+    static string TryDeferNode(string node, JsonNode result)
+    {
+        if (Main.LocalPlayer.dead || Main.LocalPlayer.suffocating || ContactEscapeActive || Watches.HasRecoveryBlocker
+            || result is not JsonObject receipt || receipt["error"] != null) return null;
+        var value = receipt["value"] as JsonObject ?? receipt;
+        if (value["wake"] != null || value["error"] != null) return null;
+        var outcome = (value["blocked"] as JsonObject ?? value["collection"] as JsonObject ?? value)["outcome"]?.ToString();
+        if (outcome is not ("source_unavailable" or "source_area_exhausted")) return null;
+        var plan = Plan.Snapshot();
+        var blocked = plan["steps"].AsArray().FirstOrDefault(step => step["id"]?.ToString() == node);
+        if (blocked == null) return null;
+        deferredNodes.Add((blocked["workflow"].ToString(), Plan.ExecutionRevision(node)));
+        string next = NextPreparedNode(plan);
+        if (next != null && next != node)
+            DiagLog.Write($"[dag-node-deferred] node={node} next={next} outcome={outcome}");
+        return next == node ? null : next;
     }
 
     static void StartPreparedNode(string next, string handle, CancellationToken token, string recovery = null)
@@ -580,7 +618,15 @@ public static partial class AgentTools
                         report["recovery_reason"] = recoveryValue["reason"]?.DeepClone();
                     if (returned?["ok"]?.ToString() == "false" || returned?["value"] is JsonObject value
                         && (value["status"]?.ToString() is "yield" or "needs_review" || value["wake"] != null || value["error"] != null))
-                        ReportExecutionGap(report, "script_requires_review");
+                    {
+                        if (!Actions.HasPrimaryControl && TryDeferNode(next, returned) is string sibling)
+                        {
+                            pendingNode = sibling;
+                            report["status"] = "deferred_to_ready_node";
+                            report["next_node"] = sibling;
+                        }
+                        else ReportExecutionGap(report, "script_requires_review");
+                    }
                     else if (!Actions.HasPrimaryControl)
                     {
                         var script = Plan.Script(next);
@@ -590,7 +636,7 @@ public static partial class AgentTools
                         if (plan["ready_steps"].AsArray().Any(n => n?.ToString() == next))
                             plan = Plan.Advance(next, AgentTaskEvidence.Measure);
                         if (plan["steps"].AsArray().Any(n => n["id"]?.ToString() == next && n["status"]?.ToString() == "completed"))
-                            pendingNode = plan["current_step"]?.ToString();
+                            pendingNode = NextPreparedNode(plan);
                         else if (!continuing) ReportExecutionGap(report, "script_returned_without_action_or_completion");
                     }
                     DiagLog.Write($"[dag-continuation] after={handle} node={next} result={result}");
@@ -751,7 +797,7 @@ public static partial class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null; inventoryPreparationNotified = false; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
+    public static void NewTask() { ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); deferredNodes.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null; inventoryPreparationNotified = false; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
     public static void Stop()
     {
         ClearCombatPreparation();
