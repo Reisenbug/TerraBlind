@@ -60,6 +60,24 @@ return tool('collect_treasure', {x: chest.x, y: chest.y});
 
 工具的完整参数见 [Tools.json](Tools.json)。模型可读的运行约定见 [System.txt](System.txt)。
 
+## 原版制作与 Mod 按键 / Native crafting and mod keybinds
+
+| 接口 / API | 用法 / Usage |
+| --- | --- |
+| `craft_recipes` → `craft_recipe` | 打开背包后查询可用配方索引，制作一次并把成品留在鼠标上。Open the inventory, look up an available recipe index, and craft once onto the cursor. |
+| `craft_into_inventory` | 用原版配方批量制作并存进背包。旧脚本中的 `craft` 调用应改用此入口。Batch-craft into the inventory using vanilla recipes. Migrate old `craft` calls to this tool. |
+| `mod_input_list` → `mod_input` | 按 Mod 内部名查询已注册的按键，再用 `ModName/KeyName` 按下并释放。List registered keybinds by internal mod name, then press and release a binding by `ModName/KeyName`. |
+
+`mod_input` 走 tModLoader 的 `ModPlayer.ProcessTriggers`，支持按下、保持和释放。Mod 用 `KeybindLoader.RegisterKeybind` 注册的输入会自动被发现。派发回执只确认按键已交给游戏，实际效果请查游戏状态。
+
+`mod_input` delivers press, hold, and release through tModLoader's `ModPlayer.ProcessTriggers`. Bindings registered through `KeybindLoader.RegisterKeybind` are discovered automatically. Check game state to verify the mod's response.
+
+~~~javascript
+const bindings = tool('mod_input_list', {mod: 'MyMod'});
+const key = bindings.keys.find(key => key === 'MyMod/ActivateAbility');
+return key ? tool('mod_input', {key, frames: 1}) : {error: 'binding_not_found'};
+~~~
+
 ## 验证
 
 ~~~sh

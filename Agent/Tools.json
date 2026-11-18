@@ -1,4 +1,7 @@
 [
+{"type":"function","function":{"name":"craft_into_inventory","description":"用名称name或物品编号item_type调用原版配方连续制作，成品直接收进背包。先核对空间，手持光标物品时拒绝；意外未入包的成品保留在光标。需要逐次控制光标时用craft_recipe。","parameters":{"type":"object","properties":{"name":{"type":"string"},"item_type":{"type":"integer","minimum":1},"amount":{"type":"integer","minimum":1,"maximum":9999}},"required":[]}}},
+{"type":"function","function":{"name":"mod_input_list","description":"列出已加载Mod注册的语义按键。可按Mod内部名筛选，每页40项；key用于mod_input。","parameters":{"type":"object","properties":{"mod":{"type":"string"},"offset":{"type":"integer","minimum":0}}}}},
+{"type":"function","function":{"name":"mod_input","description":"触发已注册的Mod按键，按key指定ModName/KeyName，可保持1..120个输入更新，结束时释放。返回输入是否派发，不代表Mod效果已发生。","parameters":{"type":"object","properties":{"key":{"type":"string"},"frames":{"type":"integer","minimum":1,"maximum":120}},"required":["key"]}}},
 {"type":"function","function":{"name":"housing","description":"原版房屋操作。check在x/y检查房间，assign给房间坐标和npc/npc_type，evict对实际NPC撤销分配。联机返回requested时等服务端状态更新。","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["check","assign","evict"]},"x":{"type":"integer"},"y":{"type":"integer"},"npc":{"type":"integer"},"npc_type":{"type":"integer"}},"required":["action"]}}},
 {"type":"function","function":{"name":"game_input","description":"执行一次原版语义快捷操作。hotbar的index是0..9，loadout的index是0..2，inventory与smart_cursor传enabled，zoom传原版1..2倍倍率，journey_powers切换旅途角色的能力菜单。快捷治疗、回蓝、增益调用原版操作。读取返回的实际状态或用get_state核实效果。","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["hotbar","loadout","inventory","smart_cursor","quick_heal","quick_mana","quick_buff","journey_powers","zoom"]},"index":{"type":"integer","minimum":0},"enabled":{"type":"boolean"},"zoom":{"type":"number","minimum":1,"maximum":2}},"required":["action"]}}},
 {"type":"function","function":{"name":"slot_state","description":"读取指定槽位与鼠标持物。inventory槽0..49，coin/ammo各0..3，equipment/vanity各0..9，trash用0，container使用当前已打开的箱子或个人储物容器。返回container是当前原版容器ID。","parameters":{"type":"object","properties":{"section":{"type":"string","enum":["inventory","coin","ammo","equipment","vanity","container","trash"]},"slot":{"type":"integer","minimum":0}},"required":["section","slot"]}}},
@@ -533,29 +536,6 @@
   {
     "type": "function",
     "function": {
-      "name": "craft",
-      "description": "合成一个物品(按名字)。需要站在对应工作台/熔炉旁边、材料足够,否则失败。失败时会返回当前能合成的物品列表(available_names),据此判断缺工作台还是缺材料。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "物品名。中文显示名('工作台')或英文内部名('WorkBench'/'Work Bench')都行"
-          },
-          "amount": {
-            "type": "integer",
-            "description": "数量,默认1"
-          }
-        },
-        "required": [
-          "name"
-        ]
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
       "name": "track",
       "description": "【要攒够某个数量的东西时,先用这个立台账】。比如查出做铁头盔要15铁锭=45铁矿、还要5铁锭做铁砧,就 track {\"铁矿\":60}。之后**每个动作的返回里都会自动带【进度】字段**(如 铁矿 23/60,够了会标'够了'),数字是从背包实时读的真值。所以挖矿这种要重复十几轮的活,照着进度判断够没够就行,**绝不要自己在脑子里累加**:你看不到被省略的旧结果,一定会数错。攒完一样接着攒下一样时,重新 track 覆盖即可。",
       "parameters": {
@@ -576,7 +556,7 @@
     "type": "function",
     "function": {
       "name": "recipe",
-      "description": "查物品配方。can_craft_now 是游戏当前可制作列表的实际判断；为 true 时直接尝试 craft，不要再索要材料。ingredients 每项有 need、have（随身背包加可用虚空袋）、in_inventory、in_void_bag。have 不覆盖所有模组合成来源和配方组，是否能做优先看 can_craft_now。stations 是所需工作台，每项列出能放出该工作台的物品及其随身背包数量。也返回当前不能制作的配方，不能仅因查到配方就判断能做。",
+      "description": "查物品配方。can_craft_now 是游戏当前可制作列表的实际判断；为 true 时使用 craft_recipes 查实际配方索引后调用 craft_recipe，也可用 craft_into_inventory，不要再索要材料。ingredients 每项有 need、have（随身背包加可用虚空袋）、in_inventory、in_void_bag。have 不覆盖所有模组合成来源和配方组，是否能做优先看 can_craft_now。stations 是所需工作台，每项列出能放出该工作台的物品及其随身背包数量。也返回当前不能制作的配方，不能仅因查到配方就判断能做。",
       "parameters": {
         "type": "object",
         "properties": {

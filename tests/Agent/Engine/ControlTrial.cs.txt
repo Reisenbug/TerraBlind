@@ -25,6 +25,8 @@ public sealed class ControlTrial : ModSystem
     public override void Load()
     {
         enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentcontrolcheck");
+        if (enabled && Environment.GetEnvironmentVariable("TB_NATIVE_PRIMITIVES") == "1")
+            PrimitiveBindingProbe.Binding = KeybindLoader.RegisterKeybind(Mod, "PrimitiveInputProbe", "F10");
         if (enabled) { IL_Main.DoUpdate += Focus; On_Main.Update += OpenWorld; On_Player.PickTile += ObservePick; }
     }
     public override void Unload() { if (enabled) { IL_Main.DoUpdate -= Focus; On_Main.Update -= OpenWorld; On_Player.PickTile -= ObservePick; } }
@@ -187,7 +189,7 @@ public sealed class ControlTrial : ModSystem
             ["behaviors"] = new JsonArray("mining"), ["reason"] = "do not undermine this sand wall",
             ["region"] = new JsonObject { ["x"] = sandX, ["y"] = floor - 7, ["width"] = 4, ["height"] = 7 } });
         Check(localVeto["status"]?.ToString() == "ready", "local excavation veto not ready");
-        var crafted = await Call("craft", new JsonObject { ["name"] = "WoodPlatform", ["amount"] = 20, ["control_claim"] = claimId });
+        var crafted = await Call("craft_into_inventory", new JsonObject { ["name"] = "WoodPlatform", ["amount"] = 20, ["control_claim"] = claimId });
         Check(crafted["ok"]?.ToString() == "true", "could not prepare platforms for the alternate route");
         await OnMain(() =>
         { Check(NavCoordinator.FindPlatformSlot(Main.LocalPlayer) >= 0, "crafted platforms absent from real inventory"); return true; });
@@ -242,6 +244,13 @@ public sealed class ControlTrial : ModSystem
         var placed = await Call("slot_click", args);
         Check(placed["outcome"]?.ToString() == "changed" && await OnMain(() => Main.mouseItem.IsAir
             && Main.LocalPlayer.inventory[12].type == ItemID.WorkBench), "primitive_slot_click_did_not_transfer_crafted_item");
+        var bindings = await Call("mod_input_list", new JsonObject { ["mod"] = Mod.Name });
+        string key = Mod.Name + "/PrimitiveInputProbe";
+        Check(bindings["keys"].AsArray().Any(item => item.ToString() == key), "primitive_registered_mod_binding_missing");
+        var dispatched = await Call("mod_input", new JsonObject { ["key"] = key, ["frames"] = 3 });
+        Check(dispatched["outcome"]?.ToString() == "dispatched" && await OnMain(() =>
+            PrimitiveBindingProbe.Pressed == 1 && PrimitiveBindingProbe.Held == 3 && PrimitiveBindingProbe.Released == 1),
+            "primitive_mod_trigger_did_not_deliver_press_hold_release");
         Console.WriteLine("NATIVE_PRIMITIVES_COMPLETE native_engine=true model_calls=0");
     }
 
@@ -252,5 +261,19 @@ public sealed class ControlTrial : ModSystem
         for (int y = floor - 7; y < floor; y++)
             if (Main.tile[x, y].HasTile && Main.tile[x, y].TileType == TileID.Sand) count++;
         return count;
+    }
+}
+
+public sealed class PrimitiveBindingProbe : ModPlayer
+{
+    internal static ModKeybind Binding;
+    internal static int Pressed, Held, Released;
+
+    public override void ProcessTriggers(Terraria.GameInput.TriggersSet triggersSet)
+    {
+        if (Binding == null) return;
+        if (Binding.JustPressed) Pressed++;
+        if (Binding.Current) Held++;
+        if (Binding.JustReleased) Released++;
     }
 }

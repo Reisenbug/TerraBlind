@@ -32,9 +32,9 @@ public sealed class AgentControlSession
     public bool Active => current != 0 || attackTicket != 0;
     public string Tool => tool ?? (attackTicket != 0 ? "fight" : null);
     public static bool ActionTool(string name) => name is "nav_to" or "mine" or "mine_vein" or "chop_wood"
-        or "use_item" or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap"
+        or "use_item" or "place_at" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap"
         or "combat_reposition" or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat" or "fight" or "fight_player"
-        or "slot_click" or "game_input" or "craft_recipe" or "housing";
+        or "slot_click" or "game_input" or "craft_recipe" or "housing" or "mod_input";
 
     public static void DescribeClaims(JsonArray schemas)
     {
@@ -44,7 +44,7 @@ public sealed class AgentControlSession
         control["description"] = control["description"].ToString()
             + "confine将behaviors限定在region矩形内，默认navigation/dodge；边界为世界格坐标，人物整个碰撞箱应在区域内。"
             + "deny配合region可保护具体区域的mining/placement/navigation；scope默认task，控制action/task/persistent有效期，release按id撤销。"
-            + "equip_item、inventory_swap、craft等常规工具已完成原子输入交接，可直接调用；claim用于自行持续接管输入。";
+            + "equip_item、inventory_swap、craft_recipe等常规工具已完成原子输入交接，可直接调用；claim用于自行持续接管输入。";
         foreach (var schema in schemas)
             if (ActionTool(schema["function"]?["name"]?.ToString()))
                 schema["function"]["parameters"]["properties"]["control_claim"] = new JsonObject

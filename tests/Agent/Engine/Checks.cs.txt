@@ -45,7 +45,7 @@ public sealed partial class BehaviorTrial
         var before = await Call("inspect_terrain", new JsonObject { ["radius"] = 8 });
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var placed = await Call("place_at", new JsonObject { ["item"] = "36" });
-        var crafted = await Call("craft", new JsonObject { ["name"] = "WoodenSword" });
+        var crafted = await Call("craft_into_inventory", new JsonObject { ["name"] = "WoodenSword" });
         File.WriteAllText(Path.Combine(Main.SavePath, "workstation-replay.json"), new JsonObject {
             ["elapsed_ms"] = clock.ElapsedMilliseconds, ["before"] = before, ["placed"] = placed, ["crafted"] = crafted }.ToJsonString());
         if (placed["outcome"]?.ToString() != "done" || crafted["ok"]?.GetValue<bool>() != true)
@@ -1953,7 +1953,7 @@ public sealed class Driver : ModSystem
                     Call("recipe", new JsonObject { ["name"] = "ThornChakram" }); break;
                 case 5:
                     Console.WriteLine($"AGENT_ENGINE_STATION adjacent={player.adjTile[TileID.Anvils]} inventory_open={Main.playerInventory}");
-                    Call("craft", new JsonObject { ["name"] = "ThornChakram", ["amount"] = 1 }); break;
+                    Call("craft_into_inventory", new JsonObject { ["name"] = "ThornChakram", ["amount"] = 1 }); break;
                 case 6:
                     Check(result["error"] == null, "craft_rejected"); Call("task_step", Step("weapon")); break;
                 case 7:

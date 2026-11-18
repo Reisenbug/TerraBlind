@@ -2261,7 +2261,7 @@ public sealed partial class BehaviorTrial : ModSystem
                 observations["inventory_open"] = Main.playerInventory;
                 return true;
             });
-            observations["first"] = await Call("craft", new JsonObject { ["name"] = "ThornChakram" });
+            observations["first"] = await Call("craft_into_inventory", new JsonObject { ["name"] = "ThornChakram" });
             if (Environment.GetEnvironmentVariable("TB_CRAFT_ADJ_EXPECT_FIXED") == "1")
             {
                 Vector2 position = default;
@@ -2295,7 +2295,7 @@ public sealed partial class BehaviorTrial : ModSystem
                 observations["adj_refreshed"] = Main.LocalPlayer.adjTile[TileID.Anvils];
                 return true;
             });
-            observations["second"] = await Call("craft", new JsonObject { ["name"] = "ThornChakram" });
+            observations["second"] = await Call("craft_into_inventory", new JsonObject { ["name"] = "ThornChakram" });
             File.WriteAllText(Path.Combine(Main.SavePath, "craft-adjacency.json"), observations.ToJsonString());
             if (observations["first"]["error"]?.ToString() != "item_not_found"
                 || observations["adj_before"].GetValue<bool>() || !observations["adj_refreshed"].GetValue<bool>()
@@ -3753,7 +3753,7 @@ public sealed partial class BehaviorTrial : ModSystem
             ["items"] = new JsonArray(new JsonObject { ["item_type"] = ItemID.WoodenBow, ["count"] = 1 },
                 new JsonObject { ["item_type"] = ItemID.WoodenArrow, ["count"] = 50 }) };
         string script = "const input=" + input.ToJsonString() + ";\n" + """
-            const bench=tool('craft',{name:'WorkBench'});
+            const bench=tool('craft_into_inventory',{name:'WorkBench'});
             if(bench.ok!==true)throw new Error(JSON.stringify(bench));
             const placed=tool('place_at',{item:'36',...input.station,local:true});
             if(placed.ok!==true)throw new Error(JSON.stringify(placed));
@@ -3858,7 +3858,7 @@ public sealed partial class BehaviorTrial : ModSystem
         var clock = Stopwatch.StartNew();
         string script = "const target=" + target.ToJsonString() + ";" + """
             let evasion=null;
-            const bench=tool('craft',{name:'WorkBench'});
+            const bench=tool('craft_into_inventory',{name:'WorkBench'});
             if(!bench.ok)throw new Error(JSON.stringify(bench));
             on('tick',event=>{
               if(event.execution?.tool==='place_at'&&!evasion
@@ -3897,7 +3897,7 @@ public sealed partial class BehaviorTrial : ModSystem
     {
         var target = new JsonObject { ["x"] = x + 10, ["y"] = floor - 1, ["mode"] = "stand" };
         var args = new JsonObject { ["workflow"] = "native-cancelled-navigation", ["code"] =
-            "step('bench',()=>tool('craft',{name:'WorkBench'}));return step('route',()=>tool('nav_to',"
+            "step('bench',()=>tool('craft_into_inventory',{name:'WorkBench'}));return step('route',()=>tool('nav_to',"
             + target.ToJsonString() + "));" };
         using var cancellation = new CancellationTokenSource();
         var clock = Stopwatch.StartNew();
@@ -6977,10 +6977,10 @@ public sealed partial class BehaviorTrial : ModSystem
         });
         if (Environment.GetEnvironmentVariable("TB_PLACEMENT_SITE_TRIAL") == "1")
         {
-            await Call("craft",new JsonObject { ["name"]="WorkBench",["amount"]=1 });
+            await Call("craft_into_inventory",new JsonObject { ["name"]="WorkBench",["amount"]=1 });
             var placementClock=Stopwatch.StartNew();
             var result=await Call("place_at",new JsonObject { ["item"]="36" });
-            var sword=await Call("craft",new JsonObject { ["name"]="WoodenSword",["amount"]=1 });
+            var sword=await Call("craft_into_inventory",new JsonObject { ["name"]="WoodenSword",["amount"]=1 });
             var proof=new JsonObject { ["placement_ms"]=placementClock.ElapsedMilliseconds,
                 ["placement"]=result.DeepClone(),["craft"]=sword.DeepClone() };
             File.WriteAllText(Path.Combine(Main.SavePath,"placement-site-native.json"),proof.ToJsonString());
@@ -8190,7 +8190,7 @@ public sealed partial class BehaviorTrial : ModSystem
                         const benchType=resolve('WorkBench');
                         const benchRecipe=tool('recipe',{name:'WorkBench'}).recipes.find(r=>r.internal==='WorkBench');
                         if(!benchRecipe?.can_craft_now) tool('decision_point',{reason:'No available workbench recipe; retain material plan and find a station'});
-                        requireResult(tool('craft',{name:'WorkBench'}));
+                        requireResult(tool('craft_into_inventory',{name:'WorkBench'}));
                         const bench=inventory(benchType);
                         if(!bench) throw new Error('crafted workbench missing from inventory');
                         const benchInfo=tool('item_info',{slot:bench.slot});
@@ -8240,7 +8240,7 @@ public sealed partial class BehaviorTrial : ModSystem
                           const type=resolve(name);
                           const recipe=tool('recipe',{name}).recipes.find(r=>r.internal===name);
                           if(!recipe?.can_craft_now) tool('decision_point',{reason:'Equipment recipe unavailable at current station: '+name});
-                          requireResult(tool('craft',{name}));
+                          requireResult(tool('craft_into_inventory',{name}));
                           const item=inventory(type), previous=tool('equipment_list').find(i=>i.slot===slot);
                           if(!item) throw new Error('crafted equipment missing: '+name);
                           requireResult(tool('equip_item',{inventory_slot:item.slot,equipment_slot:slot,expected_inventory:item,expected_equipment:previous}));
@@ -8720,7 +8720,7 @@ public sealed partial class BehaviorTrial : ModSystem
                           current=recipe();
                         }
                         if(!current.can_craft_now) tool('decision_point',{reason:'Station arrival did not make recipe craftable',evidence:{recipe:current}});
-                        const made=tool('craft',{name:current.internal});
+                        const made=tool('craft_into_inventory',{name:current.internal});
                         if(made.error||made.ok===false) throw new Error(JSON.stringify(made));
                         const verified=tool('task_step',{id:'crafted',action:'verify'});
                         const inventory=tool('get_state').inventory_slots;

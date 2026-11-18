@@ -1740,17 +1740,18 @@ static class RuntimeTests
             AgentTools.Watches.Reset();
         }
         var beforeCompactHandler = HttpServerSystem.Handler;
+        var beforeCompactCraft = CraftCoordinator.Handler;
         try
         {
             var nodes = new JsonArray();
             for (int i = 0; i < 8; i++) nodes.Add(new JsonObject { ["id"] = "bounded" + i,
                 ["description"] = "retain node program " + i,
                 ["depends_on"] = i == 0 ? new JsonArray() : new JsonArray("bounded" + (i - 1)),
-                ["script"] = i == 0 ? "return step('craft_once',()=>tool('craft',{name:'WorkBench'}));"
+                ["script"] = i == 0 ? "return step('craft_once',()=>tool('craft_into_inventory',{item_type:36}));"
                     : "const saved='" + new string('x', 2000) + "'; return saved.length;",
                 ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "permanent_health", ["count"] = 1000 }) });
             AgentTools.Plan.Create(new JsonObject { ["goal"] = "bounded successful tool facts", ["mode"] = "dag", ["steps"] = nodes }, _ => 0);
-            HttpServerSystem.Handler = (_, _) => (200, "{\"ok\":true,\"crafted\":1}");
+            CraftCoordinator.Handler = (_, _) => 1;
             var compactRun = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
                 new JsonObject { ["task_node"] = "bounded0", ["event_delivery"] = "script" }, default)));
             Check(compactRun["ok"].GetValue<bool>() && compactRun["value"]["crafted"].GetValue<int>() == 1
@@ -1762,7 +1763,7 @@ static class RuntimeTests
             Check(retainedPlan["steps"].AsArray().Count == 8 && retainedPlan["steps"][1]["script"].ToString().Contains(new string('x', 2000)),
                 "compact action result erased the full plan available to explicit observation");
         }
-        finally { HttpServerSystem.Handler = beforeCompactHandler; AgentTools.Plan.Reset(); AgentTools.Watches.Reset(); }
+        finally { HttpServerSystem.Handler = beforeCompactHandler; CraftCoordinator.Handler = beforeCompactCraft; AgentTools.Plan.Reset(); AgentTools.Watches.Reset(); }
         int invalidCalls = 0, invalidStops = 0;
         bool previousDead = Game.LocalPlayer.dead;
         var beforeDeathSnapshot = HttpServerSystem.LatestSnapshot;
@@ -2379,17 +2380,16 @@ static class RuntimeTests
 
             Game.LocalPlayer.inventory[0].Name = "木材";
             Game.LocalPlayer.inventory[0].stack = 20;
-            HttpServerSystem.Handler = (path, payload) =>
+            CraftCoordinator.Handler = (type, amount) =>
             {
-                Check(path == "/craft", "unexpected craft endpoint");
-                var args = JsonNode.Parse(payload);
-                Check(args["item_name"].ToString() == "工作台" && args["amount"].GetValue<int>() == 1, "craft arguments changed");
+                Check(type == 36 && amount == 1, "craft arguments changed");
                 Game.LocalPlayer.inventory[0].stack = 10;
                 Game.LocalPlayer.inventory[1].Name = "工作台";
                 Game.LocalPlayer.inventory[1].stack = 1;
-                return (200, "{\"ok\":true}");
+                return 1;
             };
-            var crafted = JsonNode.Parse(await Execute(AgentTools.Execute("craft", new JsonObject { ["name"] = "工作台" }, default)));
+            var crafted = JsonNode.Parse(await Execute(AgentTools.Execute("craft_into_inventory", new JsonObject { ["item_type"] = 36 }, default)));
+            CraftCoordinator.Handler = null;
             Check(crafted["got"]["工作台"].GetValue<int>() == 1 && crafted["lost"]["木材"].GetValue<int>() == 10, "tool result did not measure inventory delta");
             Check(crafted["state"]["pos"]["x"].GetValue<int>() == 12 && crafted["state"]["pos"]["y"].GetValue<int>() == 34, "tool position is not taken from player origin");
             Console.WriteLine("PASS: craft adapter reports measured inventory delta and player origin");
@@ -4072,9 +4072,9 @@ static class RuntimeTests
                 steps.Add(new JsonObject { ["id"] = id, ["description"] = id, ["depends_on"] = new JsonArray(),
                     ["script"] = source, ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "permanent_health", ["count"] = 9999 }) });
             AgentTools.Plan.Create(new JsonObject { ["goal"] = "retain failure facts without repeated scripts", ["mode"] = "dag", ["steps"] = steps }, AgentTaskEvidence.Measure);
-            HttpServerSystem.Handler = (_, _) => (200, "{\"error\":\"fixture_blocked\",\"outcome\":\"no_progress\",\"crafted\":0,\"wanted\":1}");
+            CraftCoordinator.Handler = (_, _) => { CraftCoordinator.LastStop = "fixture_blocked"; return 0; };
             var response = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject {
-                ["task_node"] = "a", ["tool"] = "craft", ["args"] = new JsonObject { ["name"] = "fixture" } }, default)));
+                ["task_node"] = "a", ["tool"] = "craft_into_inventory", ["args"] = new JsonObject { ["item_type"] = 36 } }, default)));
             Check(response["value"]?["error"]?.ToString() == "fixture_blocked" && response["output_limit"] == null
                 && response["value"]["crafted"]?.GetValue<int>() == 0 && response["value"]["wanted"]?.GetValue<int>() == 1,
                 "failure query overflow hid the actual failed action: " + response);
@@ -4084,7 +4084,7 @@ static class RuntimeTests
                 && AgentTools.Plan.Incomplete, "failure payload lost the full host plan or completed an unverified goal");
             Console.WriteLine("PASS: failed actions retain failure facts and host scripts without overflowing returned DAG text; chars=" + response.ToJsonString().Length);
         }
-        finally { HttpServerSystem.Handler = previous; AgentTools.Plan.Reset(); AgentTools.Watches.Reset(); }
+        finally { HttpServerSystem.Handler = previous; CraftCoordinator.Handler = null; CraftCoordinator.LastStop = "no_recipe"; AgentTools.Plan.Reset(); AgentTools.Watches.Reset(); }
     }
 
     static async Task TestToolFailureEvidence()
@@ -4094,11 +4094,11 @@ static class RuntimeTests
             """).AsObject(), default));
         try
         {
-            HttpServerSystem.Handler = (_, _) => throw new IOException("fixture dispatch failed");
-            var result = JsonNode.Parse(await Execute(AgentTools.Execute("craft", new JsonObject { ["name"] = "fixture" }, default)));
+            CraftCoordinator.Handler = (_, _) => throw new IOException("fixture dispatch failed");
+            var result = JsonNode.Parse(await Execute(AgentTools.Execute("craft_into_inventory", new JsonObject { ["item_type"] = 36 }, default)));
             Check(result["error"]?.ToString() == "tool_exception" && result["detail"].ToString().Contains("fixture dispatch failed"),
                 "tool exception was not returned with actionable detail");
-            Check(result["task_plan"]["steps"][0]["blocking_evidence"]["tool"].ToString() == "craft", "tool exception evidence not retained in plan");
+            Check(result["task_plan"]["steps"][0]["blocking_evidence"]["tool"].ToString() == "craft_into_inventory", "tool exception evidence not retained in plan");
             await Execute(AgentTools.Execute("task_step", new JsonObject { ["id"] = "health", ["action"] = "block", ["reason"] = "fixture dispatch failed" }, default));
             int stops = 0;
             HttpServerSystem.Handler = (path, _) =>
@@ -4132,11 +4132,11 @@ static class RuntimeTests
                 "rejected cleanup was reported as successful");
             string before = AgentTools.Plan.Snapshot().ToJsonString();
             using var cancel = new CancellationTokenSource(); cancel.Cancel();
-            try { await Execute(AgentTools.Execute("craft", new JsonObject { ["name"] = "stale action" }, cancel.Token)); throw new Exception("cancelled tool ran"); }
+            try { await Execute(AgentTools.Execute("craft_into_inventory", new JsonObject { ["name"] = "stale action" }, cancel.Token)); throw new Exception("cancelled tool ran"); }
             catch (OperationCanceledException) { }
             Check(AgentTools.Plan.Snapshot().ToJsonString() == before, "cancelled tool contaminated task evidence");
         }
-        finally { HttpServerSystem.Handler = null; AgentTools.Plan.Reset(); }
+        finally { HttpServerSystem.Handler = null; CraftCoordinator.Handler = null; AgentTools.Plan.Reset(); }
         Console.WriteLine("PASS: tool exceptions retain evidence and stop failed polling actions; cleanup errors remain visible and cancellation stays cancellation");
     }
 

@@ -117,7 +117,7 @@ public sealed class ScriptLibrary
               }
               if(!available.recipes?.some(r=>r.can_craft_now===true))
                 return {status:'needs_review',error:'recipe_not_available',item,completed,evidence:available};
-              const made=tool('craft',{name,amount:item.count-before});
+              const made=tool('craft_into_inventory',{name,amount:item.count-before});
               const actual=counts()[item.item_type]??0;
               if(actual<item.count)return {status:'needs_review',error:made.error??'craft_target_not_met',item,actual,completed,evidence:made};
               completed.push({item_type:item.item_type,actual,gained:actual-before,...(approach?{approach}:{})});

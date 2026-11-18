@@ -382,6 +382,19 @@ namespace Terraria.ModLoader
 }
 namespace TerraBlind
 {
+    public static class CraftCoordinator
+    {
+        public static Func<int, int, int> Handler;
+        public static string LastStop = "no_recipe";
+        public static int LastOverflow;
+        public static int Craft(int item, int amount) => Handler?.Invoke(item, amount) ?? 0;
+    }
+    public static class ModInputSystem
+    {
+        public static JsonObject List(string mod, int offset) => new() { ["keys"] = new JsonArray() };
+        public static Task<JsonObject> Press(string key, int frames, CancellationToken token)
+            => Task.FromResult(new JsonObject { ["ok"] = true, ["key"] = key, ["frames"] = frames, ["outcome"] = "dispatched" });
+    }
     public static class TerrainMap
     {
         public static JsonObject Read(JsonObject args) => new() { ["stub"] = true };

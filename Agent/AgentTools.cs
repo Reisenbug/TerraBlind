@@ -964,7 +964,7 @@ public static partial class AgentTools
         var result = JsonNode.Parse(response.Body) as JsonObject
             ?? throw new InvalidOperationException($"{path} 未返回 JSON 对象。");
         if (response.Status >= 400 && result["error"] == null) result["error"] = $"status {response.Status}";
-        if (response.Status < 400 && path is "/swap" or "/quick_heal" or "/craft")
+        if (response.Status < 400 && path is "/swap" or "/quick_heal")
             WorldFramesRequired = Math.Max(WorldFramesRequired, 2);
         return result;
     }, token);
@@ -1284,7 +1284,7 @@ public static partial class AgentTools
         or "find_descent" or "find_biome"
         or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "jev_judge" or "item_info" or "wiki_search" or "wiki_page"
         or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status" or "action_query"
-        or "find_descent" or "descent_route" or "slot_state" or "craft_recipes";
+        or "find_descent" or "descent_route" or "slot_state" or "craft_recipes" or "mod_input_list";
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
     {
         long id = Interlocked.Increment(ref invocationSequence);
@@ -1337,9 +1337,9 @@ public static partial class AgentTools
                 ["state_after_respawn"] = JsonNode.Parse(await State(token)) }.ToJsonString();
         }
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
-            or "place_at" or "act" or "interact" or "loot_all" or "craft" or "inventory_swap" or "combat_reposition"
+            or "place_at" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap" or "combat_reposition"
             or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat"
-            or "slot_click" or "game_input" or "craft_recipe" or "housing";
+            or "slot_click" or "game_input" or "craft_recipe" or "housing" or "mod_input";
         bool action = external || name is "fight" or "fight_player";
         bool startsPrimary = name == "action_start" && Text(args, "tool") != "fight";
         if ((external || startsPrimary) && string.IsNullOrEmpty(taskNode)
@@ -2344,6 +2344,11 @@ public static partial class AgentTools
             case "game_input":
                 result = await NativeAgent.OnMain(() => ApplyGameInput(args), token);
                 break;
+            case "mod_input_list":
+                return (await NativeAgent.OnMain(() => ModInputSystem.List(Text(args, "mod"), Int(args, "offset")), token)).ToJsonString();
+            case "mod_input":
+                result = await ModInputSystem.Press(Text(args, "key"), Int(args, "frames", 1), token);
+                break;
             case "craft_recipes":
                 return (await NativeAgent.OnMain(() => CraftAtCursor(args, execute: false), token)).ToJsonString();
             case "craft_recipe":
@@ -2683,13 +2688,28 @@ public static partial class AgentTools
             case "loot_all":
                 result = await NativeAgent.OnMain(HttpServerSystem.LootOpenChest, token);
                 break;
-            case "craft":
-                var craftArgs = new JsonObject { ["item_name"] = Text(args, "name"), ["amount"] = Int(args, "amount", 1) };
-                var matches = await NativeAgent.OnMain(() => ItemCatalog(Text(args, "name")), token);
-                var itemIds = matches["matches"].AsArray().Where(m => m["exact"]?.GetValue<bool>() == true)
-                    .Select(m => m["type"].GetValue<int>()).Distinct().ToArray();
-                if (itemIds.Length == 1) craftArgs["item_id"] = itemIds[0];
-                result = await Call("/craft", craftArgs, token);
+            case "craft_into_inventory":
+                result = await NativeAgent.OnMain(() =>
+                {
+                    int amount = Int(args, "amount", 1);
+                    if (amount is < 1 or > 9999) return new JsonObject { ["error"] = "invalid_craft_amount" };
+                    int type = Int(args, "item_type");
+                    if (type == 0)
+                    {
+                        var matches = ItemCatalog(Text(args, "name"));
+                        var ids = matches["matches"].AsArray().Where(m => m["exact"]?.GetValue<bool>() == true)
+                            .Select(m => m["type"].GetValue<int>()).Distinct().ToArray();
+                        if (ids.Length != 1) return new JsonObject { ["error"] = "craft_item_unresolved", ["matches"] = matches["matches"].DeepClone() };
+                        type = ids[0];
+                    }
+                    if (type < 1 || type >= Terraria.ModLoader.ItemLoader.ItemCount)
+                        return new JsonObject { ["error"] = "invalid_craft_item" };
+                    int crafted = CraftCoordinator.Craft(type, amount);
+                    if (crafted > 0) WorldFramesRequired = Math.Max(WorldFramesRequired, 2);
+                    return new JsonObject { ["ok"] = crafted >= amount, ["crafted"] = crafted, ["wanted"] = amount,
+                        ["cursor_remainder"] = CraftCoordinator.LastOverflow, ["stop"] = CraftCoordinator.LastStop,
+                        ["error"] = crafted >= amount ? null : crafted > 0 ? "partial" : CraftCoordinator.LastStop };
+                }, token);
                 break;
             case "act":
                 bool cursorInput = args["expected_cursor"] is JsonObject;
