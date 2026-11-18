@@ -959,6 +959,12 @@ static class ScriptTests
                 programs: library.Callable());
             Check(custom["ok"].GetValue<bool>() && custom["value"]["reason"].ToString() == "custom_policy",
                 "saved recovery revision did not replace its built-in implementation: " + custom);
+            var pinned = await AgentScript.Run("return skill('recover_navigation',0,{error:'source_unavailable'});", 5,
+                (_, _) => { }, (_, _, _) => throw new Exception("uncovered recovery unexpectedly called a tool"),
+                _ => Task.CompletedTask, default, programs: library.Callable());
+            Check(pinned["ok"].GetValue<bool>() && pinned["value"]["reason"].ToString() == "uncovered_failure"
+                && pinned["skill_calls"][0]["revision"].GetValue<int>() == 0,
+                "a saved recovery revision invalidated the built-in revision pinned by a prepared script: " + pinned);
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
         Console.WriteLine("PASS: navigation recovery verifies actual removal, respects hazards and supports immediate use or saved replacement");

@@ -348,7 +348,7 @@ public sealed class ScriptLibrary
             return false;
             """);
         if (name == "recover_navigation") return Template(name,
-            "内置局部恢复技能，可直接调用revision=0。input含error、tile或traps、allow_trigger_removal。核对近身非实心接触伤害物或获准拆除的压力板，使用实际镐子并验证方块变化；retry只在修复验证后返回true。保存同名修订可替换实现，调用时取当前revision。",
+            "内置局部恢复技能，可直接调用revision=0。input含error、tile或traps、allow_trigger_removal。核对近身非实心接触伤害物或获准拆除的压力板，使用实际镐子并验证方块变化；retry只在修复验证后返回true。需要同名自定义实现时，用script_program get读取其revision。",
             """
             const contact=input.error==='navigation_contact_escape';
             const targets=contact?(input.tile?[input.tile]:[]):input.traps??[];
@@ -1231,7 +1231,13 @@ public sealed class ScriptLibrary
             return new JsonArray(BuiltIns.Concat(Directory.Exists(directory)
                 ? Directory.EnumerateFiles(directory, "*.json").Select(Path.GetFileNameWithoutExtension)
                 : Enumerable.Empty<string>()).Distinct().OrderBy(name => name)
-                .Select(name => (JsonNode)Get(name, includeRuntime: false)).ToArray());
+                .Select(name =>
+                {
+                    var program = Get(name, includeRuntime: false);
+                    if (program["revision"].GetValue<int>() > 0 && BuiltIns.Contains(name))
+                        program["builtin_code"] = Example(name)["code"].DeepClone();
+                    return (JsonNode)program;
+                }).ToArray());
     }
 
     public void RecordCalls(JsonArray calls, string world)

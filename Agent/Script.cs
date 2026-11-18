@@ -678,7 +678,7 @@ public static class AgentScript
                     ((reactions.Handling ? handlerProgress : progress) ?? throw new InvalidOperationException("step需要run_script.workflow。 ")).Enter(id).ToJsonString()));
                 engine.SetValue("__stepComplete", new Action<string, string>((id, json) =>
                     (reactions.Handling ? handlerProgress : progress).Complete(id, JsonNode.Parse(json)?["value"])));
-                engine.SetValue("__skillEnter", new Func<string, string, string, int>((name, input, key) =>
+                engine.SetValue("__skillEnter", new Func<string, int, string, string, int>((name, revision, input, key) =>
                 {
                     budget.Token.ThrowIfCancellationRequested();
                     int count = reactions.Handling ? ++handlerSkillCalls : ++mainSkillCalls;
@@ -686,9 +686,10 @@ public static class AgentScript
                     if (input.Length > 8000) throw hostFailure = new InvalidOperationException($"技能input为{input.Length}字符，上限8000字符。");
                     if (skillCalls.Count >= 64 && skillCalls.All(call => call["status"]?.ToString() != "running")) skillCalls.Clear();
                     var saved = skills[name];
-                    skillCalls.Add(new JsonObject { ["name"] = name, ["revision"] = saved["revision"].DeepClone(),
+                    string executedCode = revision == saved["revision"].GetValue<int>() ? saved["code"].ToString() : saved["builtin_code"].ToString();
+                    skillCalls.Add(new JsonObject { ["name"] = name, ["revision"] = revision,
                         ["source_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-                            System.Text.Encoding.UTF8.GetBytes(saved["code"].ToString()))),
+                            System.Text.Encoding.UTF8.GetBytes(executedCode))),
                         ["input"] = JsonNode.Parse(input), ["key"] = key, ["status"] = "running",
                         ["started_ms"] = clock.ElapsedMilliseconds, ["tool_calls_before"] = calls });
                     return skillCalls.Count - 1;
@@ -703,15 +704,20 @@ public static class AgentScript
                 }));
                 string skillSource = string.Join(",", skills.Select(pair =>
                 {
-                    string code = pair.Value["code"].ToString();
-                    try { Engine.PrepareScript(ScriptLibrary.FunctionSource(code)); }
-                    catch (ScriptPreparationException error)
+                    string BuildFunction(string code, int revision)
                     {
-                        code = "throw new Error(" + System.Text.Json.JsonSerializer.Serialize(
-                            $"program_invalid_syntax: {pair.Key} revision={pair.Value["revision"]}: {error.Message}") + ");";
+                        try { Engine.PrepareScript(ScriptLibrary.FunctionSource(code)); }
+                        catch (ScriptPreparationException error)
+                        {
+                            code = "throw new Error(" + System.Text.Json.JsonSerializer.Serialize(
+                                $"program_invalid_syntax: {pair.Key} revision={revision}: {error.Message}") + ");";
+                        }
+                        return "function(input){\n" + code + "\n}";
                     }
-                    return System.Text.Json.JsonSerializer.Serialize(pair.Key) + ":{revision:" + pair.Value["revision"]
-                        + ",run:function(input){\n" + code + "\n}}";
+                    int revision = pair.Value["revision"].GetValue<int>();
+                    string builtin = pair.Value["builtin_code"] is JsonValue code ? ",builtin:" + BuildFunction(code.ToString(), 0) : "";
+                    return System.Text.Json.JsonSerializer.Serialize(pair.Key) + ":{revision:" + revision
+                        + ",run:" + BuildFunction(pair.Value["code"].ToString(), revision) + builtin + "}";
                 }));
                 string wrapper = """
                     (function(call, log, enter, complete, enterSkill, exitSkill, register, setHandling, setIntent, setNavigationCondition) {
@@ -811,13 +817,14 @@ public static class AgentScript
                         const skill = (name, revision, input = {}, key = name) => {
                             if (!Object.hasOwn(programs, name)) throw new Error('unknown_saved_skill: ' + name);
                             const program = programs[name];
-                            if (program.revision !== revision) throw new Error('program_revision_conflict: ' + name + ' actual=' + program.revision);
+                            const run = program.revision === revision ? program.run : revision === 0 ? program.builtin : null;
+                            if (!run) throw new Error('program_revision_conflict: ' + name + ' actual=' + program.revision);
                             if (typeof key !== 'string' || !key.length) throw new Error('skill key needs a stable nonempty string');
                             const previous = stepPrefix;
                             stepPrefix += key + '/';
-                            const index = enterSkill(name, stringify(input), stepPrefix);
+                            const index = enterSkill(name, revision, stringify(input), stepPrefix);
                             try {
-                                const value = program.run(input);
+                                const value = run(input);
                                 if (value && typeof value.then === 'function') throw new Error('skill不支持Promise');
                                 const facts = {};
                                 if (value && typeof value === 'object')
