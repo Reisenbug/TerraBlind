@@ -50,7 +50,12 @@ public static class PvpInventory
                 if (click && args["expected_container"]?.GetValue<int>() != player.chest)
                     return new JsonObject { ["error"] = "container_changed", ["container"] = player.chest };
                 ChestUI.GetContainerUsageInfo(out _, out slots);
-                context = player.chest >= 0 ? ItemSlot.Context.ChestItem : ItemSlot.Context.BankItem;
+                context = player.chest switch
+                {
+                    >= 0 => ItemSlot.Context.ChestItem,
+                    -5 => ItemSlot.Context.VoidItem,
+                    _ => ItemSlot.Context.BankItem
+                };
                 break;
             case "trash" when index == 0: slots = new[] { player.trashItem }; context = ItemSlot.Context.TrashItem; break;
             default: return new JsonObject { ["error"] = "invalid_slot_address" };

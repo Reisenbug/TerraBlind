@@ -57,7 +57,7 @@ namespace Terraria.UI
         public static class Context
         {
             public const int InventoryItem = 0, InventoryCoin = 1, InventoryAmmo = 2, ChestItem = 3, BankItem = 4;
-            public const int TrashItem = 6, EquipArmor = 8, EquipArmorVanity = 9, EquipAccessory = 10, EquipAccessoryVanity = 11;
+            public const int TrashItem = 6, EquipArmor = 8, EquipArmorVanity = 9, EquipAccessory = 10, EquipAccessoryVanity = 11, VoidItem = 32;
         }
         public static Action<Terraria.Item[], int, int> LeftClickHandler;
         public static void LeftClick(Terraria.Item[] items, int context, int slot) => LeftClickHandler?.Invoke(items, context, slot);
@@ -97,6 +97,7 @@ namespace Terraria
         public static int maxNPCs = 20, maxItems = 20;
         public static Item mouseItem = new();
         public static bool mouseLeft, mouseLeftRelease, SmartCursorWanted_Mouse;
+        public static float GameZoomTarget = 1;
         public static Recipe[] recipe = Array.Empty<Recipe>();
         public static int[] availableRecipe = Array.Empty<int>();
         public static int numAvailableRecipes;
@@ -126,6 +127,9 @@ namespace Terraria
     public class Player
     {
         public int CurrentLoadoutIndex;
+        public int difficulty;
+        public void ToggleInv() => Main.playerInventory = !Main.playerInventory;
+        public void ToggleCreativeMenu() { }
         public void TrySwitchingLoadout(int index) => CurrentLoadoutIndex = index;
         public void QuickHeal() { }
         public void QuickMana() { }

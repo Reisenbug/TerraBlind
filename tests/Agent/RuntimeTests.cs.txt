@@ -4241,6 +4241,7 @@ static class RuntimeTests
         int selected = player.selectedItem;
         var storage = player.inventory[12];
         var http = HttpServerSystem.Handler;
+        int openedContainer = player.chest;
         var old = (Game.playerInventory, Game.mouseItem, Game.recipe, Game.availableRecipe, Game.numAvailableRecipes,
             Game.CraftHandler, Terraria.UI.ItemSlot.LeftClickHandler, Terraria.UI.ItemSlot.RightClickHandler);
         try
@@ -4300,6 +4301,24 @@ static class RuntimeTests
             var transformed = await Call("slot_click", args.ToJsonString());
             Check(transformed["after"]?["item"]?["type"]?.ToString() == "5360" && rightContext == Terraria.UI.ItemSlot.Context.InventoryItem,
                 "arbitrary vanilla right-click was incorrectly gated as bag opening");
+            player.chest = -5;
+            var containerAddress = """{"section":"container","slot":0}""";
+            var bankItem = Terraria.UI.ChestUI.FixtureBank[0];
+            try
+            {
+                observed = await Call("slot_state", containerAddress);
+                var voidClick = JsonNode.Parse(containerAddress).AsObject();
+                voidClick["button"] = "right";
+                voidClick["expected_container"] = -2;
+                voidClick["expected_item"] = observed["item"].DeepClone();
+                voidClick["expected_cursor"] = observed["cursor"].DeepClone();
+                var switched = await Call("slot_click", voidClick.ToJsonString());
+                Check(switched["error"]?.ToString() == "container_changed", "slot click accepted a changed container");
+                voidClick["expected_container"] = -5;
+                await Call("slot_click", voidClick.ToJsonString());
+                Check(rightContext == Terraria.UI.ItemSlot.Context.VoidItem, "void storage did not use its distinct native slot context");
+            }
+            finally { Terraria.UI.ChestUI.FixtureBank[0] = bankItem; }
             Console.WriteLine("PASS: native primitive adapters select a hotbar slot, craft onto the cursor, deposit by click and preserve slot identity");
         }
         finally
@@ -4307,6 +4326,7 @@ static class RuntimeTests
             (Game.playerInventory, Game.mouseItem, Game.recipe, Game.availableRecipe, Game.numAvailableRecipes,
                 Game.CraftHandler, Terraria.UI.ItemSlot.LeftClickHandler, Terraria.UI.ItemSlot.RightClickHandler) = old;
             HttpServerSystem.Handler = http;
+            player.chest = openedContainer;
             player.selectedItem = selected; player.inventory[12] = storage;
         }
     }

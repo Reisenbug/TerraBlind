@@ -107,6 +107,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_NATIVE_PRIMITIVES") == "1")
+        {
+            await NativePrimitives();
+            return;
+        }
         await OnMain(() =>
         {
             Config.I.AgentEnabled = true; Config.I.AiClient = false;
@@ -201,6 +206,43 @@ public sealed class ControlTrial : ModSystem
         });
         Console.WriteLine($"CONTROL_ASSERTIONS paused_handle={handle} sand_unchanged={sandBefore} explicit_move=true native_restart_rejected=true");
         Console.WriteLine("CONTROL_REGION_ASSERTIONS original_destination_reached=true rejected_excavation_not_repeated=true navigation_enabled=true");
+    }
+
+    async Task NativePrimitives()
+    {
+        await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            Manual.On = false;
+            AgentTools.NewTask();
+            var player = Main.LocalPlayer;
+            player.inventory[7].SetDefaults(ItemID.Wood);
+            player.inventory[7].stack = 10;
+            player.inventory[12].TurnToAir();
+            Main.mouseItem.TurnToAir();
+            return true;
+        });
+        var inventory = await Call("game_input", new JsonObject { ["action"] = "inventory", ["enabled"] = true });
+        Check(inventory["inventory_open"]?.GetValue<bool>() == true, "primitive_inventory_did_not_open");
+        var selected = await Call("game_input", new JsonObject { ["action"] = "hotbar", ["index"] = 7 });
+        Check(selected["selected_slot"]?.GetValue<int>() == 7, "primitive_hotbar_slot_not_selected");
+        var recipes = await Call("craft_recipes", new JsonObject { ["item_type"] = (int)ItemID.WorkBench });
+        Check(recipes["recipes"] is JsonArray { Count: > 0 }, "primitive_workbench_recipe_not_found");
+        var crafted = await Call("craft_recipe", new JsonObject
+        {
+            ["index"] = recipes["recipes"][0]["index"].DeepClone(), ["expected_type"] = (int)ItemID.WorkBench
+        });
+        Check(crafted["produced"]?.GetValue<int>() == 1 && await OnMain(() => Main.mouseItem.type == ItemID.WorkBench
+            && Main.LocalPlayer.inventory[7].IsAir), "primitive_native_craft_cursor_or_materials_incorrect");
+        var args = new JsonObject { ["section"] = "inventory", ["slot"] = 12 };
+        var state = await Call("slot_state", args);
+        args["button"] = "left";
+        args["expected_item"] = state["item"].DeepClone();
+        args["expected_cursor"] = state["cursor"].DeepClone();
+        var placed = await Call("slot_click", args);
+        Check(placed["outcome"]?.ToString() == "changed" && await OnMain(() => Main.mouseItem.IsAir
+            && Main.LocalPlayer.inventory[12].type == ItemID.WorkBench), "primitive_slot_click_did_not_transfer_crafted_item");
+        Console.WriteLine("NATIVE_PRIMITIVES_COMPLETE native_engine=true model_calls=0");
     }
 
     int CountSand()

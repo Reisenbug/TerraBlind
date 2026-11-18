@@ -862,10 +862,14 @@ public static partial class AgentTools
             case "hotbar" when index is >= 0 and < 10 && Main.mouseItem.IsAir: player.selectedItem = index; break;
             case "loadout" when index is >= 0 and < 3: player.TrySwitchingLoadout(index); break;
             case "inventory" when args["enabled"] != null:
-                if (!Bool(args, "enabled") && player.chest != -1) TreasureGrab.CloseChest();
-                Main.playerInventory = Bool(args, "enabled");
+                bool open = Bool(args, "enabled");
+                if (Main.playerInventory != open) player.ToggleInv();
+                if (Main.playerInventory != open) return new JsonObject { ["error"] = "inventory_toggle_intercepted" };
                 break;
             case "smart_cursor" when args["enabled"] != null: Main.SmartCursorWanted_Mouse = Bool(args, "enabled"); break;
+            case "journey_powers" when player.difficulty == 3: player.ToggleCreativeMenu(); break;
+            case "zoom" when args["zoom"] is JsonValue value && value.TryGetValue<float>(out var zoom) && zoom is >= 1 and <= 2:
+                Main.GameZoomTarget = zoom; break;
             case "quick_heal": player.QuickHeal(); break;
             case "quick_mana": player.QuickMana(); break;
             case "quick_buff": player.QuickBuff(); break;
@@ -873,7 +877,7 @@ public static partial class AgentTools
         }
         return new JsonObject { ["ok"] = true, ["action"] = action, ["selected_slot"] = player.selectedItem,
             ["loadout"] = player.CurrentLoadoutIndex, ["inventory_open"] = Main.playerInventory,
-            ["smart_cursor"] = Main.SmartCursorWanted_Mouse, ["health_delta"] = player.statLife - healthBefore,
+            ["smart_cursor"] = Main.SmartCursorWanted_Mouse, ["zoom"] = Main.GameZoomTarget, ["health_delta"] = player.statLife - healthBefore,
             ["mana_delta"] = player.statMana - manaBefore };
     }
 
