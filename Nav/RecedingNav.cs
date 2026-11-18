@@ -538,6 +538,11 @@ namespace TerraBlind
                     + $"{(hit ? "HIT" : $"MISS d=({dxc},{dyc})")}{(_lastPillar ? " pillar" : "")} "
                     + $"px={p.position.X:0.#},{p.position.Y:0.#} cols[{bl}..{br}] feet={feetRow} under={(under == "" ? "空" : under.Trim())}{gap}");
                 StateSpacePlanner.ReportEdge(f.Item1, f.Item2, t.Item1, t.Item2, cell.Item1, cell.Item2, _lastPillar);
+                if (!hit && StateSpacePlanner.RepeatedLanding(cell, f))
+                {
+                    RecoverNoProgress(p, cell, "repeated_missed_landing");
+                    return;
+                }
                 if (RecordAttempt(p, hit))
                 {
                     RecoverNoProgress(p, cell, "execution_missed");

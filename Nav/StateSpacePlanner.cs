@@ -2693,6 +2693,9 @@ namespace TerraBlind
             if (_recent.Count > RecentLen) _recent.RemoveAt(0);
         }
         static readonly System.Collections.Generic.List<(int, int)> _recent = new();
+        internal static bool RepeatedLanding((int, int) current, (int, int) other)
+            => current != other && _recent.Count >= 5 && _recent[^1] == current && _recent[^2] == other
+                && _recent[^3] == current && _recent[^4] == other && _recent[^5] == current;
         const int RecentLen = 6;              // how many past landings to remember for revisit detection
         const float RevisitPenalty = 12f;     // base penalty for an edge landing on a recently-visited cell; repeats double it (see ReportEdge)
         const float RevisitCap = 200f;        // escalation ceiling = one shock's worth, revisit alone can do what a shock did, but no more
@@ -2978,28 +2981,24 @@ namespace TerraBlind
                 }
             }
             (int, int)? shuttleReturn = null;
-            if (best != null && _recent.Count >= 5)
+            var current = (curCx, curCy);
+            if (best != null && RepeatedLanding(current, bestCell))
             {
-                var current = (curCx, curCy);
-                if (bestCell != current && _recent[^1] == current && _recent[^2] == bestCell
-                    && _recent[^3] == current && _recent[^4] == bestCell && _recent[^5] == current)
+                var repeated = bestCell;
+                float alternateScore = float.MaxValue;
+                foreach (var candidate in jigglePool)
                 {
-                    var repeated = bestCell;
-                    float alternateScore = float.MaxValue;
-                    foreach (var candidate in jigglePool)
-                    {
-                        if (candidate.cell == repeated) continue;
-                        float score = candidate.total
-                            + (RiskLayer.Enabled ? RiskLayer.Penalty(p, curCx, curCy, candidate.cell.Item1, candidate.cell.Item2) : 0);
-                        if (score >= alternateScore) continue;
-                        alternateScore = score;
-                        best = candidate.edge; bestCell = candidate.cell; bestTotal = score;
-                    }
-                    if (bestCell != repeated)
-                    {
-                        shuttleReturn = repeated;
-                        DiagLog.Write($"[recede-break-shuttle] from={current} repeated={repeated} alternate={bestCell}");
-                    }
+                    if (candidate.cell == repeated) continue;
+                    float score = candidate.total
+                        + (RiskLayer.Enabled ? RiskLayer.Penalty(p, curCx, curCy, candidate.cell.Item1, candidate.cell.Item2) : 0);
+                    if (score >= alternateScore) continue;
+                    alternateScore = score;
+                    best = candidate.edge; bestCell = candidate.cell; bestTotal = score;
+                }
+                if (bestCell != repeated)
+                {
+                    shuttleReturn = repeated;
+                    DiagLog.Write($"[recede-break-shuttle] from={current} repeated={repeated} alternate={bestCell}");
                 }
             }
             if (best != null && AgentNavigationIntent.RevisionFor(goalWx, goalWy) != 0)

@@ -1663,6 +1663,26 @@ public sealed class Driver : ModSystem
             {
                 case 0:
                     Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                    if (Environment.GetEnvironmentVariable("TB_NATIVE_SHUTTLE_CHECK") == "1")
+                    {
+                        var repeated = typeof(StateSpacePlanner).GetMethod("RepeatedLanding", BindingFlags.Static | BindingFlags.NonPublic);
+                        var current = (1243, 532);
+                        var other = (1243, 533);
+                        StateSpacePlanner.ResetLineProgress();
+                        for (int index = 0; index < 5; index++)
+                        {
+                            var landed = index % 2 == 0 ? current : other;
+                            var from = landed == current ? other : current;
+                            StateSpacePlanner.ReportEdge(from.Item1, from.Item2, 1236, 532, landed.Item1, landed.Item2);
+                            Check((bool)repeated.Invoke(null, new object[] { landed, from }) == (index == 4),
+                                "missed route offsets did not detect exactly two repeated landings");
+                        }
+                        Check(!(bool)repeated.Invoke(null, new object[] { current, (1236, 532) }),
+                            "unvisited route endpoint was mistaken for a return");
+                        StateSpacePlanner.ResetLineProgress();
+                        Finish(true, "AGENT_NATIVE_SHUTTLE_CHECK model_calls=0");
+                        return;
+                    }
                     if (Environment.GetEnvironmentVariable("TB_MINING_INPUT_CHECK") == "1")
                     {
                         NavigationExecutionChecks.VerifyMiningReach();
