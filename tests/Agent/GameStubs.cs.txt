@@ -486,6 +486,7 @@ namespace TerraBlind
         public static Func<Terraria.Player, int, int, bool> InteractTest;
         public static bool CanInteract(Terraria.Player player, int x, int y) => InteractTest?.Invoke(player, x, y) ?? true;
         public static bool CanMine(Terraria.Player player, int x, int y) => MineTest?.Invoke(player, x, y) ?? true;
+        public static bool CanMine(Terraria.Player player, int x, int y, Terraria.Item item) => CanMine(player, x, y);
     }
     public static class TreasureGrab
     {

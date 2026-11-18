@@ -2522,6 +2522,27 @@ public static partial class AgentTools
                 result = await Call("/craft", craftArgs, token);
                 break;
             case "act":
+                if (args["steps"] is JsonArray { Count: 1 } directSteps && directSteps[0] is JsonObject direct
+                    && direct["at"] is JsonArray { Count: 2 } tileOffset && Bool(direct, "use")
+                    && direct["until"]?["frames"] is JsonValue && direct["rel"] == null
+                    && (direct["keys"] is null or JsonArray { Count: 0 }) && args["repeat"] == null)
+                {
+                    result = await NativeAgent.OnMain(() =>
+                    {
+                        var player = Main.LocalPlayer;
+                        int slot = Int(direct, "slot", player.selectedItem);
+                        if (player.dead || player.velocity != Microsoft.Xna.Framework.Vector2.Zero
+                            || slot < 0 || slot >= player.inventory.Length) return null;
+                        var item = player.inventory[slot];
+                        if (item == null || item.IsAir || item.pick <= 0 && item.axe <= 0 && item.hammer <= 0) return null;
+                        int x = ActExecutor.OriginCx(player) + tileOffset[0].GetValue<int>();
+                        int y = ActExecutor.OriginCy(player) + tileOffset[1].GetValue<int>();
+                        if (Reach.CanMine(player, x, y, item)) return null;
+                        return new JsonObject { ["outcome"] = "no_progress", ["reason"] = "cursor_out_of_reach",
+                            ["target"] = new JsonObject { ["x"] = x, ["y"] = y }, ["slot"] = slot };
+                    }, token);
+                    if (result != null) break;
+                }
                 JsonObject observation = null;
                 bool observe = Bool(args, "observe");
                 if (observe)

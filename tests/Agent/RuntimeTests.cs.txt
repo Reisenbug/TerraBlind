@@ -2956,6 +2956,7 @@ static class RuntimeTests
             await TestEventDelivery();
             await TestBackgroundBossObservation();
             await TestMineTerminalOutcomes();
+            await TestFixedMiningReach();
             await TestNavigationTerminalOutcomes();
             await TestMineVeinInventoryLoop();
             await TestContinuedReview();
@@ -4170,6 +4171,41 @@ static class RuntimeTests
             Game.LocalPlayer.itemAnimation = animation; Game.LocalPlayer.itemTime = itemTime;
         }
         Console.WriteLine("PASS: navigation completion is checked at the command boundary before checkpointing and subsequent effects");
+    }
+
+    static async Task TestFixedMiningReach()
+    {
+        var player = Game.LocalPlayer;
+        var item = player.inventory[1];
+        var velocity = player.velocity;
+        var reach = Reach.MineTest;
+        var handler = HttpServerSystem.Handler;
+        int dispatched = 0;
+        try
+        {
+            player.inventory[1] = new Terraria.Item { type = 3509, stack = 1, pick = 35 };
+            player.velocity = default;
+            Reach.MineTest = (_, _, _) => false;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/act") dispatched++;
+                return (200, "{\"outcome\":\"done\",\"active\":false}");
+            };
+            var args = JsonNode.Parse("""{"steps":[{"slot":1,"at":[-1,3],"use":true,"until":{"frames":90}}]}""").AsObject();
+            var rejected = JsonNode.Parse(await Execute(AgentTools.Execute("act", args, default)));
+            Check(rejected["reason"]?.ToString() == "cursor_out_of_reach" && dispatched == 0,
+                "fixed mining sent inputs to an unreachable tile: " + rejected);
+            args["steps"][0]["keys"] = new JsonArray("right");
+            var approaching = JsonNode.Parse(await Execute(AgentTools.Execute("act", args, default)));
+            Check(approaching["outcome"]?.ToString() == "done" && dispatched == 1,
+                "reach preflight rejected an approach with movement");
+            Console.WriteLine("PASS: fixed mining reports out-of-reach before dispatch and leaves moving steps intact");
+        }
+        finally
+        {
+            player.inventory[1] = item; player.velocity = velocity;
+            Reach.MineTest = reach; HttpServerSystem.Handler = handler;
+        }
     }
 
     static async Task TestMineTerminalOutcomes()
