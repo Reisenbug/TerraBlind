@@ -548,7 +548,7 @@ public static partial class AgentTools
         var value = receipt["value"] as JsonObject ?? receipt;
         if (value["wake"] != null || value["error"] != null) return null;
         var outcome = (value["blocked"] as JsonObject ?? value["collection"] as JsonObject ?? value)["outcome"]?.ToString();
-        if (outcome is not ("source_unavailable" or "source_area_exhausted")) return null;
+        if (outcome is not ("source_unavailable" or "source_area_exhausted" or "navigation_no_progress")) return null;
         var plan = Plan.Snapshot();
         var blocked = plan["steps"].AsArray().FirstOrDefault(step => step["id"]?.ToString() == node);
         if (blocked == null) return null;
@@ -572,13 +572,14 @@ public static partial class AgentTools
             try
             {
                 var args = new JsonObject { ["task_node"] = next };
+                JsonObject failedAction = null;
                 if (recovery != null)
                 {
-                    var failure = await Actions.Query(handle, 0, token);
+                    failedAction = await Actions.Query(handle, 0, token);
                     string recoveryWorkflow = await NativeAgent.OnMain(() =>
                     {
                         string id = Plan.Script(next)["workflow"] + "-recovery";
-                        report["failed_attempt"] = failure["attempt"]?.DeepClone();
+                        report["failed_attempt"] = failedAction["attempt"]?.DeepClone();
                         return id;
                     }, token);
                     recoveryProgress = new ScriptProgress();
@@ -619,7 +620,10 @@ public static partial class AgentTools
                     if (returned?["ok"]?.ToString() == "false" || returned?["value"] is JsonObject value
                         && (value["status"]?.ToString() is "yield" or "needs_review" || value["wake"] != null || value["error"] != null))
                     {
-                        if (!Actions.HasPrimaryControl && TryDeferNode(next, returned) is string sibling)
+                        var localFailure = returned?["value"] is JsonObject uncovered && uncovered["reason"]?.ToString() == "uncovered_failure"
+                            && uncovered["status"]?.ToString() == "needs_review" && uncovered["wake"] == null && uncovered["error"] == null
+                            ? failedAction?["result"] : returned;
+                        if (!Actions.HasPrimaryControl && TryDeferNode(next, localFailure) is string sibling)
                         {
                             pendingNode = sibling;
                             report["status"] = "deferred_to_ready_node";

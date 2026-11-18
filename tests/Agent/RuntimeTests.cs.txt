@@ -839,7 +839,7 @@ static class RuntimeTests
         var retained = AgentTools.Workflows.Keys.ToHashSet();
         try
         {
-            foreach (string outcome in new[] { "source_unavailable", "unsafe" })
+            foreach (string outcome in new[] { "source_unavailable", "navigation_no_progress", "unsafe" })
             {
                 AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask();
                 Game.LocalPlayer.statLifeMax = 100;
@@ -862,15 +862,21 @@ static class RuntimeTests
                     """).AsObject();
                 plan["steps"][0]["script"] = "tool('act',{steps:[{keys:['right'],until:{frames:1}}]});"
                     + "return {status:'yield',blocked:{outcome:'" + outcome + "'}};";
+                if (outcome == "navigation_no_progress")
+                    plan["steps"][0]["on_failure"] = "return {status:'needs_review',reason:'uncovered_failure'};";
                 AgentTools.Plan.Create(plan, _ => 0);
                 await Execute(AgentTools.Execute("run_script", new JsonObject { ["task_node"] = "resource", ["background"] = true }, default));
                 await PumpUntil(() => dispatches > 0 && !AgentTools.Actions.HasPrimaryControl);
                 AgentTools.ContinuePreparedNode(default);
-                if (outcome == "source_unavailable")
-                    await PumpUntil(() => AgentTools.Plan.Snapshot()["steps"][1]["status"]?.ToString() == "completed");
+                if (outcome != "unsafe")
+                    await PumpUntil(() =>
+                    {
+                        AgentTools.ContinuePreparedNode(default);
+                        return AgentTools.Plan.Snapshot()["steps"][1]["status"]?.ToString() == "completed";
+                    });
                 for (int i = 0; i < 8; i++) { AgentTools.ContinuePreparedNode(default); Agent.PostUpdateEverything(); await Task.Delay(5); }
                 var steps = AgentTools.Plan.Snapshot()["steps"];
-                Check(dispatches == (outcome == "source_unavailable" ? 2 : 1)
+                Check(dispatches == (outcome != "unsafe" ? 2 : 1)
                     && steps[0]["status"]?.ToString() != "completed" && steps[2]["status"]?.ToString() == "pending",
                     "deferred resource was replayed, lost, or allowed an unverified dependent: " + outcome);
             }
@@ -883,7 +889,7 @@ static class RuntimeTests
             Game.LocalPlayer.statLifeMax = health;
             HttpServerSystem.Handler = handler;
         }
-        Console.WriteLine("PASS: exhausted sources hand off to a ready sibling, preserve unmet dependents and leave unsafe failures for review");
+        Console.WriteLine("PASS: exhausted sources and unhandled route failures hand off to ready siblings, preserving unmet dependents and unsafe review");
     }
 
     static async Task TestPreparedFailureRecovery()
