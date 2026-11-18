@@ -2234,6 +2234,7 @@ namespace TerraBlind
         const float ProprioMismatchPx = 6f;   // per-frame predicted-vs-actual gap that flags a control anomaly
         const float TeleportPx = 160f;         // one-frame jump beyond any possible physics = teleport/yank → abort nav
         static int _replanCount;
+        static bool _recedingEdge;
         static bool _silentPath;   // suppress the full [ss-path] dump during replan (storms flood the log); the [ss-replan] summary line carries the delta instead
         const int MaxReplans = 40;
         static int _placeStall;
@@ -3368,6 +3369,7 @@ namespace TerraBlind
         // Main rendering/input, so this must run on the main thread; only Plan (above / in the bg task) is heavy.
         static void ExecDispatch(SSResult res, int targetWx, int targetWy, int goalWx, int goalWy, bool rolling)
         {
+            _recedingEdge = false;
             _lastExecResult = res;
             Visualize(res, targetWx, targetWy);
             DiagLog.Write($"[ss-plan] target=({targetWx},{targetWy}) final=({goalWx},{goalWy}) found={res.Found} partial={res.Partial} exp={res.Expansions} ms={res.Millis:0.#} steps={res.Steps.Count}");
@@ -3627,7 +3629,14 @@ namespace TerraBlind
 
         // 派发一个早先算好的计划(lookahead 在上一段执行时后台算的)。和 Execute 尾部相同但跳过规划。调用方已经验证过真实位置匹配。
         public static void DispatchPlan(SSResult res)
+            => DispatchPlan(res, recedingEdge: false);
+
+        internal static void DispatchRecedingEdge(SSResult res)
+            => DispatchPlan(res, recedingEdge: true);
+
+        static void DispatchPlan(SSResult res, bool recedingEdge)
         {
+            _recedingEdge = recedingEdge;
             // 【入口无条件打一条】。贪心选中的 bridge/place/dig 边派发之后什么都没发生
             // 桥没铺、平台没放、镐没挥,而 [ss-steps]/[mine] 一条日志都没有。
             // 断在 DispatchPlan 到执行器之间,推了三次都推错(BridgeBuilder/TickSteps/MineCoordinator),
@@ -3709,6 +3718,14 @@ namespace TerraBlind
         static bool Replan(string reason)
         {
             if (_replanPending) return true;   // a replan is already cooking; keep waiting
+            if (_recedingEdge && RecedingNav.Active)
+            {
+                _execFailCode = "local_edge_" + reason;
+                DiagLog.Write($"[ss-edge-reselect] reason={reason} goal=({_finalGoalWx},{_finalGoalWy})");
+                LegacyMovementLookahead.Reset();
+                StopExec(); StopSteps(); DiagLog.EndRun();
+                return true;
+            }
             if (_replanCount >= MaxReplans) { DiagLog.Write("[ss-replan] max replans hit → stop"); _execFailCode = "replan_storm"; return false; }
             _replanCount++;
             _replanReason = reason;

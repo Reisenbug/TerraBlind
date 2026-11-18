@@ -641,7 +641,7 @@ namespace TerraBlind
             _lastPillar = res.Steps.Count > 0 && res.Steps[0].Pillar;
             _lastLandPx = res.Steps.Count > 0 ? res.Steps[0].LandPx : 0f;
             _lastLandPy = res.Steps.Count > 0 ? res.Steps[0].LandPy : 0f;
-            StateSpacePlanner.DispatchPlan(res);
+            StateSpacePlanner.DispatchRecedingEdge(res);
             if (StateSpacePlanner.ExecRunning)
                 LegacyMovementLookahead.Start(Main.LocalPlayer, res, _goalWx, _goalWy);
         }
