@@ -525,6 +525,40 @@ static class GatherTests
             p.ZoneLihzhardTemple = false;
             action = await Pump(templeWorld.Act(npc, default));
             Check(action["error"]?.ToString() == "target_changed", "gather attacked a stale temple candidate after leaving");
+
+            var savedItem = p.inventory[20]; var savedTrash = p.trashItem;
+            agent.Load();
+            try
+            {
+                Main.item[0].active = false;
+                p.inventory[20] = new Item { type = 3, stack = 7 };
+                p.trashItem = new Item();
+                p.ItemSpaceHandler = _ => p.inventory[20].IsAir;
+                AgentTools.NewTask();
+                var script = AgentTools.Execute("run_script", new JsonObject { ["code"] = """
+                    on('inventory_full',event=>{
+                      if(event.execution.phase!=='capacity_blocked')return {handled:false};
+                      const result=tool('inventory_trash',{slot:20,expected:{type:3,prefix:0,stack:7},expected_trash:{type:0,prefix:0,stack:0}});
+                      return {handled:result.ok===true};
+                    });
+                    return tool('gather',{targets:[{item_type:191,count:1}]});
+                    """ }, default);
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (!script.IsCompleted)
+                {
+                    Check(clock.Elapsed.TotalSeconds < 6, "inventory recovery waited after the bag was cleared");
+                    agent.PostUpdateEverything(); await Task.Delay(1);
+                }
+                var resumed = JsonNode.Parse(await script);
+                Check(p.inventory[20].IsAir && resumed["value"]?["outcome"]?.ToString() == "source_unavailable",
+                    "gather did not reobserve capacity and continue on the same invocation: " + resumed);
+            }
+            finally
+            {
+                p.inventory[20] = savedItem; p.trashItem = savedTrash;
+                AgentTools.NewTask();
+                agent.Unload();
+            }
         }
         finally
         {

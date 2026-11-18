@@ -1404,8 +1404,35 @@ public static partial class AgentTools
             string output = await Execute(name, args, token);
             var local = AgentScript.CurrentReactions.Value;
             var policy = taskPolicy?.Reactions;
-            if (!AgentControlSession.ActionTool(name) || local?.Handling == true || policy?.Has("action_failed") != true
-                || local?.Active == true && local.Has("action_failed")) return output;
+            if (!AgentControlSession.ActionTool(name) || local?.Handling == true) return output;
+            var inventoryPolicy = local?.Active == true && local.Has("inventory_full") ? local : policy;
+            if (name == "gather" && inventoryPolicy?.Has("inventory_full") == true
+                && JsonNode.Parse(output) is JsonObject capacity && Text(capacity, "outcome") == "inventory_full"
+                && capacity["item_space"] is JsonObject itemSpace)
+            {
+                var blocked = itemSpace.Where(pair => pair.Value?.ToString() == "false").Select(pair => int.Parse(pair.Key)).ToArray();
+                Task<bool> HasSpace() => NativeAgent.OnMain(() => !Main.LocalPlayer.dead && blocked.Length > 0
+                    && blocked.All(type =>
+                    {
+                        var sample = new Item(); sample.SetDefaults(type);
+                        return Main.LocalPlayer.ItemSpace(sample).CanTakeItem;
+                    }), token);
+                string owner = ActionTasks.NodeContext.Value;
+                if (blocked.Length > 0 && !await HasSpace())
+                    await ServiceReaction(inventoryPolicy, () => NativeAgent.OnMain(() =>
+                    {
+                        Watches.Emit("inventory_full", "task", capacity);
+                        var notice = Watches.TakeForScript(new[] { "inventory_full" }).FirstOrDefault()?.AsObject();
+                        if (notice != null)
+                        {
+                            notice["execution"] = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["phase"] = "capacity_blocked" };
+                            notice["task_node"] = owner;
+                        }
+                        return notice;
+                    }, token), token);
+                if (await HasSpace()) return await Execute(name, args, token);
+            }
+            if (policy?.Has("action_failed") != true || local?.Active == true && local.Has("action_failed")) return output;
             if (JsonNode.Parse(output) is not JsonObject failed || !ScriptProgress.Failed(failed)
                 || failed["task_policy_recovery"] != null) return output;
             var decision = await ServiceReaction(policy, () => Task.FromResult(new JsonObject { ["kind"] = "action_failed",
