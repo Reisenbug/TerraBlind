@@ -900,6 +900,14 @@ static class GatherTests
             Check(!FightCoordinator.Evade(p).Apply, "friendly projectile triggered evasion");
             shot.hostile = true; shot.Center += new Microsoft.Xna.Framework.Vector2(500, 0);
             Check(!FightCoordinator.Evade(p).Apply, "non-intersecting projectile caused idle movement");
+            var falling = new Projectile { active = true, hostile = true, damage = 140, width = 31, height = 31,
+                Center = p.Center + new Microsoft.Xna.Framework.Vector2(-20, -105), velocity = new(0, 1.5f) };
+            Main.projectile = new[] { falling };
+            p.controlLeft = p.controlRight = p.controlJump = false;
+            Check(!FightCoordinator.Evade(p).Apply, "linear control projectile unexpectedly intersected the player");
+            falling.type = Terraria.ID.ProjectileID.Boulder;
+            Check(FightCoordinator.Evade(p) is { Apply: true, Direction: > 0 },
+                "evasion failed to move before a falling boulder entered its linear horizon");
             Main.projectile = Array.Empty<Projectile>();
             var enemy = Main.npc[0]; enemy.active = true; enemy.damage = 20;
             enemy.position = p.Center + new Microsoft.Xna.Framework.Vector2(80 - enemy.width / 2f, -enemy.height / 2f);

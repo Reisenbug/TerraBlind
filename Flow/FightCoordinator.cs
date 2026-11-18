@@ -115,10 +115,11 @@ namespace TerraBlind
         {
             bool blocked = target != null && NeedsClearLine(p.HeldItem)
                 && !Collision.CanHitLine(p.Center, 4, 4, target.Center, 4, 4);
-            var shots = new List<Projectile>();
+            var shots = new List<(Projectile Shot, Vector2[] Path)>();
             var enemies = new List<NPC>();
             foreach (var shot in Main.projectile)
-                if (shot.active && shot.hostile && shot.damage > 0) shots.Add(shot);
+                if (shot.active && shot.hostile && shot.damage > 0)
+                    shots.Add((shot, shot.type == ProjectileID.Boulder ? BoulderPath(shot) : null));
             foreach (var npc in Main.npc)
                 if (npc.active && !npc.friendly && !npc.townNPC && npc.damage > 0
                     && Vector2.Distance(npc.Center, p.Center) < 600)
@@ -180,9 +181,9 @@ namespace TerraBlind
                         (position.X - p.width / 2f) / 16, (position.Y - p.height / 2f) / 16, p.width / 16f, p.height / 16f))
                         return float.PositiveInfinity;
                     if (blocked && !Collision.CanHitLine(position, 4, 4, target.Center + target.velocity * frame, 4, 4)) score++;
-                    foreach (var shot in shots)
+                    foreach (var (shot, path) in shots)
                     {
-                        Vector2 point = shot.Center + shot.velocity * ((shot.extraUpdates + 1) * frame);
+                        Vector2 point = path == null ? shot.Center + shot.velocity * ((shot.extraUpdates + 1) * frame) : path[frame - 1];
                         if (Math.Abs(point.X - position.X) < (p.width + shot.width) / 2f + 6
                             && Math.Abs(point.Y - position.Y) < (p.height + shot.height) / 2f + 6)
                             score += (25 - frame) * 100;
@@ -210,6 +211,33 @@ namespace TerraBlind
                 if (risk < bestRisk) { bestRisk = risk; best = (direction, jump, true); }
             }
             return best;
+        }
+
+        static Vector2[] BoulderPath(Projectile shot)
+        {
+            var path = new Vector2[24];
+            var center = shot.Center;
+            var velocity = shot.velocity;
+            var halfSize = new Vector2(shot.width / 2f, shot.height / 2f);
+            bool up = Collision.up, down = Collision.down;
+            try
+            {
+                for (int frame = 0; frame < path.Length; frame++)
+                {
+                    if (velocity.Y <= 6f && Math.Abs(velocity.X) < 7f)
+                        velocity.X += Math.Sign(velocity.X) * .05f;
+                    velocity.Y = Math.Min(velocity.Y, 16f) + .3f;
+                    var movement = shot.tileCollide
+                        ? Collision.TileCollision(center - halfSize, velocity, shot.width, shot.height)
+                        : velocity;
+                    center += movement;
+                    if (movement.X != velocity.X) velocity.X = 0;
+                    if (movement.Y != velocity.Y) velocity.Y = 0;
+                    path[frame] = center;
+                }
+            }
+            finally { Collision.up = up; Collision.down = down; }
+            return path;
         }
 
         public static bool IsActive => _active && _framesLeft > 0;

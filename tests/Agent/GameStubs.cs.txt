@@ -246,6 +246,7 @@ namespace Terraria.ID
     public static class NPCID { public const int FixtureEnemy = 222, Lihzahrd = 198, LihzahrdCrawler = 199, FlyingSnake = 226; }
     public static class ProjectileID
     {
+        public const int Boulder = 99;
         public static class Sets
         {
             public static bool[] NoMeleeSpeedVelocityScaling = new bool[1200];
