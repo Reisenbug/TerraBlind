@@ -636,7 +636,24 @@ namespace TerraBlind
 
         static void DispatchLegacy(StateSpacePlanner.SSResult res, (int, int) cell)
         {
-            BeginAttempt(Main.LocalPlayer);
+            var player = Main.LocalPlayer;
+            BeginAttempt(player);
+            if (!res.NativeVerified && res.Steps.Count == 1 && res.Steps[0].Frames is { Count: > 0 } frames
+                && !FallSafety.Immune(player))
+            {
+                int fallStart = player.velocity.Y * player.gravDir > 0 ? player.fallStart : (int)(player.position.Y / 16);
+                var last = frames[^1];
+                if (FallSafety.LandingDamage(player, new Vector2(last.Px, last.Py), fallStart) >= player.statLife)
+                {
+                    if (player.velocity == Vector2.Zero)
+                    {
+                        StateSpacePlanner.PenalizeEdges(new[] { (cell.Item1, cell.Item2, res.GoalWx, res.GoalWy) }, 200f);
+                        if (RecordAttempt(player, false)) RecoverNoProgress(player, cell, "unverified_lethal_drop");
+                    }
+                    DiagLog.Write($"[recede-unverified-fall] from={cell} destination=({res.GoalWx},{res.GoalWy}) frames={frames.Count}");
+                    return;
+                }
+            }
             _lastFrom = cell; _lastTarget = (res.GoalWx, res.GoalWy); _haveLast = true;
             _lastPillar = res.Steps.Count > 0 && res.Steps[0].Pillar;
             _lastLandPx = res.Steps.Count > 0 ? res.Steps[0].LandPx : 0f;

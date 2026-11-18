@@ -1705,6 +1705,14 @@ public sealed class Driver : ModSystem
                         player.immune = false; player.immuneTime = player.itemAnimation = player.itemTime = 0;
                         var forecast = NavigationSurvival.AssessFall(player);
                         Check(forecast["lethal"].GetValue<bool>() && forecast["frames"].GetValue<int>() > 12, "expected lethal fall beyond late placement window");
+                        var origin = (ActExecutor.OriginCx(player), ActExecutor.OriginCy(player));
+                        var landing = forecast["landing_pixels"];
+                        var unverified = new StateSpacePlanner.SSResult { GoalWx = origin.Item1, GoalWy = fallTestFloor - 1 };
+                        unverified.Steps.Add(new StateSpacePlanner.ExecStep { Frames = new List<PhysicsSimulator.ControlInput>
+                            { new() { Px = landing["x"].GetValue<float>(), Py = landing["y"].GetValue<float>(), Vy = 0 } } });
+                        typeof(RecedingNav).GetMethod("DispatchLegacy", BindingFlags.Static | BindingFlags.NonPublic)
+                            .Invoke(null, new object[] { unverified, origin });
+                        Check(!StateSpacePlanner.ExecRunning, "navigation dispatched an unverified lethal drop");
                         RecedingNav.Active = true; fallTestTick = ticks; phase = 92; break;
                     }
                     if (Environment.GetEnvironmentVariable("TB_DESCENT_ROUTE_CHECK") == "1")
