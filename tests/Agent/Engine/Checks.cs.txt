@@ -1400,8 +1400,9 @@ public sealed class HornetTrialNpcs : GlobalNPC
 public sealed class Driver : ModSystem
 {
     bool enabled, opened;
-    int fallTestX, fallTestY, fallTestStart, fallTestTick, webPlacedAt;
-    bool EarlyFallCheck => Environment.GetEnvironmentVariable("TB_EARLY_FALL_CHECK") == "1";
+    int fallTestFloor, fallTestStart, fallTestTick, webPlacedAt;
+    bool EarlyFallCheck => Environment.GetEnvironmentVariable("TB_EARLY_FALL_CHECK") is "1" or "recorded";
+    bool RecordedFallCheck => Environment.GetEnvironmentVariable("TB_EARLY_FALL_CHECK") == "recorded";
     bool liveRunning;
     DateTime liveStart;
     int phase, ticks;
@@ -1653,20 +1654,33 @@ public sealed class Driver : ModSystem
                         Manual.On = false;
                         foreach (var npc in Main.npc) npc.active = false;
                         foreach (var item in player.armor) item.TurnToAir();
-                        fallTestX = Main.spawnTileX; fallTestY = Main.spawnTileY + 8;
-                        for (int tx = fallTestX - 3; tx <= fallTestX + 3; tx++)
-                        for (int ty = fallTestY - 5; ty <= fallTestY + 17; ty++)
+                        if (RecordedFallCheck)
                         {
-                            Main.tile[tx, ty].ClearEverything();
-                            if (ty == fallTestY + 17) Main.tile[tx, ty].ResetToType(TileID.Stone);
-                            if (ty >= fallTestY + 2 && ty <= fallTestY + 5) Main.tile[tx, ty].WallType = WallID.Stone;
+                            fallTestFloor = 844;
+                            player.position = new Vector2(22419.877f, 13246.251f);
+                            fallTestStart = 781;
+                        }
+                        else
+                        {
+                            int fallTestX = Main.spawnTileX, fallTestY = Main.spawnTileY + 8;
+                            fallTestFloor = fallTestY + 17;
+                            for (int tx = fallTestX - 3; tx <= fallTestX + 3; tx++)
+                            for (int ty = fallTestY - 5; ty <= fallTestFloor; ty++)
+                            {
+                                Main.tile[tx, ty].ClearEverything();
+                                if (ty == fallTestFloor) Main.tile[tx, ty].ResetToType(TileID.Stone);
+                                if (ty >= fallTestY + 2 && ty <= fallTestY + 5) Main.tile[tx, ty].WallType = WallID.Stone;
+                            }
+                            player.position = new Vector2(fallTestX * 16 + 2, fallTestY * 16 - player.height);
+                            fallTestStart = (int)(player.position.Y / 16) - 40;
                         }
                         player.inventory[5].SetDefaults(ItemID.Cobweb);
                         player.inventory[5].stack = 2;
-                        player.position = new Vector2(fallTestX * 16 + 2, fallTestY * 16 - player.height);
-                        player.velocity = new Vector2(0, 10);
-                        player.fallStart = player.fallStart2 = fallTestStart = (int)(player.position.Y / 16) - 40;
-                        player.statLife = player.statLifeMax = 100;
+                        player.velocity = new Vector2(0, RecordedFallCheck ? 10.01f : 10);
+                        player.fallStart = player.fallStart2 = fallTestStart;
+                        player.ConsumedLifeCrystals = RecordedFallCheck ? 6 : 0;
+                        player.statLifeMax = player.statLifeMax2 = RecordedFallCheck ? 220 : 100;
+                        player.statLife = RecordedFallCheck ? 215 : 100;
                         player.immune = false; player.immuneTime = player.itemAnimation = player.itemTime = 0;
                         var forecast = NavigationSurvival.AssessFall(player);
                         Check(forecast["lethal"].GetValue<bool>() && forecast["frames"].GetValue<int>() > 12, "expected lethal fall beyond late placement window");
@@ -2029,11 +2043,11 @@ public sealed class Driver : ModSystem
                 case 92:
                     if (player.inventory[5].stack == 1 && webPlacedAt == 0) webPlacedAt = ticks - fallTestTick;
                     if (webPlacedAt > 0 && player.fallStart > fallTestStart) RecedingNav.Active = false;
-                    if (player.dead || player.Bottom.Y >= (fallTestY + 17) * 16 - 1 || ticks - fallTestTick > 240)
+                    if (player.dead || player.Bottom.Y >= fallTestFloor * 16 - 1 || ticks - fallTestTick > 240)
                     {
                         RecedingNav.Active = false;
-                        Finish(!player.dead && player.statLife == 100 && webPlacedAt is > 0 and <= 12
-                            && player.Bottom.Y >= (fallTestY + 17) * 16 - 1,
+                        Finish(!player.dead && player.statLife >= (RecordedFallCheck ? 215 : 100) && webPlacedAt is > 0 and <= 12
+                            && player.Bottom.Y >= fallTestFloor * 16 - 1,
                             $"AGENT_EARLY_FALL_CHECK hp={player.statLife} web_at_frame={webPlacedAt} fall_start={player.fallStart} bottom={player.Bottom.Y} model_calls=0");
                     }
                     phase = 92; break;
