@@ -250,19 +250,34 @@ internal static class LegacyNativePrediction
         {
             bool stateMatches = VanillaAsyncMovement.StateMatches(player, anchor, true, out var reason, out var mismatch);
             JsonArray trajectory = null;
-            if (!searchingPlacement && plan.Steps.Count == 1 && plan.Steps[0].Frames is { Count: > 0 } controls
+            JsonObject completed = pending.IsCompletedSuccessfully ? pending.Result : null;
+            if (searchingPlacement && completed?["status"]?.ToString() == "complete"
+                && completed["frames"] is JsonArray { Count: > 0 } placementFrames
+                && completed["proposal"] is JsonObject proposal)
+            {
+                trajectory = new JsonArray(new JsonObject { ["x"] = anchor["x"].DeepClone(), ["y"] = anchor["y"].DeepClone() });
+                foreach (var frame in placementFrames) trajectory.Add(frame.DeepClone());
+                if (proposal["placements"] is JsonArray placements)
+                    foreach (var placement in placements)
+                        trajectory.Add(new JsonObject { ["x"] = 16f * placement["x"].GetValue<int>(),
+                            ["y"] = 16f * placement["y"].GetValue<int>() });
+                else if (proposal["jump_place"]?.GetValue<bool>() != false && proposal["tile_x"] != null && proposal["tile_y"] != null)
+                    trajectory.Add(new JsonObject { ["x"] = 16f * proposal["tile_x"].GetValue<int>(),
+                        ["y"] = 16f * proposal["tile_y"].GetValue<int>() });
+            }
+            else if (!searchingPlacement && plan.Steps.Count == 1 && plan.Steps[0].Frames is { Count: > 0 } controls
                 && !controls.Exists(frame => frame.Place))
             {
                 trajectory = new JsonArray(new JsonObject { ["x"] = plan.StartPx, ["y"] = plan.StartPy });
                 foreach (var frame in controls)
                     trajectory.Add(new JsonObject { ["x"] = frame.Px, ["y"] = frame.Py });
-                if (pending.IsCompletedSuccessfully && pending.Result["frames"] is JsonArray nativeFrames)
+                if (completed?["frames"] is JsonArray nativeFrames)
                     foreach (var frame in nativeFrames) trajectory.Add(frame.DeepClone());
             }
             bool terrainMatches = VanillaFrame.ContextMatches(snapshot, player, out var terrainDifference, trajectory);
             if (!stateMatches || !terrainMatches)
             {
-                DiagLog.Write($"[legacy-native-discard] state={reason} detail={mismatch} terrain={(terrainMatches ? "unchanged" : terrainDifference)} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###}");
+                DiagLog.Write($"[legacy-native-discard] state={reason} detail={mismatch} terrain={(terrainMatches ? "unchanged" : terrainDifference)} worker_status={completed?["status"]} path_scoped={trajectory != null} total_ms={System.Diagnostics.Stopwatch.GetElapsedTime(requestedAt).TotalMilliseconds:0.###}");
                 return true;
             }
             cancellation.Token.ThrowIfCancellationRequested();
