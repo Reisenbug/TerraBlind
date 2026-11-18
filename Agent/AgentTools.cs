@@ -2039,7 +2039,7 @@ public static partial class AgentTools
                 var idleClock = Stopwatch.StartNew();
                 while (idleClock.Elapsed.TotalSeconds < 2 && !await NativeAgent.OnMain(() => Main.LocalPlayer.dead
                     || Main.LocalPlayer.itemAnimation == 0 && Main.LocalPlayer.itemTime == 0, token))
-                    await Task.Delay(50, token);
+                    await NativeAgent.NextUpdate(token);
                 result = await NativeAgent.OnMain(() => name switch
                 {
                     "open_item" => PvpInventory.Open(args),
@@ -2047,7 +2047,6 @@ public static partial class AgentTools
                     "inventory_trash" => PvpInventory.Trash(args),
                     _ => PvpInventory.Swap(args)
                 }, token);
-                if (name == "open_item" && !Rejected(result)) await Task.Delay(300, token);
                 break;
             case "equipment_list":
                 return (await NativeAgent.OnMain(Equipment.Snapshot, token)).ToJsonString();
@@ -2655,10 +2654,7 @@ public static partial class AgentTools
             if (approach["done"]?.GetValue<bool>() != true)
                 return new JsonObject { ["error"] = "cannot_reach_collect_target", ["navigation"] = approach };
             if (await NativeAgent.OnMain(() => !Main.tile[x, y].HasUnactuatedTile, token))
-            {
-                await Task.Delay(400, token);
                 return new JsonObject { ["outcome"] = "removed", ["mode_adjustment"] = "navigation_mined_target" };
-            }
             bool InMiningRange()
             {
                 var player = Main.LocalPlayer;
@@ -2685,7 +2681,6 @@ public static partial class AgentTools
             navigationProgress: completion == null ? null : _ => NativeAgent.OnMain(completion, token),
             reactionContext: new JsonObject { ["tool"] = "use_item", ["args"] = new JsonObject {
                 ["slot"] = target["slot"].DeepClone(), ["x"] = x, ["y"] = y, ["strict"] = true } });
-        if (Text(result, "outcome") == "removed") await Task.Delay(400, token);
         result["mode_adjustment"] = "target_use_collect_tool";
         return result;
     }

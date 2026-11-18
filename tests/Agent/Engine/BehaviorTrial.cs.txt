@@ -865,7 +865,8 @@ public sealed partial class BehaviorTrial : ModSystem
     async Task Run()
     {
         if (Environment.GetEnvironmentVariable("TB_THINKING_PAUSE_TRIAL") == "1"
-            || Environment.GetEnvironmentVariable("TB_CHEST_RECEIPT_TRIAL") == "1") { await ThinkingPauseTrial(); return; }
+            || Environment.GetEnvironmentVariable("TB_CHEST_RECEIPT_TRIAL") == "1"
+            || Environment.GetEnvironmentVariable("TB_PICKUP_HANDOFF_TRIAL") == "1") { await ThinkingPauseTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_SKILL_LEARNING") == "1") { await SkillLearningRun(); return; }
         if (Environment.GetEnvironmentVariable("TB_QUEEN_MINING_REPLAY") == "1") { await QueenMiningReplay(); return; }
         if (Environment.GetEnvironmentVariable("TB_WORKSTATION_REPLAY") == "1") { await WorkstationReplay(); return; }
@@ -5062,6 +5063,41 @@ public sealed partial class BehaviorTrial : ModSystem
             }
             finally { await OnMain(() => { Main.LocalPlayer.inventory = savedInventory; Main.LocalPlayer.chest = -1; return true; }); }
             await Until(() => ThinkingPause.Frozen, "chest handoff");
+            if (Environment.GetEnvironmentVariable("TB_PICKUP_HANDOFF_TRIAL") == "1")
+            {
+                if (Config.I.AgentCodexModel != "gpt-6.2-sol")
+                    throw new Exception("unexpected game agent model: " + Config.I.AgentCodexModel);
+                var pickup = await OnMain(() =>
+                {
+                    var player = Main.LocalPlayer;
+                    int before = player.inventory.Where(i => i.type == ItemID.Stinger).Sum(i => i.stack);
+                    int slot = Item.NewItem(player.GetSource_Misc("pickup-handoff"), player.Center, ItemID.Stinger);
+                    Main.item[slot].velocity = Vector2.Zero;
+                    Main.item[slot].noGrabDelay = 18;
+                    return (Before: before, Slot: slot, Tick: Main.GameUpdateCount);
+                });
+                var timer = Stopwatch.StartNew();
+                var gather = Call("gather", new JsonObject { ["targets"] = new JsonArray(new JsonObject {
+                    ["item_type"] = (int)ItemID.Stinger, ["count"] = pickup.Before + 1 }) });
+                await Until(() => !Main.item[pickup.Slot].active, "native pickup");
+                long observedAt = timer.ElapsedMilliseconds;
+                var picked = await gather.WaitAsync(TimeSpan.FromSeconds(4));
+                long returnedAt = timer.ElapsedMilliseconds;
+                uint pickupFrames = await OnMain(() => Main.GameUpdateCount - pickup.Tick);
+                if (picked["outcome"]?.ToString() != "enough" || picked["last_result"]?["result"]?["outcome"]?.ToString() != "picked_up"
+                    || await OnMain(() => Main.LocalPlayer.inventory.Where(i => i.type == ItemID.Stinger).Sum(i => i.stack)) != pickup.Before + 1)
+                    throw new Exception("gather did not return verified native pickup: " + picked);
+                float beforeMove = await OnMain(() => Main.LocalPlayer.Center.X);
+                var next = await Call("act", new JsonObject { ["steps"] = new JsonArray(new JsonObject {
+                    ["keys"] = new JsonArray("right"), ["until"] = new JsonObject { ["frames"] = 8 } }) });
+                float moved = await OnMain(() => Main.LocalPlayer.Center.X - beforeMove);
+                if (moved <= 0) throw new Exception("next action did not move the player: " + next);
+                Record("pickup_handoff", new JsonObject(), new JsonObject {
+                    ["item_disappeared_ms"] = observedAt, ["gather_returned_ms"] = returnedAt,
+                    ["frames_until_return"] = pickupFrames, ["next_action_pixels"] = moved, ["next_action"] = next });
+                Console.WriteLine("PICKUP_HANDOFF_NATIVE_PASS model_calls=0");
+                return;
+            }
             if (Environment.GetEnvironmentVariable("TB_CHEST_RECEIPT_TRIAL") == "1")
             {
                 Console.WriteLine("CHEST_RECEIPT_NATIVE_PASS model_calls=0 cases=" + measurements.Count);

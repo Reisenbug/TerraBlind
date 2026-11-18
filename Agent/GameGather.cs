@@ -133,53 +133,60 @@ public sealed class GameGather : IGatherWorld
         int who = candidate["who"].GetValue<int>();
         if (kind == "drop")
         {
+            int itemType = candidate["item_type"].GetValue<int>();
             bool ValidDrop() => observedDrops.TryGetValue(who, out var identity)
                 && identity.Generation == candidate["drop_generation"]?.GetValue<int>()
-                && ReferenceEquals(identity.Entity, Main.item[who]) && Main.item[who].active
-                && Main.item[who].type == candidate["item_type"].GetValue<int>();
-            JsonObject PickupBlocked() => ValidDrop() && !Main.LocalPlayer.ItemSpace(Main.item[who]).CanTakeItem
-                ? new JsonObject { ["ok"] = false, ["outcome"] = "inventory_full", ["item_type"] = Main.item[who].type,
-                    ["who"] = who, ["stack"] = Main.item[who].stack } : null;
-            int stable = 0;
-            Microsoft.Xna.Framework.Vector2? previousPosition = null;
-            for (int i = 0; i < 20; i++)
+                && ReferenceEquals(identity.Entity, Main.item[who]) && Main.item[who].active && Main.item[who].type == itemType;
+            int Count() => Main.LocalPlayer.inventory.Where(i => i.type == itemType).Sum(i => i.stack);
+            var initial = await NativeAgent.OnMain(() => (World: Main.worldID, Count: Count()), token);
+            bool InGrabRange()
             {
-                var sample = await NativeAgent.OnMain(() =>
-                {
-                    var item = Main.item[who];
-                    return (Valid: ValidDrop(), Position: item.Center, Blocked: PickupBlocked());
-                }, token);
-                if (!sample.Valid) return new JsonObject { ["outcome"] = "target_changed" };
-                if (sample.Blocked != null) return sample.Blocked;
-                stable = previousPosition.HasValue && (sample.Position - previousPosition.Value).LengthSquared() <= .25f ? stable + 1 : 0;
-                previousPosition = sample.Position;
-                if (stable >= 2) break;
-                await NativeAgent.WaitForWorld(150, token);
+                var player = Main.LocalPlayer;
+                var range = player.Hitbox;
+                int padding = player.GetItemGrabRange(Main.item[who]);
+                range.Inflate(padding, padding);
+                return range.Intersects(Main.item[who].Hitbox);
+            }
+            JsonObject ObservePickup()
+            {
+                if (Main.gameMenu || Main.worldID != initial.World || Main.LocalPlayer.dead)
+                    return new JsonObject { ["error"] = "pickup_interrupted" };
+                int gained = Count() - initial.Count;
+                if (gained > 0)
+                    return new JsonObject { ["outcome"] = "picked_up", ["inventory_gain"] = gained };
+                if (!ValidDrop()) return new JsonObject { ["outcome"] = "target_changed" };
+                if (!Main.LocalPlayer.ItemSpace(Main.item[who]).CanTakeItem)
+                    return new JsonObject { ["ok"] = false, ["outcome"] = "inventory_full", ["item_type"] = itemType,
+                        ["who"] = who, ["stack"] = Main.item[who].stack };
+                return null;
             }
             var live = await NativeAgent.OnMain(() =>
             {
-                var item = Main.item[who];
-                DiagLog.Write($"[gather] drop who={who} pos={item.Center} velocity={item.velocity} player={Main.LocalPlayer.Center}");
-                if (!ValidDrop()) return null;
-                if (PickupBlocked() is JsonObject blocked) return blocked;
-                if (stable < 2 || (item.Center - previousPosition.Value).LengthSquared() > .25f)
-                    return new JsonObject { ["moving"] = true };
-                return item.active && item.type == candidate["item_type"].GetValue<int>()
-                    ? new JsonObject { ["gx"] = (int)(item.Center.X / 16), ["gy"] = (int)(item.Center.Y / 16), ["stand"] = false,
-                        ["near"] = Microsoft.Xna.Framework.Vector2.Distance(item.Center, Main.LocalPlayer.Center) <= 48 } : null;
+                var result = ObservePickup();
+                if (result != null) return (Result: result, Near: false, X: 0, Y: 0);
+                var center = Main.item[who].Center;
+                return (Result: (JsonObject)null, Near: InGrabRange(), X: (int)(center.X / 16), Y: (int)(center.Y / 16));
             }, token);
-            if (live == null) return new JsonObject { ["outcome"] = "target_changed" };
-            if (live["outcome"] != null) return live;
-            if (live["moving"] != null) return new JsonObject { ["outcome"] = "drop_still_moving" };
-            if (live["near"]?.GetValue<bool>() == true)
+            if (live.Result != null) return live.Result;
+            if (!live.Near)
             {
-                await NativeAgent.WaitForWorld(400, token);
-                return await NativeAgent.OnMain(PickupBlocked, token) ?? new JsonObject { ["outcome"] = "waited_for_pickup" };
+                var approach = await AgentTools.Navigate(new JsonObject { ["x"] = live.X, ["y"] = live.Y, ["mode"] = "stand" },
+                    token, 12, () => ObservePickup() ?? (InGrabRange() ? new JsonObject { ["outcome"] = "in_pickup_range" } : null));
+                if (approach["done"]?.ToString() != "true" && approach["outcome"]?.ToString() != "in_pickup_range") return approach;
             }
-            var result = await AgentTools.Navigate(new JsonObject { ["x"] = live["gx"].DeepClone(),
-                ["y"] = live["gy"].DeepClone(), ["mode"] = "stand" }, token, 12, PickupBlocked);
-            await NativeAgent.WaitForWorld(400, token);
-            return await NativeAgent.OnMain(PickupBlocked, token) ?? result;
+            Interlocked.Increment(ref NativeAgent.WorldWaiters);
+            try
+            {
+                for (int frame = 0; ; frame++)
+                {
+                    var result = await NativeAgent.OnMain(() => ObservePickup()
+                        ?? (!InGrabRange() ? new JsonObject { ["outcome"] = "drop_out_of_range" } : null), token);
+                    if (result != null) return result;
+                    if (frame >= 120) return new JsonObject { ["outcome"] = "pickup_not_confirmed" };
+                    await NativeAgent.NextUpdate(token, worldFrame: true);
+                }
+            }
+            finally { Interlocked.Decrement(ref NativeAgent.WorldWaiters); }
         }
         bool Valid() => who >= 0 && who < Main.maxNPCs && Main.npc[who].active && !Main.npc[who].friendly
             && FightCoordinator.TempleTargetAllowed(Main.LocalPlayer, Main.npc[who])

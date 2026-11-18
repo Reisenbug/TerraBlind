@@ -134,6 +134,8 @@ namespace Terraria
         public Microsoft.Xna.Framework.Vector2 velocity;
         public Microsoft.Xna.Framework.Vector2 Center => new(position.X + width / 2f, position.Y + height / 2f);
         public Microsoft.Xna.Framework.Vector2 Bottom => new(Center.X, position.Y + height);
+        public Microsoft.Xna.Framework.Rectangle Hitbox => new((int)position.X, (int)position.Y, width, height);
+        public int GetItemGrabRange(Item item) => 38;
         public bool HasAmmo(Item item) => HasAmmunition;
         public int GetWeaponDamage(Item item) => item.damage;
         public float MeleeAttackSpeed = 1;
@@ -164,6 +166,7 @@ namespace Terraria
     }
     public class Item
     {
+        public Microsoft.Xna.Framework.Rectangle Hitbox => new((int)position.X, (int)position.Y, width, height);
         public bool active, consumable;
         public bool favorited, accessory, material;
         public int defense, headSlot = -1, bodySlot = -1, legSlot = -1;

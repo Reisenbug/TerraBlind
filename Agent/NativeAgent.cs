@@ -15,6 +15,7 @@ public class NativeAgent : ModSystem
 {
     static readonly ConcurrentQueue<Action> MainQueue = new();
     static readonly ConcurrentQueue<Action> FrameQueue = new();
+    static readonly ConcurrentQueue<Action> WorldFrameQueue = new();
     static NativeAgent _instance;
     HttpClient _http;
     AgentConversation _conversation;
@@ -49,13 +50,6 @@ public class NativeAgent : ModSystem
     internal static bool WorkPending => _instance?._pending != null || Processing;
     internal static Func<TimeSpan> FrozenTime = () => TimeSpan.Zero;
     internal static int WorldWaiters;
-    internal static async Task WaitForWorld(int milliseconds, CancellationToken token)
-    {
-        Interlocked.Increment(ref WorldWaiters);
-        try { await Task.Delay(milliseconds, token); }
-        finally { Interlocked.Decrement(ref WorldWaiters); }
-    }
-
     internal static JsonArray ObserveTiles(Player player)
     {
         var result = new JsonArray();
@@ -206,6 +200,11 @@ public class NativeAgent : ModSystem
         }
         int frameWaiters = FrameQueue.Count;
         for (int i = 0; i < frameWaiters && FrameQueue.TryDequeue(out var waiter); i++) waiter();
+        if (worldAdvanced)
+        {
+            int worldWaiters = WorldFrameQueue.Count;
+            for (int i = 0; i < worldWaiters && WorldFrameQueue.TryDequeue(out var waiter); i++) waiter();
+        }
         while (MainQueue.TryDequeue(out var action)) action();
         bool runtimeActive = _cancel?.IsCancellationRequested == false
             && Status is not ("needs_repair" or "budgetLimited" or "failed");
@@ -546,11 +545,11 @@ public class NativeAgent : ModSystem
         return result.Task;
     }
 
-    internal static Task NextUpdate(CancellationToken token)
+    internal static Task NextUpdate(CancellationToken token, bool worldFrame = false)
     {
         var result = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var registration = token.Register(() => result.TrySetCanceled(token));
-        FrameQueue.Enqueue(() => { result.TrySetResult(true); registration.Dispose(); });
+        (worldFrame ? WorldFrameQueue : FrameQueue).Enqueue(() => { result.TrySetResult(true); registration.Dispose(); });
         return result.Task;
     }
 
