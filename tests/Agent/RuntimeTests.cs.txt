@@ -873,7 +873,7 @@ static class RuntimeTests
                 string recovery = "if(failure.result.detail.length!==20000)throw new Error('truncated failure');"
                     + (mode == "unhandled" ? "return {status:'needs_review',reason:'uncovered_failure'};"
                         : "tool('act',{steps:[{keys:['right'],until:{frames:1}}]});"
-                            + "const resumed=tool('action_control',{handle:failure.handle,command:'resume'});"
+                            + "const resumed=tool('action_control',{handle:failure.handle,action:'resume'});"
                             + "return {handle:resumed.handle,status:resumed.status};");
                 if (mode == "disabled") recovery = "";
                 var patch = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", new JsonObject

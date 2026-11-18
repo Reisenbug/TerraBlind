@@ -531,9 +531,28 @@ public static partial class AgentTools
                     args["workflow"] = recoveryWorkflow;
                 }
                 string result = await Execute("run_script", args, token);
+                var returned = JsonNode.Parse(result);
+                if (recovery != null && returned?["value"] is JsonObject review
+                    && review["status"]?.ToString() == "needs_review" && review["reason"]?.ToString() == "uncovered_failure")
+                {
+                    var failure = await Actions.Query(handle, 0, token);
+                    var fallback = await NativeAgent.OnMain(() =>
+                    {
+                        var source = PrepareCombatRecovery(failure);
+                        if (source != null) report["mode"] = "combat_recovery";
+                        return source;
+                    }, token);
+                    if (fallback != null)
+                    {
+                        recoveryProgress = new ScriptProgress();
+                        recoveryContext.Value = (args["workflow"].ToString(), recoveryProgress);
+                        args["code"] = fallback;
+                        result = await Execute("run_script", args, token);
+                        returned = JsonNode.Parse(result);
+                    }
+                }
                 await NativeAgent.OnMain(() =>
                 {
-                    var returned = JsonNode.Parse(result);
                     report["status"] = "returned"; report["ok"] = returned?["ok"]?.DeepClone();
                     report["error"] = returned?["error"]?.DeepClone();
                     if (recovery != null && returned?["value"] is JsonObject recoveryValue)
@@ -578,6 +597,24 @@ public static partial class AgentTools
                 recoveryContext.Value = null;
             }
         }, token);
+    }
+
+    static string PrepareCombatRecovery(JsonObject failure)
+    {
+        if (Main.LocalPlayer.dead || Main.LocalPlayer.suffocating || Watches.HasRecoveryBlocker
+            || Actions.HasPrimaryControl || ControlSession.PrimaryActive || ContactEscapeActive) return null;
+        var root = failure["result"];
+        var evidence = failure["tool"]?.ToString() == "gather" ? root
+            : root?["failure"]?["tool"]?.ToString() == "gather" ? root["failure"]["evidence"] : null;
+        if (evidence?["outcome"]?.ToString() is not ("combat_obstructed" or "combat_out_of_range" or "combat_no_progress")
+            || evidence["recovery_skill"]?["input"] is not JsonObject input
+            || input["npc"] == null || input["npc_type"] == null) return null;
+        string handle = failure["handle"].ToString();
+        string key = "combat:" + handle + ":" + input["npc"] + ":" + input["npc_type"];
+        if (!recoveredActions.TryAdd(key, "combat_approach")) return null;
+        return "const r=skill('combat_approach',0," + input.ToJsonString() + ");"
+            + "if(r.status!=='ready')return {status:'needs_review',reason:r.reason,approach:r};"
+            + "return tool('action_control',{command:'resume',handle:" + JsonValue.Create(handle).ToJsonString() + "});";
     }
 
     static void ReportExecutionGap(JsonObject report, string reason)
@@ -2419,19 +2456,25 @@ public static partial class AgentTools
             case "fight":
                 if (!await NativeAgent.OnMain(() => AgentPermissions.Attack, token))
                     return "{\"error\":\"玩家禁止自动攻击，请先确认是否修改许可。\"}";
-                if (args["npc_types"] is JsonArray || args.ContainsKey("movement"))
+                int[] types = (args["npc_types"] as JsonArray)?.Select(n => n.GetValue<int>()).ToArray();
+                if (types != null && (types.Length == 0 || types.Any(t => t <= 0))) throw new ArgumentException("npc_types 不能为空且编号必须为正数。");
+                string movement = args["movement"]?.GetValue<string>() ?? "auto";
+                bool backgroundFight = Actions.RunningBackgroundFight;
+                bool filteredFight = types != null || args.ContainsKey("movement");
+                if (backgroundFight && !filteredFight) result = await Call("/fight", args, token);
+                else result = await NativeAgent.OnMain(() =>
                 {
-                    int[] types = (args["npc_types"] as JsonArray)?.Select(n => n.GetValue<int>()).ToArray();
-                    if (types != null && (types.Length == 0 || types.Any(t => t <= 0))) throw new ArgumentException("npc_types 不能为空且编号必须为正数。");
-                    string movement = args["movement"]?.GetValue<string>() ?? "auto";
-                    result = await NativeAgent.OnMain(() =>
-                    { FightCoordinator.Start(Int(args, "max_dist", 40), types, movement); return new JsonObject { ["ok"] = true }; }, token);
-                }
-                else result = await Call("/fight", args, token);
+                    float maxDist = args["max_dist"]?.Deserialize<float>() ?? (filteredFight ? 40f : 20f);
+                    if (backgroundFight) FightCoordinator.Start(maxDist, types, movement);
+                    else FightCoordinator.StartAction(maxDist, types, movement);
+                    return new JsonObject { ["ok"] = true };
+                }, token);
                 if (!Rejected(result))
                 {
                     result = await Wait("/fight_active", "active", "/fight", Math.Clamp((int)Math.Ceiling(args["seconds"]?.GetValue<double>() ?? 10), 1, 120), token,
                         reactionContext: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() });
+                    if (!backgroundFight && result["outcome"] == null && await NativeAgent.OnMain(() => FightCoordinator.EndedWithoutTarget, token))
+                        result["outcome"] = "no_actionable_target";
                     await Call("/fight", new JsonObject { ["active"] = false }, token);
                     if (Text(result, "outcome") == "timeout")
                         result = new JsonObject { ["outcome"] = "duration_elapsed",
@@ -2898,6 +2941,8 @@ public static partial class AgentTools
                 if (result["error"] == null) result["error"] = "navigation_contact_escape";
                 result["contact_escape"] = LastContactEscape.DeepClone();
             }
+            if (result["outcome"] == null && Text(result, "reason") is "local_escape_search_budget" or "repeated_action_failure")
+                result["outcome"] = "no_progress";
             int distance = Math.Max(Math.Abs(ActExecutor.OriginCx(p) - Int(args, "x")), Math.Abs(ActExecutor.OriginCy(p) - Int(args, "y")));
             bool arrived = Bool(request, "reach") ? Reach.CanInteract(p, Int(args, "x"), Int(args, "y")) : distance <= 6;
             if (Bool(request, "reach") && (Bool(args, "exact") || Text(args, "mode") == "mine"))

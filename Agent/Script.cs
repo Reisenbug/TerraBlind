@@ -583,6 +583,11 @@ public static class AgentScript
                     if (name is "run_script" or "ask") throw new InvalidOperationException("脚本内禁止嵌套run_script或ask；需要决策时return交回模型。");
                     if (json == null || json.Length > 32000) throw new ArgumentException("工具参数超过32000字符。");
                     var args = JsonNode.Parse(json) as JsonObject ?? throw new ArgumentException("工具参数必须是JSON对象。");
+                    if (name == "action_control" && args["command"] == null && args["action"]?.ToString() == "resume")
+                    {
+                        args["command"] = "resume";
+                        args.Remove("action");
+                    }
                     if (observingIntent && (!PreparationOnly("tool(" + JsonValue.Create(name).ToJsonString() + ",{});")
                         || name == "game_api" || name == "script_program" && args["operation"]?.ToString() is not ("get" or "list" or "example")))
                         throw new InvalidOperationException("intent observation and verification callbacks are read-only");
@@ -620,7 +625,7 @@ public static class AgentScript
                         if (ScriptProgress.Failed(toolResult))
                         {
                             var facts = new JsonObject();
-                            foreach (string field in new[] { "error", "detail", "outcome", "done", "status", "reason", "state", "pos", "progress_idle_seconds", "stationary_seconds", "distance_pixels", "best_distance_pixels", "active_handle", "name_candidates", "requested_name", "targets", "source_rules", "source_error", "last_result", "placed", "wanted" })
+                            foreach (string field in new[] { "error", "detail", "outcome", "done", "status", "reason", "state", "pos", "progress_idle_seconds", "stationary_seconds", "distance_pixels", "best_distance_pixels", "active_handle", "name_candidates", "requested_name", "targets", "source_rules", "source_error", "last_result", "recovery_skill", "placed", "wanted" })
                                 if (toolResult[field] != null) facts[field] = toolResult[field].DeepClone();
                             if (toolResult["cells"] is JsonArray cells && cells.Count > 0) facts["last_cell"] = cells[^1]?.DeepClone();
                             lastFailure = new JsonObject { ["tool"] = name, ["args"] = args.DeepClone(), ["evidence"] = facts };
@@ -850,8 +855,17 @@ public static class AgentScript
                 var parsed = JsonNode.Parse(output);
                 if (output.Length > 16000)
                 {
-                    int references = ReferenceActions(parsed);
-                    if (references == 0 || parsed.ToJsonString().Length > 16000)
+                    ReferenceActions(parsed);
+                    if (parsed.ToJsonString().Length > 16000 && parsed["value"] is JsonObject review
+                        && review["status"]?.ToString() == "needs_review")
+                    {
+                        var summary = new JsonObject { ["evidence_omitted"] = true };
+                        foreach (string field in new[] { "status", "reason", "error", "outcome", "handle", "task_node" })
+                            if (review[field] is JsonValue fact && fact.ToJsonString().Length <= 512)
+                                summary[field] = fact.DeepClone();
+                        parsed["value"] = summary;
+                    }
+                    if (parsed.ToJsonString().Length > 16000)
                         return Report(lastFailure == null ? "script_result_too_large" : "tool_failed",
                             "脚本主体已执行，但返回值超过16000字符，已省略；这不是任务完成或动作回滚。先用action_query/get_state/script_progress核对实际效果与原句柄，只返回所需字段，不要重跑已执行动作。",
                             omittedOutputChars: output.Length);

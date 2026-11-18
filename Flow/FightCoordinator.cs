@@ -14,6 +14,8 @@ namespace TerraBlind
         private static float _maxDistTiles = 20f;
         private const int TimeoutFrames = 360;
         private static HashSet<int> _types;
+        private static bool _endWithoutTarget;
+        internal static bool EndedWithoutTarget { get; private set; }
         private static bool _idleDefense;
         internal static bool NavigationSnapshotPending;
         private static bool _usingItem;
@@ -205,6 +207,13 @@ namespace TerraBlind
             _framesLeft = TimeoutFrames;
             _active = true;
             _types = types == null ? null : new HashSet<int>(types);
+            _endWithoutTarget = EndedWithoutTarget = false;
+        }
+
+        internal static void StartAction(float maxDistTiles, int[] types = null, string movement = "auto")
+        {
+            Start(maxDistTiles, types, movement);
+            _endWithoutTarget = true;
         }
 
         public static void Stop()
@@ -335,7 +344,13 @@ namespace TerraBlind
                 else RememberAnimation(p, false);
                 _idleDefense = false;
                 _usingItem = false;
-                if (!idle) _framesLeft--;
+                if (!idle && _endWithoutTarget)
+                {
+                    Stop();
+                    EndedWithoutTarget = true;
+                    DiagLog.Write($"[agent_fight] stopped=no_actionable_target tick={Main.GameUpdateCount}");
+                }
+                else if (!idle) _framesLeft--;
                 return;
             }
             if (idle && !_idleDefense) DiagLog.Write($"[agent_defense] started target={target.whoAmI} hp={p.statLife}");

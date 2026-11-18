@@ -1002,6 +1002,15 @@ static class GatherTests
             Main.npc[1].friendly = true; p.controlUseItem = false;
             FightCoordinator.Start(40, new[] { 2 }); FightCoordinator.Tick(p);
             Check(!p.controlUseItem, "target filter bypassed friendly NPC protection");
+            FightCoordinator.StartAction(40, new[] { 2 });
+            FightCoordinator.Tick(p);
+            Check(!FightCoordinator.IsActive && FightCoordinator.EndedWithoutTarget,
+                "agent attack with no actionable target retained its six-second wait");
+            Main.npc[1].friendly = false;
+            FightCoordinator.StartAction(40, new[] { 2 });
+            FightCoordinator.Tick(p);
+            Check(FightCoordinator.IsActive && !FightCoordinator.EndedWithoutTarget && p.controlUseItem,
+                "agent attack did not continue when a viable target was present");
         }
         finally { FightCoordinator.Stop(); p.inventory[0] = oldWeapon; Main.npc[0] = oldA; Main.npc[1] = oldB; p.controlUseItem = false; }
         Console.WriteLine("PASS: production NPC attack filters target types, preserves ordinary selection and refuses friendly targets");

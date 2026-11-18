@@ -58,6 +58,7 @@ public sealed class ActionTasks
     internal string ActiveNode { get { lock (gate) return active?.Node; } }
     internal string ActiveAttempt { get { lock (gate) { var entry = active ?? attack; return entry == null ? null : entry.Id + ":" + entry.Attempt; } } }
     internal bool RunningScript { get { lock (gate) return active?.Tool == "run_script" && caller.Value == active.Id; } }
+    internal bool RunningBackgroundFight { get { lock (gate) return attack is { Inline: false } && caller.Value == attack.Id; } }
     internal JsonObject LatestFinishedPrimary()
     {
         lock (gate)

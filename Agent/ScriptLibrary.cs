@@ -968,7 +968,7 @@ public sealed class ScriptLibrary
             finally { tool('set_combat',{auto_attack:originalCombat.auto_attack,weapon_type:originalCombat.combat_weapon_type}); }
             """);
         if (name == "gather_route") return Template(name,
-            "内置参数化采集技能，可直接调用revision=0；input包含gather_args和当前世界查证的waypoints（最多8项，每项x/y及可选mode/source_area）。先收集当前位置可用来源，未达到真实库存目标且当前来源耗尽时，立即前往下一个预备位置并继续；其他失败保留证据交回。DAG按真实条件完成验收。",
+            "内置参数化采集技能，可直接调用revision=0；input包含gather_args和当前世界查证的waypoints（最多8项，每项x/y及可选mode/source_area）。先收集当前位置可用来源，未达到真实库存目标且当前来源耗尽或路线无进展时，立即前往下一个预备位置并继续；其他失败保留证据交回。DAG按真实条件完成验收。",
             """
             const config=typeof input==='undefined'?null:input;
             if(!config?.gather_args?.targets||!Array.isArray(config.waypoints)||config.waypoints.length>8)
@@ -990,7 +990,7 @@ public sealed class ScriptLibrary
                 if(actual.every(t=>t.actual>=t.wanted)) return {status:'collected',counts:actual,visited};
                 return {status:'needs_review',reason:'inventory_changed',counts:actual,result};
               }
-              if(!['source_unavailable','source_area_exhausted'].includes(result.outcome))
+              if(!['source_unavailable','source_area_exhausted','navigation_no_progress'].includes(result.outcome))
                 return {status:'needs_review',reason:'collection_blocked',result,visited};
               const point=config.waypoints[index];
               if(!point) return {status:'needs_review',reason:'prepared_sources_exhausted',result,visited};

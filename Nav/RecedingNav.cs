@@ -144,6 +144,7 @@ namespace TerraBlind
         static Vector2 _attemptStart;
         static int _attemptTerrain, _noProgressSteps;
         static bool _failureRecoveryPending, _failureRecoveryTried;
+        static long _failureRecoveryStartedAt;
 
         static int TerrainStamp(Player player)
         {
@@ -192,8 +193,13 @@ namespace TerraBlind
                 if (field != null)
                 {
                     int h = field.TryGetValue(cell, out int value) ? value : int.MaxValue;
-                    bool dispatched = TrapEscape.TryEscape(field, cell.Item1, cell.Item2, h, _goalWx, _goalWy);
-                    if (TrapEscape.Busy) { _failureRecoveryPending = true; return; }
+                    bool dispatched = TrapEscape.TryLocalEscape(field, cell.Item1, cell.Item2, h, _goalWx, _goalWy);
+                    if (TrapEscape.Busy)
+                    {
+                        _failureRecoveryPending = true;
+                        _failureRecoveryStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+                        return;
+                    }
                     if (dispatched) { StuckSentinel.Reset(); return; }
                 }
             }
@@ -208,9 +214,10 @@ namespace TerraBlind
                 _failureRecoveryPending = false;
                 StuckSentinel.Reset(); return;
             }
-            if (TrapEscape.Busy) return;
+            if (TrapEscape.Busy && System.Diagnostics.Stopwatch.GetElapsedTime(_failureRecoveryStartedAt).TotalSeconds < 1.5) return;
             _failureRecoveryPending = false;
-            LastStop = "repeated_action_failure";
+            LastStop = TrapEscape.Busy ? "local_escape_search_budget" : "repeated_action_failure";
+            DiagLog.Write($"[recede] {LastStop} elapsed_ms={System.Diagnostics.Stopwatch.GetElapsedTime(_failureRecoveryStartedAt).TotalMilliseconds:0}");
             Stop();
         }
         public static void Start(int goalWx, int goalWy, bool exact = false)

@@ -215,7 +215,7 @@ public sealed class GameGather : IGatherWorld
             if (!Valid()) return false;
             if (!AgentPermissions.Attack) throw new InvalidOperationException("玩家禁止自动攻击。");
             hpBefore = Main.npc[who].life;
-            FightCoordinator.Start(40, new[] { candidate["npc_type"].GetValue<int>() });
+            FightCoordinator.StartAction(40, new[] { candidate["npc_type"].GetValue<int>() });
             return true;
         }, token);
         if (!startFight) return new JsonObject { ["error"] = "target_changed" };
@@ -234,6 +234,7 @@ public sealed class GameGather : IGatherWorld
                     bool present = Valid();
                     return new JsonObject { ["target_present"] = present, ["hp_before"] = hpBefore,
                         ["hp_after"] = present ? Main.npc[who].life : 0, ["self_dead"] = player.dead,
+                        ["no_actionable_target"] = FightCoordinator.EndedWithoutTarget,
                         ["clear_line"] = present && Collision.CanHitLine(player.Center, 4, 4, Main.npc[who].Center, 4, 4),
                         ["requires_clear_line"] = FightCoordinator.NeedsClearLine(player.HeldItem),
                         ["weapon_type"] = player.HeldItem.type,
@@ -242,6 +243,11 @@ public sealed class GameGather : IGatherWorld
                 }, token);
                 if (!combat["target_present"].GetValue<bool>() || combat["self_dead"].GetValue<bool>()) break;
                 int hp = combat["hp_after"].GetValue<int>();
+                if (combat["no_actionable_target"].GetValue<bool>())
+                {
+                    combat["outcome"] = combat["clear_line"].GetValue<bool>() ? "combat_no_progress" : "combat_obstructed";
+                    return combat;
+                }
                 blockedSamples = !combat["clear_line"].GetValue<bool>() && combat["requires_clear_line"].GetValue<bool>()
                     && hp >= previousHp ? blockedSamples + 1 : 0;
                 previousHp = hp;

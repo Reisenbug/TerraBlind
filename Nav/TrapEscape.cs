@@ -88,6 +88,13 @@ namespace TerraBlind
         // 卡住的那一帧调。成功派发了一段 A* 路就返回 true,调用方直接 return
         public static bool TryEscape(Dictionary<(int, int), int> field, int curCx, int curCy, int curH,
                                      int goalWx, int goalWy)
+            => TryEscape(field, curCx, curCy, curH, goalWx, goalWy, preferLocalExit: false);
+
+        internal static bool TryLocalEscape(Dictionary<(int, int), int> field, int curCx, int curCy, int curH, int goalWx, int goalWy)
+            => TryEscape(field, curCx, curCy, curH, goalWx, goalWy, preferLocalExit: true);
+
+        static bool TryEscape(Dictionary<(int, int), int> field, int curCx, int curCy, int curH,
+                              int goalWx, int goalWy, bool preferLocalExit)
         {
             if (Busy) return false;
             // H 比上次卡的时候明显低了 = 中间真出去过,这是个新坑,失败计数重新开始。
@@ -96,7 +103,7 @@ namespace TerraBlind
             if (_fails >= MaxFails) return false;
 
             // PickTarget 里已经打了具体原因(可达区多大、区内最低 H 多少),这儿不再重复
-            var t = PickTarget(field, curCx, curCy, curH);
+            var t = PickTarget(field, curCx, curCy, curH, preferLocalExit);
             if (t == null) return false;
             var target = t.Value;
             int tH = field[(target.x, target.y)];
@@ -124,15 +131,19 @@ namespace TerraBlind
         //
         // 改成按【可达性】挑:从人站的格泛洪,只走物理走得通的边,完全不看 H。
         // 这片区域就是"这个坑"。区内 H 最低的格一定能到。A* 不会白搜。
-        static (int x, int y)? PickTarget(Dictionary<(int, int), int> field, int cx, int cy, int curH)
+        static (int x, int y)? PickTarget(Dictionary<(int, int), int> field, int cx, int cy, int curH, bool preferLocalExit)
         {
             var region = Flood(cx, cy);
             (int x, int y)? best = null;
             int bestH = curH;
+            int bestDistance = int.MaxValue;
             foreach (var c in region)
             {
                 if (!field.TryGetValue(c, out int h)) continue;
-                if (h < bestH) { bestH = h; best = c; }
+                int distance = preferLocalExit ? System.Math.Abs(c.x - cx) + System.Math.Abs(c.y - cy) : 0;
+                if ((long)curH - h < MinDrop || distance > bestDistance || distance == bestDistance && h >= bestH) continue;
+                bestDistance = distance;
+                bestH = h; best = c;
             }
             if (best != null && curH - bestH >= MinDrop)
             {

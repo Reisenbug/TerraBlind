@@ -555,6 +555,13 @@ static class ScriptTests
                     && action["result"]["detail"].ToString().Length == length,
                 "action reference changed stored evidence or compacted a small result");
         }
+        var review = await AgentScript.Run("return {status:'needs_review',handle:'original',reason:'route blocked',evidence:tool('inspect',{radius:8})};",
+            5, (_, _) => { }, (_, _, _) => Task.FromResult(new JsonObject { ["terrain"] = new string('x', 20000) }.ToJsonString()),
+            _ => Task.CompletedTask, default);
+        Check(review["ok"].GetValue<bool>() && review["value"]["status"].ToString() == "needs_review"
+            && review["value"]["reason"].ToString() == "route blocked" && review["value"]["handle"].ToString() == "original"
+            && review["value"]["evidence_omitted"].GetValue<bool>(),
+            "oversized terrain evidence erased the recovery decision or original action handle: " + review);
         Console.WriteLine("PASS: oversized action receipts become queryable references while preserving the review decision and original evidence");
     }
 
@@ -3526,23 +3533,26 @@ static class ScriptTests
                 "skill invocation reset the parent tool budget");
             Console.WriteLine("PASS: parameterized saved skills share validation and budgets, isolate checkpoints and audit fresh inputs across worlds");
             library.Save("gather_route", ScriptLibrary.Example("gather_route")["code"].ToString(), 0);
-            int collectedCount = 0, gatherCalls = 0, recoveryMoves = 0;
-            Task<string> RouteGather(string name, JsonObject args, CancellationToken token)
+            foreach (string blocked in new[] { "source_unavailable", "navigation_no_progress" })
             {
-                if (name == "get_state") return Task.FromResult("{\"inventory_counts\":{\"42\":" + collectedCount + "}}");
-                if (name == "nav_to") { recoveryMoves++; return Task.FromResult("{\"done\":true}"); }
-                Check(name == "gather", "source recovery dispatched an unrelated action");
-                gatherCalls++;
-                if (recoveryMoves == 0) return Task.FromResult("{\"ok\":false,\"outcome\":\"source_unavailable\"}");
-                Check(args["source_area"] == null, "source recovery kept the exhausted area's bounds at a new location");
-                collectedCount = 1;
-                return Task.FromResult("{\"ok\":true,\"outcome\":\"enough\"}");
+                int collectedCount = 0, gatherCalls = 0, recoveryMoves = 0;
+                Task<string> RouteGather(string name, JsonObject args, CancellationToken token)
+                {
+                    if (name == "get_state") return Task.FromResult("{\"inventory_counts\":{\"42\":" + collectedCount + "}}");
+                    if (name == "nav_to") { recoveryMoves++; return Task.FromResult("{\"done\":true}"); }
+                    Check(name == "gather", "source recovery dispatched an unrelated action");
+                    gatherCalls++;
+                    if (recoveryMoves == 0) return Task.FromResult("{\"ok\":false,\"outcome\":\"" + blocked + "\"}");
+                    Check(args["source_area"] == null, "source recovery kept the exhausted area's bounds at a new location");
+                    collectedCount = 1;
+                    return Task.FromResult("{\"ok\":true,\"outcome\":\"enough\"}");
+                }
+                var sourceRecovery = await AgentScript.Run("return skill('gather_route',1,{gather_args:{targets:[{item_type:42,count:1}],source_area:{x:10,y:10,width:10,height:10}},waypoints:[{x:30,y:40}]},'collect');",
+                    5, (_, _) => { }, RouteGather, _ => Task.CompletedTask, default, programs: library.Callable());
+                Check(sourceRecovery["ok"].GetValue<bool>() && sourceRecovery["value"]["status"].ToString() == "collected"
+                    && gatherCalls == 2 && recoveryMoves == 1 && sourceRecovery["value"]["counts"][0]["actual"].GetValue<int>() == 1,
+                    "prepared source recovery waited for a model, ignored actual inventory or lost the selected waypoint");
             }
-            var sourceRecovery = await AgentScript.Run("return skill('gather_route',1,{gather_args:{targets:[{item_type:42,count:1}],source_area:{x:10,y:10,width:10,height:10}},waypoints:[{x:30,y:40}]},'collect');",
-                5, (_, _) => { }, RouteGather, _ => Task.CompletedTask, default, programs: library.Callable());
-            Check(sourceRecovery["ok"].GetValue<bool>() && sourceRecovery["value"]["status"].ToString() == "collected"
-                && gatherCalls == 2 && recoveryMoves == 1 && sourceRecovery["value"]["counts"][0]["actual"].GetValue<int>() == 1,
-                "prepared source recovery waited for a model, ignored actual inventory or lost the selected waypoint");
             Console.WriteLine("PASS: prepared source recovery moves and resumes collection in the same script using real returned inventory counts");
             bool escaped = false;
             try { library.Save("../outside", "return 1;", 0); }

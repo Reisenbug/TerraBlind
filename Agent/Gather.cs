@@ -175,7 +175,7 @@ public static class Gather
                     && combat["hp_after"] is JsonValue afterHp && afterHp.TryGetValue<int>(out int after)
                     && after > 0 && after < before)
                     attempts[id] = 0;
-                if (last["result"]?["outcome"]?.ToString() is "combat_obstructed" or "combat_out_of_range")
+                if (last["result"]?["outcome"]?.ToString() is "combat_obstructed" or "combat_out_of_range" or "combat_no_progress")
                 {
                     combatBlocked[id] = last["result"]["outcome"].ToString();
                     blockedSources.Add(new JsonObject { ["candidate"] = candidate.DeepClone(),
@@ -209,7 +209,7 @@ public static class Gather
             ["source_error"] = sourceError,
             ["recovery_skill"] = outcome is "source_unavailable" or "source_area_exhausted"
                 ? new JsonObject { ["tool"] = "script_program", ["operation"] = "example", ["name"] = "gather_route" }
-                : outcome is "combat_obstructed" or "combat_out_of_range"
+                : outcome is "combat_obstructed" or "combat_out_of_range" or "combat_no_progress"
                     ? new JsonObject { ["tool"] = "script_program", ["operation"] = "get", ["name"] = "combat_approach",
                         ["input"] = new JsonObject { ["npc"] = combatCandidate?["who"]?.DeepClone(),
                             ["npc_type"] = combatCandidate?["npc_type"]?.DeepClone() } } : null,
