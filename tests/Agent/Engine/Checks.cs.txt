@@ -636,6 +636,7 @@ public static class NavigationExecutionChecks
         var player = Main.LocalPlayer;
         var position = player.position; var velocity = player.velocity;
         var weapon = player.inventory[0]; var pick = player.inventory[1]; int selected = player.selectedItem;
+        int animation = player.itemAnimation, itemTime = player.itemTime;
         bool solid = Main.tileSolid[TileID.Dirt], use = player.controlUseItem, left = player.controlLeft, right = player.controlRight;
         int rangeX = Player.tileRangeX, rangeY = Player.tileRangeY, mouseX = Main.mouseX, mouseY = Main.mouseY;
         bool smart = Main.SmartCursorWanted_Mouse;
@@ -661,6 +662,19 @@ public static class NavigationExecutionChecks
                 if (player.controlUseItem != fixture.Reachable || MineCoordinator.IsActive != fixture.Reachable
                     || !fixture.Reachable && (MineCoordinator.Outcome != "out_of_reach" || player.selectedItem != 0))
                     throw new InvalidOperationException("mining reach used the held weapon instead of the chosen pick: " + fixture);
+                if (fixture.Target == 14)
+                {
+                    var automation = typeof(StateSnapshotPlayer).GetMethod("TbAutoActive", hidden);
+                    if (!(bool)automation.Invoke(null, null))
+                        throw new InvalidOperationException("standalone mining did not register as an active input owner");
+                    player.itemAnimation = player.itemTime = 0;
+                    for (int frame = 0; frame < 13 && MineCoordinator.IsActive; frame++)
+                        MineCoordinator.ApplyControls();
+                    if (MineCoordinator.IsActive || MineCoordinator.Outcome != "stalled" || player.controlUseItem
+                        || MineCoordinator.MinedCount != 0)
+                        throw new InvalidOperationException("an unaccepted mining input held the executor instead of returning");
+                    Console.WriteLine("MINING_INPUT_STALL_PASS standalone_owner=true no_tile_removed=true");
+                }
                 MineCoordinator.Stop();
             }
             Console.WriteLine("NAVIGATION_MINING_REACH_CONTRACTS_COMPLETE checks=3 actual_pick_reach=true model_calls=0");
@@ -671,6 +685,7 @@ public static class NavigationExecutionChecks
             foreach (int x in Enumerable.Range(14, 3)) Main.tile[x, 12].ClearEverything();
             player.position = position; player.velocity = velocity; player.inventory[0] = weapon; player.inventory[1] = pick; player.selectedItem = selected;
             player.controlUseItem = use; player.controlLeft = left; player.controlRight = right; Main.tileSolid[TileID.Dirt] = solid;
+            player.itemAnimation = animation; player.itemTime = itemTime;
             Player.tileRangeX = rangeX; Player.tileRangeY = rangeY; Main.mouseX = mouseX; Main.mouseY = mouseY; Main.SmartCursorWanted_Mouse = smart;
             hooks.SetValue(null, oldHooks);
         }
@@ -1648,6 +1663,12 @@ public sealed class Driver : ModSystem
             {
                 case 0:
                     Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                    if (Environment.GetEnvironmentVariable("TB_MINING_INPUT_CHECK") == "1")
+                    {
+                        NavigationExecutionChecks.VerifyMiningReach();
+                        Finish(true, "AGENT_MINING_INPUT_CHECK model_calls=0");
+                        return;
+                    }
                     if (EarlyFallCheck)
                     {
                         Concessions.Enabled = Combat.Enabled = Dodge.Enabled = false;
