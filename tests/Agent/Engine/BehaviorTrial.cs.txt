@@ -6314,6 +6314,7 @@ public sealed partial class BehaviorTrial : ModSystem
     {
         bool defense = Environment.GetEnvironmentVariable("TB_CRYSTAL_DAG_DEFENSE") == "1";
         bool encounter = defense && Environment.GetEnvironmentVariable("TB_CRYSTAL_DAG_ENCOUNTER") == "1";
+        bool blockedRoute = encounter && Environment.GetEnvironmentVariable("TB_CRYSTAL_DAG_BLOCK_ROUTE") == "1";
         var evadingField = typeof(FightCoordinator).GetField("_evading", HiddenStatic);
         using var lifetime = new CancellationTokenSource();
         var agent = ModContent.GetInstance<NativeAgent>();
@@ -6342,8 +6343,10 @@ public sealed partial class BehaviorTrial : ModSystem
         var gaps = new JsonArray();
         var defenseResumes = new JsonArray();
         int crystals = 0, attacks = 0, evades = 0, movingAttacks = 0, initialHp = 0;
-        long lastEvade = -1, encounterAt = -1;
-        bool stingerSpawned = false;
+        long lastEvade = -1, encounterAt = -1, lastShot = -1, blockedAt = -1, crossedAt = -1;
+        int stingers = 0, roofX = setup["resources"][1]["x"].GetValue<int>() + 2;
+        int roofY = setup["resources"][1]["y"].GetValue<int>() + 29;
+        var roofTiles = new List<int>();
         void EndGap(long now)
         {
             if (idleSince < 0) return;
@@ -6371,10 +6374,25 @@ public sealed partial class BehaviorTrial : ModSystem
                     if (crystals >= 2 && secondPickup < 0) { secondPickup = now; EndGap(now); }
                     bool moving = Vector2.DistanceSquared(actor.position, previous) > .0025f;
                     previous = actor.position;
-                    if (encounter && firstPickup >= 0 && RecedingNav.Active && moving)
+                    if (blockedRoute && firstPickup >= 0 && RecedingNav.Active && StateSpacePlanner.ExecRunning
+                        && blockedAt < 0 && Math.Abs(actor.Center.X / 16 - roofX) < 4
+                        && actor.Top.Y / 16 >= roofY + 2 && actor.Bottom.Y / 16 <= roofY + 9)
+                    {
+                        for (int x = roofX - 1; x <= roofX + 1; x++)
+                            if (!Main.tile[x, roofY].HasTile && WorldGen.PlaceTile(x, roofY, TileID.Stone, mute: true, forced: true))
+                                roofTiles.Add(x);
+                        if (roofTiles.Count > 0)
+                        {
+                            blockedAt = now;
+                            Console.WriteLine($"CRYSTAL_ROUTE_BLOCK tick={Main.GameUpdateCount} elapsed_ms={now} y={roofY} columns={string.Join(",", roofTiles)}");
+                        }
+                    }
+                    if (blockedAt >= 0 && crossedAt < 0 && actor.Bottom.Y <= roofY * 16) crossedAt = now;
+                    if (encounter && firstPickup >= 0 && RecedingNav.Active && (moving || blockedAt >= 0))
                     {
                         if (encounterAt < 0 && SpawnMaterialHornet()) encounterAt = now;
-                        if (encounterAt >= 0 && !stingerSpawned && now >= encounterAt + 500)
+                        if (encounterAt >= 0 && stingers < (blockedAt >= 0 ? 8 : 1)
+                            && now >= Math.Max(lastShot, encounterAt) + 500)
                             foreach (var offset in new[] { new Vector2(72, 0), new Vector2(-72, 0),
                                 new Vector2(0, -72), new Vector2(0, 72) })
                             {
@@ -6382,8 +6400,9 @@ public sealed partial class BehaviorTrial : ModSystem
                                 if (!Collision.CanHitLine(from, 4, 4, actor.Center, 4, 4)) continue;
                                 int shot = Projectile.NewProjectile(actor.GetSource_Misc("crystal-handoff-encounter"),
                                     from, -Vector2.Normalize(offset) * 4, ProjectileID.Stinger, 10, 0);
-                                stingerSpawned = shot < Main.maxProjectiles && Main.projectile[shot].active;
-                                if (stingerSpawned) break;
+                                if (shot >= Main.maxProjectiles || !Main.projectile[shot].active) continue;
+                                stingers++; lastShot = now;
+                                break;
                             }
                     }
                     bool attacking = FightCoordinator.AttackAnimationActive
@@ -6415,7 +6434,8 @@ public sealed partial class BehaviorTrial : ModSystem
             {
                 await Task.Delay(150);
                 plan = JsonNode.Parse(await AgentTools.State(lifetime.Token, false, false, new JsonArray("task_plan")))["task_plan"].AsObject();
-            } while (clock.Elapsed.TotalSeconds < 35 && plan["status"]?.ToString() != "completed");
+            } while (clock.Elapsed.TotalSeconds < 35 && plan["status"]?.ToString() != "completed"
+                && !await OnMain(() => Main.LocalPlayer.dead));
             var report = await OnMain(() =>
             {
                 if (secondPickup < 0) EndGap(clock.ElapsedMilliseconds);
@@ -6427,12 +6447,16 @@ public sealed partial class BehaviorTrial : ModSystem
                     ["fixture_immunity_ticks"] = defense ? 0 : fixtureImmunityTicks,
                     ["defense_enabled"] = defense, ["attack_frames"] = attacks, ["moving_attack_frames"] = movingAttacks,
                     ["evade_frames"] = evades, ["evade_to_route_movement_ms"] = defenseResumes.DeepClone(),
-                    ["hornet_spawn_ms"] = encounterAt >= 0 ? encounterAt : (long?)null, ["stinger_spawned"] = stingerSpawned,
+                    ["hornet_spawn_ms"] = encounterAt >= 0 ? encounterAt : (long?)null, ["stingers_spawned"] = stingers,
+                    ["route_block_ms"] = blockedAt >= 0 ? blockedAt : (long?)null,
+                    ["block_to_crossing_ms"] = crossedAt >= 0 ? crossedAt - blockedAt : (long?)null,
+                    ["roof_y"] = roofY, ["roof_columns"] = new JsonArray(roofTiles.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
+                    ["roof_tiles_removed"] = roofTiles.Count(x => !Main.tile[x, roofY].HasTile || Main.tile[x, roofY].TileType != TileID.Stone),
                     ["initial_hp"] = initialHp, ["final_hp"] = Main.LocalPlayer.statLife, ["dead"] = Main.LocalPlayer.dead };
             });
             File.WriteAllText(Path.Combine(Main.SavePath, "crystal-dag-handoff.json"), report.ToJsonString());
             if (crystals != 2 || restarted < 0 || plan["status"]?.ToString() != "completed"
-                || encounter && attacks == 0 && evades == 0)
+                || encounter && attacks == 0 && evades == 0 || blockedRoute && (roofTiles.Count == 0 || crossedAt < 0 || stingers < 2))
                 throw new Exception("crystal DAG did not complete: " + report);
             Console.WriteLine("CRYSTAL_DAG_HANDOFF_PASS " + report);
         }
