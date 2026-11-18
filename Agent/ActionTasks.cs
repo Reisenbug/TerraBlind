@@ -250,7 +250,10 @@ public sealed class ActionTasks
                         && result?["done"]?.ToString() == "true" && Moved(starting, observed)
                         && arrivals.Add(entry.Args["x"] + "," + entry.Args["y"])) navigationArrivals++;
                     if (entry.Tool == "fight") attack = null; else active = null;
-                    if (entry.ResumeAfter is { } resume && entry.Status == "completed" && active == null
+                    bool normalYield = entry.Status == "failed" && result is JsonObject report
+                        && report["ok"]?.ToString() == "true" && report["failure"] == null
+                        && report["value"] is JsonObject value && value["status"]?.ToString() == "yield" && value["wake"] == null;
+                    if (entry.ResumeAfter is { } resume && (entry.Status == "completed" || normalYield) && active == null
                         && !handingOff && !entry.Root.IsCancellationRequested && entry.TaskSerial == taskSerial
                         && resume.Status is "failed" or "paused")
                     {

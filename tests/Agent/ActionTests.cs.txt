@@ -360,8 +360,9 @@ static class ActionTests
 
     static async Task ResumeFromRecovery()
     {
-        foreach (bool failed in new[] { false, true })
+        foreach (string mode in new[] { "completed", "yield", "failed", "event_yield" })
         {
+            bool shouldResume = mode is "completed" or "yield";
             var queuedResume = Signal();
             var finishRepair = Signal();
             var resumed = Signal();
@@ -376,7 +377,13 @@ static class ActionTests
                     Check(receipt["status"].ToString() == "resume_queued", "recovery could not queue the original handle");
                     queuedResume.TrySetResult(true);
                     await finishRepair.Task.WaitAsync(token);
-                    return failed ? "{\"ok\":false}" : "{\"ok\":true}";
+                    return mode switch
+                    {
+                        "yield" => "{\"ok\":true,\"value\":{\"status\":\"yield\"}}",
+                        "event_yield" => "{\"ok\":true,\"value\":{\"status\":\"yield\",\"wake\":{}}}",
+                        "failed" => "{\"ok\":false}",
+                        _ => "{\"ok\":true}"
+                    };
                 }
                 if (Interlocked.Increment(ref executions) == 1) return "{\"ok\":false}";
                 Check(args["count"]?.GetValue<int>() == 2, "queued resume lost updated arguments");
@@ -393,10 +400,10 @@ static class ActionTests
                 Check(executions == 1 && actions.ActiveHandle == repair, "original action ran before recovery yielded input");
                 finishRepair.SetResult(true);
                 var receipt = await actions.Query(repair, 1000, default);
-                Check(receipt["status"].ToString() == (failed ? "failed" : "completed"), "recovery did not settle");
-                if (!failed) await resumed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                Check(receipt["status"].ToString() == (mode == "completed" ? "completed" : "failed"), "recovery did not settle");
+                if (shouldResume) await resumed.Task.WaitAsync(TimeSpan.FromSeconds(3));
                 var next = await actions.Query(original, 1000, default);
-                Check(executions == (failed ? 1 : 2) && next["attempt"].GetValue<int>() == executions,
+                Check(executions == (shouldResume ? 2 : 1) && next["attempt"].GetValue<int>() == executions,
                     "recovery did not transfer control exactly once after successful cleanup");
             }
             finally { ActionTasks.NodeContext.Value = null; }
