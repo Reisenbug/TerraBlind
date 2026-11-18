@@ -3909,6 +3909,7 @@ public sealed partial class BehaviorTrial : ModSystem
 
     async Task CoverTrial()
     {
+        bool scriptedCover = Environment.GetEnvironmentVariable("TB_COVER_SCRIPTED") == "1";
         int x = Main.spawnTileX, floor = Main.spawnTileY + 8;
         await OnMain(() =>
         {
@@ -3946,6 +3947,14 @@ public sealed partial class BehaviorTrial : ModSystem
             tool('act',{steps:[{keys:['left'],until:{frames:60}}]});
             return selected;
             """.Replace("DESTINATION", new JsonObject { ["x"] = x - 10, ["y"] = floor - 1 }.ToJsonString());
+        if (scriptedCover) code = """
+            const cover=tool('combat_assess',{radius:25}).cover_candidates[0];
+            if(!cover)return {status:'needs_review',reason:'no_cover_candidate'};
+            const placed=tool('place_at',cover.action);
+            if(!placed.ok)return placed;
+            tool('act',{steps:[{keys:['left'],until:{frames:60}}]});
+            return placed;
+            """;
         var clock = Stopwatch.StartNew();
         var created = await Call("task_plan", new JsonObject { ["goal"] = "Build cover and continue left", ["mode"] = "dag",
             ["steps"] = new JsonArray(new JsonObject { ["id"] = "cover", ["description"] = "Build and continue",
@@ -3986,10 +3995,10 @@ public sealed partial class BehaviorTrial : ModSystem
             ["action"] = action.DeepClone(), ["blocks"] = built.Count, ["wood_remaining"] = Main.LocalPlayer.inventory.Where(i => i.type == ItemID.Wood).Sum(i => i.stack),
             ["platforms_auto_crafted"] = Main.LocalPlayer.inventory.Where(i => i.type == ItemID.WoodPlatform).Sum(i => i.stack),
             ["protected_while_running"] = protectedWhileRunning,
-            ["model_idle_input_isolated"] = idleInputIsolated,
+            ["model_idle_input_isolated"] = scriptedCover ? (bool?)null : idleInputIsolated,
             ["continued_distance_pixels"] = x * 16 - Main.LocalPlayer.position.X,
             ["protection_released"] = built.All(p => !((AgentControlPolicy)typeof(AgentTools).GetField("Control", HiddenStatic).GetValue(null)).ForbiddenAt(ControlBehavior.Mining, p.X, p.Y)),
-            ["hp"] = Main.LocalPlayer.statLife, ["fixture_terrain"] = true, ["live_jev"] = true, ["slow_model_calls"] = 0 });
+            ["hp"] = Main.LocalPlayer.statLife, ["fixture_terrain"] = true, ["live_jev"] = !scriptedCover, ["slow_model_calls"] = 0 });
         if (built.Count == 4)
         {
             int wallX = built[0].X;
@@ -4010,12 +4019,12 @@ public sealed partial class BehaviorTrial : ModSystem
         File.WriteAllText(Path.Combine(Main.SavePath, "cover-native.json"), report.ToJsonString());
         Console.WriteLine($"COVER_NATIVE_MEASURED blocks={built.Count} elapsed_ms={clock.ElapsedMilliseconds} continued_px={report["continued_distance_pixels"]} input_isolated={idleInputIsolated}");
         if (built.Count != 4 || report["wood_remaining"].GetValue<int>() != 36 - report["platforms_auto_crafted"].GetValue<int>() / 2
-            || !protectedWhileRunning || !idleInputIsolated
+            || !protectedWhileRunning || !scriptedCover && !idleInputIsolated
             || !report["protection_released"].GetValue<bool>() || report["continued_distance_pixels"].GetValue<float>() < 64
             || report["arrow"]["active"].GetValue<bool>() || report["arrow"]["hp_before"].GetValue<int>() != report["arrow"]["hp_after"].GetValue<int>()
             || Math.Abs(report["arrow"]["x"].GetValue<float>() - report["arrow"]["wall_x"].GetValue<int>()) > 32)
-            throw new Exception("native Jev cover failed; inspect " + Path.Combine(Main.SavePath, "cover-native.json"));
-        Console.WriteLine("COVER_NATIVE_PASS cells=4 live_jev=true protected_until_action_end=true slow_model_calls=0");
+            throw new Exception("native cover failed; inspect " + Path.Combine(Main.SavePath, "cover-native.json"));
+        Console.WriteLine($"COVER_NATIVE_PASS cells=4 live_jev={!scriptedCover} protected_until_action_end=true slow_model_calls=0");
     }
 
     async Task FallCatchTrial()
@@ -6314,6 +6323,7 @@ public sealed partial class BehaviorTrial : ModSystem
     {
         bool defense = Environment.GetEnvironmentVariable("TB_CRYSTAL_DAG_DEFENSE") == "1";
         bool encounter = defense && Environment.GetEnvironmentVariable("TB_CRYSTAL_DAG_ENCOUNTER") == "1";
+        bool lastKnife = encounter && Environment.GetEnvironmentVariable("TB_CRYSTAL_DAG_LAST_KNIFE") == "1";
         bool blockedRoute = encounter && Environment.GetEnvironmentVariable("TB_CRYSTAL_DAG_BLOCK_ROUTE") == "1";
         var evadingField = typeof(FightCoordinator).GetField("_evading", HiddenStatic);
         using var lifetime = new CancellationTokenSource();
@@ -6328,9 +6338,25 @@ public sealed partial class BehaviorTrial : ModSystem
             var args = new JsonObject { ["targets"] = new JsonArray(new JsonObject { ["item_type"] = item,
                 ["count"] = i + 1, ["tile_names"] = new JsonArray("Heart") }), ["source_area"] = new JsonObject {
                 ["x"] = x - 3, ["y"] = y - 3, ["width"] = 8, ["height"] = 8 } };
+            string script = "return step('gather',()=>tool('gather'," + args.ToJsonString() + "));";
+            if (lastKnife && i == 1) script = """
+                let cover=null;
+                on('tick',event=>{
+                  if(cover||event.execution?.tool!=='nav_to')return {handled:true};
+                  const scene=tool('combat_assess',{radius:12});
+                  if(scene.cover_candidates?.length&&
+                     (tool('get_state',{fields:['inventory_counts']}).inventory_counts?.['KNIFE_TYPE']??0)===0){
+                    const candidate=scene.cover_candidates[0];
+                    cover={candidate,result:tool('place_at',candidate.action)};
+                  }
+                  return {handled:true};
+                });
+                const gathered=step('gather',()=>tool('gather',ARGS));
+                return {...gathered,cover};
+                """.Replace("ARGS", args.ToJsonString()).Replace("KNIFE_TYPE", ItemID.ThrowingKnife.ToString());
             nodes.Add(new JsonObject { ["id"] = "crystal" + i, ["description"] = $"Collect crystal at ({x},{y})",
                 ["depends_on"] = i == 0 ? new JsonArray() : new JsonArray("crystal0"),
-                ["script"] = "return step('gather',()=>tool('gather'," + args.ToJsonString() + "));",
+                ["script"] = script,
                 ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "item", ["type"] = item, ["count"] = i + 1 }) });
         }
         var plan = await Call("task_plan", new JsonObject { ["goal"] = "collect two natural jungle crystals", ["mode"] = "dag", ["steps"] = nodes });
@@ -6343,7 +6369,8 @@ public sealed partial class BehaviorTrial : ModSystem
         var gaps = new JsonArray();
         var defenseResumes = new JsonArray();
         int crystals = 0, attacks = 0, evades = 0, movingAttacks = 0, initialHp = 0;
-        long lastEvade = -1, encounterAt = -1, lastShot = -1, blockedAt = -1, crossedAt = -1;
+        long lastEvade = -1, encounterAt = -1, lastShot = -1, blockedAt = -1, crossedAt = -1, exhaustedAt = -1, movedUnarmedAt = -1;
+        int unarmedAttackInputs = 0;
         int stingers = 0, roofX = setup["resources"][1]["x"].GetValue<int>() + 2;
         int roofY = setup["resources"][1]["y"].GetValue<int>() + 29;
         var roofTiles = new List<int>();
@@ -6365,6 +6392,12 @@ public sealed partial class BehaviorTrial : ModSystem
                 cancel.SetValue(agent, lifetime);
                 p.immune = !defense; p.immuneTime = defense ? 0 : fixtureImmunityTicks;
                 AgentPermissions.Attack = AgentPermissions.Dodge = defense;
+                if (lastKnife)
+                {
+                    foreach (var weapon in p.inventory.Where(CombatLoadout.Usable)) weapon.TurnToAir();
+                    p.inventory[4].SetDefaults(ItemID.ThrowingKnife);
+                    p.inventory[5].SetDefaults(ItemID.Wood); p.inventory[5].stack = 40;
+                }
                 initialHp = p.statLife;
                 BoundaryInputPlayer.ObserveInput = actor =>
                 {
@@ -6407,6 +6440,12 @@ public sealed partial class BehaviorTrial : ModSystem
                     }
                     bool attacking = FightCoordinator.AttackAnimationActive
                         || FightCoordinator.AimTarget.HasValue && actor.controlUseItem;
+                    if (lastKnife && exhaustedAt < 0 && !actor.HasItem(ItemID.ThrowingKnife)) exhaustedAt = now;
+                    if (exhaustedAt >= 0 && actor.itemAnimation == 0)
+                    {
+                        if (moving && RecedingNav.Active && movedUnarmedAt < 0) movedUnarmedAt = now;
+                        if (FightCoordinator.AimTarget.HasValue && actor.controlUseItem) unarmedAttackInputs++;
+                    }
                     if (attacking) { attacks++; if (moving) movingAttacks++; }
                     if (defense && (bool)evadingField.GetValue(null)) { evades++; lastEvade = now; }
                     else if (lastEvade >= 0 && RecedingNav.Active && moving)
@@ -6439,7 +6478,7 @@ public sealed partial class BehaviorTrial : ModSystem
             var report = await OnMain(() =>
             {
                 if (secondPickup < 0) EndGap(clock.ElapsedMilliseconds);
-                return new JsonObject { ["scene"] = setup.DeepClone(), ["plan"] = plan.DeepClone(), ["collected"] = crystals,
+                var evidence = new JsonObject { ["scene"] = setup.DeepClone(), ["plan"] = plan.DeepClone(), ["collected"] = crystals,
                     ["first_pickup_ms"] = firstPickup, ["second_pickup_ms"] = secondPickup,
                     ["first_pickup_to_next_movement_ms"] = restarted >= 0 ? restarted - firstPickup : (long?)null,
                     ["longest_idle_ms"] = longestIdle, ["idle_intervals"] = gaps.DeepClone(),
@@ -6453,10 +6492,15 @@ public sealed partial class BehaviorTrial : ModSystem
                     ["roof_y"] = roofY, ["roof_columns"] = new JsonArray(roofTiles.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
                     ["roof_tiles_removed"] = roofTiles.Count(x => !Main.tile[x, roofY].HasTile || Main.tile[x, roofY].TileType != TileID.Stone),
                     ["initial_hp"] = initialHp, ["final_hp"] = Main.LocalPlayer.statLife, ["dead"] = Main.LocalPlayer.dead };
+                evidence["last_knife_spent_ms"] = exhaustedAt >= 0 ? exhaustedAt : (long?)null;
+                evidence["spent_to_unarmed_route_movement_ms"] = movedUnarmedAt >= 0 ? movedUnarmedAt - exhaustedAt : (long?)null;
+                evidence["unarmed_attack_inputs"] = unarmedAttackInputs;
+                return evidence;
             });
             File.WriteAllText(Path.Combine(Main.SavePath, "crystal-dag-handoff.json"), report.ToJsonString());
             if (crystals != 2 || restarted < 0 || plan["status"]?.ToString() != "completed"
-                || encounter && attacks == 0 && evades == 0 || blockedRoute && (roofTiles.Count == 0 || crossedAt < 0 || stingers < 2))
+                || encounter && attacks == 0 && evades == 0 || blockedRoute && (roofTiles.Count == 0 || crossedAt < 0 || stingers < 2)
+                || lastKnife && (exhaustedAt < 0 || movedUnarmedAt < 0 || unarmedAttackInputs != 0))
                 throw new Exception("crystal DAG did not complete: " + report);
             Console.WriteLine("CRYSTAL_DAG_HANDOFF_PASS " + report);
         }
