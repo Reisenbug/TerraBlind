@@ -25,6 +25,8 @@ namespace TerraBlind
 		// 上次为够不着而伸手的那一格。只为日志去重。每帧都打会刷满
 		private static (int, int) _boostLogAt = (int.MinValue, int.MinValue);
 		private static int _stallFrames, _lastRemaining;
+		private static (int X, int Y) _useTarget;
+		private static int _noSwingFrames;
 		private const int StallMax = 600; // ~10s with no tile removed = can't reach the target → bail
 		private const int MineBoxMargin = 2; // tiles of slack around the start↔target box before mining aborts
 
@@ -46,6 +48,8 @@ namespace TerraBlind
 			_idleDistance = int.MaxValue;
 			_alignFrames = 0;
 			_lastRemaining = int.MaxValue;
+			_useTarget = (int.MinValue, int.MinValue);
+			_noSwingFrames = 0;
 			Outcome = "running";
 			Reason = "";
 			MinedCount = 0;
@@ -255,6 +259,19 @@ namespace TerraBlind
 				p.selectedItem = previousSlot;
 				DiagLog.Write($"[mine] 够不着 ({tx},{ty}) dir={req.Dir} 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → stop");
 				Finish("out_of_reach", $"够不着({tx},{ty}),人在({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
+				return;
+			}
+			if (_useTarget != (tx, ty) || p.itemAnimation > 0 || p.itemTime > 0)
+			{
+				_useTarget = (tx, ty);
+				_noSwingFrames = 0;
+			}
+			else if (++_noSwingFrames >= 12)
+			{
+				p.controlUseItem = p.controlLeft = p.controlRight = p.controlDown = false;
+				string evidence = $"tile=({tx},{ty}) delay_use={p.delayUseItem} mouse_interface={p.mouseInterface} release_use={p.releaseUseItem}";
+				DiagLog.Write($"[mine] input not accepted frames={_noSwingFrames} {evidence}");
+				Finish("stalled", $"镐未开始挥动; {evidence}");
 				return;
 			}
 

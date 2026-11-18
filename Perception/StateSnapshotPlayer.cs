@@ -418,7 +418,7 @@ namespace TerraBlind
 		// 我们自己的动作在不在跑。判据只有这一份,别在各处各写一套
 		// 【打 boss 两层也算】。漏了就跳过清拦截,而 delayUseItem 只在 !controlUseItem 时才清
 		static bool TbAutoActive()
-			=> ItemUseCoordinator.IsActive || PlaceAction.IsRunning || BridgeBuilder.IsRunning
+			=> ItemUseCoordinator.IsActive || MineCoordinator.IsActive || PlaceAction.IsRunning || BridgeBuilder.IsRunning
 			   || PillarUp.IsRunning || DeckBuilder.IsRunning || HouseBuilder.IsRunning
 			   || PlaceAnywhere.IsRunning || WofPrep.IsRunning || RecedingNav.Active
 			   || PlaceWalls.IsRunning || WalkPlace.IsRunning || WofFight.On || PlayerCombat.Active || PvpDuel.Active
