@@ -2912,6 +2912,35 @@ public sealed partial class BehaviorTrial : ModSystem
                     if (landingCase == 5)
                     { p.inventory[41].SetDefaults(ItemID.WoodPlatform); p.inventory[41].stack = 100; }
                 }
+                if (landingCase is 11 or 12)
+                {
+                    AgentPermissions.Reset(); Config.I.AgentEnabled = true;
+                    p.position = new Vector2(16745.67f, 7853.05f);
+                    p.velocity = new Vector2(0, 10.01f);
+                    p.fallStart = p.fallStart2 = 463;
+                    p.ConsumedLifeCrystals = 2;
+                    p.statLife = p.statLifeMax = p.statLifeMax2 = landingHealth = 140;
+                    if (landingCase == 11)
+                    {
+                        var settle = typeof(StateSpacePlanner).GetMethod("SettleNode", HiddenStatic);
+                        var falling = new StateSpacePlanner.SSNode { Px = p.position.X, Py = p.position.Y, Vy = p.velocity.Y };
+                        var arguments = new object[] { falling, PhysicsSimulator.Params.FromPlayer(p), falling,
+                            new List<PhysicsSimulator.ControlInput>() };
+                        bool rejected = settle.Invoke(null, arguments) == null;
+                        p.noFallDmg = true;
+                        bool immuneAllowed = settle.Invoke(null, arguments) != null;
+                        p.noFallDmg = false;
+                        if (!rejected || !immuneAllowed)
+                            throw new Exception($"recorded fall tail: unsafe_rejected={rejected} immune_allowed={immuneAllowed}");
+                        Console.WriteLine("FALL_TAIL_PASS recorded_world=true unsafe_rejected=true immune_allowed=true model_calls=0");
+                    }
+                    if (landingCase == 12)
+                    {
+                        p.inventory[0].SetDefaults(ItemID.Starfury);
+                        p.itemAnimation = p.itemTime = 27;
+                        p.controlUseItem = true; p.releaseUseItem = false;
+                    }
+                }
                 if (landingCase == 4)
                 {
                     int x = Main.spawnTileX, y = (int)Main.worldSurface + 40;
@@ -2994,7 +3023,8 @@ public sealed partial class BehaviorTrial : ModSystem
                             ["placement_stock"] = p.inventory.Where(it => !it.IsAir && it.createTile == placementType).Sum(it => it.stack),
                             ["platform_stock"] = p.inventory.Where(it => !it.IsAir && it.createTile == TileID.Platforms).Sum(it => it.stack),
                             ["held_type"] = p.HeldItem.type, ["item_animation"] = p.itemAnimation, ["item_time"] = p.itemTime,
-                            ["use_item"] = p.controlUseItem, ["delay_use_item"] = p.delayUseItem, ["mouse_interface"] = p.mouseInterface,
+                            ["use_item"] = p.controlUseItem, ["release_use_item"] = p.releaseUseItem,
+                            ["delay_use_item"] = p.delayUseItem, ["mouse_interface"] = p.mouseInterface,
                             ["target_x"] = Player.tileTargetX, ["target_y"] = Player.tileTargetY,
                             ["chosen_x"] = chosen.X, ["chosen_y"] = chosen.Y,
                             ["chosen_has_tile"] = Main.tile[chosen.X, chosen.Y].HasTile,

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Microsoft.Xna.Framework;
 using Terraria;
 
 namespace TerraBlind
@@ -79,16 +80,30 @@ namespace TerraBlind
         // 推进到【下次重规划真正会读到的那个状态】:RecedingNav 在帧跑完且 vy==0 后的第一 tick 重规划,中间至少一个 idle 步。
         // 标最后一帧会撒谎。残余 vx 把人滑过格子边界,计划"到达"了一个事后永远读不到的格 ((800,937) 幽灵震荡)。
         const int SettleMaxFrames = 120;
-        static SSNode? SettleNode(SSNode n, PhysicsSimulator.Params ph)
+        static SSNode? SettleNode(SSNode n, PhysicsSimulator.Params ph, SSNode origin, List<PhysicsSimulator.ControlInput> frames)
         {
             var s = new PhysicsSimulator.State { Px = n.Px, Py = n.Py, Vx = n.Vx, Vy = n.Vy, Grounded = n.Grounded };
             var idle = new PhysicsSimulator.ControlInput();
+            var player = Main.LocalPlayer;
+            bool immune = FallSafety.Immune(player), followingFall = false;
+            int fallStart = 0;
             for (int f = 0; f < SettleMaxFrames; f++)
             {
                 s = PhysicsSimulator.Step(s, idle, ph);
                 if (BodyTouchesLava(s.Px, s.Py)) return null;
+                var position = new Vector2(s.Px, s.Py);
+                if (!immune && !followingFall && (!n.Grounded || !s.Grounded))
+                {
+                    if (!FallSafety.SafeTrajectory(player, new Vector2(origin.Px, origin.Py), frames, out fallStart))
+                        return null;
+                    followingFall = true;
+                }
                 if (s.Grounded)
+                {
+                    if (followingFall && FallSafety.LandingDamage(player, position, fallStart) > 0) return null;
                     return new SSNode { Px = s.Px, Py = s.Py, Vx = s.Vx, Vy = s.Vy, Grounded = true };
+                }
+                if (followingFall) fallStart = FallSafety.ResetDistance(player, position, fallStart, s.Vy, frames.Count + f + 1);
             }
             return null;
         }
@@ -2751,7 +2766,7 @@ namespace TerraBlind
                      Expand(ctx, node, ph, goalCx, goalFeetY, BuildHoldOptions(), platformTile, hasPick))
             {
                 bool alters = dig != null || pillar || frames == null || frames.Exists(f => f.Place);
-                var settled = alters ? next : SettleNode(next, ph);
+                var settled = alters ? next : SettleNode(next, ph, node, frames);
                 if (!settled.HasValue) continue;
                 var landed = settled.Value;
                 var (nx, ny) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);
@@ -2822,7 +2837,7 @@ namespace TerraBlind
                 // 落点按【停稳后】的状态标记,不按最后一帧计划:跳跃可能停在格内 0.7px 处、残余 vx 又把人滑回边界另一侧,
                 // 计划"到达"了一个静止态永远不占的格 ((800,937) 幽灵)。但改造地形的边必须【不】做自由落体沉降。它们的砖还没挖/放。
                 bool alters = digTiles != null || pillar || frames == null || frames.Exists(f => f.Place);
-                var settled = alters ? next : SettleNode(next, ph);
+                var settled = alters ? next : SettleNode(next, ph, cur, frames);
                 if (!settled.HasValue) continue;
                 var landed = settled.Value;
                 var (ncx, ncy) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);

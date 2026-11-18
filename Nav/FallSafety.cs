@@ -40,10 +40,13 @@ public static class FallSafety
     }
 
     public static bool SafeTrajectory(Player player, Vector2 start, IReadOnlyList<PhysicsSimulator.ControlInput> frames)
+        => SafeTrajectory(player, start, frames, out _);
+
+    internal static bool SafeTrajectory(Player player, Vector2 start, IReadOnlyList<PhysicsSimulator.ControlInput> frames, out int fallStart)
     {
-        if (Immune(player)) return true;
-        int fallStart = Vector2.DistanceSquared(start, player.position) < 1 && player.velocity.Y * player.gravDir > 0
+        fallStart = Vector2.DistanceSquared(start, player.position) < 1 && player.velocity.Y * player.gravDir > 0
             ? player.fallStart : (int)(start.Y / 16);
+        if (Immune(player)) return true;
         for (int i = 0; i < frames.Count; i++)
         {
             var frame = frames[i];
