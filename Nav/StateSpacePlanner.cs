@@ -2977,6 +2977,31 @@ namespace TerraBlind
                     best = push.edge; bestCell = push.cell; bestTotal = push.total;
                 }
             }
+            (int, int)? shuttleReturn = null;
+            if (best != null && _recent.Count >= 5)
+            {
+                var current = (curCx, curCy);
+                if (bestCell != current && _recent[^1] == current && _recent[^2] == bestCell
+                    && _recent[^3] == current && _recent[^4] == bestCell && _recent[^5] == current)
+                {
+                    var repeated = bestCell;
+                    float alternateScore = float.MaxValue;
+                    foreach (var candidate in jigglePool)
+                    {
+                        if (candidate.cell == repeated) continue;
+                        float score = candidate.total
+                            + (RiskLayer.Enabled ? RiskLayer.Penalty(p, curCx, curCy, candidate.cell.Item1, candidate.cell.Item2) : 0);
+                        if (score >= alternateScore) continue;
+                        alternateScore = score;
+                        best = candidate.edge; bestCell = candidate.cell; bestTotal = score;
+                    }
+                    if (bestCell != repeated)
+                    {
+                        shuttleReturn = repeated;
+                        DiagLog.Write($"[recede-break-shuttle] from={current} repeated={repeated} alternate={bestCell}");
+                    }
+                }
+            }
             if (best != null && AgentNavigationIntent.RevisionFor(goalWx, goalWy) != 0)
             {
                 var tactical = new List<AgentNavigationIntent.Candidate>();
@@ -2989,7 +3014,7 @@ namespace TerraBlind
                     if (c.cell == bestCell && c.edge.Equals(best.Value)) baseline = i;
                 }
                 int chosen = AgentNavigationIntent.Select(goalWx, goalWy, tactical, baseline);
-                if (chosen >= 0)
+                if (chosen >= 0 && jigglePool[chosen].cell != shuttleReturn)
                 { var c = jigglePool[chosen]; best = c.edge; bestCell = c.cell; bestTotal = c.total; }
             }
             if (_visited.Add((curCx, curCy))) _visitedQ.Enqueue((curCx, curCy));
