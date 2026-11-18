@@ -491,7 +491,7 @@ public static partial class AgentTools
         if (previous["status"]?.ToString() != "completed" && !plan["ready_steps"].AsArray().Any(n => n?.ToString() == owner)) return;
         bool verified = previous["status"]?.ToString() == "completed"
             || Plan.Advance(owner, AgentTaskEvidence.Measure)["verified"]?.GetValue<bool>() == true;
-        bool prepared = !verified && workflow?.HasPreparedContinuation(previous["script"]?.ToString()) == true;
+        bool prepared = !verified && workflow?.HasPreparedContinuation(previous["script"]?.ToString(), action) == true;
         string recovery = previous["on_failure"]?.ToString();
         if (!verified && action["status"]?.ToString() == "failed" && !string.IsNullOrWhiteSpace(recovery)
             && (!recoveredActions.TryGetValue(execution, out string recovered) || recovered != recovery))

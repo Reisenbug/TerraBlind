@@ -456,6 +456,7 @@ public static class AgentScript
         + "结合库存、任务和取得成本选择机会，理由存step；多格事件按物体合并，取得用真实库存或got核验。插入时暂停并保存原handle，按需resume(args)或cancel，独立防身可与移动并行。"
         + "\n恢复：script_progress get返回steps数组，原句柄在steps[i].value.handle，当前状态用action_query。uncertain核对后再retry/complete；repeatable_navigation:true允许根据no_progress现场修正后续接原step，历史失败保留。"
         + "on_failure接收完整failure，局部修复后同段JS恢复原handle。decision_point携带关键evidence、tick、原handle、尝试和候选，reported_evidence是脚本报告；默认暂停，continue_action指定允许审阅期间继续的当前句柄，后续仍需核对交接。"
+        + "可从实际状态安全续跑的DAG脚本在可恢复动作失败时返回{status:'yield',continue_after:原失败句柄}。on_failure恢复同一个句柄，原动作成功后宿主立即重进原脚本。重新查询库存等状态并从剩余目标继续；对不可重放的效果先用step保存验收结果。"
         + "interrupted保留handle/events，按事件恢复；失败恢复保留已完成效果。get_state.script_workflows.last_execution及script_progress.last_segment保留上段工具次数、耗时和failure。"
         + "\n资源：game_catalog matches[].type按kind区分编号，places_tile仅证明可放置关系，exact:false须查证；frame和实际掉落核验来源。NPC材料可查npc_drop_sources，npc_find只列当前已生成NPC。"
         + "get_state.depth是原生高度层，与player.biome共同判环境。gather source_error.observations记录移除无增量证据，combat_obstructed/out_of_range的last_result.result给距离、射界、目标和伤害。"

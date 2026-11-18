@@ -41,6 +41,7 @@ static class ScriptTests
         await PreparedGapHandoff();
         await PreparedGapHandoff(danger: true);
         await CancelledNavigationContinuation();
+        await RecoveryContinuationContract();
         WaypointCorrections();
         await GatherObservationPolicy();
         BuiltinDiscovery();
@@ -1837,6 +1838,51 @@ static class ScriptTests
         Console.WriteLine("PASS: cancelled single navigation resumes without repeating completed effects; item and mixed steps retain reconciliation");
     }
 
+    static async Task RecoveryContinuationContract()
+    {
+        const string script = """
+            step('preparation',()=>tool('craft',{name:'WorkBench'}));
+            const state=tool('get_state');
+            if(state.count===0) return {status:'yield',continue_after:'collection'};
+            return tool('use_item',{slot:0});
+            """;
+        var progress = new ScriptProgress();
+        int crafted = 0, used = 0, count = 0;
+        Task<string> ExecuteTool(string name, JsonObject args, CancellationToken token)
+        {
+            if (name == "get_state") return Task.FromResult(new JsonObject { ["count"] = count }.ToJsonString());
+            if (name == "craft") crafted++;
+            else if (name == "use_item") used++;
+            else throw new Exception("unexpected fixture tool");
+            return Task.FromResult("""{"ok":true}""");
+        }
+        var first = await AgentScript.Run(script, 5, (_, _) => { }, ExecuteTool, _ => Task.CompletedTask, default, progress);
+        var action = JsonNode.Parse("""{"handle":"collection","status":"completed","previous_attempt":{"status":"failed"}}""").AsObject();
+        Check(first["ok"]?.GetValue<bool>() == true && !progress.HasPreparedContinuation(script)
+            && progress.HasPreparedContinuation(script, action), "matching recovered action did not enable script continuation");
+        action["handle"] = "unrelated";
+        Check(!progress.HasPreparedContinuation(script, action), "unrelated action resumed the script");
+        action["handle"] = "collection"; action["status"] = "failed";
+        Check(!progress.HasPreparedContinuation(script, action), "failed retry resumed the script");
+        action["status"] = "completed"; action.Remove("previous_attempt");
+        Check(!progress.HasPreparedContinuation(script, action), "ordinary completion resumed recovery-only continuation");
+        action["previous_attempt"] = new JsonObject { ["status"] = "failed" };
+        foreach (bool wake in new[] { true, false })
+        {
+            var waiting = new ScriptProgress();
+            waiting.Begin(script);
+            if (!wake) waiting.Enter("unverified");
+            var value = new JsonObject { ["status"] = "yield", ["continue_after"] = "collection" };
+            if (wake) value["wake"] = new JsonObject { ["reason"] = "review_terrain" };
+            waiting.End(new JsonObject { ["value"] = value });
+            Check(!waiting.HasPreparedContinuation(script, action), "recovery bypassed pending review or uncertain effects");
+        }
+        count = 1;
+        var final = await AgentScript.Run(script, 5, (_, _) => { }, ExecuteTool, _ => Task.CompletedTask, default, progress);
+        Check(final["ok"]?.GetValue<bool>() == true && crafted == 1 && used == 1, "recovered script replayed the completed checkpoint");
+        Console.WriteLine("PASS: successful recovery resumes only its waiting script and retains checkpoint effects");
+    }
+
     static async Task PreparedGapHandoff(bool danger = false)
     {
         var agent = new NativeAgent(); agent.Load();
@@ -2992,6 +3038,7 @@ static class ScriptTests
     public static async Task Run()
     {
         await CancelledNavigationContinuation();
+        await RecoveryContinuationContract();
         WaypointCorrections();
         await GatherObservationPolicy();
         await QuietObservation();

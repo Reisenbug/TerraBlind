@@ -43,11 +43,19 @@ public sealed class ScriptProgress
             && value["reason"]?.ToString() == "intent_segment_complete" && value["wake"] == null;
     }
 
-    internal bool HasPreparedContinuation(string source)
+    internal bool HasPreparedContinuation(string source, JsonObject action = null)
     {
-        lock (gate) return IntentContinuationReady(source) || !running && executedSource != null && source != executedSource
-            && last?["error"] == null && last?["failure"] == null
-            && last?["value"] is JsonObject value && value["status"]?.ToString() == "yield" && value["wake"] == null;
+        lock (gate)
+        {
+            if (IntentContinuationReady(source)) return true;
+            if (running || executedSource == null || last?["error"] != null
+                || last?["value"] is not JsonObject value || value["status"]?.ToString() != "yield" || value["wake"] != null) return false;
+            if (source != executedSource) return last["failure"] == null;
+            return value["continue_after"] is JsonValue expected && expected.TryGetValue<string>(out string handle)
+                && handle == action?["handle"]?.ToString() && action["status"]?.ToString() == "completed"
+                && action["previous_attempt"]?["status"]?.ToString() == "failed"
+                && !steps.Values.Any(step => step["status"]?.ToString() == "uncertain");
+        }
     }
 
     public void Begin(string source = null)
