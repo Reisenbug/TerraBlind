@@ -226,6 +226,19 @@ static class WatchTests
             Check(navigation.Observe(i, i * 3, 0, 1000 - i * 3, terrain) == null,
                 "slow movement toward the target was treated as local oscillation");
         Console.WriteLine("PASS: bounded oscillation yields early while slow forward progress continues");
+        navigation = new NavigationProgress(requireApproach: true);
+        var detourCosts = new[] { 6322, 5428, 5345, 4676, 3373, 3349 };
+        for (int i = 0; i < detourCosts.Length; i++)
+            Check(navigation.Observe(i * 7, i * 48, 0, 1372 + i * 9, terrain, routeCost: detourCosts[i]) == null,
+                "a real decrease in route cost failed to preserve a detour away from the destination");
+        for (int i = 1; i <= 5; i++)
+        {
+            var stagnant = navigation.Observe(35 + i * 6, (5 + i) * 48, 0, 1420 + i * 9, terrain, routeCost: 3373);
+            Check(i < 5 ? stagnant == null : stagnant?["reason"]?.ToString() == "moving_without_route_progress"
+                && stagnant["best_route_cost"]?.GetValue<int>() == 3349,
+                "movement without new distance or route-cost progress failed to expire");
+        }
+        Console.WriteLine("PASS: measured cave detour continues while route cost drops, then stops on no progress");
 
         int effects = 0;
         var progress = new ScriptProgress();

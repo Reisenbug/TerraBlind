@@ -10,11 +10,13 @@ public sealed class NavigationProgress
     readonly bool requireApproach;
     bool initialized;
     double anchorX, anchorY, localX, localY, bestDistance;
+    int? bestRouteCost;
     double lastMovement, lastLocalProgress, lastProgress;
 
     public NavigationProgress(bool requireApproach = false) => this.requireApproach = requireApproach;
 
-    public JsonObject Observe(double seconds, double x, double y, double distance, IReadOnlyDictionary<int, long> terrain, bool planning = false)
+    public JsonObject Observe(double seconds, double x, double y, double distance, IReadOnlyDictionary<int, long> terrain,
+        bool planning = false, int? routeCost = null)
     {
         if (planning) { initialized = false; return null; }
         bool edited = false;
@@ -26,6 +28,7 @@ public sealed class NavigationProgress
         if (!initialized)
         {
             initialized = true; anchorX = localX = x; anchorY = localY = y; bestDistance = distance;
+            bestRouteCost = routeCost;
             lastMovement = lastLocalProgress = lastProgress = seconds;
             return null;
         }
@@ -35,6 +38,11 @@ public sealed class NavigationProgress
         { localX = x; localY = y; lastLocalProgress = seconds; }
         if (distance <= bestDistance - 16)
         { bestDistance = distance; lastLocalProgress = lastProgress = seconds; }
+        if (routeCost is int cost && (bestRouteCost == null || cost < bestRouteCost))
+        {
+            if (bestRouteCost != null) lastLocalProgress = lastProgress = seconds;
+            bestRouteCost = cost;
+        }
         if (edited)
         {
             lastMovement = lastLocalProgress = seconds;
@@ -47,6 +55,7 @@ public sealed class NavigationProgress
         return reason == null ? null : new JsonObject { ["outcome"] = "no_progress", ["reason"] = reason,
             ["elapsed_seconds"] = seconds, ["stationary_seconds"] = seconds - lastMovement,
             ["progress_idle_seconds"] = seconds - lastProgress, ["distance_pixels"] = distance,
+            ["route_cost"] = routeCost, ["best_route_cost"] = bestRouteCost,
             ["best_distance_pixels"] = bestDistance, ["pos"] = new JsonObject { ["x"] = x, ["y"] = y } };
     }
 }

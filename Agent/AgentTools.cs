@@ -2928,9 +2928,9 @@ public static partial class AgentTools
                     DiagLog.Write($"[agent_navigation_phase] phase={(planning ? "building_field" : "executing")} elapsed_seconds={elapsed:0.###}");
                 }
                 int gx = Int(request, "gx"), gy = Int(request, "gy");
+                var field = planning ? null : MazeWand.PeekFieldOrNull(gx, gy);
                 if (!planning && !Reach.CanInteract(player, gx, gy))
                 {
-                    var field = MazeWand.PeekFieldOrNull(gx, gy);
                     if (field?.Count == 1 && field.ContainsKey((gx, gy)))
                         return new JsonObject { ["error"] = "navigation_goal_isolated", ["outcome"] = "no_route",
                             ["reason"] = "goal_has_no_traversable_neighbor", ["field_cells"] = field.Count,
@@ -2953,7 +2953,9 @@ public static partial class AgentTools
                             ? 1L + ((long)tile.TileType << 8) + ((long)tile.Slope << 4) + (tile.IsHalfBlock ? 2 : 0) : 0;
                     }
                 double distance = NavigationDistance(player, gx, gy, Bool(request, "stand"));
-                return progress.Observe(elapsed, player.position.X, player.position.Y, distance, terrain, planning);
+                int? routeCost = field != null && field.TryGetValue(
+                    StateSpacePlanner.StandCell(player.position.X, player.position.Y), out int cost) ? cost : null;
+                return progress.Observe(elapsed, player.position.X, player.position.Y, distance, terrain, planning, routeCost);
                 }, token);
             });
             bool escaped = await NativeAgent.OnMain(() => Text(result, "status") == "failed" && Text(result, "reason") == "stopped" && LastContactEscape != null

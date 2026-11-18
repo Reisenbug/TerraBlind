@@ -362,6 +362,7 @@ namespace TerraBlind
     {
         public static bool PreserveTerrain, ReservesItemUse;
         public static int[] MovementControls = Array.Empty<int>();
+        internal static (int X, int Y) StandCell(float x, float y) => ((int)x / 16, (int)y / 16);
         internal static int[] PeekMovementControls(int maxFrames, bool traceUnavailable = true) => MovementControls.Take(maxFrames).ToArray();
         internal static (int Direction, float TargetX, float ArrivalPixels)? PeekWalkIntent() => null;
     }
