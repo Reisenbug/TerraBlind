@@ -970,7 +970,7 @@ public sealed class ScriptLibrary
             finally { tool('set_combat',{auto_attack:originalCombat.auto_attack,weapon_type:originalCombat.combat_weapon_type}); }
             """);
         if (name == "gather_route") return Template(name,
-            "内置参数化采集技能，可直接调用revision=0；input包含gather_args和当前世界查证的waypoints（最多8项，每项x/y及可选mode/source_area）。先收集当前位置可用来源，未达到真实库存目标且当前来源耗尽或路线无进展时，立即前往下一个预备位置并继续；其他失败保留证据交回。DAG按真实条件完成验收。",
+            "内置参数化采集技能，可直接调用revision=0。input含gather_args及最多8项已观察的waypoints。每项可以只给source_area，由gather接近目标，或给x/y及可选mode/source_area，先导航再采集。当前来源耗尽或无法到达时立即切换到下一项，按实际库存验收。",
             """
             const config=typeof input==='undefined'?null:input;
             if(!config?.gather_args?.targets||!Array.isArray(config.waypoints)||config.waypoints.length>8)
@@ -996,9 +996,13 @@ public sealed class ScriptLibrary
                 return {status:'needs_review',reason:'collection_blocked',result,visited};
               const point=config.waypoints[index];
               if(!point) return {status:'needs_review',reason:'prepared_sources_exhausted',result,visited};
-              const travel=tool('nav_to',{x:point.x,y:point.y,mode:point.mode??'travel'});
-              if(travel.done!==true) return {status:'needs_review',reason:'approach_blocked',travel,visited};
-              visited.push({x:point.x,y:point.y});
+              if(Number.isInteger(point.x)&&Number.isInteger(point.y)){
+                const travel=tool('nav_to',{x:point.x,y:point.y,mode:point.mode??'travel'});
+                if(travel.done!==true) return {status:'needs_review',reason:'approach_blocked',travel,visited};
+                visited.push({x:point.x,y:point.y});
+              }else if(point.source_area){
+                visited.push({source_area:point.source_area});
+              }else throw new Error('waypoint needs coordinates or an observed source_area');
               args={...config.gather_args,source_area:point.source_area};
             }
             """);

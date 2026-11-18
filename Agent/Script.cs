@@ -377,7 +377,7 @@ public static class AgentScript
         programs["parameters"]["properties"]["operation"]["enum"].AsArray().Add("example");
         programs["description"] = programs["description"].ToString()
             + "list包含内置技能模板(template:true,revision:0)和已保存技能；callable:true可直接skill(name,revision,input)调用。get读取源码，可按任务修改并save为新修订；其余模板填写config后保存调用。模板标识不代表实机验收。task_reactions注册沿途采集、背包和默认自保；gather_route按已查证路点续采；use_life_crystals验证永久生命增长；craft_batch按目标库存连续制作，需要时到Agent选定的station后刷新配方；combat_approach选择有射界的实际站位。"
-            + "example返回可编辑JS示例，name为空列出名称；gather_route在来源暂不可见或本区域采尽时，按预备路点立即续采；sample_tile_variants演示按现场变体试采、保存所得、同句柄恢复及事件交回。示例不执行；先读源码，按任务修改config与策略，再save和run_script。";
+            + "example返回可编辑JS示例，name为空列出名称；采集分散方块时，先在许可范围内用find_tiles获取多个候选。gather_route用首个候选的source_area开始，waypoints按顺序放其他候选的{source_area}，以便路线失败或采尽后立即切换。sample_tile_variants演示按现场变体试采、保存所得、同句柄恢复及事件交回。";
         var events = tools.First(t => t["function"]?["name"]?.ToString() == "script_events")["function"];
         events["parameters"]["properties"]["max_events"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1,
             ["maximum"] = 16, ["description"] = "每次读取数量，默认4。remaining_events表示队列剩余数；可继续读取，未读事件不会丢弃。" };

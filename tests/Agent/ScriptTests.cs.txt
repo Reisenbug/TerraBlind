@@ -3536,24 +3536,28 @@ static class ScriptTests
                 "skill invocation reset the parent tool budget");
             Console.WriteLine("PASS: parameterized saved skills share validation and budgets, isolate checkpoints and audit fresh inputs across worlds");
             library.Save("gather_route", ScriptLibrary.Example("gather_route")["code"].ToString(), 0);
-            foreach (string blocked in new[] { "source_unavailable", "navigation_no_progress" })
+            foreach (string mode in new[] { "waypoint", "source_area" })
             {
                 int collectedCount = 0, gatherCalls = 0, recoveryMoves = 0;
+                bool sourceOnly = mode == "source_area";
                 Task<string> RouteGather(string name, JsonObject args, CancellationToken token)
                 {
                     if (name == "get_state") return Task.FromResult("{\"inventory_counts\":{\"42\":" + collectedCount + "}}");
                     if (name == "nav_to") { recoveryMoves++; return Task.FromResult("{\"done\":true}"); }
                     Check(name == "gather", "source recovery dispatched an unrelated action");
                     gatherCalls++;
-                    if (recoveryMoves == 0) return Task.FromResult("{\"ok\":false,\"outcome\":\"" + blocked + "\"}");
-                    Check(args["source_area"] == null, "source recovery kept the exhausted area's bounds at a new location");
+                    if (gatherCalls == 1) return Task.FromResult(sourceOnly ? "{\"ok\":false,\"outcome\":\"navigation_no_progress\"}"
+                        : "{\"ok\":false,\"outcome\":\"source_unavailable\"}");
+                    Check(sourceOnly ? args["source_area"]?["x"]?.GetValue<int>() == 30 : args["source_area"] == null,
+                        "source recovery kept the blocked area's bounds at a new location");
                     collectedCount = 1;
                     return Task.FromResult("{\"ok\":true,\"outcome\":\"enough\"}");
                 }
-                var sourceRecovery = await AgentScript.Run("return skill('gather_route',1,{gather_args:{targets:[{item_type:42,count:1}],source_area:{x:10,y:10,width:10,height:10}},waypoints:[{x:30,y:40}]},'collect');",
+                string point = sourceOnly ? "{source_area:{x:30,y:40,width:3,height:3}}" : "{x:30,y:40}";
+                var sourceRecovery = await AgentScript.Run("return skill('gather_route',1,{gather_args:{targets:[{item_type:42,count:1}],source_area:{x:10,y:10,width:10,height:10}},waypoints:[" + point + "]},'collect');",
                     5, (_, _) => { }, RouteGather, _ => Task.CompletedTask, default, programs: library.Callable());
                 Check(sourceRecovery["ok"].GetValue<bool>() && sourceRecovery["value"]["status"].ToString() == "collected"
-                    && gatherCalls == 2 && recoveryMoves == 1 && sourceRecovery["value"]["counts"][0]["actual"].GetValue<int>() == 1,
+                    && gatherCalls == 2 && recoveryMoves == (sourceOnly ? 0 : 1) && sourceRecovery["value"]["counts"][0]["actual"].GetValue<int>() == 1,
                     "prepared source recovery waited for a model, ignored actual inventory or lost the selected waypoint");
             }
             Console.WriteLine("PASS: prepared source recovery moves and resumes collection in the same script using real returned inventory counts");
