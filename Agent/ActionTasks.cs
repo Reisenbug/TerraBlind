@@ -204,7 +204,10 @@ public sealed class ActionTasks
             catch (System.Text.Json.JsonException) { result = JsonValue.Create(output); }
             status = result is JsonObject value && (value["error"] != null || value["ok"]?.ToString() == "false"
                 || entry.Tool == "run_script" && value["value"] is JsonObject returned
-                    && (returned["status"]?.ToString() is "yield" or "needs_review" or "failed" or "stopped_short"
+                    && ((returned["status"]?.ToString() == "yield"
+                            && (value["resume_saved_node"] is not JsonValue continuation
+                                || !continuation.TryGetValue<bool>(out bool resume) || !resume))
+                        || returned["status"]?.ToString() is "needs_review" or "failed" or "stopped_short"
                         || returned["wake"] != null || returned["error"] != null || returned["ok"]?.ToString() == "false"
                         || returned["done"]?.ToString() == "false"
                         || returned["outcome"]?.ToString() is "timeout" or "no_progress" or "interrupted_by_death" or "failed" or "stopped" or "partial")

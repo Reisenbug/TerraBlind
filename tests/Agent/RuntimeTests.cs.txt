@@ -2947,6 +2947,7 @@ static class RuntimeTests
             await TestQueuedDagActions();
             await TestAutomaticDagContinuation();
             await TestVerifiedNodeHandoff();
+            await TestTemporaryProgressHandoff();
             await TestBackgroundDescent();
             await TestObservedActionCompletion();
             await TestDagReturnValues();
@@ -4346,6 +4347,55 @@ static class RuntimeTests
             Dodge.Enabled = oldDodge; Combat.Enabled = oldCombat; Dodge.Last = oldLast;
         }
         Console.WriteLine("PASS: background Boss observations and explicit review return without self-pause or controller release");
+    }
+
+    static async Task TestTemporaryProgressHandoff()
+    {
+        int oldHealth = Game.LocalPlayer.statLifeMax;
+        var previous = HttpServerSystem.Handler;
+        try
+        {
+            foreach (string scenario in new[] { "progress", "unchanged", "blocked" })
+            {
+                AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Workflows.Clear(); AgentTools.NewTask();
+                Game.LocalPlayer.statLifeMax = 100;
+                int starts = 0;
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    if (path == "/nav_recede") starts++;
+                    if (path == "/nav_recede_done" && starts == 1 && scenario != "unchanged") Game.LocalPlayer.statLifeMax = 120;
+                    return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{\"accepted\":true}");
+                };
+                AgentTools.Plan.Create(JsonNode.Parse("""
+                    {"goal":"continue after temporary repair","mode":"dag","steps":[{"id":"prepare","description":"collect two materials",
+                    "depends_on":[],"conditions":[{"kind":"permanent_health","count":120},{"kind":"item","type":191,"count":9999}],
+                    "script":"return tool('action_start',{tool:'nav_to',args:{x:16,y:34}});",
+                    "on_failure":"return {status:'needs_review',reason:'fallback'};"}]}
+                    """).AsObject(), AgentTaskEvidence.Measure);
+                var started = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                {
+                    ["task_node"] = "prepare", ["background"] = true, ["workflow"] = "temporary-collect",
+                    ["code"] = "tool('nav_to',{x:12,y:34}); return {status:'yield'"
+                        + (scenario == "blocked" ? ",blocked:'next_action_unsafe'" : ",next:'collect materials'") + "};"
+                }, default)));
+                await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
+                var completed = await Execute(AgentTools.Actions.Query(started["handle"].ToString(), 0, default));
+                bool continueSaved = scenario == "progress";
+                Check(completed["status"]?.ToString() == (continueSaved ? "completed" : "failed"),
+                    "temporary yield was misclassified: " + completed);
+                AgentTools.ContinuePreparedNode(default);
+                await PumpUntil(() => AgentTools.LastContinuation?["status"]?.ToString() is "returned" or "execution_gap");
+                Check(starts == (continueSaved ? 2 : 1) && AgentTools.Plan.Incomplete,
+                    "handoff skipped the saved script, bypassed review or incorrectly completed the node");
+                Console.WriteLine("TEMPORARY_PROGRESS_HANDOFF scenario=" + scenario + " starts=" + starts + " model_calls=0");
+                AgentTools.Stop(); await PumpUntil(() => !AgentTools.Actions.HasActive);
+            }
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Workflows.Clear();
+            Game.LocalPlayer.statLifeMax = oldHealth; HttpServerSystem.Handler = previous;
+        }
     }
 
     static async Task TestVerifiedNodeHandoff()

@@ -491,7 +491,8 @@ public static partial class AgentTools
         if (previous["status"]?.ToString() != "completed" && !plan["ready_steps"].AsArray().Any(n => n?.ToString() == owner)) return;
         bool verified = previous["status"]?.ToString() == "completed"
             || Plan.Advance(owner, AgentTaskEvidence.Measure)["verified"]?.GetValue<bool>() == true;
-        bool prepared = !verified && workflow?.HasPreparedContinuation(previous["script"]?.ToString(), action) == true;
+        bool prepared = !verified && (workflow?.HasPreparedContinuation(previous["script"]?.ToString(), action) == true
+            || action["result"]?["resume_saved_node"] is JsonValue resumeSaved && resumeSaved.TryGetValue<bool>(out bool resume) && resume);
         string recovery = previous["on_failure"]?.ToString();
         if (!verified && action["status"]?.ToString() == "failed" && !string.IsNullOrWhiteSpace(recovery)
             && (!recoveredActions.TryGetValue(execution, out string recovered) || recovered != recovery))
@@ -646,6 +647,8 @@ public static partial class AgentTools
             || evidence["recovery_skill"]?["input"] is not JsonObject combat || combat["npc"] == null || combat["npc_type"] == null
             || !recoveredActions.TryAdd("combat:" + handle + ":" + combat["npc"] + ":" + combat["npc_type"], "combat_approach")) return null;
         return "const r=skill('combat_approach',0," + combat.ToJsonString() + ");"
+            + (failure["tool"]?.ToString() == "gather"
+                ? "if(r.reason==='target_changed'){" + resume + "}" : "")
             + "if(r.status!=='ready')return {status:'needs_review',reason:r.reason,approach:r};" + resume;
     }
 
@@ -1685,6 +1688,9 @@ public static partial class AgentTools
                     }, token)).ToJsonString();
                 }
                 bool transientWorkflow = Text(args, "task_node") != "" && args["code"] != null;
+                bool queuedScript = Actions.RunningScript;
+                JsonArray recoveryBaseline = null;
+                int recoveryRevision = -1;
                 if (Text(args, "task_node") != "")
                 {
                     bool temporary = args["code"] != null || args["tool"] != null;
@@ -1702,6 +1708,13 @@ public static partial class AgentTools
                             throw new InvalidOperationException("切换节点前须暂停原动作并保留句柄；独立防身攻击不阻止切换。");
                         Plan.Select(nodeId);
                         Watches.AcknowledgeExecutionStart(nodeId, Main.LocalPlayer.dead, Main.LocalPlayer.suffocating, Actions.Summary());
+                        if (transientWorkflow && queuedScript)
+                        {
+                            Plan.Observe(AgentTaskEvidence.Measure);
+                            recoveryBaseline = Plan.Snapshot()["steps"].AsArray().First(step => Text(step.AsObject(), "id") == nodeId)
+                                ["best_actual"].AsArray();
+                            recoveryRevision = Plan.ExecutionRevision(nodeId);
+                        }
                         return script;
                     }, token);
                     args = (JsonObject)args.DeepClone();
@@ -1714,7 +1727,6 @@ public static partial class AgentTools
                 string eventDelivery = Text(args, "event_delivery");
                 if (eventDelivery is not ("" or "agent" or "script")) throw new ArgumentException("event_delivery需要agent/script。");
                 bool localEvents = eventDelivery == "script";
-                bool queuedScript = Actions.RunningScript;
                 string source = Text(args, "code");
                 if (Text(args, "tool") != "")
                 {
@@ -1832,6 +1844,27 @@ public static partial class AgentTools
                 if (program != null)
                     result["program"] = new JsonObject { ["name"] = program["name"].DeepClone(), ["revision"] = program["revision"].DeepClone() };
                 if (Text(args, "task_node") != "") result["task_node"] = args["task_node"].DeepClone();
+                if (recoveryBaseline != null && Bool(result, "ok") && Bool(result, "input_effects") && result["failure"] == null
+                    && result["value"] is JsonObject handoff && Text(handoff, "status") == "yield"
+                    && handoff["wake"] == null && handoff["blocked"] == null && handoff["error"] == null
+                    && handoff["reason"] == null && handoff["outcome"] == null && handoff["ok"] == null && handoff["done"] == null
+                    && handoff["continue_after"] == null && handoff["handle"] == null)
+                    await NativeAgent.OnMain(() =>
+                    {
+                        string nodeId = Text(args, "task_node");
+                        if (Plan.ExecutionRevision(nodeId) != recoveryRevision || Main.LocalPlayer.dead || Main.LocalPlayer.suffocating) return false;
+                        Plan.Observe(AgentTaskEvidence.Measure);
+                        var step = Plan.Snapshot()["steps"].AsArray().FirstOrDefault(s => s["id"]?.ToString() == nodeId);
+                        if (step?["best_actual"] is not JsonArray actual || actual.Count != recoveryBaseline.Count
+                            || !step["conditions"].AsArray().Select(c => c.AsObject()).Where((condition, i) =>
+                                recoveryBaseline[i].GetValue<int>() < condition["count"].GetValue<int>()
+                                && AgentTaskEvidence.Measure(condition) - (condition["baseline"]?.GetValue<int>() ?? 0)
+                                    >= condition["count"].GetValue<int>()).Any()) return false;
+                        if (Workflows.TryGetValue(step["workflow"].ToString(), out var saved)
+                            && saved.Snapshot()["steps"].AsArray().Any(s => s["status"]?.ToString() == "uncertain")) return false;
+                        result["resume_saved_node"] = true;
+                        return true;
+                    }, token);
                 if (result["value"] is JsonObject returnedValue && returnedValue["wake"] is JsonObject deliveredWake)
                 {
                     string activeHandle = Actions.ActiveHandle;
