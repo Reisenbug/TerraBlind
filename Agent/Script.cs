@@ -444,6 +444,7 @@ public static class AgentScript
         + "task_plan_patch带expected_revision和reason，nodes更新现节点，add_nodes插入机会或恢复节点；保留原意图、workflow、handle和step id。当前片段正常yield后续跑已保存新版本；already_running保留原执行，派发中的handle可为空。"
         + "父脚本运行时由它续接；脚本已退出且主动作独立运行时，action_queue在当前handle后排同节点run_script，args填task_node。"
         + "\n重复观察用get_state的fields选择当前判断所需字段，例如{fields:['player','inventory_slots','permanent_max_health']}；首次建立现场认识再读完整状态。连续采集用JS循环和实际库存/永久血量验证，下一目标提前准备在当前脚本或后继节点中。"
+        + "按库存补足数量的采集在step外执行。先查实际库存，未达标才调用gather或采集skill；受阻返回含原句柄和失败原因的结构化结果，恢复后重新查库存与剩余量。step用于需要跨段保存的独立效果，核验后才保存。"
         + "player.biome_flags是原生群系独立标志，多个可同时为true；player.biome保留旧显示名称，判定混合群系用biome_flags，ground_tiles给出脚下实际方块坐标和类型。"
         + "\n程序与技能：script_program list/get查询现有技能和runtime证据，save/patch修订同一程序，用program、expected_revision、workflow执行。"
         + "skill(name,expected_revision,input,key)读input，共享tool/print/step与100次工具预算；稳定key隔离本次调用的step，不同目标用不同key。启动时固定版本，新版下一段生效。skill_calls记录实际版本、哈希、参数、耗时；returned表示函数返回，完成另行验收。"
