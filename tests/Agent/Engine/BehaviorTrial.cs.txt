@@ -6312,6 +6312,9 @@ public sealed partial class BehaviorTrial : ModSystem
 
     async Task CrystalDagHandoff(JsonObject setup)
     {
+        bool defense = Environment.GetEnvironmentVariable("TB_CRYSTAL_DAG_DEFENSE") == "1";
+        bool encounter = defense && Environment.GetEnvironmentVariable("TB_CRYSTAL_DAG_ENCOUNTER") == "1";
+        var evadingField = typeof(FightCoordinator).GetField("_evading", HiddenStatic);
         using var lifetime = new CancellationTokenSource();
         var agent = ModContent.GetInstance<NativeAgent>();
         var cancel = typeof(NativeAgent).GetField("_cancel", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
@@ -6337,7 +6340,10 @@ public sealed partial class BehaviorTrial : ModSystem
         bool hasMoved = false;
         const int fixtureImmunityTicks = 2400;
         var gaps = new JsonArray();
-        int crystals = 0;
+        var defenseResumes = new JsonArray();
+        int crystals = 0, attacks = 0, evades = 0, movingAttacks = 0, initialHp = 0;
+        long lastEvade = -1, encounterAt = -1;
+        bool stingerSpawned = false;
         void EndGap(long now)
         {
             if (idleSince < 0) return;
@@ -6354,7 +6360,9 @@ public sealed partial class BehaviorTrial : ModSystem
                 var p = Main.LocalPlayer;
                 var previous = p.position;
                 cancel.SetValue(agent, lifetime);
-                p.immune = true; p.immuneTime = fixtureImmunityTicks;
+                p.immune = !defense; p.immuneTime = defense ? 0 : fixtureImmunityTicks;
+                AgentPermissions.Attack = AgentPermissions.Dodge = defense;
+                initialHp = p.statLife;
                 BoundaryInputPlayer.ObserveInput = actor =>
                 {
                     long now = clock.ElapsedMilliseconds;
@@ -6363,10 +6371,34 @@ public sealed partial class BehaviorTrial : ModSystem
                     if (crystals >= 2 && secondPickup < 0) { secondPickup = now; EndGap(now); }
                     bool moving = Vector2.DistanceSquared(actor.position, previous) > .0025f;
                     previous = actor.position;
+                    if (encounter && firstPickup >= 0 && RecedingNav.Active && moving)
+                    {
+                        if (encounterAt < 0 && SpawnMaterialHornet()) encounterAt = now;
+                        if (encounterAt >= 0 && !stingerSpawned && now >= encounterAt + 500)
+                            foreach (var offset in new[] { new Vector2(72, 0), new Vector2(-72, 0),
+                                new Vector2(0, -72), new Vector2(0, 72) })
+                            {
+                                var from = actor.Center + offset;
+                                if (!Collision.CanHitLine(from, 4, 4, actor.Center, 4, 4)) continue;
+                                int shot = Projectile.NewProjectile(actor.GetSource_Misc("crystal-handoff-encounter"),
+                                    from, -Vector2.Normalize(offset) * 4, ProjectileID.Stinger, 10, 0);
+                                stingerSpawned = shot < Main.maxProjectiles && Main.projectile[shot].active;
+                                if (stingerSpawned) break;
+                            }
+                    }
+                    bool attacking = FightCoordinator.AttackAnimationActive
+                        || FightCoordinator.AimTarget.HasValue && actor.controlUseItem;
+                    if (attacking) { attacks++; if (moving) movingAttacks++; }
+                    if (defense && (bool)evadingField.GetValue(null)) { evades++; lastEvade = now; }
+                    else if (lastEvade >= 0 && RecedingNav.Active && moving)
+                    {
+                        defenseResumes.Add(now - lastEvade);
+                        lastEvade = -1;
+                    }
                     if (firstPickup >= 0 && restarted < 0 && now > firstPickup && RecedingNav.Active && moving) restarted = now;
                     bool mining = actor.HeldItem.pick > 0 && (actor.itemAnimation > 0 || actor.controlUseItem)
                         && (ItemUseCoordinator.IsActive || MineCoordinator.IsActive);
-                    if (moving || mining) { hasMoved = true; EndGap(now); }
+                    if (moving || mining || attacking) { hasMoved = true; EndGap(now); }
                     else if (hasMoved && secondPickup < 0 && idleSince < 0)
                     {
                         idleSince = now;
@@ -6392,10 +6424,15 @@ public sealed partial class BehaviorTrial : ModSystem
                     ["first_pickup_to_next_movement_ms"] = restarted >= 0 ? restarted - firstPickup : (long?)null,
                     ["longest_idle_ms"] = longestIdle, ["idle_intervals"] = gaps.DeepClone(),
                     ["elapsed_ms"] = clock.ElapsedMilliseconds, ["model_calls"] = 0,
-                    ["fixture_immunity_ticks"] = fixtureImmunityTicks };
+                    ["fixture_immunity_ticks"] = defense ? 0 : fixtureImmunityTicks,
+                    ["defense_enabled"] = defense, ["attack_frames"] = attacks, ["moving_attack_frames"] = movingAttacks,
+                    ["evade_frames"] = evades, ["evade_to_route_movement_ms"] = defenseResumes.DeepClone(),
+                    ["hornet_spawn_ms"] = encounterAt >= 0 ? encounterAt : (long?)null, ["stinger_spawned"] = stingerSpawned,
+                    ["initial_hp"] = initialHp, ["final_hp"] = Main.LocalPlayer.statLife, ["dead"] = Main.LocalPlayer.dead };
             });
             File.WriteAllText(Path.Combine(Main.SavePath, "crystal-dag-handoff.json"), report.ToJsonString());
-            if (crystals != 2 || restarted < 0 || plan["status"]?.ToString() != "completed")
+            if (crystals != 2 || restarted < 0 || plan["status"]?.ToString() != "completed"
+                || encounter && attacks == 0 && evades == 0)
                 throw new Exception("crystal DAG did not complete: " + report);
             Console.WriteLine("CRYSTAL_DAG_HANDOFF_PASS " + report);
         }
