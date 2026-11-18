@@ -864,6 +864,7 @@ public sealed partial class BehaviorTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CRYSTAL_DAG_HANDOFF") == "1") { await FrameResourceTrial(); return; }
         if (Environment.GetEnvironmentVariable("TB_THINKING_PAUSE_TRIAL") == "1"
             || Environment.GetEnvironmentVariable("TB_CHEST_RECEIPT_TRIAL") == "1"
             || Environment.GetEnvironmentVariable("TB_PICKUP_HANDOFF_TRIAL") == "1"
@@ -6309,9 +6310,106 @@ public sealed partial class BehaviorTrial : ModSystem
         }
     }
 
+    async Task CrystalDagHandoff(JsonObject setup)
+    {
+        using var lifetime = new CancellationTokenSource();
+        var agent = ModContent.GetInstance<NativeAgent>();
+        var cancel = typeof(NativeAgent).GetField("_cancel", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var nodes = new JsonArray();
+        int item = ItemID.LifeCrystal;
+        for (int i = 0; i < 2; i++)
+        {
+            var cell = setup["resources"][i];
+            int x = cell["x"].GetValue<int>(), y = cell["y"].GetValue<int>();
+            var args = new JsonObject { ["targets"] = new JsonArray(new JsonObject { ["item_type"] = item,
+                ["count"] = i + 1, ["tile_names"] = new JsonArray("Heart") }), ["source_area"] = new JsonObject {
+                ["x"] = x - 3, ["y"] = y - 3, ["width"] = 8, ["height"] = 8 } };
+            nodes.Add(new JsonObject { ["id"] = "crystal" + i, ["description"] = $"Collect crystal at ({x},{y})",
+                ["depends_on"] = i == 0 ? new JsonArray() : new JsonArray("crystal0"),
+                ["script"] = "return step('gather',()=>tool('gather'," + args.ToJsonString() + "));",
+                ["conditions"] = new JsonArray(new JsonObject { ["kind"] = "item", ["type"] = item, ["count"] = i + 1 }) });
+        }
+        var plan = await Call("task_plan", new JsonObject { ["goal"] = "collect two natural jungle crystals", ["mode"] = "dag", ["steps"] = nodes });
+        if (plan["error"] != null) throw new Exception("crystal handoff rejected: " + plan);
+        var clock = Stopwatch.StartNew();
+        long firstPickup = -1, secondPickup = -1, restarted = -1, idleSince = -1, longestIdle = 0;
+        string idlePhase = "";
+        bool hasMoved = false;
+        const int fixtureImmunityTicks = 2400;
+        var gaps = new JsonArray();
+        int crystals = 0;
+        void EndGap(long now)
+        {
+            if (idleSince < 0) return;
+            long duration = now - idleSince;
+            longestIdle = Math.Max(longestIdle, duration);
+            if (duration >= 250) gaps.Add(new JsonObject { ["start_ms"] = idleSince, ["duration_ms"] = duration,
+                ["start_phase"] = idlePhase, ["crystals"] = crystals });
+            idleSince = -1;
+        }
+        try
+        {
+            await OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                var previous = p.position;
+                cancel.SetValue(agent, lifetime);
+                p.immune = true; p.immuneTime = fixtureImmunityTicks;
+                BoundaryInputPlayer.ObserveInput = actor =>
+                {
+                    long now = clock.ElapsedMilliseconds;
+                    crystals = actor.inventory.Where(inv => inv.type == item).Sum(inv => inv.stack);
+                    if (crystals >= 1 && firstPickup < 0) firstPickup = now;
+                    if (crystals >= 2 && secondPickup < 0) { secondPickup = now; EndGap(now); }
+                    bool moving = Vector2.DistanceSquared(actor.position, previous) > .0025f;
+                    previous = actor.position;
+                    if (firstPickup >= 0 && restarted < 0 && now > firstPickup && RecedingNav.Active && moving) restarted = now;
+                    bool mining = actor.HeldItem.pick > 0 && (actor.itemAnimation > 0 || actor.controlUseItem)
+                        && (ItemUseCoordinator.IsActive || MineCoordinator.IsActive);
+                    if (moving || mining) { hasMoved = true; EndGap(now); }
+                    else if (hasMoved && secondPickup < 0 && idleSince < 0)
+                    {
+                        idleSince = now;
+                        idlePhase = !RecedingNav.Active ? "tool_handoff_or_pickup"
+                            : !(bool)FieldReadyProperty.GetValue(null) ? "building_field"
+                            : StateSpacePlanner.ExecRunning ? "navigation_execution" : "navigation_preparation";
+                    }
+                };
+                return true;
+            });
+            var started = await Call("run_script", new JsonObject { ["task_node"] = "crystal0", ["background"] = true });
+            if (started["error"] != null) throw new Exception("crystal handoff did not start: " + started);
+            do
+            {
+                await Task.Delay(150);
+                plan = JsonNode.Parse(await AgentTools.State(lifetime.Token, false, false, new JsonArray("task_plan")))["task_plan"].AsObject();
+            } while (clock.Elapsed.TotalSeconds < 35 && plan["status"]?.ToString() != "completed");
+            var report = await OnMain(() =>
+            {
+                if (secondPickup < 0) EndGap(clock.ElapsedMilliseconds);
+                return new JsonObject { ["scene"] = setup.DeepClone(), ["plan"] = plan.DeepClone(), ["collected"] = crystals,
+                    ["first_pickup_ms"] = firstPickup, ["second_pickup_ms"] = secondPickup,
+                    ["first_pickup_to_next_movement_ms"] = restarted >= 0 ? restarted - firstPickup : (long?)null,
+                    ["longest_idle_ms"] = longestIdle, ["idle_intervals"] = gaps.DeepClone(),
+                    ["elapsed_ms"] = clock.ElapsedMilliseconds, ["model_calls"] = 0,
+                    ["fixture_immunity_ticks"] = fixtureImmunityTicks };
+            });
+            File.WriteAllText(Path.Combine(Main.SavePath, "crystal-dag-handoff.json"), report.ToJsonString());
+            if (crystals != 2 || restarted < 0 || plan["status"]?.ToString() != "completed")
+                throw new Exception("crystal DAG did not complete: " + report);
+            Console.WriteLine("CRYSTAL_DAG_HANDOFF_PASS " + report);
+        }
+        finally
+        {
+            await OnMain(() => { BoundaryInputPlayer.ObserveInput = null; NativeAgent.Stop();
+                VanillaNavigationDemo.Instance.Stop(closeWorker: true); return true; });
+        }
+    }
+
     async Task FrameResourceTrial()
     {
-        var found = await Call("find_tiles", new JsonObject { ["name"] = "Heart", ["n"] = 100, ["max_dist"] = 600 });
+        bool dagHandoff = Environment.GetEnvironmentVariable("TB_CRYSTAL_DAG_HANDOFF") == "1";
+        var found = await Call("find_tiles", new JsonObject { ["name"] = "Heart", ["n"] = dagHandoff ? 400 : 100, ["max_dist"] = 600 });
         var setup = await OnMain(() =>
         {
             var p = Main.LocalPlayer;
@@ -6320,13 +6418,24 @@ public sealed partial class BehaviorTrial : ModSystem
             {
                 int x = t["x"].GetValue<int>(), y = t["y"].GetValue<int>(); var tile = Main.tile[x, y];
                 return new Point(x - tile.TileFrameX % 36 / 18, y - tile.TileFrameY % 36 / 18);
-            }).Distinct().Where(t => Math.Abs(t.X - origin) < 250 && t.Y > Main.worldSurface && t.Y < Main.worldSurface + 350).ToArray();
+            }).Distinct().Where(t => Math.Abs(t.X - origin) < (dagHandoff ? 400 : 250) && t.Y > Main.worldSurface
+                && (dagHandoff || t.Y < Main.worldSurface + 350)).ToArray();
+            bool InJungle(Point point)
+            {
+                for (int x = point.X - 48; x <= point.X + 48; x++)
+                for (int y = point.Y - 48; y <= point.Y + 48; y++)
+                    if (WorldGen.InWorld(x, y) && Main.tile[x, y].HasTile && Main.tile[x, y].TileType == TileID.JungleGrass)
+                        return true;
+                return false;
+            }
+            if (dagHandoff) hearts = hearts.Where(InJungle).ToArray();
             var pairs = (from a in hearts from b in hearts where a.X < b.X || a.X == b.X && a.Y < b.Y
+                where !dagHandoff || Math.Abs(a.Y - b.Y) >= 4 && !Collision.CanHitLine(a.ToVector2() * 16f, 2, 2, b.ToVector2() * 16f, 2, 2)
                 orderby Vector2.DistanceSquared(a.ToVector2(), b.ToVector2()) select (a, b)).ToArray();
             Point[] selected = null; Vector2 stand = Vector2.Zero;
             foreach (var pair in pairs)
             {
-                if (Vector2.Distance(pair.a.ToVector2(), pair.b.ToVector2()) > 60) continue;
+                if (Vector2.Distance(pair.a.ToVector2(), pair.b.ToVector2()) > (dagHandoff ? 90 : 60)) continue;
                 for (int d = 5; d <= 12 && selected == null; d++)
                     for (int dx = -d; dx <= d && selected == null; dx++)
                         for (int dy = -d; dy <= d; dy++)
@@ -6342,7 +6451,7 @@ public sealed partial class BehaviorTrial : ModSystem
                         }
                 if (selected != null) break;
             }
-            if (selected == null) throw new Exception("No nearby natural crystal pair and existing standing position found");
+            if (selected == null) throw new Exception($"No nearby natural crystal pair and existing standing position found (crystals={hearts.Length}, pairs={pairs.Length})");
             p.Teleport(stand); p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(stand.Y / 16);
             p.inventory[0].SetDefaults(ItemID.CopperPickaxe); p.selectedItem = 0;
             p.inventory[4].SetDefaults(ItemID.Starfury);
@@ -6353,6 +6462,7 @@ public sealed partial class BehaviorTrial : ModSystem
                 ["start_x"] = stand.X, ["start_y"] = stand.Y, ["target_health"] = 140,
                 ["pick_slot"] = 0, ["defense_slot"] = 4, ["terrain_edits"] = 0, ["supplied_crystals"] = 0 };
         });
+        if (dagHandoff) { await CrystalDagHandoff(setup); return; }
         var timer = Stopwatch.StartNew(); var samples = new JsonArray(); var phases = new JsonArray();
         int frames = 0, wait = 0, longest = 0, streak = 0, navWait = 0, consumed = 0, removed = 0;
         string phase = null; Vector2 previous = Vector2.Zero; long began = -1, lastProgress = 0;
