@@ -835,7 +835,7 @@ static class RuntimeTests
     static async Task TestPreparedFailureRecovery()
     {
         var previous = HttpServerSystem.Handler;
-        foreach (string mode in new[] { "recovered", "unhandled", "danger", "disabled", "capacity", "busy" })
+        foreach (string mode in new[] { "recovered", "unhandled", "danger", "disabled", "capacity", "busy", "typed-yield", "stale-yield" })
         {
             AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
             var existingWorkflows = AgentTools.Workflows.Keys.ToHashSet();
@@ -846,12 +846,17 @@ static class RuntimeTests
             long busyTicket = 0;
             int starts = 0, repairs = 0;
             bool fail = false;
+            bool trapYield = mode is "typed-yield" or "stale-yield";
+            var inventory = Game.LocalPlayer.inventory;
+            var position = Game.LocalPlayer.position;
+            var oldPlate = Game.tile[4, 6];
+            if (trapYield) Game.LocalPlayer.inventory = inventory.Select(_ => new Terraria.Item()).ToArray();
             string detail = new('x', 20000);
             HttpServerSystem.Handler = (path, _) =>
             {
                 if (path == "/nav_recede") starts++;
                 if (path == "/act") repairs++;
-                return (200, path == "/nav_recede_done" ? fail && repairs == 0
+                return (200, path == "/nav_recede_done" ? fail && repairs == 0 && !trapYield
                     ? new JsonObject { ["done"] = false, ["status"] = "failed", ["reason"] = "fixture_blocked", ["detail"] = detail }.ToJsonString()
                     : "{\"done\":false}" : path == "/act_status" ? "{\"active\":false}" : "{\"accepted\":true}");
             };
@@ -876,6 +881,8 @@ static class RuntimeTests
                             + "const resumed=tool('action_control',{handle:failure.handle,action:'resume'});"
                             + "return {handle:resumed.handle,status:resumed.status};");
                 if (mode == "disabled") recovery = "";
+                if (trapYield) recovery = "return {status:'yield',blocked:'navigation_near_trap',handle:"
+                    + (mode == "typed-yield" ? "failure.handle" : "'prior-handle'") + "};";
                 var patch = JsonNode.Parse(await Execute(AgentTools.Execute("task_plan_patch", new JsonObject
                 {
                     ["expected_revision"] = plan["revision"].DeepClone(), ["reason"] = "prepare while the original route runs",
@@ -883,6 +890,11 @@ static class RuntimeTests
                 }, default)));
                 Check(patch["error"] == null && AgentTools.Actions.ActiveHandle == handle && starts == 1,
                     "preparing recovery paused or restarted the active route: " + patch);
+                if (trapYield)
+                {
+                    Game.LocalPlayer.position = new(32, 64);
+                    Game.tile[4, 6] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.PressurePlates, RedWire = true };
+                }
                 fail = true;
                 await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
                 AgentTools.ObserveContinuity();
@@ -924,6 +936,10 @@ static class RuntimeTests
                 Check(AgentTools.Workflows.Keys.All(recoveryBaseKeys.Contains)
                     && AgentTools.LastContinuation?["recovery_execution"] != null,
                     "one-shot recovery left a stale workflow or discarded execution evidence");
+                if (trapYield)
+                    Check((AgentTools.LastContinuation["strategy"]?.ToString() == "local_recovery") == (mode == "typed-yield")
+                        && (AgentTools.LastContinuation["recovery_reason"]?.ToString() == "no_pickaxe") == (mode == "typed-yield"),
+                        "typed yield did not enter local recovery, or stale yield was allowed to recover: " + AgentTools.LastContinuation);
                 Check(AgentTools.Plan.Script("travel")["code"].ToString() == "return 42;" && AgentTools.Plan.Incomplete,
                     "temporary failure recovery overwrote the main script or completed the goal");
                 if (shouldRecover)
@@ -967,6 +983,12 @@ static class RuntimeTests
             }
             finally
             {
+                if (trapYield)
+                {
+                    Game.LocalPlayer.inventory = inventory;
+                    Game.LocalPlayer.position = position;
+                    Game.tile[4, 6] = oldPlate;
+                }
                 if (busyTicket != 0) AgentTools.ControlSession.End(busyTicket);
                 ActionTasks.NodeContext.Value = null;
                 var dispatch = (Task)typeof(AgentTools).GetField("continuation", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
