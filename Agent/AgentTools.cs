@@ -539,7 +539,7 @@ public static partial class AgentTools
                     var fallback = await NativeAgent.OnMain(() =>
                     {
                         var source = PrepareLocalRecovery(failure, review["reason"]?.ToString());
-                        if (source != null) report["mode"] = "local_recovery";
+                        if (source != null) report["strategy"] = "local_recovery";
                         return source;
                     }, token);
                     if (fallback != null)
@@ -621,7 +621,7 @@ public static partial class AgentTools
             return "const r=skill('recover_navigation',0," + input.ToJsonString() + ");"
                 + "if(!r.retry)return {status:'needs_review',reason:r.reason};" + resume;
         }
-        if (reviewReason != "uncovered_failure"
+        if (!AgentPermissions.CanAttack(delegated: true)
             || evidence?["outcome"]?.ToString() is not ("combat_obstructed" or "combat_out_of_range" or "combat_no_progress")
             || evidence["recovery_skill"]?["input"] is not JsonObject combat || combat["npc"] == null || combat["npc_type"] == null
             || !recoveredActions.TryAdd("combat:" + handle + ":" + combat["npc"] + ":" + combat["npc_type"], "combat_approach")) return null;
