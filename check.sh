@@ -8,6 +8,12 @@
 # This does NOT replace the in-game build — it only proves the code compiles. Loading the new
 # code into the running game is still `/build TerraBlind` in chat.
 cd "$(dirname "$0")" || exit 1
-dotnet build -t:Compile -v q --nologo -nowarn:ChangeMagicNumberToID 2>&1 | grep -Ev "^$" | tail -20
+if compile_output=$(dotnet build -t:Compile -v q --nologo -nowarn:ChangeMagicNumberToID 2>&1); then
+    printf '%s\n' "$compile_output" | grep -Ev "^$" | tail -20
+else
+    compile_status=$?
+    printf '%s\n' "$compile_output" >&2
+    exit "$compile_status"
+fi
 # 编译过了不代表原语交了失败现场 —— 那个只能靠这个查
 ./stuck_contract.sh || exit 1
