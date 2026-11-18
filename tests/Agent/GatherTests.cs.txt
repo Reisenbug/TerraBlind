@@ -265,6 +265,7 @@ static class GatherTests
         IdleDefense();
         MiningAttackTurns();
         Evasion();
+        EvasionOverDrop();
         FiringLane();
         TempleTargets();
         WeaponSuitability();
@@ -795,6 +796,46 @@ static class GatherTests
             else Terraria.ID.ContentSamples.ProjectilesByType.Remove(77);
         }
         Console.WriteLine("PASS: NPC combat seeks exposed firing positions, withholds blocked shots and permits wall-passing projectiles");
+    }
+
+    static void EvasionOverDrop()
+    {
+        var player = Main.LocalPlayer;
+        var old = (player.position, player.velocity, player.gravity, player.fallStart, player.controlLeft,
+            player.controlRight, player.controlJump, player.noFallDmg, RecedingNav.Active);
+        var enemies = Main.npc;
+        var shots = Main.projectile;
+        var solid = Collision.SolidTest;
+        var landing = FallSafety.LandingTest;
+        try
+        {
+            player.position = new(160, 320);
+            player.velocity = new(0, 5);
+            player.gravity = .4f;
+            player.fallStart = 8;
+            player.controlLeft = true;
+            player.controlRight = player.controlJump = player.noFallDmg = false;
+            Main.npc = Array.Empty<NPC>();
+            Main.projectile = new[] { new Projectile { active = true, hostile = true, damage = 10,
+                Center = player.Center + new Microsoft.Xna.Framework.Vector2(-52, 60), velocity = new(3, 0) } };
+            Collision.SolidTest = (position, _, _) => position.Y >= 900 || position.X < 150 && position.Y >= 400;
+            FallSafety.LandingTest = (_, position, start) => Math.Max(0, (int)(position.Y / 16) - start - 25) * 10;
+            RecedingNav.Active = true;
+            Check(!FightCoordinator.Evade(player).Apply, "projectile dodge steered away from the safe landing over a lethal drop");
+            player.noFallDmg = true;
+            Check(FightCoordinator.Evade(player) is { Apply: true, Direction: > 0 },
+                "fall-immune player unnecessarily gave up a viable projectile dodge");
+        }
+        finally
+        {
+            (player.position, player.velocity, player.gravity, player.fallStart, player.controlLeft,
+                player.controlRight, player.controlJump, player.noFallDmg, RecedingNav.Active) = old;
+            Main.npc = enemies;
+            Main.projectile = shots;
+            Collision.SolidTest = solid;
+            FallSafety.LandingTest = landing;
+        }
+        Console.WriteLine("PASS: evasion preserves the safe landing during a navigation drop and allows the same dodge with fall immunity");
     }
 
     static void Evasion()

@@ -135,22 +135,27 @@ namespace TerraBlind
             if (!blocked && shots.Count == 0 && enemies.Count == 0) return (0, false, false);
             int currentDirection = p.controlRight ? 1 : p.controlLeft ? -1 : 0;
             bool currentJump = p.controlJump && p.velocity.Y == 0;
+            bool checkFall = RecedingNav.Active && !FallSafety.Immune(p);
             float Risk(int direction, bool jump)
             {
                 Vector2 position = p.Center, velocity = p.velocity;
                 var halfSize = new Vector2(p.width / 2f, p.height / 2f);
+                int fallStart = p.velocity.Y * p.gravDir > 0 ? p.fallStart : (int)(p.position.Y / 16);
                 bool clearingContact = Collision.HurtTiles(p.position, p.width, p.height, p).type >= 0;
-                if (jump) velocity.Y = -Player.jumpSpeed - p.jumpSpeedBoost;
+                if (jump) velocity.Y = (-Player.jumpSpeed - p.jumpSpeedBoost) * p.gravDir;
                 int hold = jump ? 12 : 0;
+                bool landed = false;
                 float score = direction == currentDirection ? 0 : .01f;
                 if (jump != currentJump) score += .02f;
-                for (int frame = 1; frame <= 24; frame++)
+                for (int frame = 1; frame <= (checkFall ? 96 : 24); frame++)
                 {
+                    if (frame > 24 && landed) break;
                     float desired = direction * Math.Max(p.maxRunSpeed, p.accRunSpeed);
                     velocity.X += Math.Clamp(desired - velocity.X, -p.runAcceleration, p.runAcceleration);
-                    if (hold > 0 && velocity.Y < 0)
-                    { velocity.Y = -Player.jumpSpeed - p.jumpSpeedBoost; hold--; }
-                    velocity.Y += p.gravity;
+                    if (hold > 0 && velocity.Y * p.gravDir < 0)
+                    { velocity.Y = (-Player.jumpSpeed - p.jumpSpeedBoost) * p.gravDir; hold--; }
+                    velocity.Y += p.gravity * p.gravDir;
+                    if (velocity.Y * p.gravDir > p.maxFallSpeed) velocity.Y = p.maxFallSpeed * p.gravDir;
                     bool up = Collision.up, down = Collision.down;
                     Vector2 movement;
                     try { movement = Collision.TileCollision(position - halfSize, velocity, p.width, p.height,
@@ -158,7 +163,15 @@ namespace TerraBlind
                     finally { Collision.up = up; Collision.down = down; }
                     position += movement;
                     if (movement.X != velocity.X) velocity.X = 0;
+                    if (checkFall)
+                    {
+                        landed = movement.Y * p.gravDir < velocity.Y * p.gravDir;
+                        if (landed && FallSafety.LandingDamage(p, position - halfSize, fallStart) >= p.statLife)
+                            return float.PositiveInfinity;
+                        fallStart = FallSafety.ResetDistance(p, position - halfSize, fallStart, landed ? 0 : movement.Y, frame);
+                    }
                     if (movement.Y != velocity.Y) velocity.Y = 0;
+                    if (frame > 24) continue;
                     bool contact = Collision.HurtTiles(position - halfSize, p.width, p.height, p).type >= 0;
                     if (contact && !clearingContact) return float.PositiveInfinity;
                     if (contact) score += (25 - frame) * 1000;
@@ -182,6 +195,9 @@ namespace TerraBlind
                             score += (25 - frame) * 100;
                     }
                 }
+                if (checkFall && velocity.Y * p.gravDir > 0
+                    && FallSafety.LandingDamage(p, position - halfSize, fallStart) >= p.statLife)
+                    return float.PositiveInfinity;
                 return score;
             }
             (int Direction, bool Jump, bool Apply) best = (0, false, false);

@@ -109,7 +109,7 @@ namespace Terraria
         public bool HasAmmunition = true;
         public bool noFallDmg;
         public bool honeyWet, ignoreWater;
-        public float gravDir = 1;
+        public float gravDir = 1, maxFallSpeed = 10;
         public int fallStart, extraFall;
         public bool delayUseItem, mouseInterface;
         public bool ZoneSkyHeight, ZoneOverworldHeight, ZoneDirtLayerHeight, ZoneRockLayerHeight, ZoneUnderworldHeight;
@@ -452,7 +452,14 @@ namespace TerraBlind
     public static class FallSafety
     {
         public static int Damage;
-        public static int LandingDamage(Terraria.Player player, System.Numerics.Vector2 position, int fallStart) => Damage;
+        public static Func<Terraria.Player, Microsoft.Xna.Framework.Vector2, int, int> LandingTest;
+        public static int LandingDamage(Terraria.Player player, System.Numerics.Vector2 position, int fallStart)
+            => LandingDamage(player, new Microsoft.Xna.Framework.Vector2(position.X, position.Y), fallStart);
+        public static int LandingDamage(Terraria.Player player, Microsoft.Xna.Framework.Vector2 position, int fallStart)
+            => LandingTest?.Invoke(player, position, fallStart) ?? Damage;
+        public static bool Immune(Terraria.Player player) => player.noFallDmg;
+        public static int ResetDistance(Terraria.Player player, Microsoft.Xna.Framework.Vector2 position, int fallStart, float vy, int elapsedFrames)
+            => vy * player.gravDir <= 0 ? (int)(position.Y / 16) : fallStart;
     }
 
     public static class RecedingNav
