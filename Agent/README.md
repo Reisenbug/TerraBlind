@@ -76,6 +76,6 @@ python3 scripts/dev_client.py build --role agent
 python3 tests/Agent/Engine/run.py --world "/path/to/World.wld" --continuation
 ~~~
 
-当前引擎测试启动器面向 macOS。它还依赖该工作区的本地构建路径，换检出目录后需要调整包路径。`--continuation` 使用预置资源验证采集句柄的暂停与恢复。带 `--live` 等真实模型模式的测试会消耗模型额度，具体模式见 `--help`。
+引擎测试启动器面向 macOS，从当前检出目录的 Agent 开发构建中读取 `.tmod`，并把 `--world` 指定的 `.wld` 复制进独立存档。`--continuation` 使用预置资源验证采集句柄的暂停与恢复。带 `--live` 等真实模型模式的测试会消耗模型额度，具体模式见 `--help`。
 
 一次受控原生客户端联调中，模型处理了箱子事件，搜刮后恢复原采集句柄，宿主核验最终库存为 10 颗生命水晶并确认箱中战利品已入包。资源和箱子由测试预置，移动用传送替代。自然地图的长任务须单独实测导航、生存与执行衔接。

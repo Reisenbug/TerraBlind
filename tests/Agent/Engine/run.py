@@ -1,17 +1,18 @@
-"""Run real game tools in a disposable client, without a model or normal saves."""
-import json
+"""Run real game tools in a disposable client, with optional live model modes."""
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
 import socket
 import subprocess
+import sys
 import time
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--world", type=Path, default=Path("/tmp/terrablind-descent-world/Worlds/World.wld"), help="World copied into the disposable save")
+    parser.add_argument("--world", type=Path, required=True, help="World .wld file copied into the disposable save")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--behavior", action="store_true", help="Saved JS combat, live Jev judgment, loot and original-goal continuation")
     mode.add_argument("--control", action="store_true", help="Native control takeover and terrain veto trial, no model calls")
@@ -32,6 +33,16 @@ def main():
     mode.add_argument("--model-script", type=Path, help="Replay a saved model per-item.json through real game APIs, without further model calls")
     mode.add_argument("--teleport-check", action="store_true", help="Check exact teleports without terrain edits, fall reset and nearest tile ordering")
     args = parser.parse_args()
+    source = args.world.expanduser()
+    if not source.is_file():
+        parser.error(f"World file not found: {source}")
+    engine_dir = Path(__file__).resolve().parent
+    dev_client = engine_dir.parents[2] / "scripts/dev_client.py"
+    build_info = subprocess.check_output([sys.executable, str(dev_client), "info", "--role", "agent"], text=True)
+    artifact = Path(json.loads(build_info)["artifact"])
+    if not artifact.is_file():
+        parser.error(f"Built mod not found: {artifact}\nBuild this checkout with: python3 scripts/dev_client.py build --role agent")
+
     root = Path("/tmp") / ("terrablind-agent-engine-" + str(time.time_ns()))
     (root / "Mods").mkdir(parents=True)
     (root / "Worlds").mkdir()
@@ -41,12 +52,8 @@ def main():
         if len(scripts) != 1:
             raise ValueError("This per-item acceptance requires exactly one model-authored script")
         shutil.copy2(args.model_script, root / "model-script.json")
-    source = args.world
-    if not source.exists():
-        raise RuntimeError("The isolated test world is missing")
     shutil.copy2(source, root / "Worlds/Checks.wld")
-    staging = Path.home() / "Library/Application Support/TerraBlindDev/agent-277ba5a4e4c2/staging/Mods/TerraBlind.tmod"
-    shutil.copy2(staging, root / "Mods/TerraBlind.tmod")
+    shutil.copy2(artifact, root / "Mods/TerraBlind.tmod")
     user = Path.home() / "Library/Application Support/Terraria/tModLoader"
     if args.behavior:
         key = json.loads((user / "ModConfigs/TerraBlind_Config.json").read_text()).get("TypeSafeKey", "")
@@ -59,13 +66,14 @@ def main():
     for name in ("config.json", "input profiles.json"):
         shutil.copy2(user / name, root / name)
     (root / "Mods/enabled.json").write_text('["TerraBlind","Engine"]')
-    project = Path(__file__).resolve().parent / "AgentChecks.csproj"
+    project = engine_dir / "AgentChecks.csproj"
     subprocess.run(["dotnet", "build", str(project), f'-p:ExtraBuildModFlags=-tmlsavedirectory "{root}"', "-v", "q"], check=True)
     tml = Path.home() / "Library/Application Support/Steam/steamapps/common/tModLoader"
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     print("AGENT_ENGINE_ROOT", root, flush=True)
+    print("AGENT_ENGINE_ARTIFACT", artifact, flush=True)
     command = [str(tml / "dotnet_arm64/dotnet"), "tModLoader.dll", "-nosteam",
         "-tmlsavedirectory", str(root), "-agentenginecheck", "-tbhttpport", str(port)]
     if args.control:
