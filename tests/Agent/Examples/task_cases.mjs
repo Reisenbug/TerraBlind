@@ -409,8 +409,53 @@ export const cases = {
       elapsed_ticks: final.snapshot_tick - snapshot.last_damage.tick});
   },
 
-  '25-gravity-sky-chests': (i, h) => h.blocked('missing_gravity_navigation_and_sky_chest_coverage',
-    {sky_candidates: h.read('find_tiles', {name: 'Containers', n: 20, max_dist: 3000})}),
+  '25-gravity-sky-chests': (i, h) => {
+    const chests = new Map();
+    for (const area of i.sky_areas) {
+      const result = h.call('find_tiles', {name: 'Containers', frame_x: 13 * 36, frame_y: 0, source_area: area, n: 100});
+      if (result.truncated) return h.blocked('skyware_scan_truncated', {area, matches: result.total_matches});
+      for (const chest of result.tiles) chests.set(chest.x + ',' + chest.y, chest);
+    }
+    if (!chests.size) return h.blocked('no_skyware_chest_in_search_areas');
+    const state = () => h.call('get_state', {fields: ['player', 'buffs']});
+    const start = state();
+    const hasGravity = s => s.buffs.some(buff => buff.id === 18 && buff.time_left > 0);
+    h.check(!hasGravity(start) && start.player.on_ground, 'requires_normal_gravity_floor_start');
+    h.check(h.itemAt(i.potion_slot).type === 305, 'gravitation_potion_missing');
+    const drink = h.call('act', {steps: [{slot: i.potion_slot, use: true, until: {times: 1}}], timeout_frames: 60});
+    h.check(drink.outcome === 'done', 'gravitation_potion_input_missing', drink);
+    let observed = state();
+    for (let n = 0; !hasGravity(observed) && n < 4; n++) {
+      h.act([], 5);
+      observed = state();
+    }
+    h.check(hasGravity(observed), 'gravitation_buff_missing');
+    h.act(['up'], 1);
+    observed = state();
+    for (let n = 0; n < 8 && !(observed.player.on_ground && observed.player.pos.y < start.player.pos.y - 48); n++) {
+      h.act([], 15);
+      observed = state();
+    }
+    if (!observed.player.on_ground || observed.player.pos.y >= start.player.pos.y - 48 || !hasGravity(observed))
+      return h.blocked('gravity_ascent_not_observed', {position: observed.player.pos});
+    const looted = [];
+    for (const chest of chests.values()) {
+      if (chest.locked) return h.blocked('skyware_chest_locked', {chest, looted});
+      let dx;
+      while (h.calls() < 85) {
+        const p = state().player;
+        dx = chest.x * 16 + 16 - p.pos.x - p.width / 2;
+        if (Math.abs(dx) <= 22) break;
+        h.act([dx < 0 ? 'left' : 'right'], Math.min(16, Math.max(2, Math.floor(Math.abs(dx) / 4))));
+      }
+      if (dx === undefined || Math.abs(dx) > 22) return h.blocked('skyware_approach_incomplete', {chest, looted});
+      const id = h.open(chest);
+      const loot = h.call('loot_all', {expected_container: id});
+      if (loot.remaining_stacks !== 0) return h.blocked('skyware_chest_not_emptied', {chest, looted});
+      looted.push({x: chest.x, y: chest.y, items: loot.transferred_items});
+    }
+    return h.done({looted, areas: i.sky_areas.length, ascent_pixels: start.player.pos.y - observed.player.pos.y});
+  },
 
   '26-ab-storage': (i, h) => {
     const receipts = [];

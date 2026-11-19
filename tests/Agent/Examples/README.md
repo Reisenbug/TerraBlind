@@ -41,6 +41,8 @@ TB_CASEBOOK_SHAFT=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 TB_CASEBOOK_HONEY=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
+TB_CASEBOOK_SKY=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
+  python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 ~~~
 
 储物场景跑 26、28、09。社交场景跑 34 和单件饰品的 13。原版右键场景额外跑 30，使用原版回弹挡板判定。矿车场景跑 18，记录车速、下车与蘑菇入包。重铸可能耗尽次数，此时验收物品是否归还。
@@ -71,8 +73,12 @@ The shaft fixture runs 22 and 23 with two-tile-wide controls. The controls enter
 
 The honey fixture runs 24. The character fills an empty bucket, pours honey at its feet after taking damage, gains the native Honey buff, and scoops up the honey. The fixture samples damage, honey contact, and bucket state per frame and requires a dry end state.
 
+天域箱场景跑 25。脚本查询两个重叠的指定空域，识别并去重天域箱，使用重力药水升至云层，再倒置移动和取物。实机核对两个天域箱清空、两件物品入包和普通木箱原样保留。场景覆盖一条有连续云层顶面的路线。
+
+The sky fixture runs 25. The script scans two overlapping sky regions, deduplicates Skyware Chests, drinks a Gravitation Potion, and travels and loots while inverted. It checks both Skyware Chests are emptied, both items are collected, and a Wooden Chest is untouched. The route has a continuous cloud ceiling.
+
 | 当前验证范围 / Current coverage | 编号 / IDs |
 | --- | --- |
-| 已在隔离实机验证 / Verified in isolated game | 02, 09, 13 (单件 / one accessory), 18, 21, 24, 26, 28, 30, 31–36 |
+| 已在隔离实机验证 / Verified in isolated game | 02, 09, 13 (单件 / one accessory), 18, 21, 24–26, 28, 30, 31–36 |
 | 有执行脚本，完整场景待验收 / Executable with scene-specific inputs, gameplay acceptance pending | 06, 07, 37 |
-| 有分段验证或缺口探针，完整目标仍阻塞 / Partial execution or blocker probes | 01, 03, 04, 05, 08, 10–12, 14–17, 19, 20, 22, 23, 25, 27, 29, 38–40 |
+| 有分段验证或缺口探针，完整目标仍阻塞 / Partial execution or blocker probes | 01, 03, 04, 05, 08, 10–12, 14–17, 19, 20, 22, 23, 27, 29, 38–40 |

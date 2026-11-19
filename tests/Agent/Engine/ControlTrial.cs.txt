@@ -31,6 +31,7 @@ public sealed class ControlTrial : ModSystem
     int shimmerFrame = -1;
     JsonArray shaftFrames, shaftPicks;
     JsonArray honeyFrames;
+    JsonArray gravityFrames;
     JsonArray cartFrames;
     Task trial;
 
@@ -100,6 +101,12 @@ public sealed class ControlTrial : ModSystem
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         frames++;
+        if (gravityFrames != null)
+        {
+            var p = Main.LocalPlayer;
+            gravityFrames.Add(new JsonObject { ["frame"] = frames, ["x"] = p.position.X, ["y"] = p.position.Y,
+                ["gravity"] = p.gravDir, ["gravitation_buff"] = p.HasBuff(BuffID.Gravitation), ["chest"] = p.chest });
+        }
         if (honeyFrames != null)
         {
             var p = Main.LocalPlayer;
@@ -158,6 +165,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CASEBOOK_SKY") == "1")
+        {
+            await TaskCaseSky();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CASEBOOK_HONEY") == "1")
         {
             await TaskCaseHoney();
@@ -334,6 +346,71 @@ public sealed class ControlTrial : ModSystem
             { ["code"] = template.Replace("\"__TB_FIXTURE__\"", inputs.ToJsonString()) });
         Console.WriteLine($"TASK_CASE {id} " + (result["value"]?.ToJsonString() ?? result["detail"]?.ToString()));
         return result;
+    }
+
+    async Task TaskCaseSky()
+    {
+        var site = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            var p = Main.LocalPlayer;
+            int x = (int)p.Center.X / 16, ceiling = Math.Clamp((int)(Main.worldSurface * 0.4), 50, 125), floor = ceiling + 15;
+            for (int tx = x - 8; tx <= x + 38; tx++)
+            for (int y = ceiling - 3; y <= floor + 3; y++)
+            {
+                var tile = Main.tile[tx, y];
+                tile.ClearEverything();
+                if (y <= ceiling || y >= floor || y == ceiling + 6 && tx >= x + 3)
+                    tile.ResetToType(y >= floor ? TileID.Stone : TileID.Cloud);
+            }
+            p.position = new Vector2(x * 16, floor * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.selectedItem = 0;
+            p.inventory[8].SetDefaults(ItemID.GravitationPotion);
+            p.ClearBuff(BuffID.Gravitation);
+            int left = WorldGen.PlaceChest(x + 6, ceiling + 5, TileID.Containers, false, 13);
+            int right = WorldGen.PlaceChest(x + 20, ceiling + 5, TileID.Containers, false, 13);
+            int wood = WorldGen.PlaceChest(x + 30, ceiling + 5, TileID.Containers, false, 0);
+            Check(left >= 0 && right >= 0 && wood >= 0, "sky_fixture_chests_not_placed");
+            Main.chest[left].item[0].SetDefaults(ItemID.LuckyHorseshoe);
+            Main.chest[right].item[0].SetDefaults(ItemID.ShinyRedBalloon);
+            Main.chest[wood].item[0].SetDefaults(ItemID.Torch);
+            gravityFrames = new JsonArray();
+            return (X: x, Ceiling: ceiling, Left: left, Right: right, Wood: wood);
+        });
+        await DelayFrames(10);
+        var receipt = await RunTaskCase("25-gravity-sky-chests", new JsonObject
+        {
+            ["potion_slot"] = 8,
+            ["sky_areas"] = new JsonArray(
+                new JsonObject { ["x"] = site.X, ["y"] = site.Ceiling + 1, ["width"] = 25, ["height"] = 12 },
+                new JsonObject { ["x"] = site.X + 14, ["y"] = site.Ceiling + 1, ["width"] = 20, ["height"] = 12 })
+        });
+        var proof = await OnMain(() =>
+        {
+            var samples = gravityFrames;
+            gravityFrames = null;
+            var p = Main.LocalPlayer;
+            return new JsonObject { ["frames"] = samples, ["horseshoes"] = p.CountItem(ItemID.LuckyHorseshoe),
+                ["balloons"] = p.CountItem(ItemID.ShinyRedBalloon), ["potion_count"] = p.CountItem(ItemID.GravitationPotion),
+                ["left_empty"] = Main.chest[site.Left].item.All(item => item.IsAir),
+                ["right_empty"] = Main.chest[site.Right].item.All(item => item.IsAir),
+                ["wood_untouched"] = Main.chest[site.Wood].item[0].type == ItemID.Torch,
+                ["opened_inverted"] = samples.Where(sample => sample["gravity"].GetValue<float>() < 0
+                    && sample["gravitation_buff"].GetValue<bool>()).Select(sample => sample["chest"].GetValue<int>())
+                    .Where(index => index == site.Left || index == site.Right).Distinct().Count() };
+        });
+        File.WriteAllText(Path.Combine(Main.SavePath, "task-casebook-sky.json"),
+            new JsonObject { ["receipt"] = receipt, ["proof"] = proof }.ToJsonString());
+        Check(receipt["value"]?["ok"]?.GetValue<bool>() == true && proof["horseshoes"].GetValue<int>() == 1
+            && proof["balloons"].GetValue<int>() == 1 && proof["potion_count"].GetValue<int>() == 0
+            && proof["left_empty"].GetValue<bool>() && proof["right_empty"].GetValue<bool>()
+            && proof["wood_untouched"].GetValue<bool>() && proof["opened_inverted"].GetValue<int>() == 2,
+            "casebook_gravity_sky_chests_unverified");
+        Console.WriteLine("TASK_CASEBOOK_SKY_COMPLETE chests=2");
     }
 
     async Task TaskCaseHoney()
