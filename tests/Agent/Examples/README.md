@@ -47,6 +47,8 @@ TB_CASEBOOK_REFORGE=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 TB_CASEBOOK_SOULS=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
+TB_CASEBOOK_ALTARS=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
+  python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 ~~~
 
 储物场景跑 26、28、09。社交场景跑 34 和单件饰品的 13。原版右键场景额外跑 30，使用原版回弹挡板判定。矿车场景跑 18，记录车速、下车与蘑菇入包。重铸可能耗尽次数，此时验收物品是否归还。
@@ -88,6 +90,10 @@ The reforge fixture runs 13 across five equipped slots on a Classic character. I
 魂类场景跑 06。夹具构建地下神圣和地下腐化两处狩猎区，生成蝙蝠作为真实敌怪。脚本验收到场群系，击杀和拾取走原版流程，最终核对背包中两种魂各至少 9 个。
 
 The soul fixture runs 06 with underground Hallow and Corruption hunting areas and spawned Cave Bats. The script checks the current biome and uses native combat, drops, and pickup. Acceptance requires at least nine of each soul in the inventory.
+
+祭坛场景验收 07 的前段。用圣锤敲掉九个真实祭坛，通过原版祭坛计数和全图矿物格数确认新三矿生成。随后仍需验收采矿和制作链。
+
+The altar fixture verifies the first part of 07. It smashes nine native altars with the Pwnhammer and confirms each ore tier was generated using the native altar counter and world tile counts. Mining and crafting remain to be verified.
 
 | 当前验证范围 / Current coverage | 编号 / IDs |
 | --- | --- |
