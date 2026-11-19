@@ -357,15 +357,25 @@ export const cases = {
   },
 
   '31-find-shimmer-safely': (i, h) => {
-    const initial = h.call('opportunity_assess', i.shore);
-    const liquid = initial.liquids.find(t => t.liquid_type === 3 && t.amount > 0);
-    if (!liquid) return h.blocked('shimmer_not_observed_from_candidate_shore', {shore: i.shore});
-    const body = h.call('inspect_terrain', {radius: 6}).player_bounds;
-    h.check(body.left <= i.shore.x && i.shore.x <= body.right && body.top <= i.shore.y && i.shore.y <= body.bottom + 1,
-      'requires_safe_shore_stance', body);
-    h.check(!initial.liquids.some(t => t.liquid_type === 3 && t.x >= body.left && t.x <= body.right
-      && t.y >= body.top && t.y <= body.bottom), 'player_in_shimmer', body);
-    return h.done({liquid, player: body});
+    const p = h.call('get_state', {fields: ['player']}).player;
+    h.check(!p.in_liquid && p.on_ground, 'requires_dry_stance');
+    const origin = i.search ?? {x: Math.floor((p.pos.x + p.width / 2) / 16), y: Math.floor((p.pos.y + p.height) / 16)};
+    const offsets = [0, -8, 8, -16, 16, -24, 24];
+    let sampled = 0;
+    for (const dy of offsets) for (const dx of offsets) {
+      const at = {x: origin.x + dx, y: origin.y + dy};
+      if (at.x < 1 || at.y < 1) continue;
+      const probe = h.read('opportunity_assess', at);
+      if (!probe.ok) continue;
+      sampled++;
+      const liquid = probe.liquids.find(t => t.liquid_type === 3 && t.amount > 0);
+      if (liquid) {
+        const current = h.call('get_state', {fields: ['player']}).player;
+        h.check(!current.in_liquid && !current.dead, 'dry_stance_lost', current.pos);
+        return h.done({liquid, sampled, player: current.pos});
+      }
+    }
+    return h.blocked('shimmer_not_observed_in_search_region', {origin, sampled});
   },
 
   '32-grapple-no-knockback': (i, h) => {
@@ -373,8 +383,37 @@ export const cases = {
     return h.blocked('grapple_input_is_observable_but_latch_and_knockback_are_not', {action: action.outcome});
   },
 
-  '33-shimmer-transform-and-pickup': (i, h) => h.blocked('no_verified_throw_landing_and_safe_shimmer_pickup',
-    {item: h.itemAt(i.slot), target: h.read('opportunity_assess', i.target)}),
+  '33-shimmer-transform-and-pickup': (i, h) => {
+    const expected = h.itemAt(i.slot);
+    h.check(expected.type === i.input_type && expected.stack > 0, 'wrong_shimmer_input', expected);
+    h.check(i.outputs.length > 0, 'missing_shimmer_outputs');
+    const p = h.call('get_state', {fields: ['player']}).player;
+    h.check(!p.in_liquid && p.on_ground, 'requires_dry_stance');
+    const centerX = p.pos.x + p.width / 2;
+    const tileX = Math.floor(centerX / 16), feetY = Math.floor((p.pos.y + p.height) / 16);
+    const delta = i.target.x - tileX;
+    h.check(Math.abs(delta) >= 1 && Math.abs(delta) <= 6 && i.target.y >= feetY && i.target.y <= feetY + 3,
+      'requires_nearby_pool_below_stance', i.target);
+    const pool = h.call('opportunity_assess', i.target).liquids;
+    h.check(pool.some(t => t.liquid_type === 3 && t.amount >= 128 && t.x === i.target.x && t.y === i.target.y),
+      'shimmer_target_unverified', i.target);
+    const initial = h.call('get_state', {fields: ['inventory_counts']}).inventory_counts;
+    const baseline = i.outputs.map(({type, count}) => ({type, count, stock: String(type) in initial ? initial[type] : 0}));
+    const direction = delta < 0 ? 'left' : 'right';
+    if (p.direction !== direction) h.act([direction], 1);
+    const drop = h.call('inventory_drop', {slot: i.slot, expected});
+    h.check(drop.outcome === 'dropped' && Math.sign(drop.spawn_pixels.vx) === Math.sign(delta), 'throw_unverified', drop);
+    for (let n = 0; n < 20; n++) {
+      const {player: current, inventory_counts: counts} = h.call('get_state', {fields: ['player', 'inventory_counts']});
+      if (current.in_liquid || current.dead) return h.blocked('dry_stance_lost', {position: current.pos});
+      const gained = baseline.map(({type, stock}) => ({type, count: (String(type) in counts ? counts[type] : 0) - stock}));
+      if (gained.every((item, index) => item.count >= baseline[index].count))
+        return h.done({gained, world_item: drop.world_item});
+      h.act([], 20);
+    }
+    return h.blocked('shimmer_output_not_collected_from_shore', {world_item: drop.world_item,
+      drops: h.call('nearby_drops', {radius: 10}).drops});
+  },
 
   '34-use-pylon': (i, h) => {
     const observed = h.call('pylon_list');

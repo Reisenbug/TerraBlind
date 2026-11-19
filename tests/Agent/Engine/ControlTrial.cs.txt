@@ -27,6 +27,8 @@ public sealed class ControlTrial : ModSystem
     int additionalResident = -1;
     Dictionary<int, Vector2> residentPositions;
     readonly HashSet<int> residentTeleports = new();
+    bool observeShimmer, playerEnteredShimmer;
+    int shimmerFrame = -1;
     JsonArray cartFrames;
     Task trial;
 
@@ -94,6 +96,13 @@ public sealed class ControlTrial : ModSystem
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         frames++;
+        if (observeShimmer)
+        {
+            var p = Main.LocalPlayer;
+            playerEnteredShimmer |= p.shimmerWet || p.shimmering;
+            if (shimmerFrame < 0 && Main.item.Any(item => item.active && item.type == ItemID.Wood && item.shimmered))
+                shimmerFrame = frames;
+        }
         if (cartFrames != null && cartFrames.Count < 3600)
         {
             var p = Main.LocalPlayer;
@@ -132,6 +141,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CASEBOOK_SHIMMER") == "1")
+        {
+            await TaskCaseShimmer();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CASEBOOK_RESIDENCY") == "1")
         {
             await TaskCaseResidency();
@@ -288,6 +302,70 @@ public sealed class ControlTrial : ModSystem
             { ["code"] = template.Replace("\"__TB_FIXTURE__\"", inputs.ToJsonString()) });
         Console.WriteLine($"TASK_CASE {id} " + (result["value"]?.ToJsonString() ?? result["detail"]?.ToString()));
         return result;
+    }
+
+    async Task TaskCaseShimmer()
+    {
+        var (x, y) = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            var p = Main.LocalPlayer;
+            int x = (int)p.Center.X / 16, y = (int)p.Bottom.Y / 16 + 4;
+            for (int tx = x - 14; tx <= x + 12; tx++)
+            for (int row = y - 8; row <= y + 5; row++)
+            {
+                var tile = Main.tile[tx, row];
+                tile.ClearEverything();
+                if (tx >= x + 2 && tx <= x + 3 && row >= y && row < y + 3)
+                {
+                    tile.LiquidType = LiquidID.Shimmer;
+                    tile.LiquidAmount = byte.MaxValue;
+                }
+                else if (row >= y || tx == x + 4)
+                    tile.ResetToType(TileID.Stone);
+            }
+            p.position = new Vector2((x - 12) * 16, y * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.ChangeDir(1);
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            foreach (var held in p.inventory) held.TurnToAir();
+            foreach (var item in Main.item) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.WoodenSword);
+            observeShimmer = true;
+            return (x, y);
+        });
+        await DelayFrames(15);
+        var found = await RunTaskCase("31-find-shimmer-safely", new JsonObject());
+        await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            p.position = new Vector2(x * 16 + 10, y * 16 - p.height);
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            return true;
+        });
+        await DelayFrames(5);
+        var changed = await RunTaskCase("33-shimmer-transform-and-pickup", new JsonObject
+        {
+            ["slot"] = 0, ["input_type"] = (int)ItemID.WoodenSword,
+            ["target"] = new JsonObject { ["x"] = x + 2, ["y"] = y },
+            ["outputs"] = new JsonArray(new JsonObject { ["type"] = (int)ItemID.Wood, ["count"] = 7 })
+        });
+        var state = await OnMain(() => new JsonObject
+        {
+            ["shimmer_frame"] = shimmerFrame, ["player_entered"] = playerEnteredShimmer,
+            ["swords"] = Main.LocalPlayer.CountItem(ItemID.WoodenSword), ["wood"] = Main.LocalPlayer.CountItem(ItemID.Wood)
+        });
+        var report = new JsonObject { ["find"] = found, ["transform"] = changed, ["evidence"] = state };
+        File.WriteAllText(Path.Combine(Main.SavePath, "task-casebook-shimmer.json"), report.ToJsonString());
+        var liquid = found["value"]?["liquid"];
+        Check(found["value"]?["ok"]?.GetValue<bool>() == true && liquid?["x"]?.GetValue<int>() is int foundX
+            && foundX >= x + 2 && foundX <= x + 3 && found["value"]["sampled"].GetValue<int>() > 1,
+            "casebook_shimmer_search_unverified");
+        Check(changed["value"]?["ok"]?.GetValue<bool>() == true && state["swords"].GetValue<int>() == 0
+            && state["wood"].GetValue<int>() == 7 && state["shimmer_frame"].GetValue<int>() >= 0
+            && !state["player_entered"].GetValue<bool>(), "casebook_shimmer_transform_unverified");
+        Console.WriteLine("TASK_CASEBOOK_SHIMMER_COMPLETE cases=2");
     }
 
     async Task TaskCaseResidency()

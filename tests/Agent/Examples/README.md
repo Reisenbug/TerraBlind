@@ -33,6 +33,8 @@ TB_CASEBOOK_RAIL=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 TB_CASEBOOK_RESIDENCY=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
+TB_CASEBOOK_SHIMMER=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
+  python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 ~~~
 
 储物场景跑 26、28、09。社交场景跑 34 和单件饰品的 13。原版右键场景额外跑 30，使用原版回弹挡板判定。矿车场景跑 18，记录车速、下车与蘑菇入包。重铸可能耗尽次数，此时验收物品是否归还。
@@ -47,8 +49,12 @@ Cases 19 and 20 each run with and without a jump and write `task-casebook-rail.j
 
 The residency fixture runs 35 and 36. It records native NPC relocation at night, the change from insufficient to sufficient pylon residency, and player arrival at the destination pylon.
 
+微光场景跑 31 和 33。从干燥地面探查附近的微光，再单独从干燥岸边投掷木剑，核对原版分解生成的七个木材全部入包。测试全程监测角色是否接触微光。
+
+The Shimmer fixture runs 31 and 33. It locates a nearby pool from dry ground, then separately throws a Wooden Sword from the bank and checks that all seven Wood from native decrafting were collected. It monitors the player for Shimmer contact throughout.
+
 | 当前验证范围 / Current coverage | 编号 / IDs |
 | --- | --- |
-| 已在隔离实机验证 / Verified in isolated game | 02, 09, 13 (单件 / one accessory), 18, 26, 28, 30, 34, 35, 36 |
-| 有执行脚本，完整场景待验收 / Executable with scene-specific inputs, gameplay acceptance pending | 06, 07, 31, 37 |
-| 有分段验证或缺口探针，完整目标仍阻塞 / Partial execution or blocker probes | 01, 03, 04, 05, 08, 10–12, 14–17, 19–25, 27, 29, 32, 33, 38–40 |
+| 已在隔离实机验证 / Verified in isolated game | 02, 09, 13 (单件 / one accessory), 18, 26, 28, 30, 31, 33, 34, 35, 36 |
+| 有执行脚本，完整场景待验收 / Executable with scene-specific inputs, gameplay acceptance pending | 06, 07, 37 |
+| 有分段验证或缺口探针，完整目标仍阻塞 / Partial execution or blocker probes | 01, 03, 04, 05, 08, 10–12, 14–17, 19–25, 27, 29, 32, 38–40 |
