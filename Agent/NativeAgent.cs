@@ -21,6 +21,7 @@ public class NativeAgent : ModSystem
     AgentConversation _conversation;
     CodexAgent _codex;
     CancellationTokenSource _cancel;
+    CancellationTokenSource _scriptWarmup;
     Task _running;
     TaskCompletionSource<string> _answer;
     string _pending;
@@ -585,6 +586,14 @@ public class NativeAgent : ModSystem
         return await answer.WaitAsync(token);
     }
 
+    public override void OnWorldLoad()
+    {
+        if (Main.dedServ || !Config.I.AgentEnabled || _scriptWarmup != null) return;
+        _scriptWarmup = new CancellationTokenSource();
+        var token = _scriptWarmup.Token;
+        _ = Task.Run(() => AgentScript.WarmUp(token), token);
+    }
+
     public override void OnWorldUnload()
     {
         Cancel();
@@ -608,6 +617,8 @@ public class NativeAgent : ModSystem
 
     public override void Unload()
     {
+        _scriptWarmup?.Cancel();
+        _scriptWarmup?.Dispose();
         Cancel();
         CloseCodex();
         _http?.Dispose();

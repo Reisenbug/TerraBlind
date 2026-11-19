@@ -468,6 +468,20 @@ public static class AgentScript
         + "每次调用推进任务或解决未知；已知动作在JS连续执行，新事实需要模型时带证据交回。后台观察没有新决定可结束本轮，当前动作保持运行。"
         + "\n学习未知操作：act(observe:true)返回真实输入、弹射物轨迹、伤害归属及observation.id。比较短试验后用script_program保存可复用方法，结论引用实际试验ID，技能执行时读取现场参数并检验效果。";
 
+    internal static async Task WarmUp(CancellationToken token)
+    {
+        var timing = Stopwatch.StartNew();
+        var programs = new JsonArray(new JsonObject { ["name"] = "startup_probe", ["revision"] = 0,
+            ["code"] = "return tool('get_state').ready;" });
+        try
+        {
+            var result = await Run("return skill('startup_probe',0);", 1, (_, _) => { },
+                (_, _, _) => Task.FromResult("{\"ready\":true}"), _ => Task.CompletedTask, token, programs: programs);
+            DiagLog.Write($"[agent-script-warmup] ok={result["value"]?.GetValue<bool>() == true} elapsed_ms={timing.Elapsed.TotalMilliseconds:0.###}");
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+    }
+
     public static async Task<JsonObject> Run(string source, int seconds,
         Action<string, JsonObject> validate,
         Func<string, JsonObject, CancellationToken, Task<string>> execute,
