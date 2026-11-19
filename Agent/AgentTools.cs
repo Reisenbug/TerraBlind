@@ -391,7 +391,7 @@ public static partial class AgentTools
         {
             var facts = new JsonObject();
             foreach (string field in new[] { "error", "outcome", "reason", "status", "done", "tool", "x", "y", "type", "slot", "item_type", "count", "hp", "dist", "detail",
-                "args", "evidence", "failure", "navigation", "contact_escape", "predicted_tile", "state", "pos", "value", "blocked", "collection", "last_result", "result" })
+                "args", "evidence", "failure", "navigation", "contact_escape", "predicted_tile", "state", "pos", "value", "blocked", "collection", "last_result", "result", "handoff", "active_handle" })
             {
                 if (source[field] is JsonValue value)
                 {
@@ -2115,6 +2115,26 @@ public static partial class AgentTools
                     var deliveredEvents = await NativeAgent.OnMain(() => Watches.Take(8, recoveryOnly: true), token);
                     if (deliveredEvents.Count > 0) deliveredWake["events"] = deliveredEvents;
                 }
+                if (mayAct)
+                {
+                    string scriptHandle = queuedScript ? Actions.ActiveHandle : null;
+                    result["handoff"] = await NativeAgent.OnMain(() =>
+                    {
+                        string active = Actions.ActiveHandle;
+                        if (active == scriptHandle) active = null;
+                        var value = result["value"] as JsonObject;
+                        bool review = !Bool(result, "ok") || value?["wake"] is JsonObject || value?["status"]?.ToString() == "needs_review";
+                        var handoff = new JsonObject { ["status"] = active != null ? "action_running"
+                            : review ? "review_requested"
+                            : Text(args, "task_node") != "" ? "verify_and_continue" : "returned_to_caller",
+                            ["active_handle"] = active };
+                        if (active == null && !queuedScript && Plan.Incomplete
+                            && NativeAgent.GoalState?["native"]?["status"]?.ToString() == "active")
+                            Watches.ExecutionFault(new JsonObject { ["reason"] = "foreground_script_returned_without_action",
+                                ["task_node"] = result["task_node"]?.DeepClone(), ["handoff"] = handoff.DeepClone() });
+                        return handoff;
+                    }, token);
+                }
                 break;
             case "watch":
                 return (await NativeAgent.OnMain(() =>
@@ -3116,6 +3136,13 @@ public static partial class AgentTools
     internal static async Task<JsonObject> CollectTarget(int x, int y, CancellationToken token, bool nonSolidOnly = true, int requestedSlot = -1,
         Func<JsonObject> completion = null)
     {
+        bool InMiningRange(int slot)
+        {
+            var player = Main.LocalPlayer;
+            int previous = player.selectedItem;
+            try { player.selectedItem = slot; return Reach.CanMine(player, x, y); }
+            finally { player.selectedItem = previous; }
+        }
         var target = await NativeAgent.OnMain(() =>
         {
             if (!WorldGen.InWorld(x, y)) return null;
@@ -3124,14 +3151,7 @@ public static partial class AgentTools
             int Power(Item item) => Main.tileAxe[tile.TileType] ? item.axe : Main.tileHammer[tile.TileType] ? item.hammer : item.pick;
             int slot = requestedSlot >= 0 ? requestedSlot : Enumerable.Range(0, 50).OrderByDescending(i => Power(Main.LocalPlayer.inventory[i]))
                 .FirstOrDefault(i => !Main.LocalPlayer.inventory[i].IsAir && Power(Main.LocalPlayer.inventory[i]) > 0, -1);
-            bool canMine = false;
-            if (slot >= 0)
-            {
-                int previous = Main.LocalPlayer.selectedItem;
-                try { Main.LocalPlayer.selectedItem = slot; canMine = Reach.CanMine(Main.LocalPlayer, x, y); }
-                finally { Main.LocalPlayer.selectedItem = previous; }
-            }
-            return new JsonObject { ["slot"] = slot, ["in_reach"] = canMine,
+            return new JsonObject { ["slot"] = slot, ["in_reach"] = slot >= 0 && InMiningRange(slot),
                 ["solid"] = Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType],
                 ["accepted_traps"] = tile.TileType == Terraria.ID.TileID.PressurePlates && slot >= 0
                     && Power(Main.LocalPlayer.inventory[slot]) > 0 ? new JsonArray(new JsonObject {
@@ -3139,34 +3159,32 @@ public static partial class AgentTools
                         ["frame_x"] = (int)tile.TileFrameX, ["frame_y"] = (int)tile.TileFrameY }) : null };
         }, token);
         if (target == null) return null;
-        if (Int(target, "slot", -1) < 0) return new JsonObject { ["error"] = "no_collect_tool" };
+        int collectSlot = Int(target, "slot", -1);
+        if (collectSlot < 0) return new JsonObject { ["error"] = "no_collect_tool" };
         if (!Bool(target, "in_reach"))
         {
+            JsonObject ReadyToCollect() => completion?.Invoke()
+                ?? (!Main.LocalPlayer.suffocating && InMiningRange(collectSlot)
+                    ? new JsonObject { ["outcome"] = "collect_target_in_reach", ["condition_met"] = true } : null);
+            bool Arrived(JsonObject result) => Bool(result, "done") || Text(result, "outcome") == "collect_target_in_reach";
             JsonObject Approach(string mode) => new() { ["x"] = x, ["y"] = y, ["mode"] = mode,
                 ["accepted_traps"] = target["accepted_traps"]?.DeepClone() };
-            var approach = await Navigate(Approach(Bool(target, "solid") ? "mine" : "interact"), token, interruption: completion);
+            var approach = await Navigate(Approach(Bool(target, "solid") ? "mine" : "interact"), token, interruption: ReadyToCollect);
             var completed = completion == null ? null : await NativeAgent.OnMain(completion, token);
             if (completed != null) return completed;
-            if (approach["done"]?.GetValue<bool>() != true)
+            if (!Arrived(approach))
                 return new JsonObject { ["error"] = "cannot_reach_collect_target", ["navigation"] = approach };
             if (await NativeAgent.OnMain(() => !Main.tile[x, y].HasUnactuatedTile, token))
                 return new JsonObject { ["outcome"] = "removed", ["mode_adjustment"] = "navigation_mined_target" };
-            bool InMiningRange()
-            {
-                var player = Main.LocalPlayer;
-                int previous = player.selectedItem;
-                try { player.selectedItem = Int(target, "slot", -1); return Reach.CanMine(player, x, y); }
-                finally { player.selectedItem = previous; }
-            }
-            bool reachable = await NativeAgent.OnMain(InMiningRange, token);
+            bool reachable = await NativeAgent.OnMain(() => InMiningRange(collectSlot), token);
             if (!reachable && !Bool(target, "solid"))
             {
-                approach = await Navigate(Approach("stand"), token, interruption: completion);
+                approach = await Navigate(Approach("stand"), token, interruption: ReadyToCollect);
                 completed = completion == null ? null : await NativeAgent.OnMain(completion, token);
                 if (completed != null) return completed;
-                if (approach["done"]?.GetValue<bool>() != true)
+                if (!Arrived(approach))
                     return new JsonObject { ["error"] = "cannot_reach_collect_target", ["navigation"] = approach };
-                reachable = await NativeAgent.OnMain(InMiningRange, token);
+                reachable = await NativeAgent.OnMain(() => InMiningRange(collectSlot), token);
             }
             if (!reachable) return new JsonObject { ["error"] = "collect_target_out_of_mining_range",
                 ["x"] = x, ["y"] = y, ["navigation"] = approach };

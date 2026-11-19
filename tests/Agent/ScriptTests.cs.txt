@@ -57,6 +57,7 @@ static class ScriptTests
         await TestTacticalReactions();
         await ConcurrentPolicyContext();
         await BoundedCollectUse();
+        await CollectApproachHandoff();
         TestMovementExposure();
         await TestTravelManeuver();
         await TacticalSkillInput();
@@ -2880,6 +2881,52 @@ static class ScriptTests
         {
             player.inventory[49] = item; Terraria.Main.GameUpdateCount = tick;
             AgentTools.Stop(); HttpServerSystem.Handler = handler; agent.Unload();
+        }
+    }
+
+    static async Task CollectApproachHandoff()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var handler = HttpServerSystem.Handler;
+        var miningRange = Reach.MineTest;
+        var player = Terraria.Main.LocalPlayer;
+        var oldTile = Terraria.Main.tile[20, 20];
+        var oldTool = player.inventory[49];
+        int polls = 0;
+        var actions = new List<string>();
+        try
+        {
+            AgentTools.NewTask(); AgentTools.Plan.Reset();
+            Terraria.Main.tile[20, 20] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 12 };
+            player.inventory[49] = new Terraria.Item { type = 3509, pick = 35, stack = 1 };
+            Reach.MineTest = (p, _, _) => p.selectedItem == 49 && polls >= 2;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/nav_recede_done") { polls++; return (200, "{\"done\":false,\"status\":\"running\"}"); }
+                if (path == "/item_use_status") return (200, "{\"active\":false,\"outcome\":\"removed\"}");
+                if (path is "/nav_recede" or "/nav_recede_stop" or "/item_use") actions.Add(path);
+                return (200, "{}");
+            };
+            var task = AgentTools.Execute("run_script", new JsonObject { ["code"] =
+                "const r=tool('mine',{dir:'right',target_x:20,target_y:20}); return {status:r.outcome==='removed'?'done':'needs_review'};" }, default);
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (!task.IsCompleted)
+            {
+                Check(timer.Elapsed.TotalSeconds < 5, "collection waited for navigation to report done");
+                agent.PostUpdateEverything();
+                await Task.Delay(1);
+            }
+            var receipt = JsonNode.Parse(await task);
+            Check(polls == 2 && actions.SequenceEqual(new[] { "/nav_recede", "/nav_recede_stop", "/item_use" })
+                && receipt["value"]?["status"]?.ToString() == "done"
+                && receipt["handoff"]?["status"]?.ToString() == "returned_to_caller", "invalid collection/script handoff: " + receipt);
+            Console.WriteLine("PASS: collection stops unfinished navigation as soon as the actual pick can reach, then returns an explicit script handoff");
+        }
+        finally
+        {
+            Terraria.Main.tile[20, 20] = oldTile; player.inventory[49] = oldTool;
+            Reach.MineTest = miningRange; HttpServerSystem.Handler = handler;
+            AgentTools.Stop(); AgentTools.Plan.Reset(); agent.Unload();
         }
     }
 

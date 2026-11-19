@@ -60,6 +60,10 @@ return tool('collect_treasure', {x: chest.x, y: chest.y});
 
 工具的完整参数见 [Tools.json](Tools.json)。模型可读的运行约定见 [System.txt](System.txt)。
 
+动作脚本结束时，回执的 `handoff` 会说明后台动作是否仍在运行、是否需要模型复核，或是否应交给宿主验收并推进。已准备好的 DAG 后继由宿主接手。
+
+When an action script returns, its `handoff` tells the caller whether a background action is still running, model review is needed, or the host should verify the node and advance. The host starts prepared DAG successors.
+
 ## 自由探索 / Free exploration
 
 ~~~text
