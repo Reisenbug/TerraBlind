@@ -245,11 +245,13 @@ export const cases = {
       h.click(section, slot);
       h.click('reforge', 0);
       let matched = false;
+      let reason = 'reforge_roll_limit';
       try {
         for (let roll = 0; roll < (i.max_rolls_per_item ?? 20); roll++) {
-          if (h.calls() > 88) break;
+          if (h.calls() > 88) { reason = 'reforge_batch_needs_continuation'; break; }
           const quote = h.call('reforge', {action: 'quote'});
-          if (!quote.affordable || quote.cost_copper > i.budget_copper - spent) break;
+          if (!quote.affordable) { reason = 'reforge_insufficient_coins'; break; }
+          if (quote.cost_copper > i.budget_copper - spent) { reason = 'reforge_budget_exhausted'; break; }
           const next = h.call('reforge', {action: 'roll', expected_item: quote.item, max_cost: i.budget_copper - spent});
           spent += next.spent_copper;
           if (next.accessory_defense >= 3) { matched = true; break; }
@@ -258,8 +260,7 @@ export const cases = {
         h.click('reforge', 0);
         h.click(section, slot);
       }
-      if (!matched) return h.blocked(h.calls() > 88 ? 'reforge_batch_needs_continuation' : 'reforge_budget_or_roll_limit',
-        {section, slot, spent, prefixes: checked});
+      if (!matched) return h.blocked(reason, {section, slot, spent, prefixes: checked});
       const actual = at();
       h.check([64, 65].includes(actual.prefix), 'reforge_prefix_unverified', actual);
       checked.push(actual.prefix);

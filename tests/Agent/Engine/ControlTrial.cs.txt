@@ -165,6 +165,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CASEBOOK_REFORGE") == "1")
+        {
+            await TaskCaseReforge();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CASEBOOK_SKY") == "1")
         {
             await TaskCaseSky();
@@ -346,6 +351,80 @@ public sealed class ControlTrial : ModSystem
             { ["code"] = template.Replace("\"__TB_FIXTURE__\"", inputs.ToJsonString()) });
         Console.WriteLine($"TASK_CASE {id} " + (result["value"]?.ToJsonString() ?? result["detail"]?.ToString()));
         return result;
+    }
+
+    async Task TaskCaseReforge()
+    {
+        int[] types = { ItemID.Aglet, ItemID.ClimbingClaws, ItemID.ShoeSpikes, ItemID.HermesBoots, ItemID.CloudinaBottle };
+        long before = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            var p = Main.LocalPlayer;
+            int x = (int)p.Center.X / 16, y = (int)p.Bottom.Y / 16 + 4;
+            for (int tx = x - 5; tx <= x + 6; tx++)
+            for (int row = y - 6; row <= y + 2; row++)
+            {
+                var tile = Main.tile[tx, row];
+                tile.ClearEverything();
+                if (row >= y) tile.ResetToType(TileID.Stone);
+            }
+            p.position = new Vector2(x * 16, y * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            foreach (var item in p.inventory) item.TurnToAir();
+            for (int index = 0; index < types.Length; index++) p.armor[index + 3].SetDefaults(types[index]);
+            p.inventory[53].SetDefaults(ItemID.PlatinumCoin);
+            p.inventory[53].stack = 50;
+            Main.mouseItem.TurnToAir();
+            interactionNpc = NPC.NewNPC(new EntitySource_Misc("reforge-all-fixture"), (x + 2) * 16, y * 16, NPCID.GoblinTinkerer);
+            Check(interactionNpc < Main.maxNPCs, "reforge_fixture_goblin_missing");
+            p.SetTalkNPC(interactionNpc);
+            Main.InReforgeMenu = Main.playerInventory = true;
+            return Utils.CoinsCount(out _, p.inventory);
+        });
+        await DelayFrames(10);
+        var budgetProbe = await RunTaskCase("13-reforge-defense", new JsonObject
+            { ["equipment_slots"] = new JsonArray(3, 4, 5, 6, 7), ["budget_copper"] = 1 });
+        bool budgetRespected = budgetProbe["value"]?["reason"]?.ToString() == "reforge_budget_exhausted"
+            && await OnMain(() => Utils.CoinsCount(out _, Main.LocalPlayer.inventory) == before
+                && Main.reforgeItem.IsAir && Main.mouseItem.IsAir && Main.LocalPlayer.armor[3].type == types[0]);
+        const int budget = 4500000;
+        int spent = 0;
+        bool completed = false;
+        var rounds = new JsonArray();
+        for (int round = 0; round < 12 && !completed && spent < budget; round++)
+        {
+            var result = await RunTaskCase("13-reforge-defense", new JsonObject
+            {
+                ["equipment_slots"] = new JsonArray(3, 4, 5, 6, 7), ["budget_copper"] = budget - spent,
+                ["max_rolls_per_item"] = 20
+            });
+            rounds.Add(result);
+            var value = result["value"];
+            completed = value?["ok"]?.GetValue<bool>() == true;
+            spent += (completed ? value?["spent"] : value?["evidence"]?["spent"])?.GetValue<int>() ?? 0;
+            if (!completed && value?["reason"]?.ToString() is not ("reforge_roll_limit" or "reforge_batch_needs_continuation")) break;
+        }
+        var proof = await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            var slots = p.armor.Skip(3).Take(types.Length).ToArray();
+            return new JsonObject
+            {
+                ["types_preserved"] = slots.Select(item => item.type).SequenceEqual(types),
+                ["prefixes"] = new JsonArray(slots.Select(item => (JsonNode)JsonValue.Create((int)item.prefix)).ToArray()),
+                ["all_defense"] = slots.All(item => item.prefix is PrefixID.Armored or PrefixID.Warding),
+                ["spent"] = before - Utils.CoinsCount(out _, p.inventory),
+                ["slots_clear"] = Main.reforgeItem.IsAir && Main.mouseItem.IsAir
+            };
+        });
+        File.WriteAllText(Path.Combine(Main.SavePath, "task-casebook-reforge.json"),
+            new JsonObject { ["rounds"] = rounds, ["proof"] = proof, ["budget_probe"] = budgetProbe }.ToJsonString());
+        Check(completed && budgetRespected && proof["types_preserved"].GetValue<bool>() && proof["all_defense"].GetValue<bool>()
+            && proof["slots_clear"].GetValue<bool>() && proof["spent"].GetValue<long>() == spent,
+            "casebook_all_accessories_reforge_unverified");
+        Console.WriteLine($"TASK_CASEBOOK_REFORGE_COMPLETE equipped={types.Length} rounds={rounds.Count} spent={spent}");
     }
 
     async Task TaskCaseSky()
@@ -1186,7 +1265,7 @@ public sealed class ControlTrial : ModSystem
             }
             else
             {
-                Check(defense["value"]?["reason"]?.ToString() == "reforge_budget_or_roll_limit"
+                Check(defense["value"]?["reason"]?.ToString() is ("reforge_budget_exhausted" or "reforge_roll_limit" or "reforge_insufficient_coins")
                     && await OnMain(() => Main.reforgeItem.IsAir && Main.LocalPlayer.inventory[10].type == ItemID.Aglet),
                     "casebook_reforge_did_not_preserve_item");
             }
