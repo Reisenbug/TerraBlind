@@ -166,6 +166,7 @@ namespace TerraBlind
         public class SSResult
         {
             public bool Found;
+            public bool BlockedByCycle;
             public int Expansions;
             public double Millis;
             public List<(float px, float py)> Path = new();
@@ -2837,6 +2838,7 @@ namespace TerraBlind
             var cands = new List<Cand>();
             // 所有候选,连 total 一起留着。选边要按 total 采样,不是取最小(见下面的 softmax)
             var jigglePool = new List<((SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> dig) edge, (int, int) cell, int h, float total)>();
+            bool blockedByCycle = false;
             var _candLog = new System.Text.StringBuilder();
             var _swCycle = System.Diagnostics.Stopwatch.StartNew();
             foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick))
@@ -2851,6 +2853,8 @@ namespace TerraBlind
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
                 if (IsLavaCell(ncx, ncy)) continue;           // never step into lava (deadly, not drift)
                 if (!field.TryGetValue((ncx, ncy), out int nH)) continue;   // off the field → can't value it
+                if (RecedingNav.BlocksCycleEdge(p, (curCx, curCy), (ncx, ncy)))
+                { blockedByCycle = true; continue; }
                 // g+h 两段同尺(帧):g=走这条边的帧数,h=落点场值。弃用 LookaheadH。它取周围 18 格最小 H,
                 // 望得见走不到:(2581,318)H1097 旁边 H1141 被望成 t862,来回八趟 200 帧。
                 bool isPlace = !pillar && digTiles == null && frames != null && frames.Exists(f => f.Place);
@@ -2888,6 +2892,7 @@ namespace TerraBlind
                 { bestDropTotal = total; bestDropCell = (ncx, ncy); }
                 jigglePool.Add(((next, frames, cost, pillar, digTiles), (ncx, ncy), nH, total));
             }
+            if (blockedByCycle && bestDropTotal == float.MaxValue) return new SSResult { BlockedByCycle = true };
             // 风险只在【选边】这一层加价,势能场一分不动 -- 场仍然是纯帧数,cost 还是一套
             if (jigglePool.Count > 0 && best != null && RiskLayer.Enabled)
             {

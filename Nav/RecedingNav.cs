@@ -36,11 +36,8 @@ namespace TerraBlind
         static bool _lastPillar;         // pillar 边只承诺往上,判到没到时要放宽行号
         static float _lastLandPx, _lastLandPy;   // 上条边【规划】的像素落点,MISS 时和真实落点比
 
-        // 打转由 StateSpacePlanner 的进度地板在选边时掐掉;这里只留 _bestH/_ring 供日志读
-        static int _bestH;
-        static readonly System.Collections.Generic.List<(int fx, int fy, int tx, int ty, int h)> _ring = new();
-        const int RingLen = 24;
-        static (int, int)? _prevCell;
+        static readonly NavigationCycleGuard cycle = new();
+        static int _lastEdgeContext;
 
         public static void Toggle()
         {
@@ -146,17 +143,21 @@ namespace TerraBlind
         static bool _startupWalkReported;
         static Vector2 _attemptStart;
         static int _attemptTerrain, _noProgressSteps;
-        static bool _failureRecoveryPending, _failureRecoveryTried;
+        static bool _failureRecoveryPending, _failureRecoveryTried, _cycleEscapePending;
         static long _failureRecoveryStartedAt;
 
         static int TerrainStamp(Player player)
+            => TerrainStamp(((int)(player.Center.X / 16f), (int)(player.Center.Y / 16f)));
+
+        static int TerrainStamp((int X, int Y) cell)
         {
             var hash = new System.HashCode();
-            int cx = (int)(player.Center.X / 16f), cy = (int)(player.Center.Y / 16f);
+            var (cx, cy) = cell;
             for (int x = System.Math.Max(0, cx - 6); x <= System.Math.Min(Main.maxTilesX - 1, cx + 6); x++)
                 for (int y = System.Math.Max(0, cy - 6); y <= System.Math.Min(Main.maxTilesY - 1, cy + 6); y++)
                 {
                     var tile = Main.tile[x, y];
+                    hash.Add(tile.LiquidAmount); hash.Add(tile.LiquidType);
                     hash.Add(tile.HasTile);
                     if (!tile.HasTile) continue;
                     hash.Add(tile.TileType); hash.Add(tile.Slope);
@@ -164,6 +165,14 @@ namespace TerraBlind
                 }
             return hash.ToHashCode();
         }
+
+        static int EdgeContext(Player player, (int, int) from, (int, int) target) => System.HashCode.Combine(
+            TerrainStamp(from), TerrainStamp(target), player.maxRunSpeed, player.jumpSpeedBoost, player.gravDir,
+            player.gravControl, player.slowFall, player.AnyExtraJumpUsable());
+
+        internal static bool BlocksCycleEdge(Player player, (int, int) from, (int, int) target)
+            => Active && cycle.TryGetBlockedContext(from, target, out int context)
+                && context == EdgeContext(player, from, target);
 
         static bool AttemptProgressed(Player player)
             => Vector2.DistanceSquared(player.position, _attemptStart) >= 1f
@@ -188,6 +197,11 @@ namespace TerraBlind
 
         static void RecoverNoProgress(Player player, (int, int) cell, string reason)
         {
+            if (reason == "local_route_cycle")
+            {
+                if (StateSpacePlanner.PreserveTerrain) { LastStop = "no_progress_preserving_terrain"; Stop(); return; }
+                if (player.velocity != Vector2.Zero) { _cycleEscapePending = true; return; }
+            }
             EventLog.W(Ev.Fail, $"NO-PROGRESS attempts={_noProgressSteps} at={cell} reason={reason} recovery_tried={_failureRecoveryTried}");
             if (!_failureRecoveryTried)
             {
@@ -248,7 +262,7 @@ namespace TerraBlind
             _startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             int latencyRequest = NavigationLatency.Begin(requestedAt, goalWx, goalWy);
             _startupWalkReported = false;
-            _noProgressSteps = 0; _failureRecoveryPending = false; _failureRecoveryTried = false;
+            _noProgressSteps = 0; _failureRecoveryPending = false; _failureRecoveryTried = false; _cycleEscapePending = false;
             LegacyNativePrediction.Reset();
             LegacyMovementLookahead.Reset();
             VanillaNavBridge.Reset();
@@ -259,7 +273,7 @@ namespace TerraBlind
                 || ActExecutor.OriginCy(Main.LocalPlayer) >= Main.UnderworldLayer;
             _braking = false;
             _goalWx = goalWx; _goalWy = goalWy; Active = true; LastStop = null; _haveLast = false; _lastTarget = null; _lastFrom = null;
-            _bestH = int.MaxValue; _ring.Clear(); _prevCell = null;
+            cycle.Reset();
             StateSpacePlanner.ResetFloor();   // 换目标=换场,旧地板的 H 是另一把尺子上的数,留着会误判
             Commitment.Reset();               // 承诺和它的失败记录属于这一趟,别带进下一趟
             Trap.Reset();                     // 卡点记录也是按趟算的
@@ -324,7 +338,7 @@ namespace TerraBlind
             StateSpacePlanner.StopNav();
             SkillExecutor.Stop(); MineCoordinator.Stop(); BridgeBuilder.Stop(); ItemUseCoordinator.Stop();
             TrapEscape.Reset();
-            _haveLast = false; _failureRecoveryPending = false;
+            _haveLast = false; _failureRecoveryPending = false; _cycleEscapePending = false;
             _noProgressSteps = 0; _failureRecoveryTried = false;
         }
 
@@ -470,6 +484,13 @@ namespace TerraBlind
             {
                 PollFailureRecovery(); return;
             }
+            if (_cycleEscapePending)
+            {
+                if (p.velocity != Vector2.Zero) return;
+                _cycleEscapePending = false;
+                RecoverNoProgress(p, StateSpacePlanner.StandCell(p.position.X, p.position.Y), "local_route_cycle");
+                return;
+            }
 
             // 每帧判卡死(不只在重规划边界):~0.5s 内走安全步,真平线 6-8s 才放弃这一段。它挪的时候占用本帧控制
             if (StateSpacePlanner.NativeReplayMatches(p)) StuckSentinel.Reset();
@@ -502,35 +523,12 @@ namespace TerraBlind
             if (StuckSentinel.Nudging) return;
 
             if (StateSpacePlanner.ExecRunning && !StateSpacePlanner.ReplayAtHandoff) return;
-            var prepared = LegacyMovementLookahead.Take(p, _goalWx, _goalWy);
-            if (prepared != null)
-            {
-                DispatchLegacy(prepared, StateSpacePlanner.StandCell(p.position.X, p.position.Y));
-                return;
-            }
-            if (StateSpacePlanner.ExecRunning) return;
             if (p.velocity.Y != 0f) return;                   // wait until landed + settled
+            var prepared = LegacyMovementLookahead.Take(p, _goalWx, _goalWy);
+            if (StateSpacePlanner.ExecRunning && prepared == null) return;
 
             // one label function everywhere: same rounding AND same body-fit snap as the planner's landing labels.
             var cell = StateSpacePlanner.StandCell(p.position.X, p.position.Y);
-            // freshness triggers (see RebuildFieldAsync). Off-field must wait for the swap, no compass here, and
-            // letting StepAlongField run would fake a "walled_in" out of a coverage hole.
-            if (MazeWand.FieldPickStale())
-                RebuildFieldAsync("pick change");
-            if (!MazeWand.GetField(_goalWx, _goalWy).ContainsKey(cell))
-            {
-                if (cell != _offFieldCell) { _offFieldCell = cell; _offFieldTries = 0; }
-                if (++_offFieldTries <= 1)
-                {
-                    RebuildFieldAsync("off-field");
-                    return;
-                }
-                // 建过了还在场外:不再建,放行下去。StepAlongField 会报 EXPAND-EMPTY 然后走安全逃逸步,
-                // 人挪一格就可能回到场里。停在这儿等一张永远不会包含这格的场才是真死锁。
-                EventLog.W(Ev.Fail, $"OFF-FIELD {cell} 重建后仍不在场里 → 交给逃逸步");
-            }
-            else if (cell == _offFieldCell) { _offFieldCell = (int.MinValue, int.MinValue); _offFieldTries = 0; }
-            // 上一条边真落到哪了 → 变成连续的失配权重,软性压低老是落空的边。随后整表衰减:不做黑名单、不禁回头
             if (_haveLast && _lastFrom.HasValue && _lastTarget.HasValue)
             {
                 StateSpacePlanner.DecayMiss();
@@ -553,17 +551,45 @@ namespace TerraBlind
                     + $"{(hit ? "HIT" : $"MISS d=({dxc},{dyc})")}{(_lastPillar ? " pillar" : "")} "
                     + $"px={p.position.X:0.#},{p.position.Y:0.#} cols[{bl}..{br}] feet={feetRow} under={(under == "" ? "空" : under.Trim())}{gap}");
                 StateSpacePlanner.ReportEdge(f.Item1, f.Item2, t.Item1, t.Item2, cell.Item1, cell.Item2, _lastPillar);
-                if (!hit && StateSpacePlanner.RepeatedLanding(cell, f))
+                if (cycle.Landed(f, t, cell, _lastEdgeContext))
+                {
+                    DiagLog.Write($"[recede-cycle] from={f} planned={t} landed={cell}");
+                    Commitment.Clear();
+                }
+                if (!StateSpacePlanner.ExecRunning && !hit && StateSpacePlanner.RepeatedLanding(cell, f))
                 {
                     RecoverNoProgress(p, cell, "repeated_missed_landing");
                     return;
                 }
-                if (RecordAttempt(p, hit))
+                if (RecordAttempt(p, hit) && !StateSpacePlanner.ExecRunning)
                 {
                     RecoverNoProgress(p, cell, "execution_missed");
                     return;
                 }
             }
+            if (prepared != null && !BlocksCycleEdge(p, cell, (prepared.GoalWx, prepared.GoalWy)))
+            {
+                DispatchLegacy(prepared, cell);
+                return;
+            }
+            if (StateSpacePlanner.ExecRunning) return;
+            // freshness triggers (see RebuildFieldAsync). Off-field must wait for the swap, no compass here, and
+            // letting StepAlongField run would fake a "walled_in" out of a coverage hole.
+            if (MazeWand.FieldPickStale())
+                RebuildFieldAsync("pick change");
+            if (!MazeWand.GetField(_goalWx, _goalWy).ContainsKey(cell))
+            {
+                if (cell != _offFieldCell) { _offFieldCell = cell; _offFieldTries = 0; }
+                if (++_offFieldTries <= 1)
+                {
+                    RebuildFieldAsync("off-field");
+                    return;
+                }
+                // 建过了还在场外:不再建,放行下去。StepAlongField 会报 EXPAND-EMPTY 然后走安全逃逸步,
+                // 人挪一格就可能回到场里。停在这儿等一张永远不会包含这格的场才是真死锁。
+                EventLog.W(Ev.Fail, $"OFF-FIELD {cell} 重建后仍不在场里 → 交给逃逸步");
+            }
+            else if (cell == _offFieldCell) { _offFieldCell = (int.MinValue, int.MinValue); _offFieldTries = 0; }
             // 后台 A* 搜完了就在这儿派发(派发必须在主线程)。搜索本身在 Task 里跑,
             // 这一帧只是取结果。主线程一次展开都不做
             if (TrapEscape.Poll()) { StuckSentinel.Reset(); _haveLast = false; return; }
@@ -572,6 +598,8 @@ namespace TerraBlind
             long stepStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             var res = StateSpacePlanner.StepAlongField(_goalWx, _goalWy);
             NavigationLatency.Search(System.Diagnostics.Stopwatch.GetElapsedTime(stepStarted).TotalMilliseconds, "first_segment");
+            if (res?.BlockedByCycle == true)
+            { RecoverNoProgress(p, cell, "local_route_cycle"); return; }
             // 贪心当场承认走不动(物理候选没一个降 H)。这是它的理论缺陷,补丁修不好。
             // 只在这一刻叫 A*,而且只搜"出这个坑"那一小段。别处照旧走贪心,它的好处一条不丢。
             if (Trap.JustTrapped)
@@ -621,12 +649,6 @@ namespace TerraBlind
             if (res == null || res.Steps.Count == 0)
             { DiagLog.Write($"[recede] STOP at {cell}: no physics edge at all (unbreakable seal — a human couldn't pass either)"); LastStop = "walled_in"; Stop(); Chatter.Say("[TerraBlind] receding: walled in"); return; }
 
-            // bestH 只在当前盆地内衡量进度:摔一次能让 H 跳 +500~1300(循环环内才 ≤50),那是换盆地不是打转
-            if (res.CurH < _bestH) _bestH = res.CurH;
-            _ring.Add((cell.Item1, cell.Item2, res.GoalWx, res.GoalWy, res.CurH));
-            if (_ring.Count > RingLen) _ring.RemoveAt(0);
-            _prevCell = cell;
-
             _altered += res.Altered;
             if (res.Steps.Exists(step => step.Dig || step.Pillar || step.Bridge
                 || step.MineTiles?.Count > 0 || step.Frames?.Exists(frame => frame.Place) == true))
@@ -657,6 +679,9 @@ namespace TerraBlind
         static void DispatchLegacy(StateSpacePlanner.SSResult res, (int, int) cell)
         {
             var player = Main.LocalPlayer;
+            var target = (res.GoalWx, res.GoalWy);
+            if (BlocksCycleEdge(player, cell, target))
+            { RecoverNoProgress(player, cell, "local_route_cycle"); return; }
             BeginAttempt(player);
             if (!res.NativeVerified && res.Steps.Count == 1 && res.Steps[0].Frames is { Count: > 0 } frames
                 && !FallSafety.Immune(player))
@@ -674,7 +699,8 @@ namespace TerraBlind
                     return;
                 }
             }
-            _lastFrom = cell; _lastTarget = (res.GoalWx, res.GoalWy); _haveLast = true;
+            _lastFrom = cell; _lastTarget = target; _haveLast = true;
+            _lastEdgeContext = EdgeContext(player, cell, target);
             _lastPillar = res.Steps.Count > 0 && res.Steps[0].Pillar;
             _lastLandPx = res.Steps.Count > 0 ? res.Steps[0].LandPx : 0f;
             _lastLandPy = res.Steps.Count > 0 ? res.Steps[0].LandPy : 0f;

@@ -96,14 +96,15 @@ namespace TerraBlind
         static bool TryEscape(Dictionary<(int, int), int> field, int curCx, int curCy, int curH,
                               int goalWx, int goalWy, bool preferLocalExit)
         {
-            if (Busy || curH < MinDrop) return false;
+            int minDrop = preferLocalExit ? 1 : MinDrop;
+            if (Busy || curH < minDrop) return false;
             // H 比上次卡的时候明显低了 = 中间真出去过,这是个新坑,失败计数重新开始。
             // 不清的话:一趟里前面某个坑用光了 3 次机会,后面所有坑都不再尝试
             if (_lastH != int.MinValue && curH < _lastH - MinDrop) _fails = 0;
             if (_fails >= MaxFails) return false;
 
             // PickTarget 里已经打了具体原因(可达区多大、区内最低 H 多少),这儿不再重复
-            var t = PickTarget(field, curCx, curCy, curH, preferLocalExit);
+            var t = PickTarget(field, curCx, curCy, curH, preferLocalExit, minDrop);
             if (t == null) return false;
             var target = t.Value;
             int tH = field[(target.x, target.y)];
@@ -131,7 +132,7 @@ namespace TerraBlind
         //
         // 改成按【可达性】挑:从人站的格泛洪,只走物理走得通的边,完全不看 H。
         // 这片区域就是"这个坑"。区内 H 最低的格一定能到。A* 不会白搜。
-        static (int x, int y)? PickTarget(Dictionary<(int, int), int> field, int cx, int cy, int curH, bool preferLocalExit)
+        static (int x, int y)? PickTarget(Dictionary<(int, int), int> field, int cx, int cy, int curH, bool preferLocalExit, int minDrop)
         {
             var region = Flood(cx, cy);
             (int x, int y)? best = null;
@@ -141,11 +142,11 @@ namespace TerraBlind
             {
                 if (!field.TryGetValue(c, out int h)) continue;
                 int distance = preferLocalExit ? System.Math.Abs(c.x - cx) + System.Math.Abs(c.y - cy) : 0;
-                if ((long)curH - h < MinDrop || distance > bestDistance || distance == bestDistance && h >= bestH) continue;
+                if ((long)curH - h < minDrop || distance > bestDistance || distance == bestDistance && h >= bestH) continue;
                 bestDistance = distance;
                 bestH = h; best = c;
             }
-            if (best != null && curH - bestH >= MinDrop)
+            if (best != null)
             {
                 DiagLog.Write($"[escape] 可达区 {region.Count} 格,区内最低 ({best.Value.x},{best.Value.y})H{bestH} 降{curH - bestH}");
                 return best;

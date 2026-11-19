@@ -4,6 +4,37 @@ using System.Text.Json.Nodes;
 
 namespace TerraBlind;
 
+internal sealed class NavigationCycleGuard
+{
+    readonly record struct Edge((int, int) From, (int, int) Target);
+    readonly record struct Traversal(Edge Edge, (int, int) Landing, int Context);
+    readonly System.Collections.Generic.List<Traversal> path = new();
+    readonly System.Collections.Generic.Dictionary<Edge, int> blocked = new();
+
+    internal void Reset() { path.Clear(); blocked.Clear(); }
+
+    internal bool TryGetBlockedContext((int, int) from, (int, int) target, out int context)
+        => blocked.TryGetValue(new Edge(from, target), out context);
+
+    internal bool Landed((int, int) from, (int, int) target, (int, int) landing, int context)
+    {
+        if (path.Count > 0 && path[^1].Landing != from) path.Clear();
+        var edge = new Edge(from, target);
+        if (landing == from) return false;
+        int repeated = path.FindLastIndex(step => step.Edge.From == landing);
+        if (repeated >= 0)
+        {
+            for (int i = repeated; i < path.Count; i++) blocked[path[i].Edge] = path[i].Context;
+            blocked[edge] = context;
+            path.RemoveRange(repeated, path.Count - repeated);
+            return true;
+        }
+        path.Add(new Traversal(edge, landing, context));
+        if (path.Count > 16) path.RemoveAt(0);
+        return false;
+    }
+}
+
 public sealed class NavigationProgress
 {
     readonly Dictionary<int, long> tiles = new();

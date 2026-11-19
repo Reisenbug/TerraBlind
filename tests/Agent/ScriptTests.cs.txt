@@ -38,6 +38,7 @@ static class ScriptTests
         await NavigationConditionContracts();
         await NavigationConditionContracts(existingTick: true);
         NavigationGoalProgress();
+        NavigationCycleContracts();
         await PreparedGapHandoff();
         await PreparedGapHandoff(danger: true);
         await CancelledNavigationContinuation();
@@ -98,7 +99,7 @@ static class ScriptTests
         await PendingCombatNavigation(ownerEnded: true);
         await ReactiveFightIntegration();
         await ReactiveGatherFightIntegration();
-        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=68 model_calls=0");
+        Console.WriteLine("DECISION_CONTRACTS_COMPLETE tests=69 model_calls=0");
     }
 
     static async Task EquipmentAnimationHandoff()
@@ -2074,6 +2075,28 @@ static class ScriptTests
         }
         finally { p.position = position; }
         Console.WriteLine("PASS: route progress survives incidental edits while productive digging and construction continue");
+    }
+
+    static void NavigationCycleContracts()
+    {
+        var cycle = new NavigationCycleGuard();
+        var low = (1685, 652);
+        var platform = (1686, 649);
+        var slope = (1685, 650);
+        var exit = (1684, 652);
+        Check(!cycle.Landed(low, platform, platform, 41) && !cycle.Landed(platform, slope, slope, 42)
+            && cycle.Landed(slope, low, low, 43), "crystal landing cycle should close on the third edge");
+        Check(cycle.TryGetBlockedContext(low, platform, out int first) && first == 41
+            && cycle.TryGetBlockedContext(platform, slope, out int second) && second == 42
+            && cycle.TryGetBlockedContext(slope, low, out int last) && last == 43
+            && !cycle.TryGetBlockedContext(low, exit, out _), "the cycle should block only traversed edges in their original context");
+
+        cycle.Reset();
+        Check(!cycle.Landed(low, platform, platform, 41) && !cycle.TryGetBlockedContext(platform, low, out _)
+            && cycle.Landed(platform, slope, low, 42) && cycle.TryGetBlockedContext(platform, slope, out _)
+            && !cycle.TryGetBlockedContext(low, exit, out _)
+            && !cycle.Landed(low, exit, exit, 41), "a first backtrack and an untried exit should remain available after a missed landing");
+        Console.WriteLine("PASS: crystal landing cycle closes after three edges; first backtrack and unused exit remain available");
     }
 
     static async Task NavigationConditionContracts(bool existingTick = false)
