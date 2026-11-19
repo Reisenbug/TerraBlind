@@ -227,6 +227,7 @@ export const cases = {
         h.check(h.stock(output.item_type) >= output.count, 'crafted_output_missing', output);
       }
       if (stage.station) {
+        if (stage.station.stand) h.move(stage.station.stand.x, stage.station.stand.y);
         h.place(stage.station, stage.station.item_type);
         h.check(h.tile(stage.station).tile_type === stage.station.tile_type, 'station_not_placed', stage.station);
       }

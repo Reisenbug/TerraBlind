@@ -373,6 +373,10 @@ public sealed class ControlTrial : ModSystem
 
     async Task TaskCaseOreChain()
     {
+        bool stocked = Environment.GetEnvironmentVariable("TB_CASEBOOK_ORECHAIN_STOCKED") == "1";
+        var veins = stocked
+            ? new[] { (10, 3, TileID.Cobalt), (16, 3, TileID.Mythril), (22, 3, TileID.Adamantite) }
+            : new[] { (10, 17, TileID.Cobalt), (30, 35, TileID.Mythril), (68, 83, TileID.Adamantite) };
         var site = await OnMain(() =>
         {
             Config.I.AgentEnabled = true; Config.I.AiClient = false;
@@ -387,9 +391,9 @@ public sealed class ControlTrial : ModSystem
                 tile.ClearEverything();
                 if (row >= y) tile.ResetToType(TileID.Stone);
             }
-            foreach (var (first, width, type) in new[] { (10, 17, TileID.Cobalt), (30, 35, TileID.Mythril), (68, 83, TileID.Adamantite) })
+            foreach (var (first, width, type) in veins)
                 for (int tx = x + first; tx < x + first + width; tx++)
-                for (int row = y - 6; row <= y - 4; row++)
+                for (int row = y - (stocked ? 4 : 6); row <= y - 4; row++)
                     Main.tile[tx, row].ResetToType(type);
             WorldGen.Place3x2(x - 3, y - 1, TileID.Furnaces);
             WorldGen.PlaceTile(x - 1, y - 1, TileID.Anvils, mute: true);
@@ -399,6 +403,12 @@ public sealed class ControlTrial : ModSystem
             foreach (var item in p.inventory) item.TurnToAir();
             p.inventory[0].SetDefaults(ItemID.MoltenPickaxe);
             p.inventory[1].SetDefaults(ItemID.Hellforge);
+            if (stocked)
+            {
+                p.inventory[2].SetDefaults(ItemID.CobaltOre); p.inventory[2].stack = 42;
+                p.inventory[3].SetDefaults(ItemID.MythrilOre); p.inventory[3].stack = 97;
+                p.inventory[4].SetDefaults(ItemID.AdamantiteOre); p.inventory[4].stack = 243;
+            }
             return (X: x, Y: y);
         });
         JsonObject At(int offset) => new() { ["x"] = site.X + offset, ["y"] = site.Y - 1 };
@@ -416,11 +426,12 @@ public sealed class ControlTrial : ModSystem
             ["ores"] = new JsonArray(new JsonObject { ["item_type"] = item, ["count"] = count, ["tile_names"] = new JsonArray(tile) }),
             ["craft"] = new JsonArray(products)
         };
-        var cobalt = Stage(10, 17, ItemID.CobaltOre, 45, "Cobalt", Output(ItemID.CobaltBar, 15), Output(ItemID.CobaltPickaxe));
-        var mythril = Stage(30, 35, ItemID.MythrilOre, 100, "Mythril", Output(ItemID.MythrilBar, 25), Output(ItemID.MythrilAnvil));
+        var cobalt = Stage(veins[0].Item1, veins[0].Item2, ItemID.CobaltOre, 45, "Cobalt", Output(ItemID.CobaltBar, 15), Output(ItemID.CobaltPickaxe));
+        var mythril = Stage(veins[1].Item1, veins[1].Item2, ItemID.MythrilOre, 100, "Mythril", Output(ItemID.MythrilBar, 25), Output(ItemID.MythrilAnvil));
         mythril["station"] = Station(2, ItemID.MythrilAnvil, TileID.MythrilAnvil);
-        var adamantite = Stage(68, 83, ItemID.AdamantiteOre, 246, "Adamantite", Output(ItemID.AdamantiteForge));
+        var adamantite = Stage(veins[2].Item1, veins[2].Item2, ItemID.AdamantiteOre, 246, "Adamantite", Output(ItemID.AdamantiteForge));
         adamantite["station"] = Station(5, ItemID.AdamantiteForge, TileID.AdamantiteForge);
+        adamantite["station"]["stand"] = At(3);
         int[] armor = { ItemID.AdamantiteHelmet, ItemID.AdamantiteBreastplate, ItemID.AdamantiteLeggings };
         await DelayFrames(10);
         var receipt = await RunTaskCase("07-altars-hardmode-ores", new JsonObject
@@ -436,6 +447,9 @@ public sealed class ControlTrial : ModSystem
         {
             var p = Main.LocalPlayer;
             return new JsonObject { ["armor_complete"] = armor.All(type => p.CountItem(type) == 1),
+                ["stocked"] = stocked,
+                ["cleared_stocked_veins"] = stocked && veins.All(vein =>
+                    Enumerable.Range(site.X + vein.Item1, vein.Item2).All(x => !Main.tile[x, site.Y - 4].HasTile)),
                 ["cobalt_pickaxe"] = p.CountItem(ItemID.CobaltPickaxe), ["mythril_pickaxe"] = p.CountItem(ItemID.MythrilPickaxe),
                 ["anvil_placed"] = Main.tile[site.X + 2, site.Y - 1].TileType == TileID.MythrilAnvil,
                 ["forge_placed"] = Main.tile[site.X + 5, site.Y - 1].TileType == TileID.AdamantiteForge };
@@ -444,6 +458,7 @@ public sealed class ControlTrial : ModSystem
             new JsonObject { ["receipt"] = receipt, ["proof"] = proof }.ToJsonString());
         Check(receipt["value"]?["ok"]?.GetValue<bool>() == true && proof["armor_complete"].GetValue<bool>()
             && proof["anvil_placed"].GetValue<bool>() && proof["forge_placed"].GetValue<bool>()
+            && (!stocked || proof["cleared_stocked_veins"].GetValue<bool>())
             && proof["cobalt_pickaxe"].GetValue<int>() == 1 && proof["mythril_pickaxe"].GetValue<int>() == 1,
             "casebook_hardmode_ore_chain_unverified");
         Console.WriteLine("TASK_CASEBOOK_ORE_CHAIN_COMPLETE");

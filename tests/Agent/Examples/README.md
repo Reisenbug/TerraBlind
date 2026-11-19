@@ -51,6 +51,8 @@ TB_CASEBOOK_ALTARS=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 TB_CASEBOOK_ORECHAIN=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
+TB_CASEBOOK_ORECHAIN=1 TB_CASEBOOK_ORECHAIN_STOCKED=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
+  python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 ~~~
 
 储物场景跑 26、28、09。社交场景跑 34 和单件饰品的 13。原版右键场景额外跑 30，使用原版回弹挡板判定。矿车场景跑 18，记录车速、下车与蘑菇入包。重铸可能耗尽次数，此时验收物品是否归还。
@@ -97,9 +99,9 @@ The soul fixture runs 06 with underground Hallow and Corruption hunting areas an
 
 The altar fixture verifies the first part of 07. It smashes nine native altars with the Pwnhammer and confirms each ore tier was generated using the native altar counter and world tile counts. Mining and crafting remain to be verified.
 
-采矿场景单独运行 07 的后段，从熔岩镐和原版矿物格开始。当前实机完成了钴镐，秘银入包 97/100，随后因导航无进展退出。验收仍要求实际制作两级镐、砧、熔炉及整套护甲。
+采矿场景单独运行 07 的后段，从熔岩镐和原版矿物格开始。全量采矿实机完成了钴镐，秘银入包 97/100，随后因导航无进展退出。短程对照预备了大部分矿物，但每级仍实际挖取最后三格。对照通过了两级镐、秘银砧和精金熔炉的制作与放置，以及整套精金护甲的制作。
 
-The mining fixture runs the second part of 07 from a Molten Pickaxe and native ore tiles. The current run crafted the Cobalt Pickaxe and collected 97 of 100 Mythril Ore before navigation returned no progress. The acceptance gate still requires both upgraded pickaxes, the placed anvil and forge, and the complete armor set.
+The mining fixture runs the second part of 07 from a Molten Pickaxe and native ore tiles. The full mining run crafted the Cobalt Pickaxe and collected 97 of 100 Mythril Ore before navigation returned no progress. The stocked control mined the final three ores of each tier and verified both pickaxes, the crafted and placed Mythril Anvil and Adamantite Forge, and the complete Adamantite armor set.
 
 | 当前验证范围 / Current coverage | 编号 / IDs |
 | --- | --- |
