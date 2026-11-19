@@ -303,7 +303,10 @@ public class NativeAgent : ModSystem
         _cancel?.Dispose();
         _cancel = new CancellationTokenSource();
         var token = _cancel.Token;
-        AgentTools.NewTask();
+        AgentTools.NewTask(goal);
+        string safetyPolicy = AgentTools.AllowTaskRecall
+            ? "skill('safety_reactions',0);"
+            : "skill('safety_reactions',0,{allow_recall:false});";
         _lastDangerNotice = 0;
         string system = AgentScript.Instructions(_system + "\n回复语言风格：" + Config.I.AgentPersona, _schemas);
         var entrySchemas = AgentScript.EntryTools(_schemas);
@@ -315,7 +318,7 @@ public class NativeAgent : ModSystem
             {
                 await _goalStopping.WaitAsync(token);
                 await AgentTools.Execute("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
-                    ["code"] = "skill('safety_reactions',0);" }, token);
+                    ["code"] = safetyPolicy }, token);
                 var modelContext = new AgentContext();
                 int contextRevision = 0;
                 Task<bool> Covered() => OnMain(() => (AgentTools.ControlSession.PrimaryActive || AgentTools.Actions.HasPrimaryControl)

@@ -974,6 +974,50 @@ public sealed partial class BehaviorTrial : ModSystem
             Console.WriteLine("LAVA_ESCAPE_PASS case=" + lavaCase + " native_item_consumed=1 model_calls=0 elapsed_ms=" + timer.ElapsedMilliseconds);
             return;
         }
+        if (Environment.GetEnvironmentVariable("TB_TASK_RECALL_CHECK") == "1")
+        {
+            var origin = new Vector2((Main.spawnTileX + 40) * 16, Main.spawnTileY * 16);
+            foreach (bool restricted in new[] { true, false })
+            {
+                await OnMain(() =>
+                {
+                    AgentTools.NewTask(restricted ? "继续探索，不要回城。" : "继续探索。");
+                    Config.I.AgentEnabled = true;
+                    var p = Main.LocalPlayer;
+                    p.inventory[0].SetDefaults(ItemID.RecallPotion);
+                    p.inventory[0].stack = 2;
+                    p.position = origin; p.velocity = Vector2.Zero;
+                    for (int x = (int)origin.X / 16 - 1; x <= (int)origin.X / 16 + 2; x++)
+                    for (int y = (int)origin.Y / 16 - 1; y <= (int)origin.Y / 16 + 3; y++)
+                    { var tile = Main.tile[x, y]; tile.ClearEverything(); tile.HasTile = true; tile.TileType = TileID.Sand; }
+                    return true;
+                });
+                await Call("set_combat", new JsonObject { ["auto_dodge"] = true, ["auto_attack"] = false });
+                await Call("watch", new JsonObject { ["events"] = new JsonArray("suffocating") });
+                bool suffocated = false;
+                var start = await OnMain(() => Main.GameUpdateCount);
+                JsonObject observation;
+                do
+                {
+                    await Task.Delay(20);
+                    observation = await OnMain(() =>
+                    {
+                        var p = Main.LocalPlayer;
+                        suffocated |= p.suffocating;
+                        return new JsonObject { ["frames"] = (int)(Main.GameUpdateCount - start),
+                            ["suffocated"] = suffocated, ["dead"] = p.dead,
+                            ["potions"] = p.inventory.Where(i => i.type == ItemID.RecallPotion).Sum(i => i.stack),
+                            ["distance"] = Vector2.Distance(origin, p.position) };
+                    });
+                } while (observation["frames"].GetValue<int>() < 90);
+                if (observation["dead"].GetValue<bool>() || !observation["suffocated"].GetValue<bool>()
+                    || observation["potions"].GetValue<int>() != (restricted ? 2 : 1)
+                    || (observation["distance"].GetValue<float>() > 256) == restricted)
+                    throw new Exception("native recall policy check failed restricted=" + restricted + " " + observation);
+                Console.WriteLine("TASK_RECALL_NATIVE_PASS restricted=" + restricted + " " + observation);
+            }
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_LAVA_IMMUNITY_PROBE") == "1")
         {
             var target = await OnMain(() =>

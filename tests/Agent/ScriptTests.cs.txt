@@ -66,6 +66,7 @@ static class ScriptTests
         await GatherReactionConsumption();
         await NavigationRecoverySkill();
         await SurvivalDecisionPolicy();
+        await TaskRecallRestriction();
         await SurvivalCombatPolicy();
         await BackpackLoadout();
         await TacticalReviews();
@@ -676,8 +677,9 @@ static class ScriptTests
     static async Task SurvivalDecisionPolicy()
     {
         foreach (bool taskPolicy in new[] { false, true })
-        foreach (string scenario in new[] { "recall", "continue", "pending", "healthy", "healed", "no_item", "boss" })
+        foreach (string scenario in new[] { "recall", "continue", "pending", "healthy", "healed", "no_item", "boss", "recall_forbidden" })
         {
+            if (taskPolicy && scenario == "recall_forbidden") continue;
             int uses = 0, judgments = 0;
             var player = JsonNode.Parse("{\"hp\":40,\"max_hp\":100,\"pos\":{\"x\":160,\"y\":320},\"potion_delay_ticks\":3500}").AsObject();
             var combat = new JsonObject { ["tick"] = 100, ["boss_present"] = scenario == "boss",
@@ -688,7 +690,8 @@ static class ScriptTests
                 ["agent"] = new JsonObject { ["auto_attack"] = true, ["combat_weapon_type"] = 24 },
                 ["inventory_slots"] = scenario == "no_item" ? new JsonArray()
                 : new JsonArray(new JsonObject { ["slot"] = 4, ["type"] = 2350, ["stack"] = 2 }) };
-            string code = taskPolicy ? "return skill('task_reactions',0,{resources:[],weapon_order:[24],max_detour_tiles:0,health_reserve:0});"
+            string code = scenario == "recall_forbidden" ? "skill('safety_reactions',0,{allow_recall:false});"
+                : taskPolicy ? "return skill('task_reactions',0,{resources:[],weapon_order:[24],max_detour_tiles:0,health_reserve:0});"
                 : ScriptLibrary.Example("safety_reactions")["code"].ToString();
             var result = await AgentScript.Run("(function(){" + code
                 + "})();return tool('nav_to');", 5, (_, _) => { }, async (name, args, token) =>
@@ -722,6 +725,53 @@ static class ScriptTests
                     + " task_policy=" + taskPolicy + " " + result);
         }
         Console.WriteLine("PASS: fast survival policy uses typed decisions, current terrain and real item input without pausing for pending answers");
+    }
+
+    static async Task TaskRecallRestriction()
+    {
+        var agent = new NativeAgent(); agent.Load();
+        var player = Terraria.Main.LocalPlayer;
+        var previous = player.inventory[49];
+        var handler = HttpServerSystem.Handler;
+        int starts = 0;
+        try
+        {
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                if (path == "/item_use") starts++;
+                return (200, "{\"active\":false,\"outcome\":\"done\"}");
+            };
+            foreach (var (instruction, item, allowed) in new[]
+            {
+                ("高效率，不要死，不要回城。", Terraria.ID.ItemID.RecallPotion, false),
+                ("Return alive. No recall.", Terraria.ID.ItemID.MagicMirror, false),
+                ("不要回城，使用药水。", 288, true),
+                ("回城休整", Terraria.ID.ItemID.RecallPotion, true)
+            })
+            {
+                AgentTools.NewTask(instruction);
+                player.inventory[49] = new Terraria.Item { type = item, stack = 1 };
+                int count = starts;
+                var task = AgentTools.Execute("use_item", new JsonObject { ["slot"] = 49,
+                    ["x"] = 10, ["y"] = 10, ["duration_ticks"] = 1 }, default);
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                while (!task.IsCompleted)
+                {
+                    Check(timer.Elapsed.TotalSeconds < 5, "task recall restriction did not finish");
+                    agent.PostUpdateEverything(); await Task.Delay(1);
+                }
+                var result = JsonNode.Parse(await task);
+                Check(starts - count == (allowed ? 1 : 0)
+                    && (result["error"]?.ToString() == "recall_forbidden_by_task") == !allowed,
+                    "task recall restriction changed the wrong item input: " + result);
+            }
+        }
+        finally
+        {
+            player.inventory[49] = previous; HttpServerSystem.Handler = handler;
+            AgentTools.Stop(); AgentTools.NewTask(); agent.Unload();
+        }
+        Console.WriteLine("PASS: task recall restrictions block recall items and preserve other item use");
     }
 
     static async Task IdleTaskPolicy()
@@ -3220,6 +3270,7 @@ static class ScriptTests
         await TaskPolicyIntegration();
         await IdleTaskPolicy();
         await SurvivalDecisionPolicy();
+        await TaskRecallRestriction();
         await SurvivalCombatPolicy();
         await BackpackLoadout();
         await TacticalReviews();

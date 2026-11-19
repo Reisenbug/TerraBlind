@@ -54,7 +54,7 @@ public class AgentContactEscape : ModSystem
         lavaPosition = player.position;
         int slot = lava && !suffocating
             ? Array.FindIndex(player.inventory, 0, 50, item => !item.IsAir && item.buffType == BuffID.ObsidianSkin) : -1;
-        if (slot < 0 && (suffocating || lavaStillFrames >= 15))
+        if (slot < 0 && AgentTools.AllowTaskRecall && (suffocating || lavaStillFrames >= 15))
             foreach (int type in new[] { ItemID.RecallPotion, ItemID.MagicMirror, ItemID.IceMirror })
             { slot = Array.FindIndex(player.inventory, 0, 50, item => !item.IsAir && item.type == type); if (slot >= 0) break; }
         if (slot < 0) return false;

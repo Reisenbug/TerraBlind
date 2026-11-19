@@ -742,6 +742,11 @@ public static partial class AgentTools
     internal static readonly AgentControlSession ControlSession = new(Control);
     internal static JsonObject LastDamage, LastDeath, LastContactEscape, LastAutomaticHeal;
     internal static bool ContactEscapeActive;
+    internal static bool AllowTaskRecall { get; private set; } = true;
+
+    internal static bool IsRecallItem(int type) => type is Terraria.ID.ItemID.RecallPotion or Terraria.ID.ItemID.MagicMirror
+        or Terraria.ID.ItemID.IceMirror or Terraria.ID.ItemID.CellPhone or Terraria.ID.ItemID.Shellphone
+        or Terraria.ID.ItemID.ShellphoneSpawn or Terraria.ID.ItemID.PotionOfReturn;
     internal static JsonObject RecentContactDamage(long tick)
     {
         var damage = LastDamage;
@@ -805,7 +810,17 @@ public static partial class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask() { ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear(); recoveredActions.Clear(); deferredNodes.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null; inventoryPreparationNotified = false; LastContinuation = ExecutionContinuity = LastRouteLoot = null; routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset(); Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask(); }
+    public static void NewTask(string instruction = null)
+    {
+        AllowTaskRecall = instruction == null || !System.Text.RegularExpressions.Regex.IsMatch(instruction,
+            @"(?:不要|不能|禁止|不许|不得)\s*回城|\b(?:no|never|don't|do not|must not)\s+recall\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear();
+        recoveredActions.Clear(); deferredNodes.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null;
+        inventoryPreparationNotified = false; LastContinuation = ExecutionContinuity = LastRouteLoot = null;
+        routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset();
+        Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask();
+    }
     public static void Stop()
     {
         ClearCombatPreparation();
@@ -2702,6 +2717,8 @@ public static partial class AgentTools
                         ["collect_tool"] = item.pick > 0 || item.axe > 0 || item.hammer > 0,
                         ["count"] = player.inventory.Where(i => i.type == item.type).Sum(i => i.stack) };
                 }, token);
+                if (!AllowTaskRecall && usedItem?["type"]?.GetValue<int>() is int usedType && IsRecallItem(usedType))
+                    return "{\"error\":\"recall_forbidden_by_task\"}";
                 if (shapeHalf && (usedItem?["hammer"]?.GetValue<bool>() != true
                     || !Bool(args, "strict") || Int(args, "duration_ticks") is < 1 or > 120))
                     return "{\"error\":\"half_block_needs_bounded_strict_hammer\"}";
