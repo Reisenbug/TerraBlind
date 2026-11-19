@@ -141,6 +141,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CASEBOOK_GRAPPLE") == "1")
+        {
+            await TaskCaseGrapple();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CASEBOOK_SHIMMER") == "1")
         {
             await TaskCaseShimmer();
@@ -302,6 +307,92 @@ public sealed class ControlTrial : ModSystem
             { ["code"] = template.Replace("\"__TB_FIXTURE__\"", inputs.ToJsonString()) });
         Console.WriteLine($"TASK_CASE {id} " + (result["value"]?.ToJsonString() ?? result["detail"]?.ToString()));
         return result;
+    }
+
+    async Task TaskCaseGrapple()
+    {
+        var origin = await OnMain(() => ((int)Main.LocalPlayer.Center.X / 16, (int)Main.LocalPlayer.Bottom.Y / 16 + 4));
+        var (x, y) = origin;
+        var first = new Point(x + 7, y - 5);
+        var second = new Point(x - 4, y - 7);
+        JsonObject Anchor(Point point) => new() { ["x"] = point.X, ["y"] = point.Y };
+        Task Reset() => OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            var p = Main.LocalPlayer;
+            p.RemoveAllGrapplingHooks();
+            p.immune = false; p.immuneTime = 0;
+            p.statLife = p.statLifeMax;
+            for (int tx = x - 9; tx <= x + 23; tx++)
+            for (int row = y - 12; row <= y + 4; row++)
+            {
+                var tile = Main.tile[tx, row];
+                tile.ClearEverything();
+                if (row >= y) tile.ResetToType(TileID.Stone);
+            }
+            Main.tile[first.X, first.Y].ResetToType(TileID.Stone);
+            Main.tile[second.X, second.Y].ResetToType(TileID.Stone);
+            p.position = new Vector2(x * 16, y * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            foreach (var held in p.inventory) held.TurnToAir();
+            p.miscEquips[4].SetDefaults(ItemID.GrapplingHook);
+            return true;
+        });
+        bool AttachedTo(Point anchor)
+        {
+            var p = Main.LocalPlayer;
+            return p.grapCount > 0 && p.grappling[0] >= 0
+                && Main.projectile[p.grappling[0]].Center.ToTileCoordinates() == anchor;
+        }
+        await Reset();
+        await DelayFrames(12);
+        var traverse = await RunTaskCase("21-grapple-only", new JsonObject
+            { ["anchors"] = new JsonArray(Anchor(first), Anchor(second)) });
+        bool reachedSecond = await OnMain(() => AttachedTo(second));
+        await Reset();
+        await DelayFrames(12);
+        var normalStart = await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            p.Hurt(PlayerDeathReason.ByOther(0), 10, 1, dodgeable: false);
+            return p.Center;
+        });
+        await DelayFrames(8);
+        float normalDistance = await OnMain(() => Vector2.Distance(normalStart, Main.LocalPlayer.Center));
+        await Reset();
+        await DelayFrames(12);
+        var hold = RunTaskCase("32-grapple-no-knockback", new JsonObject { ["anchor"] = Anchor(first) });
+        bool attached = false;
+        for (int n = 0; n < 20 && !hold.IsCompleted; n++)
+        {
+            await DelayFrames(5);
+            attached = await OnMain(() => AttachedTo(first) && Main.LocalPlayer.velocity.Length() < 0.5f);
+            if (attached) break;
+        }
+        float? heldDistance = null;
+        if (attached)
+        {
+            await DelayFrames(24);
+            var heldStart = await OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                p.Hurt(PlayerDeathReason.ByOther(0), 10, 1, dodgeable: false);
+                return p.Center;
+            });
+            await DelayFrames(8);
+            heldDistance = await OnMain(() => Vector2.Distance(heldStart, Main.LocalPlayer.Center));
+        }
+        var held = await hold;
+        bool remainedAttached = await OnMain(() => AttachedTo(first));
+        var report = new JsonObject { ["traverse"] = traverse, ["held"] = held, ["reached_second"] = reachedSecond,
+            ["remained_attached"] = remainedAttached, ["normal_displacement"] = normalDistance, ["held_displacement"] = heldDistance };
+        File.WriteAllText(Path.Combine(Main.SavePath, "task-casebook-grapple.json"), report.ToJsonString());
+        Check(traverse["value"]?["ok"]?.GetValue<bool>() == true && reachedSecond, "casebook_grapple_route_unverified");
+        Check(held["value"]?["ok"]?.GetValue<bool>() == true && remainedAttached && normalDistance > 8 && heldDistance < 8,
+            "casebook_grapple_knockback_unverified");
+        Console.WriteLine("TASK_CASEBOOK_GRAPPLE_COMPLETE cases=2");
     }
 
     async Task TaskCaseShimmer()

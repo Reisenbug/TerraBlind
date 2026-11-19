@@ -61,6 +61,25 @@ function helpers() {
     if (at) step.at = at;
     return call('act', {steps: [step], timeout_frames: frames + 60});
   };
+  const grappleTo = anchor => {
+    const player = () => call('get_state', {fields: ['player']}).player;
+    const p = player(), centerX = p.pos.x + p.width / 2;
+    const at = [anchor.x - Math.floor((centerX - 0.001) / 16),
+      anchor.y - Math.floor((p.pos.y + p.height - 2) / 16)];
+    const anchorX = anchor.x * 16 + 8, anchorY = anchor.y * 16 + 8;
+    const startDistance = Math.hypot(anchorX - centerX, anchorY - p.pos.y - p.height / 2);
+    check(!p.dead && startDistance >= 24,
+      'grapple_start_too_close', anchor);
+    act(['hook'], 2, at);
+    for (let n = 0; n < 12; n++) {
+      act([], 10);
+      const next = player();
+      const distance = Math.hypot(anchorX - next.pos.x - next.width / 2, anchorY - next.pos.y - next.height / 2);
+      if (!next.dead && distance < 32 && startDistance - distance >= 16 && Math.hypot(next.vel.x, next.vel.y) < 0.5)
+        return {anchor, position: next.pos, distance};
+    }
+    return null;
+  };
   const railEntry = (input, featherfall = false) => {
     const {track, jump = true} = input;
     const placed = place(track, input.track_item);
@@ -97,7 +116,7 @@ function helpers() {
     return result;
   };
   return {read, check, call, blocked, done, inventory, stock, itemAt, move, npc, tile, use, place,
-    click, open, transfer, craft, gather, editCells, act, railEntry, assign, calls: () => callCount};
+    click, open, transfer, craft, gather, editCells, act, grappleTo, railEntry, assign, calls: () => callCount};
 }
 
 // Each function runs through the game's existing run_script host. A blocked result is a capability probe,
@@ -297,8 +316,16 @@ export const cases = {
 
   '20-featherfall-up-rail-boost': (i, h) => h.railEntry(i, true),
 
-  '21-grapple-only': (i, h) => h.blocked('no_grapple_only_route_with_confirmed_attach_release',
-    {site: h.read('inspect_terrain', {radius: 8}), destination: i.destination}),
+  '21-grapple-only': (i, h) => {
+    h.check(i.anchors.length > 0 && i.anchors.length <= 3, 'requires_one_to_three_grapple_anchors');
+    const reached = [];
+    for (const anchor of i.anchors) {
+      const result = h.grappleTo(anchor);
+      if (!result) return h.blocked('grapple_anchor_not_reached', {anchor, reached});
+      reached.push(result);
+    }
+    return h.done({reached});
+  },
 
   '22-grapple-one-wide': (i, h) => h.blocked('missing_grapple_latch_and_one_tile_body_transition_observation',
     {target: h.read('opportunity_assess', i.anchor)}),
@@ -379,8 +406,16 @@ export const cases = {
   },
 
   '32-grapple-no-knockback': (i, h) => {
-    const action = h.act(['hook'], 2, i.anchor_offset);
-    return h.blocked('grapple_input_is_observable_but_latch_and_knockback_are_not', {action: action.outcome});
+    const reached = h.grappleTo(i.anchor);
+    if (!reached) return h.blocked('grapple_anchor_not_reached', {anchor: i.anchor});
+    const player = () => h.call('get_state', {fields: ['player']}).player;
+    const before = player();
+    h.act([], 50);
+    const after = player();
+    if (after.hp >= before.hp) return h.blocked('no_hit_observed_while_holding', {before: before.hp, after: after.hp});
+    const displacement = Math.hypot(after.pos.x - before.pos.x, after.pos.y - before.pos.y);
+    if (after.dead || displacement > 8) return h.blocked('displaced_while_holding', {displacement, hp: after.hp});
+    return h.done({displacement, damage: before.hp - after.hp, anchor: i.anchor});
   },
 
   '33-shimmer-transform-and-pickup': (i, h) => {
