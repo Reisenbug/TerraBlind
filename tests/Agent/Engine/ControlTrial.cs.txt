@@ -109,6 +109,12 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        string containerMode = Environment.GetEnvironmentVariable("TB_CONTAINER_CHAIN");
+        if (containerMode is "script" or "live")
+        {
+            await ContainerChain(containerMode == "live");
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_NATIVE_PRIMITIVES") == "1")
         {
             await NativePrimitives();
@@ -208,6 +214,114 @@ public sealed class ControlTrial : ModSystem
         });
         Console.WriteLine($"CONTROL_ASSERTIONS paused_handle={handle} sand_unchanged={sandBefore} explicit_move=true native_restart_rejected=true");
         Console.WriteLine("CONTROL_REGION_ASSERTIONS original_destination_reached=true rejected_excavation_not_repeated=true navigation_enabled=true");
+    }
+
+    async Task ContainerChain(bool live)
+    {
+        var chest = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true;
+            Config.I.AgentFreezeWhileThinking = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false;
+            var p = Main.LocalPlayer;
+            foreach (var item in p.inventory) item.TurnToAir();
+            Main.mouseItem.TurnToAir();
+            int x = (int)p.Center.X / 16;
+            int y = (int)p.Bottom.Y / 16 + 3;
+            for (int tx = x - 4; tx <= x + 8; tx++)
+            for (int ty = y - 5; ty <= y; ty++)
+            {
+                Main.tile[tx, ty].ClearEverything();
+                if (ty == y) WorldGen.PlaceTile(tx, ty, TileID.Stone, mute: true, forced: true);
+            }
+            p.position = new Vector2(x * 16, y * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            int id = WorldGen.PlaceChest(x + 3, y - 1, TileID.Containers, false, 0);
+            Check(id >= 0, "container_chain_fixture_placement_failed");
+            var fixture = Main.chest[id];
+            fixture.item[0].SetDefaults(ItemID.Wood);
+            fixture.item[0].stack = 10;
+            fixture.item[1].SetDefaults(ItemID.Torch);
+            fixture.item[1].stack = 5;
+            return (Id: id, fixture.x, fixture.y);
+        });
+        JsonObject Snapshot()
+        {
+            var p = Main.LocalPlayer;
+            var contents = Main.chest[chest.Id].item;
+            return new JsonObject
+            {
+                ["wood_in_chest"] = contents.Where(i => i.type == ItemID.Wood).Sum(i => i.stack),
+                ["torches_in_chest"] = contents[1].type == ItemID.Torch ? contents[1].stack : 0,
+                ["workbench_in_fifth_hotbar_slot"] = p.inventory[4].type == ItemID.WorkBench ? p.inventory[4].stack : 0,
+                ["cursor_type"] = Main.mouseItem.type, ["cursor_empty"] = Main.mouseItem.IsAir,
+                ["open_container"] = p.chest
+            };
+        }
+        bool Complete(JsonObject state) => state["wood_in_chest"].GetValue<int>() == 0
+            && state["torches_in_chest"].GetValue<int>() == 5
+            && state["workbench_in_fifth_hotbar_slot"].GetValue<int>() == 1 && state["cursor_empty"].GetValue<bool>();
+        var before = await OnMain(Snapshot);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var timeline = new JsonArray();
+        JsonObject result = null;
+        if (live)
+        {
+            await OnMain(() =>
+            {
+                Config.I.AgentUseCodex = true;
+                Config.I.AgentCodexModel = "gpt-6.2-sol";
+                NativeAgent.Submit("打开面前的箱子，取10个木头，火把留在箱里。做一个工作台，放到第5个快捷栏槽位。");
+                return true;
+            });
+            JsonObject last = null;
+            while (clock.Elapsed.TotalSeconds < 75)
+            {
+                var sample = await OnMain(() => new JsonObject { ["state"] = Snapshot(), ["status"] = NativeAgent.Status });
+                if (!JsonNode.DeepEquals(last, sample))
+                    timeline.Add(new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["sample"] = sample.DeepClone() });
+                last = sample;
+                if (sample["status"]?.ToString() is "idle" or "failed" or "waiting for answer") break;
+                await Task.Delay(50);
+            }
+            await OnMain(() => { NativeAgent.Stop(); return true; });
+        }
+        else
+        {
+            string script = $$"""
+                function checked(name, args) {
+                  const result = tool(name, args);
+                  if (('ok' in result && result.ok === false) || ('error' in result && result.error)) throw new Error(name + ': ' + JSON.stringify(result));
+                  return result;
+                }
+                function click(section, slot, expectedContainer) {
+                  const address = {section, slot};
+                  const observed = checked('slot_state', address);
+                  const args = {section, slot, button:'left', expected_item:observed.item, expected_cursor:observed.cursor};
+                  if (section === 'container') args.expected_container = expectedContainer;
+                  const clicked = checked('slot_click', args);
+                  if (clicked.outcome !== 'changed') throw new Error('slot did not change: ' + section + '/' + slot);
+                }
+                const opened = checked('interact', {x:{{chest.x}}, y:{{chest.y}}});
+                if (opened.outcome !== 'opened' || opened.chest !== {{chest.Id}}) throw new Error('fixture chest did not open');
+                click('container', 0, opened.chest);
+                click('inventory', 10);
+                const recipes = checked('craft_recipes', {item_type:{{ItemID.WorkBench}}}).recipes;
+                if (!recipes.length) throw new Error('work bench recipe not available');
+                checked('craft_recipe', {index:recipes[0].index, expected_type:{{ItemID.WorkBench}}});
+                click('inventory', 4);
+                return {ok:true};
+                """;
+            result = await Call("run_script", new JsonObject { ["code"] = script });
+        }
+        var after = await OnMain(Snapshot);
+        var report = new JsonObject { ["mode"] = live ? "live" : "script", ["elapsed_ms"] = clock.ElapsedMilliseconds,
+            ["before"] = before, ["after"] = after, ["script"] = result, ["timeline"] = timeline };
+        File.WriteAllText(Path.Combine(Main.SavePath, "container-chain.json"), report.ToJsonString());
+        Check(Complete(after) && (live || result["ok"]?.GetValue<bool>() == true
+            && result["value"]?["ok"]?.GetValue<bool>() == true), "container_chain_failed: " + after.ToJsonString());
+        Console.WriteLine("CONTAINER_CHAIN_COMPLETE " + report.ToJsonString());
     }
 
     async Task NativePrimitives()
