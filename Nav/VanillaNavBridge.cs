@@ -17,9 +17,10 @@ public static class VanillaNavBridge
     public static int RouteDirection { get; private set; }
     public static bool TerrainOwned => phase is Phase.Preparing or Phase.Using or Phase.Mining or Phase.Excavating or Phase.JumpPlacing;
     public static bool ApproachingTerrain => phase == Phase.Approaching;
+    internal static bool FollowingGravityPlan => phase == Phase.GravityMoving;
     public static bool OwnsExcavation => phase == Phase.Excavating && excavation != null;
     public static string Stage => refreshSource != null ? "Refreshing" : phase.ToString();
-    enum Phase { Moving, Approaching, Braking, Preparing, Using, Mining, Excavating, JumpPlacing }
+    enum Phase { Moving, Approaching, Braking, Preparing, Using, Mining, Excavating, JumpPlacing, GravityPlanning, GravityMoving }
     static bool placementAirborne, preciseGoal;
     static float placementStartY;
     static int[] placementControls = Array.Empty<int>();
@@ -49,6 +50,9 @@ public static class VanillaNavBridge
     static JsonObject previewedRoute, arrivalAnchor;
     static uint arrivalAt;
     static readonly JsonArray rejectedEdits = new();
+    static readonly Queue<int[]> gravityCandidates = new();
+    static JsonObject gravitySnapshot;
+    static bool gravityTried;
 
     public static void Reset()
     {
@@ -65,6 +69,7 @@ public static class VanillaNavBridge
         continuingPlacement = false;
         waitingPlacementTools = false;
         preciseGoal = false;
+        gravityCandidates.Clear(); gravitySnapshot = null; gravityTried = false;
     }
 
     static void Fail(string reason)
@@ -174,6 +179,14 @@ public static class VanillaNavBridge
             else if (Main.GameUpdateCount - phaseAt > 180) Fail("jump_place_timeout");
             return;
         }
+        if (phase == Phase.GravityPlanning) { PlanGravity(player, demo); return; }
+        if (phase == Phase.GravityMoving)
+        {
+            if (demo.HasQueuedMovement) return;
+            demo.ReplanAfterTerrain();
+            phase = Phase.Moving; bestH = int.MaxValue; progressAt = Main.GameUpdateCount;
+            return;
+        }
         if (phase == Phase.Preparing) { Prepare(player); return; }
         if (phase == Phase.Using) { FinishEdit(player); return; }
         var (cx, cy) = VanillaLocalPlanner.FootCell(player.position, player.width, player.height);
@@ -189,6 +202,7 @@ public static class VanillaNavBridge
         {
             if (stable >= 3 && player.itemAnimation == 0 && player.itemTime == 0)
             {
+                if (BeginGravity(player, gx, gy, demo)) return;
                 demo.UpdateNavigationGoal(routeGoal);
                 demo.PauseForTerrain();
                 if (!CollectEdits(player, gx, gy)) return;
@@ -245,6 +259,82 @@ public static class VanillaNavBridge
             demo.PauseForTerrain();
             DiagLog.Write($"[engine-terrain-brake] vx={player.velocity.X:0.###} vy={player.velocity.Y:0.###}; retired movement queue");
         }
+    }
+
+    static bool BeginGravity(Player player, int gx, int gy, VanillaNavigationDemo demo)
+    {
+        if (gravityTried || player.gravDir != 1 || !player.gravControl || !player.releaseUp
+            || player.mount.Active || !player.HasBuff(Terraria.ID.BuffID.Gravitation)) return false;
+        var goal = new Vector2(gx * 16 + 8 - player.width / 2, (gy + 1) * 16 - player.height);
+        float rise = player.position.Y - goal.Y, travel = Math.Abs(player.position.X - goal.X);
+        if (rise is < 64 or > 400 || travel is < 16 or > 320
+            || !VanillaContactRegion.Supported(goal, player.width, player.height)) return false;
+        gravityTried = true;
+        routeGoal = goal;
+        int upFrames = 0;
+        float climbed = 0, speed = 0;
+        while (climbed < rise + 24 && upFrames < 90)
+        {
+            speed = Math.Min(player.maxFallSpeed, speed + player.gravity);
+            climbed += speed; upFrames++;
+        }
+        int horizontal = goal.X > player.position.X ? (int)VanillaKeys.Right : (int)VanillaKeys.Left;
+        int travelFrames = (int)Math.Ceiling(travel / Math.Max(1f, player.maxRunSpeed)) + 8;
+        foreach (int flipDelay in new[] { 0, 8, -6 })
+        foreach (int travelOffset in new[] { 0, -8, 8 })
+        {
+            var controls = new int[VanillaLocalPlanner.Horizon];
+            int moveAt = Math.Max(1, upFrames - 8);
+            Array.Fill(controls, horizontal, moveAt, Math.Clamp(travelFrames + travelOffset, 1, controls.Length - moveAt));
+            controls[0] |= (int)VanillaKeys.Up;
+            controls[Math.Clamp(upFrames + flipDelay, 2, controls.Length - 1)] |= (int)VanillaKeys.Up;
+            gravityCandidates.Enqueue(controls);
+        }
+        demo.UpdateNavigationGoal(goal);
+        gravitySnapshot = VanillaFrame.Capture(player, VanillaLocalPlanner.SnapshotArea(player, goal, 90), true);
+        phase = Phase.GravityPlanning; phaseAt = Main.GameUpdateCount;
+        return true;
+    }
+
+    static void PlanGravity(Player player, VanillaNavigationDemo demo)
+    {
+        if (preparing?.IsFaulted == true || preparing?.IsCanceled == true)
+        {
+            DiagLog.Write("[engine-gravity] prediction failed; resuming terrain search");
+            _ = preparing.Exception;
+            preparing = null; gravityCandidates.Clear();
+        }
+        if (preparing?.IsCompletedSuccessfully == true)
+        {
+            var result = preparing.GetAwaiter().GetResult(); preparing = null;
+            var frames = result["forecast"]?["frames"] as JsonArray;
+            var landing = frames?.LastOrDefault();
+            if (result["status"]?.ToString() == "planned" && landing != null
+                && landing["grounded"].GetValue<bool>() && landing["grav_dir"].GetValue<float>() == 1
+                && Math.Abs(landing["x"].GetValue<float>() - routeGoal.X) <= 24
+                && Math.Abs(landing["y"].GetValue<float>() - routeGoal.Y) <= 1)
+            {
+                result["context"] = gravitySnapshot.DeepClone(); result["wait_frames"] = 0;
+                result["selected"] = "gravity_ascent";
+                if (demo.ResumeTerrain(result))
+                {
+                    phase = Phase.GravityMoving;
+                    DiagLog.Write("[engine-gravity] verified paired flips and installed approach");
+                    return;
+                }
+            }
+            DiagLog.Write($"[engine-gravity] rejected status={result["status"]} x={landing?["x"]} y={landing?["y"]} grounded={landing?["grounded"]} gravity={landing?["grav_dir"]} mismatch={demo.PlannerMismatch}");
+        }
+        if (Main.GameUpdateCount - phaseAt <= 360 && preparing != null) return;
+        if (Main.GameUpdateCount - phaseAt <= 360 && gravityCandidates.TryDequeue(out var controls))
+        {
+            preparing = demo.PrepareTerrain(new JsonObject { ["command"] = "plan", ["snapshot"] = gravitySnapshot.DeepClone(),
+                ["prefix"] = new JsonArray(0), ["continuation"] = new JsonArray(controls.Select(key => JsonValue.Create(key)).ToArray()),
+                ["terminal"] = true, ["continuation_only"] = true, ["x"] = routeGoal.X, ["y"] = routeGoal.Y });
+            return;
+        }
+        demo.CancelTerrain(); preparing = null; gravitySnapshot = null; gravityCandidates.Clear();
+        phase = Phase.Braking; phaseAt = Main.GameUpdateCount;
     }
 
     static bool BuildCorridor(int cx, int cy, int gx, int gy)

@@ -353,7 +353,7 @@ public sealed class VanillaNavigationDemo : ModSystem
             }
             Status = $"{Explain(movement.LastRejection ?? movement.Status)}  接受{movement.Accepted}/拒绝{movement.Rejected}  距离{distance / 16:0.0}格";
             int contactCount = movement.ContactContinuations;
-            bool needsPlan = !VanillaNavBridge.ApproachingTerrain
+            bool needsPlan = !VanillaNavBridge.ApproachingTerrain && !VanillaNavBridge.FollowingGravityPlan
                 && (!NavigationOwned || movement.NeedsPlan(tick, player, VanillaNavBridge.Terminal));
             if (movement.ContactDescents != descentCount)
                 DiagLog.Write($"[engine-contact-descent] x={player.position.X:0.###} y={player.position.Y:0.###} vy={player.velocity.Y:0.###}; retaining safe descent despite timing differences");
