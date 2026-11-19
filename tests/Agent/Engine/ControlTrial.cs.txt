@@ -268,8 +268,6 @@ public sealed class ControlTrial : ModSystem
             await PotionNavigationComparison(gravity: true);
             return;
         }
-            return;
-        }
         if (Environment.GetEnvironmentVariable("TB_CASEBOOK_ORECHAIN") == "1")
         {
             await TaskCaseOreChain();
