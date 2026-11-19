@@ -14,7 +14,7 @@ function helpers() {
   };
   const call = (name, args = {}) => {
     const result = read(name, args);
-    check(result && !result.error && result.ok !== false, name, result);
+    check(result && (!('error' in result) || !result.error) && (!('ok' in result) || result.ok !== false), name, result);
     return result;
   };
   const blocked = (reason, evidence = {}) => ({ok: false, outcome: 'blocked', reason, evidence});
@@ -245,13 +245,22 @@ export const cases = {
       const p = readPlayer(), dx = stationX - p.pos.x;
       const vx = p.vel.x;
       if (Math.abs(dx) <= 24 && Math.abs(vx) < 0.35 && Math.abs(p.pos.y / 16 - i.station.y) < 3) {
-        h.act(['mount'], 1);
+        if (Math.abs(vx) >= 0.01) {
+          h.act([], 16);
+          continue;
+        }
+        const dismount = h.call('game_input', {action: 'quick_mount', enabled: false});
+        h.check(dismount.mounted === false, 'minecart_dismount_not_observed', dismount);
         h.gather(i.resources, i.source_area);
         return h.done({stop: p.pos, resources: i.resources});
       }
-      const brake = Math.abs(vx) > 1 && Math.abs(dx) < 24 + vx * vx * 1.5;
+      const speed = Math.abs(vx);
+      const stoppingDistance = speed * speed / (2 * 0.03);
+      const brake = speed >= 0.35 && (Math.sign(vx) !== Math.sign(dx)
+        || Math.abs(dx) <= 12 + stoppingDistance + speed * 12);
       const direction = brake ? -Math.sign(vx) : Math.sign(dx);
-      h.act(direction < 0 ? ['left'] : ['right'], brake ? 2 : 8);
+      const frames = brake ? Math.min(24, Math.floor(speed / 0.03)) : Math.abs(dx) > 96 ? 16 : 6;
+      h.act(direction < 0 ? ['left'] : ['right'], frames);
     }
     return h.blocked('station_stop_not_observed', {player: readPlayer()});
   },

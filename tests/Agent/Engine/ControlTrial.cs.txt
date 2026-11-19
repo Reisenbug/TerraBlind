@@ -23,6 +23,7 @@ public sealed class ControlTrial : ModSystem
     bool enabled, started, opened, finished;
     int frames, sandX, floor, sandPickAttempts;
     int interactionNpc = -1;
+    JsonArray cartFrames;
     Task trial;
 
     public override void Load()
@@ -89,6 +90,13 @@ public sealed class ControlTrial : ModSystem
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         frames++;
+        if (cartFrames != null && cartFrames.Count < 3600)
+        {
+            var p = Main.LocalPlayer;
+            cartFrames.Add(new JsonObject { ["frame"] = frames, ["x"] = p.position.X, ["y"] = p.position.Y,
+                ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["cart"] = p.mount.Active && p.mount.Cart,
+                ["mushrooms"] = p.CountItem(ItemID.GlowingMushroom) });
+        }
         foreach (var npc in Main.npc)
             if (npc.whoAmI != interactionNpc) npc.active = false;
         if (!started && frames >= 60)
@@ -113,6 +121,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CASEBOOK_CART") == "1")
+        {
+            await TaskCaseCart();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CASEBOOK_STORAGE") == "1")
         {
             await TaskCaseStorage();
@@ -254,6 +267,52 @@ public sealed class ControlTrial : ModSystem
             { ["code"] = template.Replace("\"__TB_FIXTURE__\"", inputs.ToJsonString()) });
         Console.WriteLine($"TASK_CASE {id} " + (result["value"]?.ToJsonString() ?? result["detail"]?.ToString()));
         return result;
+    }
+
+    async Task TaskCaseCart()
+    {
+        var site = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            var p = Main.LocalPlayer;
+            int x = (int)p.Center.X / 16, y = (int)p.Bottom.Y / 16 + 4;
+            for (int tx = x - 8; tx <= x + 80; tx++)
+            for (int ty = y - 7; ty <= y + 3; ty++)
+            {
+                var tile = Main.tile[tx, ty];
+                tile.ClearEverything();
+                if (ty >= y) tile.ResetToType(TileID.Stone);
+            }
+            for (int tx = x + 2; tx <= x + 67; tx++) Minecart.PlaceTrack(Main.tile[tx, y - 1], 0);
+            for (int tx = x + 2; tx <= x + 67; tx++) Minecart.FrameTrack(tx, y - 1, pound: false, mute: true);
+            Main.tile[x + 70, y - 1].ResetToType(TileID.MushroomBlock);
+            p.position = new Vector2(x * 16, y * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            cartFrames = new JsonArray();
+            return (X: x, TrackY: y - 1);
+        });
+        var receipt = await RunTaskCase("18-minecart-mushroom", new JsonObject
+        {
+            ["board_at"] = new JsonObject { ["x"] = site.X + 3, ["y"] = site.TrackY },
+            ["station"] = new JsonObject { ["x"] = site.X + 55, ["y"] = site.TrackY },
+            ["resources"] = new JsonArray(new JsonObject { ["item_type"] = (int)ItemID.GlowingMushroom, ["count"] = 1,
+                ["tile_names"] = new JsonArray("MushroomBlock") }),
+            ["source_area"] = new JsonObject { ["x"] = site.X + 69, ["y"] = site.TrackY - 1, ["width"] = 4, ["height"] = 3 }
+        });
+        var samples = await OnMain(() => { var result = cartFrames; cartFrames = null; return result; });
+        var report = new JsonObject { ["receipt"] = receipt, ["station"] = site.X + 55, ["frames"] = samples };
+        File.WriteAllText(Path.Combine(Main.SavePath, "task-casebook-cart.json"), report.ToJsonString());
+        var parked = samples.SkipWhile(s => !s["cart"].GetValue<bool>())
+            .TakeWhile(s => s["cart"].GetValue<bool>()).LastOrDefault();
+        Check(parked != null && Math.Abs(parked["x"].GetValue<float>() - (site.X + 55.5) * 16) <= 24
+            && Math.Abs(parked["vx"].GetValue<float>()) < 0.01 && receipt["value"]?["ok"]?.GetValue<bool>() == true
+            && await OnMain(() => !Main.LocalPlayer.mount.Active && Main.LocalPlayer.CountItem(ItemID.GlowingMushroom) >= 1),
+            "casebook_minecart_failed");
+        Console.WriteLine("TASK_CASEBOOK_CART_COMPLETE station=true dismounted=true mushroom=true");
     }
 
     async Task TaskCaseStorage()

@@ -15,6 +15,8 @@ static class ControlTests
         Check(parallel.Active && parallel.Tool == "nav_to", "attack cleanup released navigation session");
         Check(AgentControlSession.RequiredChannels("fight", new System.Text.Json.Nodes.JsonObject()) == ControlChannels.ItemUse,
             "attack requires movement ownership");
+        Check(AgentControlSession.RequiredChannels("game_input", new System.Text.Json.Nodes.JsonObject { ["action"] = "quick_mount" })
+            == ControlChannels.Movement, "quick mount bypassed movement ownership");
         parallel.End(navTicket);
         Check(parallel.Begin("act", null, out long direct, ControlChannels.Movement) == null && parallel.OwnsDirectMovement,
             "explicit short movement did not own its movement channel");

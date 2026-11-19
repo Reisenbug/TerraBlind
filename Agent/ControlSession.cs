@@ -112,6 +112,7 @@ public sealed class AgentControlSession
     public static ControlChannels RequiredChannels(string name, JsonObject args)
     {
         if (name == "fight") return ControlChannels.ItemUse;
+        if (name == "game_input" && args["action"]?.ToString() == "quick_mount") return ControlChannels.Movement;
         if (name is "slot_click" or "container_action" or "game_input" or "craft_recipe" or "housing" or "reforge"
             or "container_transfer" or "craft_to_slot") return ControlChannels.ItemUse;
         if (name != "act") return ControlChannels.All;

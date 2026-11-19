@@ -183,6 +183,7 @@ namespace Terraria
         public void ToggleCreativeMenu() { }
         public void TrySwitchingLoadout(int index) => CurrentLoadoutIndex = index;
         public void QuickHeal() { }
+        public void QuickMount() { }
         public void QuickMana() { }
         public void QuickBuff() { }
         public void AdjTiles() { }

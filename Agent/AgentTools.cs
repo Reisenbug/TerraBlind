@@ -853,9 +853,18 @@ public static partial class AgentTools
     static JsonObject ApplyGameInput(JsonObject args)
     {
         var player = Main.LocalPlayer;
-        if (Main.gameMenu || !player.active || player.dead || player.itemAnimation != 0 || player.itemTime != 0)
+        if (Main.gameMenu || !player.active || player.dead)
             return new JsonObject { ["error"] = "player_input_busy" };
         string action = Text(args, "action");
+        if (action == "quick_mount" && args["enabled"] != null)
+        {
+            bool mounted = Bool(args, "enabled");
+            if (player.mount.Active != mounted) player.QuickMount();
+            if (player.mount.Active != mounted) return new JsonObject { ["error"] = "mount_state_unchanged" };
+            return new JsonObject { ["ok"] = true, ["action"] = action, ["mounted"] = mounted, ["minecart"] = mounted && player.mount.Cart };
+        }
+        if (player.itemAnimation != 0 || player.itemTime != 0)
+            return new JsonObject { ["error"] = "player_input_busy" };
         int index = Int(args, "index", -1);
         int healthBefore = player.statLife, manaBefore = player.statMana;
         switch (action)

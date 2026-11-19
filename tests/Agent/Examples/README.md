@@ -27,14 +27,16 @@ TB_WORLD_INTERACT=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 TB_CASEBOOK_HOUSE=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
+TB_CASEBOOK_CART=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
+  python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 ~~~
 
-储物场景跑 26、28、09。社交场景跑 34 和单件饰品的 13。原版右键场景额外跑 30，使用原版回弹挡板判定。重铸可能耗尽次数，此时验收物品是否归还。
+储物场景跑 26、28、09。社交场景跑 34 和单件饰品的 13。原版右键场景额外跑 30，使用原版回弹挡板判定。矿车场景跑 18，记录车速、下车与蘑菇入包。重铸可能耗尽次数，此时验收物品是否归还。
 
-Storage runs cases 26, 28, and 09. Social interactions runs 34 and tries 13 against one accessory. The world-interaction fixture runs 30 and reads the vanilla bumper predicate. The house fixture runs 02, builds from materials and checks native housing. Reforging can hit the roll limit, in which case the fixture checks that the accessory was returned. The runner copies the world into an isolated save and prints each result as `TASK_CASE`.
+Storage runs cases 26, 28, and 09. Social interactions runs 34 and tries 13 against one accessory. The world-interaction fixture runs 30 and reads the vanilla bumper predicate. The house fixture runs 02, builds from materials and checks native housing. The minecart fixture runs 18 and records speed, dismount, and mushroom pickup. Reforging can hit the roll limit, in which case the fixture checks that the accessory was returned. The runner copies the world into an isolated save and prints each result as `TASK_CASE`.
 
 | 当前验证范围 / Current coverage | 编号 / IDs |
 | --- | --- |
-| 已在隔离实机验证 / Verified in isolated game | 02, 09, 13 (单件 / one accessory), 26, 28, 30, 34 |
-| 有执行脚本，完整场景待验收 / Executable with scene-specific inputs, gameplay acceptance pending | 06, 07, 18, 31, 35, 36, 37 |
+| 已在隔离实机验证 / Verified in isolated game | 02, 09, 13 (单件 / one accessory), 18, 26, 28, 30, 34 |
+| 有执行脚本，完整场景待验收 / Executable with scene-specific inputs, gameplay acceptance pending | 06, 07, 31, 35, 36, 37 |
 | 有分段验证或缺口探针，完整目标仍阻塞 / Partial execution or blocker probes | 01, 03, 04, 05, 08, 10–12, 14–17, 19–25, 27, 29, 32, 33, 38–40 |
