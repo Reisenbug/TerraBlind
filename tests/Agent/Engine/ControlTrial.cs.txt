@@ -45,15 +45,15 @@ public sealed class ControlTrial : ModSystem
     public override void Load()
     {
         enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentcontrolcheck");
-        if (enabled && Environment.GetEnvironmentVariable("TB_NATIVE_PRIMITIVES") == "1")
-            PrimitiveBindingProbe.Binding = KeybindLoader.RegisterKeybind(Mod, "PrimitiveInputProbe", "F10");
-        if (enabled) { IL_Main.DoUpdate += Focus; On_Main.Update += OpenWorld; On_Player.PickTile += ObservePick; }
         explorationPauseTrial = enabled && Environment.GetEnvironmentVariable("TB_EXPLORATION_PAUSE_CHECK") == "1";
         if (explorationPauseTrial) explorationObjective = Environment.GetEnvironmentVariable("TB_EXPLORATION_OBJECTIVE");
         if (explorationPauseTrial && explorationObjective == null) On_PlayerInput.UpdateInput += CheckExplorationPauseInput;
     }
     public override void Unload()
     {
+        if (enabled && Environment.GetEnvironmentVariable("TB_NATIVE_PRIMITIVES") == "1")
+            PrimitiveBindingProbe.Binding = KeybindLoader.RegisterKeybind(Mod, "PrimitiveInputProbe", "F10");
+        if (enabled) { IL_Main.DoUpdate += Focus; On_Main.Update += OpenWorld; On_Player.PickTile += ObservePick; }
         if (explorationPauseTrial && explorationObjective == null) On_PlayerInput.UpdateInput -= CheckExplorationPauseInput;
         if (enabled) { IL_Main.DoUpdate -= Focus; On_Main.Update -= OpenWorld; On_Player.PickTile -= ObservePick; }
     }
@@ -67,7 +67,10 @@ public sealed class ControlTrial : ModSystem
             switch (++explorationInputFrames)
             {
                 case 30:
-                    ToggleDragonLensPause();
+            const string key = "DragonLens/Pause";
+            var pressed = PlayerInput.Triggers.JustPressed.KeyStatus;
+                    Check(pressed.ContainsKey(key), "dragonlens_pause_key_unregistered");
+                    pressed[key] = true;
                     break;
                 case 31:
                     Check(FreezeSystem.IsFrozen, "dragonlens_did_not_pause");
@@ -75,13 +78,14 @@ public sealed class ControlTrial : ModSystem
                     break;
                 case 45:
                     Check(FreezeSystem.IsFrozen && Main.time == explorationWorldTime, "world_advanced_during_pause");
-                    ToggleDragonLensPause();
+                    pressed[key] = true;
                     break;
                 case 50:
                     Check(!FreezeSystem.IsFrozen && Main.time != explorationWorldTime, "world_did_not_resume");
                     var text = Terraria.Localization.Language.GetTextValue("Mods.TerraBlind.Exploration.Paused");
                     Check(text.StartsWith("Exploration paused.", StringComparison.Ordinal), "pause_english_localization_missing: " + text);
-                    Console.WriteLine("EXPLORATION_PAUSE_COMPLETE dragonlens=true frozen_frames=14 resumed=true english_localized=true");
+                    Console.WriteLine("EXPLORATION_PAUSE_COMPLETE dragonlens=true frozen_frames=14 resumed=true english_localized=true jev_key_loaded=true");
+                    Check(JevCombat.HasKey, "jev_credential_not_found");
                     File.WriteAllText(Path.Combine(Main.SavePath, "agent-engine-result.json"), "{\"ok\":true}");
                     finished = true;
                     break;
@@ -96,12 +100,6 @@ public sealed class ControlTrial : ModSystem
         }
     }
 
-    static void ToggleDragonLensPause()
-    {
-        Check(ModLoader.TryGetMod("DragonLens", out var dragonLens), "dragonlens_missing");
-        var pause = dragonLens.Code.GetType("DragonLens.Content.Tools.Developer.Pause", throwOnError: true);
-        pause.GetMethod("OnActivate").Invoke(Activator.CreateInstance(pause, nonPublic: true), null);
-    }
     void ObservePick(On_Player.orig_PickTile original, Player player, int x, int y, int power)
     {
         if (shaftPicks != null && player == Main.LocalPlayer)
@@ -157,9 +155,6 @@ public sealed class ControlTrial : ModSystem
         if (!enabled || finished) return;
         Main.soundVolume = Main.musicVolume = Main.ambientVolume = 0;
         Main.autoPause = false;
-        while (queue.TryDequeue(out var work)) work();
-        if (Main.gameMenu || !Main.LocalPlayer.active) return;
-        frames++;
         if (explorationPauseTrial)
         {
             if (explorationObjective != null && !Main.gameMenu && Main.LocalPlayer.active && ++frames == 90)
@@ -176,6 +171,9 @@ public sealed class ControlTrial : ModSystem
         if (gravityFrames != null)
         {
             var p = Main.LocalPlayer;
+        while (queue.TryDequeue(out var work)) work();
+        if (Main.gameMenu || !Main.LocalPlayer.active) return;
+        frames++;
             gravityFrames.Add(new JsonObject { ["frame"] = frames, ["x"] = p.position.X, ["y"] = p.position.Y,
                 ["gravity"] = p.gravDir, ["gravitation_buff"] = p.HasBuff(BuffID.Gravitation), ["chest"] = p.chest });
         }

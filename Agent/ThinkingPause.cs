@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Terraria;
+using Terraria.GameInput;
 using Terraria.Localization;
 using Terraria.ModLoader;
 
@@ -21,6 +22,7 @@ public sealed class ThinkingPause : ModSystem
     bool manualSwitch;
     bool dragonLensWasPaused;
     const string ExplorationPauseEvent = "exploration_paused";
+    const string DragonLensPauseKey = "DragonLens/Pause";
     public static bool Frozen => frozenAt != 0;
     public static double FrozenMilliseconds => FrozenDuration.TotalMilliseconds;
     static TimeSpan FrozenDuration => TimeSpan.FromSeconds((frozenTicks
@@ -63,6 +65,13 @@ public sealed class ThinkingPause : ModSystem
         if (Main.gameMenu || Main.netMode != 0 || !Main.LocalPlayer.active) return;
 
         bool paused = FreezeSystem.IsFrozen;
+        var pressed = PlayerInput.Triggers.JustPressed.KeyStatus;
+        if (paused && Main.hasFocus && !Main.drawingPlayerChat
+            && pressed.TryGetValue(DragonLensPauseKey, out bool toggle) && toggle && FreezeSystem.Unfreeze())
+        {
+            pressed[DragonLensPauseKey] = false;
+            paused = false;
+        }
         if (paused == dragonLensWasPaused) return;
         dragonLensWasPaused = paused;
         if (!paused)
