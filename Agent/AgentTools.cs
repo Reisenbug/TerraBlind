@@ -1207,7 +1207,7 @@ public static partial class AgentTools
             } : null,
             ["attack_state"] = Combat.Last, ["movement_state"] = Dodge.Last,
             ["requires_typesafe_key"] = true, ["config_key_present"] = !string.IsNullOrWhiteSpace(Config.I.TypeSafeKey),
-            ["other_key_sources"] = "not_checked",
+            ["key_available"] = JevCombat.HasKey,
             ["active_bosses"] = new JsonArray(Main.npc.Where(n => n != null && n.active && n.boss && n.life > 0)
                 .Select(n => (JsonNode)new JsonObject { ["type"] = n.type, ["hp"] = n.life,
                     ["x"] = n.Center.X, ["y"] = n.Center.Y }).ToArray())
@@ -1824,7 +1824,7 @@ public static partial class AgentTools
             case "nav_intent":
                 return (await NativeAgent.OnMain(() => AgentNavigationIntent.Update(args), token)).ToJsonString();
             case "jev_judge":
-                string decisionKey = await NativeAgent.OnMain(() => Config.I.TypeSafeKey?.Trim(), token);
+                string decisionKey = await NativeAgent.OnMain(JevCombat.Key, token);
                 if (args["channel"] != null)
                     return DecisionChannels.Poll(args, (request, ct) => ScriptDecision.Judge(HarvestHttp, decisionKey, request, ct)).ToJsonString();
                 return (await ScriptDecision.Judge(HarvestHttp, decisionKey, args, token)).ToJsonString();
@@ -2624,8 +2624,8 @@ public static partial class AgentTools
             case "chop_wood":
                 int wantedWood = Int(args, "count");
                 if (wantedWood < 1 || wantedWood > 9999) return "{\"error\":\"count 必须在 1 到 9999 之间。\"}";
-                string key = await NativeAgent.OnMain(() => Config.I.TypeSafeKey?.Trim(), token);
-                if (string.IsNullOrEmpty(key)) return "{\"error\":\"请先配置 Jev 的 TypeSafe Key。\"}";
+                string key = await NativeAgent.OnMain(JevCombat.Key, token);
+                if (string.IsNullOrEmpty(key)) return "{\"error\":\"Jev credentials are missing. Configure a TypeSafe key.\"}";
                 await NativeAgent.OnMain(() => { StateSpacePlanner.PreserveTerrain = true; return true; }, token);
                 try
                 {

@@ -467,6 +467,11 @@ namespace Terraria.ModLoader
 }
 namespace TerraBlind
 {
+    public static class JevCombat
+    {
+        public static bool HasKey => !string.IsNullOrEmpty(Key());
+        public static string Key() => Config.I.TypeSafeKey?.Trim();
+    }
     public static class CraftCoordinator
     {
         public static Func<int, int, int> Handler;
