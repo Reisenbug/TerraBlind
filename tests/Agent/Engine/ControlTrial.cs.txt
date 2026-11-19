@@ -190,7 +190,8 @@ public sealed class ControlTrial : ModSystem
             var p = Main.LocalPlayer;
             featherDescentFrames.Add(new JsonObject { ["tick"] = frames, ["x"] = p.Center.X,
                 ["bottom"] = p.Bottom.Y, ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["hp"] = p.statLife,
-                ["up"] = p.controlUp, ["right"] = p.controlRight, ["buff"] = p.HasBuff(BuffID.Featherfall) });
+                ["up"] = p.controlUp, ["right"] = p.controlRight, ["buff"] = p.HasBuff(BuffID.Featherfall),
+                ["gravity"] = p.gravDir, ["gravitation"] = p.HasBuff(BuffID.Gravitation) });
         }
         if (gravityFrames != null)
         {
@@ -259,7 +260,14 @@ public sealed class ControlTrial : ModSystem
     {
         if (Environment.GetEnvironmentVariable("TB_FEATHER_DESCENT_CHECK") == "1")
         {
-            await FeatherDescentComparison();
+            await PotionNavigationComparison(gravity: false);
+            return;
+        }
+        if (Environment.GetEnvironmentVariable("TB_GRAVITY_ASCENT_CHECK") == "1")
+        {
+            await PotionNavigationComparison(gravity: true);
+            return;
+        }
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_CASEBOOK_ORECHAIN") == "1")
@@ -454,11 +462,14 @@ public sealed class ControlTrial : ModSystem
         Console.WriteLine("CONTROL_REGION_ASSERTIONS original_destination_reached=true rejected_excavation_not_repeated=true navigation_enabled=true");
     }
 
-    async Task FeatherDescentComparison()
+    async Task PotionNavigationComparison(bool gravity)
     {
-        int x = Main.spawnTileX + 100, top = Main.spawnTileY + 80, shelf = top + 27;
+        int x = Main.spawnTileX + 100, top = Main.spawnTileY + 80, shelf = top + (gravity ? -18 : 27);
+        string report = gravity ? "gravity-ascent.json" : "feather-descent.json";
+        int potionType = gravity ? ItemID.GravitationPotion : ItemID.FeatherfallPotion;
+        int buffType = gravity ? BuffID.Gravitation : BuffID.Featherfall;
         var comparisons = new JsonArray();
-        foreach (bool feather in new[] { false, true })
+        foreach (bool withPotion in new[] { false, true })
         {
             await OnMain(() =>
             {
@@ -467,16 +478,18 @@ public sealed class ControlTrial : ModSystem
                 NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
                 VanillaNavBridge.Enabled = true;
                 for (int tx = x - 35; tx <= x + 74; tx++)
-                for (int row = top - 16; row <= top + 49; row++)
+                for (int row = top - (gravity ? 40 : 16); row <= top + 49; row++)
                 {
                     var tile = Main.tile[tx, row]; tile.ClearEverything();
-                    if (row >= top + 45 || tx <= x && row >= top || tx >= x + 23 && row >= shelf)
+                    if (row >= top + 45 || tx <= x && row >= top || tx >= x + 23 && row >= shelf
+                        || gravity && (row <= top - 38 || row >= top))
                         tile.ResetToType(TileID.Stone);
                 }
                 var p = Main.LocalPlayer;
-                p.ClearBuff(BuffID.Featherfall);
+                p.ClearBuff(buffType);
+                p.gravDir = 1;
                 foreach (var item in p.inventory) item.TurnToAir();
-                if (feather) p.inventory[0].SetDefaults(ItemID.FeatherfallPotion);
+                if (withPotion) p.inventory[0].SetDefaults(potionType);
                 p.position = new Vector2((x - 3) * 16, top * 16 - p.height);
                 p.velocity = Vector2.Zero;
                 p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
@@ -485,11 +498,11 @@ public sealed class ControlTrial : ModSystem
                 return true;
             });
             await DelayFrames(15);
-            if (feather)
+            if (withPotion)
             {
                 var potion = await Call("use_item", new JsonObject { ["slot"] = 0, ["x"] = x - 3, ["y"] = top - 1 });
-                Check(potion["verified"]?.GetValue<bool>() == true && await OnMain(() => Main.LocalPlayer.HasBuff(BuffID.Featherfall)),
-                    "featherfall_potion_not_consumed");
+                Check(potion["verified"]?.GetValue<bool>() == true && await OnMain(() => Main.LocalPlayer.HasBuff(buffType)),
+                    "navigation_test_potion_not_consumed");
             }
             await OnMain(() => { featherDescentFrames = new JsonArray(); return true; });
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(22));
@@ -504,20 +517,25 @@ public sealed class ControlTrial : ModSystem
             var result = await OnMain(() =>
             {
                 var samples = featherDescentFrames; featherDescentFrames = null;
-                var firstLanding = samples.FirstOrDefault(sample => sample["bottom"].GetValue<float>() >= (shelf - 1) * 16
-                    && sample["vy"].GetValue<float>() == 0);
+                var firstLanding = samples.FirstOrDefault(sample => sample["x"].GetValue<float>() >= (x + 23) * 16
+                    && Math.Abs(sample["bottom"].GetValue<float>() - shelf * 16) < 1
+                    && sample["gravity"].GetValue<float>() > 0 && sample["vy"].GetValue<float>() == 0);
                 Halt.All(); VanillaNavBridge.Reset();
-                return new JsonObject { ["featherfall"] = feather, ["route"] = route, ["frames"] = samples.Count,
+                return new JsonObject { ["potion"] = withPotion, ["route"] = route, ["frames"] = samples.Count,
+                    ["featherfall"] = !gravity && withPotion,
                     ["up_frames"] = samples.Count(s => s["up"].GetValue<bool>()),
+                    ["inverted_frames"] = samples.Count(s => s["gravity"].GetValue<float>() < 0),
+                    ["min_bottom"] = samples.Min(s => s["bottom"].GetValue<float>()),
+                    ["final_gravity"] = samples[^1]["gravity"].DeepClone(),
                     ["right_frames"] = samples.Count(s => s["right"].GetValue<bool>()),
                     ["min_hp"] = samples.Min(s => s["hp"].GetValue<int>()),
                     ["max_x"] = samples.Max(s => s["x"].GetValue<float>()),
-                    ["first_lower_landing"] = firstLanding?.DeepClone(), ["samples"] = samples };
+                    ["first_shelf_landing"] = firstLanding?.DeepClone(), ["samples"] = samples };
             });
             var summary = result.DeepClone().AsObject(); summary.Remove("samples");
-            Console.WriteLine("FEATHER_DESCENT_RESULT " + summary.ToJsonString());
+            Console.WriteLine((gravity ? "GRAVITY_ASCENT_RESULT " : "FEATHER_DESCENT_RESULT ") + summary.ToJsonString());
             comparisons.Add(result);
-            File.WriteAllText(Path.Combine(Main.SavePath, "feather-descent.json"), new JsonObject
+            File.WriteAllText(Path.Combine(Main.SavePath, report), new JsonObject
             {
                 ["shelf_x"] = x + 23, ["shelf_y"] = shelf, ["trials"] = comparisons.DeepClone()
             }.ToJsonString());
