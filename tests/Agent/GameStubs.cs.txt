@@ -291,6 +291,7 @@ namespace Terraria
         public bool RedWire, BlueWire, GreenWire, YellowWire;
     }
     public class Mount { public bool Active, Cart; }
+    public static class Minecart { public static bool DrawBouncyBumper(int frame) => false; }
     public class Projectile
     {
         public static Action<Projectile> PrepareBomb;
@@ -369,7 +370,7 @@ namespace Terraria.ID
     {
         public const int FixtureSource = 1, FixtureOther = 2;
         public const int Containers = 21, Dressers = 88, Containers2 = 467;
-        public const int PressurePlates = 135, Traps = 137, Boulder = 138, Explosives = 141;
+        public const int PressurePlates = 135, Traps = 137, Boulder = 138, Explosives = 141, MinecartTrack = 314;
         public const int RollingCactus = 484, BouncyBoulder = 664, LifeCrystalBoulder = 665;
         public static class Sets
         {

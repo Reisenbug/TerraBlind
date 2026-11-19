@@ -113,6 +113,16 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CASEBOOK_STORAGE") == "1")
+        {
+            await TaskCaseStorage();
+            return;
+        }
+        if (Environment.GetEnvironmentVariable("TB_CASEBOOK_HOUSE") == "1")
+        {
+            await TaskCaseHouse();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_WORLD_INTERACT") == "1")
         {
             await WorldInteractions();
@@ -235,6 +245,113 @@ public sealed class ControlTrial : ModSystem
         Console.WriteLine("CONTROL_REGION_ASSERTIONS original_destination_reached=true rejected_excavation_not_repeated=true navigation_enabled=true");
     }
 
+    async Task<JsonObject> RunTaskCase(string id, JsonObject inputs)
+    {
+        string path = Environment.GetEnvironmentVariable("TB_TASK_CASEBOOK");
+        var bundle = JsonNode.Parse(File.ReadAllText(path)).AsObject();
+        string template = bundle[id]?.GetValue<string>() ?? throw new Exception("Unknown task case: " + id);
+        var result = await Call("run_script", new JsonObject
+            { ["code"] = template.Replace("\"__TB_FIXTURE__\"", inputs.ToJsonString()) });
+        Console.WriteLine($"TASK_CASE {id} " + (result["value"]?.ToJsonString() ?? result["detail"]?.ToString()));
+        return result;
+    }
+
+    async Task TaskCaseStorage()
+    {
+        var fixture = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            var p = Main.LocalPlayer;
+            int x = (int)p.Center.X / 16;
+            int y = (int)p.Bottom.Y / 16 + 4;
+            for (int tx = x - 7; tx <= x + 7; tx++)
+            for (int ty = y - 7; ty <= y + 3; ty++)
+            {
+                var tile = Main.tile[tx, ty];
+                tile.ClearEverything();
+                if (ty >= y) tile.ResetToType(TileID.Stone);
+            }
+            p.position = new Vector2(x * 16, y * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            p.inventory[1].SetDefaults(ItemID.Wood); p.inventory[1].stack = 20;
+            p.inventory[2].SetDefaults(ItemID.Torch); p.inventory[2].stack = 10;
+            p.inventory[3].SetDefaults(ItemID.StoneBlock); p.inventory[3].stack = 30;
+            int a = WorldGen.PlaceChest(x + 3, y - 1, TileID.Containers, false, 0);
+            int b = WorldGen.PlaceChest(x - 3, y - 1, TileID.Containers, false, 0);
+            Check(a >= 0 && b >= 0, "casebook_chests_missing");
+            return (X: x, Floor: y, A: a, B: b);
+        });
+        JsonObject Point(int x, int y) => new() { ["x"] = x, ["y"] = y };
+        var coords = await OnMain(() =>
+        {
+            var a = Main.chest[fixture.A]; var b = Main.chest[fixture.B];
+            return (A: Point(a.x, a.y), B: Point(b.x, b.y));
+        });
+        var storage = await RunTaskCase("26-ab-storage", new JsonObject { ["storage"] = new JsonArray(
+            new JsonObject { ["chest"] = coords.A.DeepClone(), ["items"] = new JsonArray(new JsonObject { ["type"] = (int)ItemID.Wood, ["count"] = 10 }) },
+            new JsonObject { ["chest"] = coords.B, ["items"] = new JsonArray(new JsonObject { ["type"] = (int)ItemID.Torch, ["count"] = 5 }) }) });
+        Check(storage["value"]?["ok"]?.GetValue<bool>() == true && await OnMain(() =>
+            Main.chest[fixture.A].item.Sum(i => i.type == ItemID.Wood ? i.stack : 0) == 10
+            && Main.chest[fixture.B].item.Sum(i => i.type == ItemID.Torch ? i.stack : 0) == 5), "casebook_ab_storage_failed");
+        int ax = coords.A["x"].GetValue<int>();
+        var removed = await RunTaskCase("28-empty-chest-remove-blocks", new JsonObject { ["chest"] = coords.A,
+            ["pick_slot"] = 0, ["below"] = new JsonArray(Point(ax, fixture.Floor), Point(ax + 1, fixture.Floor)) });
+        Check(removed["value"]?["ok"]?.GetValue<bool>() == true && await OnMain(() => Main.chest[fixture.A] == null
+            && !Main.tile[ax, fixture.Floor].HasTile && !Main.tile[ax + 1, fixture.Floor].HasTile),
+            "casebook_remove_chest_failed");
+
+        int left = fixture.X - 1, right = fixture.X + 2, top = fixture.Floor - 4, bottom = fixture.Floor;
+        var cells = new JsonArray();
+        for (int y = bottom; y >= top; y--)
+        for (int x = left; x <= right; x++)
+            if (x == left || x == right || y == top || y == bottom) cells.Add(Point(x, y));
+        var enclosure = await RunTaskCase("09-block-enclosure", new JsonObject { ["cells"] = cells, ["item_type"] = (int)ItemID.StoneBlock,
+            ["tile_type"] = (int)TileID.Stone, ["bounds"] = new JsonObject { ["left"] = left, ["right"] = right, ["top"] = top, ["bottom"] = bottom } });
+        Check(enclosure["value"]?["ok"]?.GetValue<bool>() == true && await OnMain(() =>
+            cells.All(c => Main.tile[c["x"].GetValue<int>(), c["y"].GetValue<int>()].HasTile)),
+            "casebook_enclosure_failed");
+        File.WriteAllText(Path.Combine(Main.SavePath, "task-casebook.json"), new JsonObject
+            { ["26"] = storage, ["28"] = removed, ["09"] = enclosure }.ToJsonString());
+        Console.WriteLine("TASK_CASEBOOK_STORAGE_COMPLETE 26=true 28=true 09=true");
+    }
+
+    async Task TaskCaseHouse()
+    {
+        var position = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            var p = Main.LocalPlayer;
+            int x = (int)p.Center.X / 16, y = (int)p.Bottom.Y / 16 + 4;
+            for (int tx = x - 16; tx <= x + 26; tx++)
+            for (int ty = y - 14; ty <= y + 2; ty++)
+            {
+                var tile = Main.tile[tx, ty];
+                tile.ClearEverything();
+                if (ty >= y) tile.ResetToType(TileID.Stone);
+            }
+            p.position = new Vector2(x * 16, y * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            p.inventory[1].SetDefaults(ItemID.Wood); p.inventory[1].stack = 800;
+            p.inventory[2].SetDefaults(ItemID.WoodPlatform); p.inventory[2].stack = 100;
+            p.inventory[3].SetDefaults(ItemID.Torch); p.inventory[3].stack = 20;
+            interactionNpc = NPC.NewNPC(new EntitySource_Misc("guide-house-fixture"), (x - 8) * 16, y * 16, NPCID.Guide);
+            return (X: x + 2, Y: y);
+        });
+        var result = await RunTaskCase("02-house-guide", new JsonObject { ["site"] = new JsonObject
+            { ["x"] = position.X, ["y"] = position.Y, ["rooms"] = 1, ["dir"] = 1 } });
+        File.WriteAllText(Path.Combine(Main.SavePath, "task-casebook-house.json"), result.ToJsonString());
+        Check(result["value"]?["ok"]?.GetValue<bool>() == true && await OnMain(() => !Main.npc[interactionNpc].homeless),
+            "casebook_guide_house_failed");
+    }
+
     async Task WorldInteractions()
     {
         var fixture = await OnMain(() =>
@@ -295,6 +412,16 @@ public sealed class ControlTrial : ModSystem
             p.velocity = Vector2.Zero;
             return true;
         });
+        if (Environment.GetEnvironmentVariable("TB_TASK_CASEBOOK") != null)
+        {
+            await OnMain(() => { Main.LocalPlayer.inventory[2].SetDefaults(ItemID.WoodenHammer); return true; });
+            var bumper = await RunTaskCase("30-bouncy-track", new JsonObject
+            {
+                ["track"] = new JsonObject { ["x"] = cx + 9, ["y"] = cy - 1 }, ["hammer_slot"] = 2
+            });
+            Check(bumper["value"]?["ok"]?.GetValue<bool>() == true && await OnMain(() =>
+                Minecart.DrawBouncyBumper(Main.tile[cx + 9, cy - 1].TileFrameX)), "casebook_no_native_bouncy_bumper");
+        }
         var boarded = await Click(cx + 11, cy - 1);
         Check(boarded["outcome"]?.ToString() == "minecart_mounted" && await OnMain(() => Main.LocalPlayer.mount is { Active: true, Cart: true }),
             "world_interact_native_minecart_mount_not_observed");
@@ -347,6 +474,13 @@ public sealed class ControlTrial : ModSystem
         var teleported = await Call("pylon_use", new JsonObject { ["x"] = x + 28, ["y"] = floor - 4 });
         Check(teleported["outcome"]?.ToString() == "arrived"
             && await OnMain(() => Math.Abs(Main.LocalPlayer.Center.X / 16 - (x + 28)) < 3), "native_pylon_arrival_not_observed");
+        if (Environment.GetEnvironmentVariable("TB_TASK_CASEBOOK") != null)
+        {
+            var returned = await RunTaskCase("34-use-pylon", new JsonObject { ["x"] = x + 2, ["y"] = floor - 4 });
+            Check(returned["value"]?["ok"]?.GetValue<bool>() == true
+                && await OnMain(() => Math.Abs(Main.LocalPlayer.Center.X / 16 - (x + 2)) < 3), "casebook_pylon_failed");
+            await Call("pylon_use", new JsonObject { ["x"] = x + 28, ["y"] = floor - 4 });
+        }
 
         long coinsBefore = await OnMain(() =>
         {
@@ -382,6 +516,22 @@ public sealed class ControlTrial : ModSystem
             Main.reforgeItem.prefix > 0 && Utils.CoinsCount(out _, Main.LocalPlayer.inventory) == coinsBefore - cost), "native_reforge_not_charged");
         await Click("reforge", 0);
         await Click("inventory", 10);
+        if (Environment.GetEnvironmentVariable("TB_TASK_CASEBOOK") != null)
+        {
+            var defense = await RunTaskCase("13-reforge-defense", new JsonObject { ["slots"] = new JsonArray(10),
+                ["budget_copper"] = 450000, ["max_rolls_per_item"] = 12 });
+            if (defense["value"]?["ok"]?.GetValue<bool>() == true)
+            {
+                Check(await OnMain(() => Main.LocalPlayer.inventory[10].prefix is PrefixID.Armored or PrefixID.Warding),
+                    "casebook_reforge_result_mismatch");
+            }
+            else
+            {
+                Check(defense["value"]?["reason"]?.ToString() == "reforge_budget_or_roll_limit"
+                    && await OnMain(() => Main.reforgeItem.IsAir && Main.LocalPlayer.inventory[10].type == ItemID.Aglet),
+                    "casebook_reforge_did_not_preserve_item");
+            }
+        }
         await OnMain(() =>
         {
             var p = Main.LocalPlayer;

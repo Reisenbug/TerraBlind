@@ -127,9 +127,17 @@ public static class TerrainInspection
                 ["basis"] = "straight_line_geometry_not_navigation_route" };
         }
         var target = Main.tile[x, y];
+        var targetState = new JsonObject { ["x"] = x, ["y"] = y, ["has_tile"] = target.HasTile,
+            ["tile_type"] = target.HasTile ? (int)target.TileType : null };
+        if (target.HasUnactuatedTile && target.TileType == TileID.MinecartTrack)
+        {
+            targetState["frame_x"] = target.TileFrameX;
+            targetState["frame_y"] = target.TileFrameY;
+            targetState["front_bouncy"] = Minecart.DrawBouncyBumper(target.TileFrameX);
+            targetState["back_bouncy"] = Minecart.DrawBouncyBumper(target.TileFrameY);
+        }
         return new JsonObject { ["ok"] = true, ["tick"] = (long)Main.GameUpdateCount, ["elapsed_ms"] = clock.Elapsed.TotalMilliseconds,
-            ["target"] = new JsonObject { ["x"] = x, ["y"] = y, ["has_tile"] = target.HasTile,
-                ["tile_type"] = target.HasTile ? (int)target.TileType : null },
+            ["target"] = targetState,
             ["approach_direct_distance"] = approach, ["direct_corridor_solid_cells"] = solids,
             ["hazards"] = hazards, ["liquids"] = liquids, ["sampled_cells"] = sampled.Count, ["route_relation"] = relation,
             ["reachable"] = null, ["travel_time_ms"] = null, ["required_mining_cells"] = null,
