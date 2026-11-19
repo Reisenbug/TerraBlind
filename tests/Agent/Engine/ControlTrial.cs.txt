@@ -29,6 +29,7 @@ public sealed class ControlTrial : ModSystem
     readonly HashSet<int> residentTeleports = new();
     bool observeShimmer, playerEnteredShimmer;
     int shimmerFrame = -1;
+    JsonArray shaftFrames, shaftPicks;
     JsonArray cartFrames;
     Task trial;
 
@@ -42,6 +43,8 @@ public sealed class ControlTrial : ModSystem
     public override void Unload() { if (enabled) { IL_Main.DoUpdate -= Focus; On_Main.Update -= OpenWorld; On_Player.PickTile -= ObservePick; } }
     void ObservePick(On_Player.orig_PickTile original, Player player, int x, int y, int power)
     {
+        if (shaftPicks != null && player == Main.LocalPlayer)
+            shaftPicks.Add(new JsonArray(x, y));
         if (started && player == Main.LocalPlayer && x >= sandX && x < sandX + 4 && y >= floor - 7 && y < floor)
         {
             sandPickAttempts++;
@@ -96,6 +99,13 @@ public sealed class ControlTrial : ModSystem
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         frames++;
+        if (shaftFrames != null)
+        {
+            var p = Main.LocalPlayer;
+            shaftFrames.Add(new JsonObject { ["frame"] = frames, ["center_x"] = p.Center.X,
+                ["top"] = p.Top.Y, ["bottom"] = p.Bottom.Y, ["grapples"] = p.grapCount,
+                ["vy"] = p.velocity.Y });
+        }
         if (observeShimmer)
         {
             var p = Main.LocalPlayer;
@@ -141,6 +151,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CASEBOOK_SHAFT") == "1")
+        {
+            await TaskCaseShaft();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CASEBOOK_GRAPPLE") == "1")
         {
             await TaskCaseGrapple();
@@ -307,6 +322,79 @@ public sealed class ControlTrial : ModSystem
             { ["code"] = template.Replace("\"__TB_FIXTURE__\"", inputs.ToJsonString()) });
         Console.WriteLine($"TASK_CASE {id} " + (result["value"]?.ToJsonString() ?? result["detail"]?.ToString()));
         return result;
+    }
+
+    async Task TaskCaseShaft()
+    {
+        const int shaftDepth = 6, digDepth = 3;
+        var (x, y) = await OnMain(() => ((int)Main.LocalPlayer.Center.X / 16, (int)Main.LocalPlayer.Bottom.Y / 16 + 4));
+        var report = new JsonObject();
+        foreach (var (width, dig) in new[] { (2, false), (2, true), (1, false), (1, true) })
+        {
+            int column = x + width - 1;
+            await OnMain(() =>
+            {
+                Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+                var p = Main.LocalPlayer;
+                p.RemoveAllGrapplingHooks();
+                for (int tx = x - 8; tx <= x + 9; tx++)
+                for (int row = y - 8; row <= y + shaftDepth + digDepth + 2; row++)
+                {
+                    var tile = Main.tile[tx, row];
+                    tile.ClearEverything();
+                    bool floor = row >= y + shaftDepth && (width == 1 || !dig || tx == column || row >= y + shaftDepth + digDepth);
+                    if (row >= y && (tx < x || tx >= x + width || floor))
+                        tile.ResetToType(tx == column && row >= y + shaftDepth ? TileID.Dirt : TileID.Stone);
+                }
+                p.position = new Vector2(x * 16 + 8 - p.width / 2f, y * 16 - p.height);
+                p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+                foreach (var held in p.inventory) held.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.IronPickaxe);
+                p.miscEquips[4].SetDefaults(ItemID.GrapplingHook);
+                shaftFrames = new JsonArray();
+                shaftPicks = new JsonArray();
+                return true;
+            });
+            await DelayFrames(10);
+            string id = dig ? "23-grapple-one-wide-dig" : "22-grapple-one-wide";
+            var receipt = await RunTaskCase(id, new JsonObject
+            {
+                ["anchor"] = new JsonObject { ["x"] = column, ["y"] = y + shaftDepth },
+                ["mouth_y"] = y, ["pick_slot"] = 0, ["depth"] = digDepth
+            });
+            report[id + (width == 2 ? "-control" : "")] = await OnMain(() =>
+            {
+                var samples = shaftFrames;
+                var picks = shaftPicks;
+                shaftFrames = shaftPicks = null;
+                bool enteredWhileLatched = samples.Any(sample => sample["top"].GetValue<float>() > y * 16
+                    && sample["center_x"].GetValue<float>() >= x * 16 && sample["center_x"].GetValue<float>() < (x + width) * 16
+                    && sample["grapples"].GetValue<int>() > 0);
+                bool wallsIntact = Enumerable.Range(y, shaftDepth + digDepth)
+                    .All(row => Main.tile[x - 1, row].HasUnactuatedTile && Main.tile[x + width, row].HasUnactuatedTile);
+                int floorsRemoved = Enumerable.Range(y + shaftDepth, digDepth).Count(row => !Main.tile[column, row].HasTile);
+                return new JsonObject { ["receipt"] = receipt, ["samples"] = samples, ["picks"] = picks,
+                    ["width_tiles"] = width, ["mouth_y"] = y, ["entered_while_latched"] = enteredWhileLatched,
+                    ["walls_intact"] = wallsIntact, ["floors_removed"] = floorsRemoved, ["dig_column"] = column,
+                    ["attached"] = samples.Any(sample => sample["grapples"].GetValue<int>() > 0),
+                    ["picks_stayed_in_column"] = picks.All(pick => pick[0].GetValue<int>() == column) };
+            });
+        }
+        File.WriteAllText(Path.Combine(Main.SavePath, "task-casebook-shaft.json"), report.ToJsonString());
+        JsonNode control = report["22-grapple-one-wide-control"];
+        Check(control["entered_while_latched"].GetValue<bool>() && control["receipt"]["value"]?["ok"]?.GetValue<bool>() == true,
+            "casebook_shaft_control_unverified");
+        JsonNode digControl = report["23-grapple-one-wide-dig-control"];
+        Check(digControl["entered_while_latched"].GetValue<bool>() && digControl["picks_stayed_in_column"].GetValue<bool>()
+            && digControl["floors_removed"].GetValue<int>() == digDepth && digControl["walls_intact"].GetValue<bool>()
+            && digControl["receipt"]["value"]?["ok"]?.GetValue<bool>() == true, "casebook_shaft_dig_control_unverified");
+        Check(report["22-grapple-one-wide"]["receipt"]["value"] != null
+            && report["23-grapple-one-wide-dig"]["receipt"]["value"] != null
+            && report["22-grapple-one-wide"]["attached"].GetValue<bool>()
+            && report["23-grapple-one-wide-dig"]["attached"].GetValue<bool>(), "casebook_shaft_probe_failed");
+        Console.WriteLine("TASK_CASEBOOK_SHAFT_MEASURED cases=2 controls=2");
     }
 
     async Task TaskCaseGrapple()

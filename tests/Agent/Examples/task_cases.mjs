@@ -327,11 +327,39 @@ export const cases = {
     return h.done({reached});
   },
 
-  '22-grapple-one-wide': (i, h) => h.blocked('missing_grapple_latch_and_one_tile_body_transition_observation',
-    {target: h.read('opportunity_assess', i.anchor)}),
+  '22-grapple-one-wide': (i, h) => {
+    const reached = h.grappleTo(i.anchor);
+    const p = h.call('get_state', {fields: ['player']}).player;
+    if (!reached || p.pos.y < i.mouth_y * 16)
+      return h.blocked('body_stopped_at_shaft_mouth', {reached, position: p.pos, width: p.width});
+    return h.done({reached, position: p.pos});
+  },
 
-  '23-grapple-one-wide-dig': (i, h) => h.blocked('missing_grapple_latch_and_single_column_excavation_constraint',
-    {target: h.read('opportunity_assess', i.anchor), column: i.anchor.x}),
+  '23-grapple-one-wide-dig': (i, h) => {
+    const reached = h.grappleTo(i.anchor);
+    const player = () => h.call('get_state', {fields: ['player']}).player;
+    const cellX = p => Math.floor((p.pos.x + p.width / 2) / 16);
+    const start = player();
+    if (!reached || start.pos.y < i.mouth_y * 16 || cellX(start) !== i.anchor.x)
+      return h.blocked('body_stopped_at_shaft_mouth', {reached, position: start.pos, width: start.width});
+    h.check(Number.isInteger(i.depth) && i.depth > 0 && i.depth <= 8, 'invalid_dig_depth');
+    const mined = [];
+    for (let row = i.anchor.y; row < i.anchor.y + i.depth; row++) {
+      const target = {x: i.anchor.x, y: row};
+      h.check(h.tile(target).has_tile, 'shaft_floor_missing', target);
+      h.use(i.pick_slot, target, {strict: true, duration_ticks: 30});
+      h.check(!h.tile(target).has_tile, 'shaft_floor_not_removed', target);
+      mined.push(target);
+      h.act([], 15);
+      const p = player();
+      if (p.dead || cellX(p) !== i.anchor.x || p.pos.y < i.mouth_y * 16)
+        return h.blocked('left_shaft_while_digging', {position: p.pos, mined});
+    }
+    const finish = player();
+    if (finish.pos.y - start.pos.y < (i.depth - 0.5) * 16)
+      return h.blocked('body_did_not_follow_excavation', {start: start.pos, finish: finish.pos, mined});
+    return h.done({mined, descent_pixels: finish.pos.y - start.pos.y});
+  },
 
   '24-honey-bucket-reaction': (i, h) => h.blocked('missing_buff_and_bucket_state_in_same_damage_reaction',
     {bucket: h.itemAt(i.slot), liquids: h.read('opportunity_assess', i.honey).liquids}),

@@ -37,6 +37,8 @@ TB_CASEBOOK_SHIMMER=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 TB_CASEBOOK_GRAPPLE=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
+TB_CASEBOOK_SHAFT=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
+  python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 ~~~
 
 储物场景跑 26、28、09。社交场景跑 34 和单件饰品的 13。原版右键场景额外跑 30，使用原版回弹挡板判定。矿车场景跑 18，记录车速、下车与蘑菇入包。重铸可能耗尽次数，此时验收物品是否归还。
@@ -58,6 +60,10 @@ The Shimmer fixture runs 31 and 33. It locates a nearby pool from dry ground, th
 钩爪场景跑 21 和 32。以钩爪移动到两个锚点，检查最终挂点；另一轮对比同一记伤害在空手站立与挂住钩爪时造成的位移。
 
 The grapple fixture runs 21 and 32. It traverses two anchors and checks the final native attachment, then compares displacement from the same hit while standing and while latched.
+
+竖井场景跑 22 和 23，各有一个两格宽对照。对照中角色下井、在同一列挖掉三格并下移 48 像素。一格宽的直井中，钩爪挂住后角色仍停在入口，脚本报告阻塞。
+
+The shaft fixture runs 22 and 23 with two-tile-wide controls. The controls entered the shaft, removed three tiles from one column, and descended 48 pixels. In the one-tile-wide straight shaft, the hook latched while the player stayed at the entrance, and the scripts reported the blockage.
 
 | 当前验证范围 / Current coverage | 编号 / IDs |
 | --- | --- |
