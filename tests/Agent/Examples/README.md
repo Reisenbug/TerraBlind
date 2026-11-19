@@ -39,6 +39,8 @@ TB_CASEBOOK_GRAPPLE=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 TB_CASEBOOK_SHAFT=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
+TB_CASEBOOK_HONEY=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
+  python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 ~~~
 
 储物场景跑 26、28、09。社交场景跑 34 和单件饰品的 13。原版右键场景额外跑 30，使用原版回弹挡板判定。矿车场景跑 18，记录车速、下车与蘑菇入包。重铸可能耗尽次数，此时验收物品是否归还。
@@ -65,8 +67,12 @@ The grapple fixture runs 21 and 32. It traverses two anchors and checks the fina
 
 The shaft fixture runs 22 and 23 with two-tile-wide controls. The controls entered the shaft, removed three tiles from one column, and descended 48 pixels. In the one-tile-wide straight shaft, the hook latched while the player stayed at the entrance, and the scripts reported the blockage.
 
+蜂蜜场景跑 24。角色先用空桶舀蜂蜜，受伤后在脚边倒出，获得原版蜂蜜增益，再把蜂蜜收回桶里。逐帧核对伤害、接触蜂蜜和桶的状态，验收脚边无剩余液体。
+
+The honey fixture runs 24. The character fills an empty bucket, pours honey at its feet after taking damage, gains the native Honey buff, and scoops up the honey. The fixture samples damage, honey contact, and bucket state per frame and requires a dry end state.
+
 | 当前验证范围 / Current coverage | 编号 / IDs |
 | --- | --- |
-| 已在隔离实机验证 / Verified in isolated game | 02, 09, 13 (单件 / one accessory), 18, 21, 26, 28, 30, 31–36 |
+| 已在隔离实机验证 / Verified in isolated game | 02, 09, 13 (单件 / one accessory), 18, 21, 24, 26, 28, 30, 31–36 |
 | 有执行脚本，完整场景待验收 / Executable with scene-specific inputs, gameplay acceptance pending | 06, 07, 37 |
-| 有分段验证或缺口探针，完整目标仍阻塞 / Partial execution or blocker probes | 01, 03, 04, 05, 08, 10–12, 14–17, 19, 20, 22–25, 27, 29, 38–40 |
+| 有分段验证或缺口探针，完整目标仍阻塞 / Partial execution or blocker probes | 01, 03, 04, 05, 08, 10–12, 14–17, 19, 20, 22, 23, 25, 27, 29, 38–40 |

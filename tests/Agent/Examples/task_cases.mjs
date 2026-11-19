@@ -361,8 +361,53 @@ export const cases = {
     return h.done({mined, descent_pixels: finish.pos.y - start.pos.y});
   },
 
-  '24-honey-bucket-reaction': (i, h) => h.blocked('missing_buff_and_bucket_state_in_same_damage_reaction',
-    {bucket: h.itemAt(i.slot), liquids: h.read('opportunity_assess', i.honey).liquids}),
+  '24-honey-bucket-reaction': (i, h) => {
+    const state = () => h.call('get_state', {fields: ['player', 'buffs', 'last_damage']});
+    const bucketUse = at => {
+      const p = state().player;
+      const offset = [at.x - Math.floor((p.pos.x + p.width / 2 - 0.001) / 16),
+        at.y - Math.floor((p.pos.y + p.height - 2) / 16)];
+      const action = h.call('act', {steps: [{slot: i.slot, at: offset, use: true, until: {times: 1}}], timeout_frames: 60});
+      h.check(action.outcome === 'done', 'bucket_input_not_dispatched', action);
+    };
+    let bucket = h.itemAt(i.slot);
+    if (bucket.type === 205 && i.source) {
+      bucketUse(i.source);
+      bucket = h.itemAt(i.slot);
+    }
+    h.check(bucket.type === 1128 && bucket.stack === 1, 'requires_one_honey_bucket', bucket);
+    const honeyBuff = snapshot => snapshot.buffs.some(buff => buff.id === 48 && buff.time_left > 0);
+    const qualified = snapshot => snapshot.last_damage && snapshot.last_damage.kind === 'hurt'
+      && snapshot.last_damage.damage >= (i.min_damage ?? 10)
+      && snapshot.snapshot_tick - snapshot.last_damage.tick < 90;
+    let snapshot = state();
+    for (let n = 0; !qualified(snapshot) && n < 12; n++) {
+      h.act([], 5);
+      snapshot = state();
+    }
+    if (!qualified(snapshot) || snapshot.player.dead) return h.blocked('no_qualifying_recent_hit');
+    if (honeyBuff(snapshot)) return h.blocked('honey_buff_already_active');
+    const p = snapshot.player;
+    const target = i.honey ?? {x: Math.floor((p.pos.x + p.width / 2) / 16), y: Math.floor((p.pos.y + p.height - 2) / 16)};
+    const liquids = () => h.call('opportunity_assess', target).liquids.filter(t => t.liquid_type === 2);
+    h.check(liquids().length === 0, 'requires_dry_target_before_pour');
+    bucketUse(target);
+    const spent = h.itemAt(i.slot);
+    if (spent.type !== 205) return h.blocked('honey_not_poured', {spent});
+    let gained = state();
+    for (let n = 0; !honeyBuff(gained) && n < 6; n++) {
+      h.act([], 2);
+      gained = state();
+    }
+    const puddle = liquids().sort((a, b) => b.amount - a.amount)[0];
+    if (!puddle) return h.blocked('poured_honey_not_observed');
+    bucketUse(puddle);
+    const refilled = h.itemAt(i.slot), final = state();
+    if (refilled.type !== 1128 || !honeyBuff(gained) || !honeyBuff(final))
+      return h.blocked('honey_dip_or_reclaim_unverified', {refilled, buff: honeyBuff(final), puddle});
+    return h.done({damage: snapshot.last_damage.damage, buff: true, refilled: refilled.type,
+      elapsed_ticks: final.snapshot_tick - snapshot.last_damage.tick});
+  },
 
   '25-gravity-sky-chests': (i, h) => h.blocked('missing_gravity_navigation_and_sky_chest_coverage',
     {sky_candidates: h.read('find_tiles', {name: 'Containers', n: 20, max_dist: 3000})}),
