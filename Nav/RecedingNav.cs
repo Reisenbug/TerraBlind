@@ -593,6 +593,7 @@ namespace TerraBlind
             // 后台 A* 搜完了就在这儿派发(派发必须在主线程)。搜索本身在 Task 里跑,
             // 这一帧只是取结果。主线程一次展开都不做
             if (TrapEscape.Poll()) { StuckSentinel.Reset(); _haveLast = false; return; }
+            if (TrapEscape.WaitingAtAnchor(p)) { StuckSentinel.Reset(); return; }
 
             Trap.JustTrapped = false;
             long stepStarted = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -630,6 +631,7 @@ namespace TerraBlind
                     _haveLast = false;       // 这一段不是贪心选的边,别拿它去算失配权重
                     return;
                 }
+                if (TrapEscape.WaitingAtAnchor(p)) { StuckSentinel.Reset(); return; }
                 // 【脚下有挖不动的列】排在承诺前面:这是有明确解法的具体障碍(挪一格就行),
                 // 而承诺是"没别的办法了"才用的瞎猜。日志现场:黑曜石卡住后承诺把人往西推 8 格,
                 // 正对着一整片黑曜石,东边一格就能挖。

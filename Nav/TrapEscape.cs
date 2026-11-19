@@ -26,7 +26,10 @@ namespace TerraBlind
         static System.Threading.Tasks.Task<StateSpacePlanner.SSResult> _search;
         static System.Threading.CancellationTokenSource _searchCancellation;
         static int _generation, _searchGeneration;
-        static float _startVx;
+        static float _startPx, _startPy, _startVx;
+        static long _searchStartedAt;
+        static bool _holdingAnchor;
+        static readonly HashSet<(int, int)> heldAnchors = new();
         static (int x, int y) _reqAt, _reqTo;
         static int _reqH, _reqTH;
 
@@ -42,7 +45,20 @@ namespace TerraBlind
                 _ = search.ContinueWith(task => { _ = task.Exception; source?.Dispose(); }, System.Threading.Tasks.TaskScheduler.Default);
             else source?.Dispose();
             _fails = 0; _lastH = int.MinValue;
+            heldAnchors.Clear(); _holdingAnchor = false;
             _generation++;
+        }
+
+        internal static bool WaitingAtAnchor(Player player)
+        {
+            if (!Busy || !_holdingAnchor) return false;
+            if (player.velocity != Microsoft.Xna.Framework.Vector2.Zero || player.suffocating || player.lavaWet
+                || System.MathF.Abs(player.position.X - _startPx) > .01f
+                || System.MathF.Abs(player.position.Y - _startPy) > .01f
+                || System.Diagnostics.Stopwatch.GetElapsedTime(_searchStartedAt).TotalSeconds >= 1.5)
+            { _holdingAnchor = false; return false; }
+            if (heldAnchors.Add(_reqAt)) DiagLog.Write($"[escape] holding search anchor {_reqAt}");
+            return true;
         }
 
         // 主线程每帧调:后台搜完了就在这儿派发。派发必须在主线程。DispatchPlan 会动执行器
@@ -113,7 +129,9 @@ namespace TerraBlind
             int tx = target.x, ty = target.y;
             var p = Main.LocalPlayer;
             var start = (p.position.X, p.position.Y, p.velocity.X);
-            _startVx = p.velocity.X;
+            (_startPx, _startPy, _startVx) = start;
+            _searchStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            _holdingAnchor = !preferLocalExit && p.velocity == Microsoft.Xna.Framework.Vector2.Zero && !heldAnchors.Contains(_reqAt);
             _searchGeneration = _generation;
             _searchCancellation = new System.Threading.CancellationTokenSource();
             var cancellation = _searchCancellation.Token;
