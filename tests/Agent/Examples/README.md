@@ -45,6 +45,8 @@ TB_CASEBOOK_SKY=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 TB_CASEBOOK_REFORGE=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
+TB_CASEBOOK_SOULS=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
+  python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 ~~~
 
 储物场景跑 26、28、09。社交场景跑 34 和单件饰品的 13。原版右键场景额外跑 30，使用原版回弹挡板判定。矿车场景跑 18，记录车速、下车与蘑菇入包。重铸可能耗尽次数，此时验收物品是否归还。
@@ -83,8 +85,12 @@ The sky fixture runs 25. The script scans two overlapping sky regions, deduplica
 
 The reforge fixture runs 13 across five equipped slots on a Classic character. It keeps finished accessories across batches and verifies final prefixes, original item types, actual spending, and empty cursor and reforge slots. A separate insufficient-budget attempt verifies zero spending.
 
+魂类场景跑 06。夹具构建地下神圣和地下腐化两处狩猎区，生成蝙蝠作为真实敌怪。脚本验收到场群系，击杀和拾取走原版流程，最终核对背包中两种魂各至少 9 个。
+
+The soul fixture runs 06 with underground Hallow and Corruption hunting areas and spawned Cave Bats. The script checks the current biome and uses native combat, drops, and pickup. Acceptance requires at least nine of each soul in the inventory.
+
 | 当前验证范围 / Current coverage | 编号 / IDs |
 | --- | --- |
-| 已在隔离实机验证 / Verified in isolated game | 02, 09, 13, 18, 21, 24–26, 28, 30, 31–36 |
-| 有执行脚本，完整场景待验收 / Executable with scene-specific inputs, gameplay acceptance pending | 06, 07, 37 |
+| 已在隔离实机验证 / Verified in isolated game | 02, 06, 09, 13, 18, 21, 24–26, 28, 30, 31–36 |
+| 有执行脚本，完整场景待验收 / Executable with scene-specific inputs, gameplay acceptance pending | 07, 37 |
 | 有分段验证或缺口探针，完整目标仍阻塞 / Partial execution or blocker probes | 01, 03, 04, 05, 08, 10–12, 14–17, 19, 20, 22, 23, 27, 29, 38–40 |

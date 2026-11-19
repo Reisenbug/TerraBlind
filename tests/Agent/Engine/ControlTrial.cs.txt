@@ -32,6 +32,8 @@ public sealed class ControlTrial : ModSystem
     JsonArray shaftFrames, shaftPicks;
     JsonArray honeyFrames;
     JsonArray gravityFrames;
+    readonly HashSet<int> soulMobs = new();
+    Action spawnSoulMobs;
     JsonArray cartFrames;
     Task trial;
 
@@ -136,13 +138,14 @@ public sealed class ControlTrial : ModSystem
                 ["mushrooms"] = p.CountItem(ItemID.GlowingMushroom) });
         }
         foreach (var npc in Main.npc)
-            if (npc.whoAmI != interactionNpc && npc.whoAmI != additionalResident) npc.active = false;
+            if (npc.whoAmI != interactionNpc && npc.whoAmI != additionalResident && !soulMobs.Contains(npc.whoAmI)) npc.active = false;
             else if (residentPositions != null && npc.active)
             {
                 if (residentPositions.TryGetValue(npc.whoAmI, out var previous) && Vector2.Distance(previous, npc.Center) > 128)
                     residentTeleports.Add(npc.whoAmI);
                 residentPositions[npc.whoAmI] = npc.Center;
             }
+        spawnSoulMobs?.Invoke();
         if (!started && frames >= 60)
         {
             started = true;
@@ -165,6 +168,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CASEBOOK_SOULS") == "1")
+        {
+            await TaskCaseSouls();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CASEBOOK_REFORGE") == "1")
         {
             await TaskCaseReforge();
@@ -351,6 +359,85 @@ public sealed class ControlTrial : ModSystem
             { ["code"] = template.Replace("\"__TB_FIXTURE__\"", inputs.ToJsonString()) });
         Console.WriteLine($"TASK_CASE {id} " + (result["value"]?.ToJsonString() ?? result["detail"]?.ToString()));
         return result;
+    }
+
+    async Task TaskCaseSouls()
+    {
+        const int separation = 190, spawnLimit = 100;
+        var appearances = new int[2];
+        var setup = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            var p = Main.LocalPlayer;
+            Main.hardMode = true;
+            int x = (int)p.Center.X / 16, y = (int)Main.rockLayer + 40;
+            for (int tx = x - 90; tx <= x + separation + 90; tx++)
+            for (int row = y - 64; row <= y + 64; row++)
+            {
+                var tile = Main.tile[tx, row];
+                tile.ClearEverything();
+                if (row < y) continue;
+                ushort type = TileID.Stone;
+                if (row >= y + 3 && row < y + 14)
+                {
+                    if (Math.Abs(tx - x) <= 23) type = TileID.Pearlstone;
+                    if (Math.Abs(tx - x - separation) <= 23) type = TileID.Ebonstone;
+                }
+                tile.ResetToType(type);
+            }
+            p.position = new Vector2(x * 16, y * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.ClockworkAssaultRifle);
+            p.inventory[54].SetDefaults(ItemID.MusketBall);
+            p.inventory[54].stack = 3000;
+            p.armor[0].SetDefaults(ItemID.MoltenHelmet);
+            p.armor[1].SetDefaults(ItemID.MoltenBreastplate);
+            p.armor[2].SetDefaults(ItemID.MoltenGreaves);
+            p.armor[3].SetDefaults(ItemID.CobaltShield);
+            spawnSoulMobs = () =>
+            {
+                soulMobs.RemoveWhere(index => !Main.npc[index].active);
+                int centerX = (int)(p.Center.X / 16);
+                int zone = Math.Abs(centerX - x) <= 22 && p.ZoneHallow ? 0
+                    : Math.Abs(centerX - x - separation) <= 22 && p.ZoneCorrupt ? 1 : -1;
+                if (zone < 0 || p.dead || appearances[zone] >= spawnLimit || soulMobs.Count != 0
+                    || p.CountItem(zone == 0 ? ItemID.SoulofLight : ItemID.SoulofNight) >= 9) return;
+                int center = x + zone * separation;
+                int enemyX = (centerX + (centerX < center ? -5 : 5)) * 16;
+                int index = NPC.NewNPC(new EntitySource_Misc("soul-fixture"), enemyX, y * 16 - 5, NPCID.CaveBat,
+                    (appearances[0] + appearances[1]) % 170 + 10);
+                if (index < Main.maxNPCs) { soulMobs.Add(index); appearances[zone]++; }
+            };
+            return (X: x, Y: y);
+        });
+        await DelayFrames(30);
+        JsonObject Zone(int x, int item, string biome) => new()
+        {
+            ["item_type"] = item, ["biome"] = biome, ["npc_types"] = new JsonArray(NPCID.CaveBat),
+            ["stand"] = new JsonObject { ["x"] = x, ["y"] = setup.Y - 1 },
+            ["source_area"] = new JsonObject { ["x"] = x - 30, ["y"] = setup.Y - 26, ["width"] = 61, ["height"] = 29 }
+        };
+        var receipt = await RunTaskCase("06-light-dark-souls", new JsonObject
+        {
+            ["light"] = Zone(setup.X, ItemID.SoulofLight, "hallow"),
+            ["night"] = Zone(setup.X + separation, ItemID.SoulofNight, "corruption")
+        });
+        var proof = await OnMain(() =>
+        {
+            spawnSoulMobs = null;
+            soulMobs.Clear();
+            var p = Main.LocalPlayer;
+            return new JsonObject { ["light"] = p.CountItem(ItemID.SoulofLight), ["night"] = p.CountItem(ItemID.SoulofNight),
+                ["alive"] = !p.dead, ["hallow_spawns"] = appearances[0], ["corruption_spawns"] = appearances[1] };
+        });
+        File.WriteAllText(Path.Combine(Main.SavePath, "task-casebook-souls.json"),
+            new JsonObject { ["receipt"] = receipt, ["proof"] = proof }.ToJsonString());
+        Check(receipt["value"]?["ok"]?.GetValue<bool>() == true && proof["alive"].GetValue<bool>()
+            && proof["light"].GetValue<int>() >= 9 && proof["night"].GetValue<int>() >= 9, "casebook_souls_unverified");
+        Console.WriteLine($"TASK_CASEBOOK_SOULS_COMPLETE light={proof["light"]} night={proof["night"]}");
     }
 
     async Task TaskCaseReforge()

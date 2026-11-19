@@ -153,12 +153,47 @@ export const cases = {
 
   '06-light-dark-souls': (i, h) => {
     const receipts = [];
-    for (const zone of [i.light, i.night]) {
-      const before = h.stock(zone.item_type);
-      h.move(zone.stand.x, zone.stand.y);
+    const world = h.call('get_state', {fields: ['world']}).world;
+    if (!world.hardmode) return h.blocked('hardmode_required');
+    const zones = [i.light, i.night];
+    const baseline = zones.map(zone => h.stock(zone.item_type));
+    const player = () => h.call('get_state', {fields: ['player']}).player;
+    for (let index = 0; index < zones.length; index++) {
+      const zone = zones[index], before = baseline[index];
+      const atSource = p => !p.dead && p.biome_flags[zone.biome] === true
+        && Math.abs((p.pos.x + p.width / 2) / 16 - zone.stand.x) <= 14
+        && Math.abs((p.pos.y + p.height) / 16 - zone.stand.y) <= 6;
+      if (!atSource(player())) {
+        const nav = h.read('nav_to', {x: zone.stand.x, y: zone.stand.y, mode: 'travel'});
+        const actual = player();
+        if (!atSource(actual)) return h.blocked('soul_hunting_area_not_reached',
+          {completed: receipts, biome: zone.biome, position: actual.pos, navigation: nav.status});
+      }
       const target = {item_type: zone.item_type, count: before + 9, npc_types: zone.npc_types};
-      h.gather([target], zone.source_area);
-      receipts.push({item_type: zone.item_type, gained: h.stock(zone.item_type) - before});
+      const args = {targets: [target], source_area: zone.source_area};
+      const area = zone.source_area;
+      let gained = h.stock(zone.item_type) - before, outcome = 'not_started', actions = 0;
+      for (let batch = 0; batch < 10 && gained < 9 && h.calls() < 87; batch++) {
+        const result = h.read('gather', args);
+        actions += ('actions' in result ? result.actions : 0);
+        outcome = 'outcome' in result ? result.outcome : 'gather_rejected';
+        gained = h.stock(zone.item_type) - before;
+        if (gained >= 9 || !['source_unavailable', 'source_area_exhausted'].includes(outcome)) break;
+        let sourceReturned = false;
+        for (let n = 0; n < 6 && h.calls() < 86; n++) {
+          h.act([], 8);
+          const scene = h.read('gather_observe', args);
+          if ('candidates' in scene && scene.candidates.some(c => c.x >= area.x && c.x < area.x + area.width
+            && c.y >= area.y && c.y < area.y + area.height && !('blocked_reason' in c))) {
+            sourceReturned = true;
+            break;
+          }
+        }
+        if (!sourceReturned) break;
+      }
+      if (gained < 9) return h.blocked('soul_goal_incomplete', {completed: receipts, item_type: zone.item_type,
+        gained, gather: outcome});
+      receipts.push({item_type: zone.item_type, gained, actions});
     }
     return h.done({souls: receipts});
   },
