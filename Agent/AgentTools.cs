@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Terraria;
+using Terraria.GameContent;
 
 namespace TerraBlind;
 
@@ -1281,6 +1282,7 @@ public static partial class AgentTools
     internal static int QueriesInFlight;
     static readonly AsyncLocal<long> scriptInvocation = new();
     static bool ObservationTool(string name) => name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain" or "block_region"
+        or "pylon_list" or "fishing_status"
         or "find_descent" or "find_biome"
         or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "jev_judge" or "item_info" or "wiki_search" or "wiki_page"
         or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status" or "action_query"
@@ -1339,7 +1341,8 @@ public static partial class AgentTools
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
             or "place_at" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap" or "combat_reposition"
             or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat"
-            or "slot_click" or "container_action" or "game_input" or "craft_recipe" or "housing" or "mod_input";
+            or "slot_click" or "container_action" or "game_input" or "craft_recipe" or "housing" or "mod_input"
+            or "pylon_use" or "reforge" or "fish";
         bool action = external || name is "fight" or "fight_player";
         bool startsPrimary = name == "action_start" && Text(args, "tool") != "fight";
         if ((external || startsPrimary) && string.IsNullOrEmpty(taskNode)
@@ -2347,6 +2350,19 @@ public static partial class AgentTools
             case "container_action":
                 result = await NativeAgent.OnMain(() => PvpInventory.ContainerAction(Text(args, "action"), args), token);
                 break;
+            case "reforge":
+                result = await NativeAgent.OnMain(() => PvpInventory.Reforge(args), token);
+                break;
+            case "pylon_list":
+                return (await NativeAgent.OnMain(PylonList, token)).ToJsonString();
+            case "pylon_use":
+                result = await UsePylon(Int(args, "x", -1), Int(args, "y", -1), token);
+                break;
+            case "fishing_status":
+                return (await NativeAgent.OnMain(FishingStatus, token)).ToJsonString();
+            case "fish":
+                result = await Fish(args, token);
+                break;
             case "game_input":
                 result = await NativeAgent.OnMain(() => ApplyGameInput(args), token);
                 break;
@@ -3317,6 +3333,125 @@ public static partial class AgentTools
     internal static double NavigationDistance(Player player, int gx, int gy, bool stand) =>
         Math.Abs(player.Center.X - (gx * 16 + 8))
         + Math.Abs((stand ? player.position.Y + player.height : player.Center.Y) - (gy * 16 + (stand ? 16 : 8)));
+
+    static JsonObject PylonList()
+    {
+        var entries = new JsonArray();
+        foreach (var pylon in Main.PylonSystem.Pylons)
+        {
+            var p = pylon.PositionInTiles;
+            int required = pylon.TypeOfPylon == TeleportPylonType.Victory ? 0 : 2;
+            entries.Add(new JsonObject { ["x"] = p.X, ["y"] = p.Y, ["type"] = pylon.TypeOfPylon.ToString(),
+                ["vanilla_residency_ok"] = pylon.ModPylon == null
+                    ? TeleportPylonsSystem.DoesPositionHaveEnoughNPCs(required, p) : null,
+                ["modded"] = pylon.ModPylon != null });
+        }
+        return new JsonObject { ["near_pylon"] = TeleportPylonsSystem.IsPlayerNearAPylon(Main.LocalPlayer), ["pylons"] = entries };
+    }
+
+    static async Task<JsonObject> UsePylon(int x, int y, CancellationToken token)
+    {
+        bool NearDestination(Player p) => Math.Abs(p.Center.X - x * 16f) <= 96 && Math.Abs(p.Center.Y - y * 16f) <= 96;
+        var request = await NativeAgent.OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            if (Main.gameMenu || !p.active || p.dead) return (Error: "pylon_not_available", World: Main.worldID);
+            var matches = Main.PylonSystem.Pylons.Where(info => info.PositionInTiles.X == x && info.PositionInTiles.Y == y).ToArray();
+            if (matches.Length != 1) return (Error: "pylon_not_found", World: Main.worldID);
+            if (NearDestination(p)) return (Error: "already_near_destination_pylon", World: Main.worldID);
+            Main.PylonSystem.RequestTeleportation(matches[0], p);
+            return (Error: (string)null, World: Main.worldID);
+        }, token);
+        if (request.Error != null) return new JsonObject { ["error"] = request.Error };
+        var clock = Stopwatch.StartNew();
+        while (clock.Elapsed.TotalSeconds < 4)
+        {
+            var result = await NativeAgent.OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                if (Main.gameMenu || request.World != Main.worldID || !p.active || p.dead)
+                    return new JsonObject { ["error"] = "pylon_interrupted" };
+                return NearDestination(p) ? new JsonObject { ["ok"] = true, ["outcome"] = "arrived",
+                    ["x"] = (int)(p.Center.X / 16), ["y"] = (int)(p.Center.Y / 16) } : null;
+            }, token);
+            if (result != null) return result;
+            await Task.Delay(30, token);
+        }
+        var state = await NativeAgent.OnMain(PylonList, token);
+        return new JsonObject { ["error"] = "pylon_arrival_not_confirmed", ["state"] = state };
+    }
+
+    static IEnumerable<Projectile> FishingBobbers(Player p) => Main.projectile
+        .Where(projectile => projectile.active && projectile.owner == p.whoAmI && projectile.bobber);
+
+    static bool FishingBite(Projectile bobber) => bobber.ai[0] == 0 && bobber.ai[1] < 0 && bobber.localAI[1] != 0;
+
+    static JsonObject FishingStatus()
+    {
+        var p = Main.LocalPlayer;
+        return new JsonObject { ["blood_moon"] = Main.bloodMoon,
+            ["bobbers"] = new JsonArray(FishingBobbers(p).Select(b => (JsonNode)new JsonObject
+            {
+                ["id"] = b.identity, ["x"] = (int)(b.Center.X / 16), ["y"] = (int)(b.Center.Y / 16),
+                ["wet"] = b.wet || b.lavaWet || b.honeyWet, ["bite"] = FishingBite(b), ["reeling"] = b.ai[0] != 0
+            }).ToArray()) };
+    }
+
+    static async Task<JsonObject> Fish(JsonObject args, CancellationToken token)
+    {
+        string action = Text(args, "action");
+        int slot = Int(args, "slot", -1), x = Int(args, "x", -1), y = Int(args, "y", -1);
+        if (action is not ("cast" or "wait_reel" or "reel") || slot is < 0 or > 9)
+            return new JsonObject { ["error"] = "invalid_fishing_action" };
+        int world = await NativeAgent.OnMain(() => Main.worldID, token);
+        int rod = await NativeAgent.OnMain(() => Main.LocalPlayer.inventory[slot] is { IsAir: false, fishingPole: > 0 } item
+            ? item.type : 0, token);
+        if (rod == 0) return new JsonObject { ["error"] = "no_fishing_rod_in_slot" };
+        bool cast = action == "cast";
+        var deadline = Stopwatch.StartNew();
+        JsonObject input;
+        do
+        {
+            input = await NativeAgent.OnMain(() =>
+            {
+                var p = Main.LocalPlayer;
+                if (Main.gameMenu || world != Main.worldID || !p.active || p.dead || Manual.On)
+                    return new JsonObject { ["error"] = "fishing_interrupted" };
+                if (p.inventory[slot].type != rod || !Main.mouseItem.IsAir)
+                    return new JsonObject { ["error"] = "fishing_input_changed" };
+                var bobbers = FishingBobbers(p).ToArray();
+                if (cast && bobbers.Length > 0) return new JsonObject { ["error"] = "fishing_line_already_cast" };
+                if (!cast && (bobbers.Length == 0 || bobbers.All(b => b.ai[0] != 0)))
+                    return new JsonObject { ["error"] = "no_waiting_fishing_line" };
+                if (cast && !WorldGen.InWorld(x, y)) return new JsonObject { ["error"] = "invalid_fishing_target" };
+                if (p.itemAnimation > 0 || p.itemTime > 0 || action == "wait_reel" && !bobbers.Any(FishingBite)) return null;
+                var step = new JsonObject { ["slot"] = slot, ["use"] = true, ["until"] = new JsonObject { ["times"] = 1 } };
+                if (cast) step["at"] = new JsonArray(x - ActExecutor.OriginCx(p), y - ActExecutor.OriginCy(p));
+                return new JsonObject { ["steps"] = new JsonArray(step), ["timeout_frames"] = 120 };
+            }, token);
+            if (input != null) break;
+            await NativeAgent.NextUpdate(token);
+        } while (deadline.Elapsed.TotalSeconds < (action == "wait_reel" ? Math.Clamp(Int(args, "wait_seconds", 45), 1, 120) : 2));
+        if (input == null) return new JsonObject { ["error"] = action == "wait_reel" ? "fishing_bite_timeout" : "fishing_rod_busy" };
+        if (Rejected(input)) return input;
+        var started = await Call("/act", input, token);
+        if (Rejected(started)) return started;
+        var acted = await Wait("/act_status", "active", "/act_stop", 4, token);
+        if (Text(acted, "outcome") != "done") return acted;
+        deadline.Restart();
+        do
+        {
+            var state = await NativeAgent.OnMain(FishingStatus, token);
+            if (state["bobbers"] is JsonArray lines && (cast ? lines.Count > 0 : lines.Count == 0))
+            {
+                state["ok"] = true;
+                state["outcome"] = cast ? "cast" : "reeled";
+                return state;
+            }
+            await NativeAgent.NextUpdate(token);
+        } while (deadline.Elapsed.TotalSeconds < (cast ? 2 : 8));
+        return new JsonObject { ["error"] = "fishing_input_not_confirmed", ["state"] = await NativeAgent.OnMain(FishingStatus, token) };
+    }
 
     internal static JsonObject CombatAssessment(int radius)
     {

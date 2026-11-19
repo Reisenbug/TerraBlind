@@ -8,6 +8,8 @@ using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using MonoMod.Cil;
 using Terraria;
+using Terraria.DataStructures;
+using Terraria.GameContent.Tile_Entities;
 using Terraria.ID;
 using Terraria.ModLoader;
 using Terraria.IO;
@@ -20,6 +22,7 @@ public sealed class ControlTrial : ModSystem
     readonly ConcurrentQueue<Action> queue = new();
     bool enabled, started, opened, finished;
     int frames, sandX, floor, sandPickAttempts;
+    int interactionNpc = -1;
     Task trial;
 
     public override void Load()
@@ -86,7 +89,8 @@ public sealed class ControlTrial : ModSystem
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         frames++;
-        foreach (var npc in Main.npc) npc.active = false;
+        foreach (var npc in Main.npc)
+            if (npc.whoAmI != interactionNpc) npc.active = false;
         if (!started && frames >= 60)
         {
             started = true;
@@ -109,6 +113,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_SOCIAL_INTERACTIONS") == "1")
+        {
+            await SocialInteractions();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CONSTRUCTION_GUARD") == "1")
         {
             await ConstructionAndGuard();
@@ -219,6 +228,105 @@ public sealed class ControlTrial : ModSystem
         });
         Console.WriteLine($"CONTROL_ASSERTIONS paused_handle={handle} sand_unchanged={sandBefore} explicit_move=true native_restart_rejected=true");
         Console.WriteLine("CONTROL_REGION_ASSERTIONS original_destination_reached=true rejected_excavation_not_repeated=true navigation_enabled=true");
+    }
+
+    async Task SocialInteractions()
+    {
+        int x = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false;
+            var p = Main.LocalPlayer;
+            int left = (int)p.Center.X / 16;
+            floor = (int)p.Bottom.Y / 16 + 5;
+            for (int tx = left - 8; tx <= left + 80; tx++)
+            for (int ty = floor - 8; ty <= floor + 16; ty++)
+            {
+                var tile = Main.tile[tx, ty];
+                tile.ClearEverything();
+                if (ty >= floor && !(tx >= left + 47 && tx <= left + 76 && ty < floor + 14))
+                    tile.ResetToType(TileID.Stone);
+                else if (ty >= floor) tile.LiquidAmount = byte.MaxValue;
+            }
+            foreach (int origin in new[] { left + 2, left + 28 })
+            {
+                for (int dx = 0; dx < 3; dx++)
+                for (int dy = 0; dy < 4; dy++)
+                {
+                    var tile = Main.tile[origin + dx, floor - 4 + dy];
+                    tile.ResetToType(TileID.TeleportationPylon);
+                    tile.TileFrameX = (short)(8 * 54 + dx * 18);
+                    tile.TileFrameY = (short)(dy * 18);
+                }
+                TETeleportationPylon.Place(origin, floor - 4);
+            }
+            p.position = new Vector2(left * 16, floor * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            Main.mouseItem.TurnToAir();
+            return left;
+        });
+        await DelayFrames(8);
+        var pylons = await Call("pylon_list", new JsonObject());
+        Check(pylons["near_pylon"]?.GetValue<bool>() == true && pylons["pylons"].AsArray().Count(p =>
+            p["x"]?.GetValue<int>() is int px && (px == x + 2 || px == x + 28)) == 2, "native_pylons_not_registered");
+        var teleported = await Call("pylon_use", new JsonObject { ["x"] = x + 28, ["y"] = floor - 4 });
+        Check(teleported["outcome"]?.ToString() == "arrived"
+            && await OnMain(() => Math.Abs(Main.LocalPlayer.Center.X / 16 - (x + 28)) < 3), "native_pylon_arrival_not_observed");
+
+        long coinsBefore = await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            interactionNpc = NPC.NewNPC(new EntitySource_Misc("reforge-fixture"), (x + 30) * 16, floor * 16, NPCID.GoblinTinkerer);
+            Check(interactionNpc < Main.maxNPCs, "goblin_not_spawned");
+            p.SetTalkNPC(interactionNpc);
+            Main.InReforgeMenu = true; Main.playerInventory = true;
+            p.inventory[10].SetDefaults(ItemID.Aglet);
+            p.inventory[51].SetDefaults(ItemID.GoldCoin); p.inventory[51].stack = 50;
+            return Utils.CoinsCount(out _, p.inventory);
+        });
+        async Task Click(string section, int index)
+        {
+            var args = new JsonObject { ["section"] = section, ["slot"] = index };
+            var state = await Call("slot_state", args);
+            args["button"] = "left"; args["expected_item"] = state["item"].DeepClone();
+            args["expected_cursor"] = state["cursor"].DeepClone();
+            Check((await Call("slot_click", args))["outcome"]?.ToString() == "changed", "native_reforge_slot_click_failed");
+        }
+        await Click("inventory", 10);
+        await Click("reforge", 0);
+        var quote = await Call("reforge", new JsonObject { ["action"] = "quote" });
+        int cost = quote["cost_copper"]?.GetValue<int>() ?? 0;
+        Check(cost > 0, "native_reforge_price_missing");
+        var args = new JsonObject { ["action"] = "roll", ["expected_item"] = quote["item"].DeepClone(), ["max_cost"] = cost - 1 };
+        var expensive = await Call("reforge", args);
+        Check(expensive["error"]?.ToString() == "reforge_budget_exceeded"
+            && await OnMain(() => Utils.CoinsCount(out _, Main.LocalPlayer.inventory) == coinsBefore), "reforge_spent_above_budget");
+        args["max_cost"] = cost;
+        var reforged = await Call("reforge", args);
+        Check(reforged["spent_copper"]?.GetValue<int>() == cost && await OnMain(() =>
+            Main.reforgeItem.prefix > 0 && Utils.CoinsCount(out _, Main.LocalPlayer.inventory) == coinsBefore - cost), "native_reforge_not_charged");
+        await Click("reforge", 0);
+        await Click("inventory", 10);
+        await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            p.SetTalkNPC(-1); Main.InReforgeMenu = Main.playerInventory = false;
+            interactionNpc = -1;
+            p.position = new Vector2((x + 44) * 16, floor * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            p.inventory[0].SetDefaults(ItemID.GoldenFishingRod);
+            p.inventory[1].SetDefaults(ItemID.MasterBait); p.inventory[1].stack = 50;
+            return true;
+        });
+        var cast = await Call("fish", new JsonObject { ["action"] = "cast", ["slot"] = 0, ["x"] = x + 55, ["y"] = floor + 1 });
+        Check(cast["outcome"]?.ToString() == "cast", "native_fishing_cast_not_observed");
+        var reeled = await Call("fish", new JsonObject { ["action"] = "wait_reel", ["slot"] = 0, ["wait_seconds"] = 65 });
+        Check(reeled["outcome"]?.ToString() == "reeled", "native_bite_or_reel_not_observed");
+        Console.WriteLine("SOCIAL_INTERACTIONS_COMPLETE pylon_arrived=true reforge_spent=" + cost + " native_bite_reeled=true model_calls=0");
+        File.WriteAllText(Path.Combine(Main.SavePath, "social-interactions.json"), new JsonObject
+            { ["pylon"] = teleported, ["reforge"] = reforged, ["cast"] = cast, ["reel"] = reeled }.ToJsonString());
     }
 
     async Task ConstructionAndGuard()

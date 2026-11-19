@@ -114,6 +114,14 @@ return skill('build_block_pattern', 0, {x: input.x, y: input.y, pattern: input.p
 return skill('travel_disarm_plates', 0, {x: input.x, y: input.y, allow_removal: true});
 ~~~
 
+## 晶塔、重铸和钓鱼 / Pylons, reforging, and fishing
+
+| 功能 / Feature | 用法 / Usage |
+| --- | --- |
+| 晶塔 / Pylons | `pylon_list` 列出位置、附近晶塔与原版居民条件。传目的晶塔的 `x/y` 给 `pylon_use`，以实际抵达为准。List registered pylons, then request a destination with `pylon_use`. The game checks biome, residents, danger and mod rules. |
+| 重铸 / Reforging | 和哥布林工匠对话进入重铸界面，用 `slot_click` 把物品放到 `reforge` 的 0 号槽。`reforge({action:'quote'})` 返回报价和快照。用 `roll`、`expected_item` 和 `max_cost` 重铸一次，回执含价格及新词缀。Open the Goblin Tinkerer's reforge menu and use slot 0 of `reforge`. Quote first, then roll with the quoted item and a copper price cap. |
+| 钓鱼 / Fishing | `fish({action:'cast',slot,x,y})` 用快捷栏鱼竿抛竿。`fishing_status` 读血月和鱼漂。`fish({action:'wait_reel',slot,wait_seconds})` 等原版咬钩并收杆。Cast to a world tile, then wait and reel in one call. Confirm the catch from inventory or an observed NPC spawn. |
+
 ## 验证
 
 ~~~sh

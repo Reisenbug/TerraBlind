@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Text.Json.Nodes;
 using Terraria;
+using Terraria.Audio;
 using Terraria.DataStructures;
 using Terraria.ID;
 using Terraria.UI;
@@ -22,6 +23,56 @@ public static class PvpInventory
 
     static JsonObject ItemState(Item item) => new()
     { ["type"] = item.type, ["prefix"] = item.prefix, ["stack"] = item.stack, ["name"] = item.Name };
+
+    static bool ReforgeOpen(Player player) => Main.InReforgeMenu && Main.playerInventory
+        && !Main.gameMenu && player.active && !player.dead
+        && player.talkNPC >= 0 && player.talkNPC < Main.maxNPCs
+        && Main.npc[player.talkNPC] is { active: true, type: NPCID.GoblinTinkerer } goblin
+        && Reach.CanInteract(player, (int)(goblin.Center.X / 16), (int)(goblin.Center.Y / 16));
+
+    internal static JsonObject Reforge(JsonObject args)
+    {
+        var player = Main.LocalPlayer;
+        if (!ReforgeOpen(player)) return new JsonObject { ["error"] = "reforge_menu_not_open" };
+        var item = Main.reforgeItem;
+        if (item.IsAir) return new JsonObject { ["error"] = "reforge_slot_empty" };
+        string action = args["action"]?.GetValue<string>();
+        if (action is not ("quote" or "roll")) return new JsonObject { ["error"] = "invalid_reforge_action" };
+        int cost = item.value * item.stack;
+        bool discount = true;
+        if (Terraria.ModLoader.ItemLoader.ReforgePrice(item, ref cost, ref discount))
+        {
+            if (discount && player.discountAvailable) cost = (int)(cost * 0.8);
+            cost = (int)(cost * (double)player.currentShoppingSettings.PriceAdjustment) / 3;
+        }
+        if (cost < 0) return new JsonObject { ["error"] = "invalid_reforge_price" };
+        var before = ItemState(item);
+        bool affordable = player.CanAfford(cost);
+        if (action == "quote") return new JsonObject { ["ok"] = true, ["item"] = before,
+            ["cost_copper"] = cost, ["affordable"] = affordable };
+        if (!Matches(item, args["expected_item"])) return new JsonObject { ["error"] = "stale_slot", ["item"] = before };
+        if (args["max_cost"]?.GetValue<int>() is not int max || max < cost)
+            return new JsonObject { ["error"] = "reforge_budget_exceeded", ["cost_copper"] = cost };
+        if (!affordable) return new JsonObject { ["error"] = "cannot_afford_reforge", ["cost_copper"] = cost };
+        if (!Terraria.ModLoader.ItemLoader.CanReforge(item)) return new JsonObject { ["error"] = "reforge_rejected_by_item" };
+        if (!player.BuyItem(cost)) return new JsonObject { ["error"] = "reforge_payment_failed" };
+        Terraria.ModLoader.ItemLoader.PreReforge(item);
+        item.ResetPrefix();
+        item.Prefix(-2);
+        item.position.X = player.position.X + player.width / 2f - item.width / 2f;
+        item.position.Y = player.position.Y + player.height / 2f - item.height / 2f;
+        Terraria.ModLoader.ItemLoader.PostReforge(item);
+        PopupText.NewText(PopupTextContext.ItemReforge, item, item.stack, noStack: true);
+        SoundEngine.PlaySound(in SoundID.Item37);
+        return new JsonObject { ["ok"] = true, ["spent_copper"] = cost, ["before"] = before,
+            ["after"] = ItemState(item), ["affix_name"] = item.AffixName(),
+            ["accessory_defense"] = item.accessory && item.prefix is >= PrefixID.Hard and <= PrefixID.Warding
+                ? item.prefix - PrefixID.Hard + 1 : 0 };
+    }
+
+    static bool Matches(Item item, JsonNode expected) => expected is JsonObject
+        && expected["type"]?.GetValue<int>() == item.type && expected["prefix"]?.GetValue<int>() == item.prefix
+        && expected["stack"]?.GetValue<int>() == item.stack;
 
     static bool ContainerOpen(int id) => id is >= -5 and <= -2
         || id >= 0 && id < Main.chest.Length && Main.chest[id] != null;
@@ -125,6 +176,9 @@ public static class PvpInventory
                 };
                 break;
             case "trash" when index == 0: slots = new[] { player.trashItem }; context = ItemSlot.Context.TrashItem; break;
+            case "reforge" when index == 0:
+                if (!ReforgeOpen(player)) return new JsonObject { ["error"] = "reforge_menu_not_open" };
+                slots = new[] { Main.reforgeItem }; context = ItemSlot.Context.PrefixItem; break;
             default: return new JsonObject { ["error"] = "invalid_slot_address" };
         }
         if (index >= slots.Length) return new JsonObject { ["error"] = "invalid_slot_address" };
@@ -138,9 +192,6 @@ public static class PvpInventory
         if (Main.gameMenu || !player.active || player.dead || player.itemAnimation != 0 || player.itemTime != 0
             || ItemUseCoordinator.IsActive || PlaceAnywhere.IsRunning)
             return new JsonObject { ["error"] = "inventory_busy" };
-        bool Matches(Item item, JsonNode expected) => expected is JsonObject
-            && expected["type"]?.GetValue<int>() == item.type && expected["prefix"]?.GetValue<int>() == item.prefix
-            && expected["stack"]?.GetValue<int>() == item.stack;
         var before = State();
         if (!Matches(slots[index], args["expected_item"]) || !Matches(Main.mouseItem, args["expected_cursor"]))
             return new JsonObject { ["error"] = "stale_slot", ["actual"] = before };
@@ -154,6 +205,7 @@ public static class PvpInventory
             if (button == "left") ItemSlot.LeftClick(slots, context, index);
             else ItemSlot.RightClick(slots, context, index);
             if (section == "trash") player.trashItem = slots[index];
+            if (section == "reforge") Main.reforgeItem = slots[index];
         }
         finally { (Main.mouseLeft, Main.mouseLeftRelease, Main.mouseRight, Main.mouseRightRelease) = mouse; }
         var after = State();

@@ -57,7 +57,7 @@ namespace Terraria.UI
         public static class Context
         {
             public const int InventoryItem = 0, InventoryCoin = 1, InventoryAmmo = 2, ChestItem = 3, BankItem = 4;
-            public const int TrashItem = 6, EquipArmor = 8, EquipArmorVanity = 9, EquipAccessory = 10, EquipAccessoryVanity = 11, VoidItem = 32;
+            public const int PrefixItem = 5, TrashItem = 6, EquipArmor = 8, EquipArmorVanity = 9, EquipAccessory = 10, EquipAccessoryVanity = 11, VoidItem = 32;
         }
         public static Action<Terraria.Item[], int, int> LeftClickHandler;
         public static void LeftClick(Terraria.Item[] items, int context, int slot) => LeftClickHandler?.Invoke(items, context, slot);
@@ -86,14 +86,39 @@ namespace Terraria.UI
 
 namespace Terraria.DataStructures
 {
+    public record struct Point16(short X, short Y);
     public struct ContainerTransferContext { public static ContainerTransferContext FromUnknown(Terraria.Player player) => default; }
+}
+
+namespace Terraria.GameContent
+{
+    public enum TeleportPylonType { SurfacePurity, Victory }
+    public record struct TeleportPylonInfo(Terraria.DataStructures.Point16 PositionInTiles, TeleportPylonType TypeOfPylon, object ModPylon = null);
+    public class TeleportPylonsSystem
+    {
+        public readonly List<TeleportPylonInfo> Pylons = new();
+        public Action<TeleportPylonInfo, Player> Request;
+        public static bool DoesPositionHaveEnoughNPCs(int count, Terraria.DataStructures.Point16 point) => count == 0;
+        public static bool IsPlayerNearAPylon(Player player) => true;
+        public void RequestTeleportation(TeleportPylonInfo pylon, Player player) => Request?.Invoke(pylon, player);
+    }
+}
+
+namespace Terraria.Audio
+{
+    public static class SoundEngine { public static void PlaySound(in int sound) { } }
 }
 
 namespace Terraria
 {
+    public enum PopupTextContext { ItemReforge }
+    public static class PopupText { public static void NewText(PopupTextContext context, Item item, int stack, bool noStack) { } }
     public static class Main
     {
         public static bool dedServ, gameMenu, gamePaused, playerInventory, editChest;
+        public static bool InReforgeMenu, bloodMoon;
+        public static Item reforgeItem = new();
+        public static readonly Terraria.GameContent.TeleportPylonsSystem PylonSystem = new();
         public static string npcChatText = "", defaultChestName = "";
         public static string SavePath = "/tmp/terrablind-agent-test-world";
         public static string worldName = "test";
@@ -140,6 +165,16 @@ namespace Terraria
     }
     public class Player
     {
+        public int talkNPC = -1, coins;
+        public bool discountAvailable;
+        public (float PriceAdjustment, int unused) currentShoppingSettings = (1f, 0);
+        public bool CanAfford(int cost) => coins >= cost;
+        public bool BuyItem(int cost)
+        {
+            if (!CanAfford(cost)) return false;
+            coins -= cost;
+            return true;
+        }
         public bool IsVoidVaultEnabled;
         public int CurrentLoadoutIndex;
         public int difficulty;
@@ -230,6 +265,10 @@ namespace Terraria
         public string Name = "";
         public int stack, pick, axe, hammer, ammo, damage, useStyle, maxStack = 9999;
         public int type, prefix, useAmmo;
+        public int value, fishingPole;
+        public void ResetPrefix() => prefix = 0;
+        public bool Prefix(int value) { prefix = value == -2 ? 65 : value; return true; }
+        public string AffixName() => Name;
         public int createTile = -1;
         public void SetDefaults(int itemType) { type = itemType; createTile = -1; }
         public float shootSpeed;
@@ -255,6 +294,8 @@ namespace Terraria
         public void SetDefaults(int value) => type = value;
         public void PrepareBombToBlow() => PrepareBomb?.Invoke(this);
         public bool active, arrow, friendly, hostile, ownerHitCheck, tileCollide = true;
+        public bool bobber, wet, lavaWet, honeyWet;
+        public float[] ai = new float[3], localAI = new float[3];
         public int owner, damage, identity, whoAmI, type, extraUpdates, aiStyle;
         public int width = 8, height = 8;
         public Microsoft.Xna.Framework.Vector2 velocity, Center;
@@ -308,7 +349,9 @@ namespace Terraria.ID
     public static class WallID { public const int SpiderUnsafe = 62; }
     public static class ProjAIStyleID { public const int ShortSword = 161, Spear = 19, Explosive = 16; }
     public static class ItemID { public const int FixtureGoal = 191, Umbrella = 946, DeadMansChest = 3988, TragicUmbrella = 4707; }
-    public static class NPCID { public const int FixtureEnemy = 222, Lihzahrd = 198, LihzahrdCrawler = 199, FlyingSnake = 226; }
+    public static class NPCID { public const int GoblinTinkerer = 107, FixtureEnemy = 222, Lihzahrd = 198, LihzahrdCrawler = 199, FlyingSnake = 226; }
+    public static class PrefixID { public const int Hard = 62, Warding = 65; }
+    public static class SoundID { public static readonly int Item37 = 37; }
     public static class ProjectileID
     {
         public const int Boulder = 99;
@@ -355,6 +398,10 @@ namespace Terraria.ModLoader
         public static int ItemCount = 6000;
         public static Func<Terraria.Item, bool> RightClickTest;
         public static bool CanRightClick(Terraria.Item item) => RightClickTest?.Invoke(item) == true;
+        public static bool ReforgePrice(Terraria.Item item, ref int cost, ref bool discount) => true;
+        public static bool CanReforge(Terraria.Item item) => true;
+        public static void PreReforge(Terraria.Item item) { }
+        public static void PostReforge(Terraria.Item item) { }
         public static bool CanStack(Terraria.Item first, Terraria.Item second) => first.type == second.type && first.prefix == second.prefix;
     }
     public static class NPCLoader { public static int NPCCount = 700; }
