@@ -1482,7 +1482,7 @@ static class ScriptTests
             for (int i = 0; i < previous.Length; i++) player.inventory[i] = new Terraria.Item();
             player.selectedItem = 0;
             player.itemAnimation = player.itemTime = 0;
-            var pickaxe = new Terraria.Item { type = 3509, stack = 1, pick = 35 };
+            var pickaxe = new Terraria.Item { type = 3509, stack = 1, pick = 35, damage = 4 };
             var weapon = new Terraria.Item { type = 1, stack = 1, damage = 14 };
             player.inventory[0] = pickaxe;
             player.inventory[21] = weapon;
@@ -1496,6 +1496,37 @@ static class ScriptTests
             Check(ready is >= 1 and < 10 && player.inventory[ready] == weapon && player.inventory[0] == pickaxe,
                 "weapon was not returned to an available hotbar slot");
             Console.WriteLine("PASS: a preferred backpack weapon returns to the hotbar after the current item animation");
+
+            bool clear = Terraria.Collision.Clear;
+            var line = Terraria.Collision.LineTest;
+            try
+            {
+                Terraria.Collision.Clear = true;
+                Terraria.Collision.LineTest = null;
+                var target = new Terraria.NPC { position = new(player.position.X, player.position.Y), width = player.width, height = player.height };
+                Check(CombatLoadout.Select(player, target, allowPickaxeFallback: true) == ready, "pickaxe displaced a usable weapon");
+                player.inventory[ready] = new Terraria.Item();
+                Check(CombatLoadout.Select(player, target, allowPickaxeFallback: true) == -1, "pickaxe replaced an explicit weapon choice");
+                CombatLoadout.PreferredType = 0;
+                Check(CombatLoadout.Select(player, target) == -1
+                    && CombatLoadout.Select(player, target, allowPickaxeFallback: true) == 0, "close enemy did not permit the requested pickaxe fallback");
+                player.inventory[21] = new Terraria.Item { type = 2, stack = 1, damage = 14, noMelee = true };
+                Check(CombatLoadout.Select(player, target, allowPickaxeFallback: true) == -1,
+                    "a weapon with no current shot was treated as missing from inventory");
+                var bow = new Terraria.Item { type = 39, stack = 1, damage = 8, useAmmo = 40 };
+                bool ammunition = player.HasAmmunition;
+                try
+                {
+                    player.inventory[21] = bow;
+                    player.HasAmmunition = false;
+                    Check(CombatLoadout.Select(player, target, allowPickaxeFallback: true) == 0, "bow without ammo prevented pickaxe fallback");
+                }
+                finally { player.HasAmmunition = ammunition; }
+                Terraria.Collision.Clear = false;
+                Check(CombatLoadout.Select(player, target, allowPickaxeFallback: true) == -1, "pickaxe swung through a wall");
+                Console.WriteLine("PASS: ordinary combat uses a pickaxe only when unarmed and able to reach a target");
+            }
+            finally { Terraria.Collision.Clear = clear; Terraria.Collision.LineTest = line; }
         }
         finally
         {

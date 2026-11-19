@@ -10,14 +10,16 @@ public static class CombatLoadout
     public static bool CanUse(Player player, Item item) => Usable(item)
         && (item.useAmmo == 0 || player.HasAmmo(item)) && item.mana * player.manaCost <= player.statMana;
 
-    public static int Select(Player player, NPC target = null)
+    public static int Select(Player player, NPC target = null, bool allowPickaxeFallback = false)
     {
         int best = -1;
+        bool hasWeapon = false;
         for (int slot = 0; slot < 50; slot++)
         {
             if (slot == 10 && best >= 0) break;
             var item = player.inventory[slot];
             if (!CanUse(player, item)) continue;
+            hasWeapon = true;
             if (target != null && !FightCoordinator.CanHitTarget(player, item, target.Center, target.width / 2f)) continue;
             if (PreferredType > 0)
             {
@@ -31,6 +33,15 @@ public static class CombatLoadout
                 if (previous.consumable && !item.consumable || previous.consumable == item.consumable
                     && player.GetWeaponDamage(item) > player.GetWeaponDamage(previous)) best = slot;
             }
+        }
+        if (best >= 0 || !allowPickaxeFallback || hasWeapon || PreferredType > 0 || target == null) return best;
+        for (int slot = 0; slot < 50; slot++)
+        {
+            if (slot == 10 && best >= 0) break;
+            var pickaxe = player.inventory[slot];
+            if (pickaxe == null || pickaxe.IsAir || pickaxe.pick <= 0 || pickaxe.damage <= 0
+                || !FightCoordinator.CanHitTarget(player, pickaxe, target.Center, target.width / 2f)) continue;
+            if (best < 0 || player.GetWeaponDamage(pickaxe) > player.GetWeaponDamage(player.inventory[best])) best = slot;
         }
         return best;
     }
