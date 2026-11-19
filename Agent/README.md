@@ -100,6 +100,8 @@ return tool('container_action', {action: 'quick_stack', expected_container: open
 
 ## 小型蓝图和压力板 / Block patterns and pressure plates
 
+**蓝图暂未完成 / Blueprint support is incomplete.** 目前是固定站位施工，8×8 是单份图的尺寸上限，实际放置范围由原版判定。自动选站位、跨区施工与整栋建筑验收待实现。The current builder works from one stance; autonomous repositioning, multi-area construction and whole-building verification are pending.
+
 - `block_region({x,y,width,height})` 读取附近最多 8×8 格的前景。把返回的 `width`、`height` 和 `cells` 保存到技能里，将来用对应的新左上角执行 `build_block_pattern`。Capture up to 8×8 foreground tiles. Save the size and relative cells in a script program, then pass them to `build_block_pattern` at a new origin.
 - 蓝图支持普通完整砖和半砖。施工需要现有支撑、足够的建材与可达格；半砖需要锤子。先查目标占用，最后逐格比较类型和形态。The builder uses existing supports, building material and a hammer. It checks occupied cells before building and verifies the final block types and shapes. Furniture, walls and slopes are outside the pattern format.
 - `nav_to({x,y,mode:'stand',avoid_pressure_plates:true})` 在每帧导航输入前检查普通压力板，发现后报告坐标并停下。The per-frame guard stops navigation on a nearby vanilla pressure plate. This check covers navigation input and cannot prevent displacement by enemies or independent triggers.
@@ -121,6 +123,11 @@ return skill('travel_disarm_plates', 0, {x: input.x, y: input.y, allow_removal: 
 | 晶塔 / Pylons | `pylon_list` 列出位置、附近晶塔与原版居民条件。传目的晶塔的 `x/y` 给 `pylon_use`，以实际抵达为准。List registered pylons, then request a destination with `pylon_use`. The game checks biome, residents, danger and mod rules. |
 | 重铸 / Reforging | 和哥布林工匠对话进入重铸界面，用 `slot_click` 把物品放到 `reforge` 的 0 号槽。`reforge({action:'quote'})` 返回报价和快照。用 `roll`、`expected_item` 和 `max_cost` 重铸一次，回执含价格及新词缀。Open the Goblin Tinkerer's reforge menu and use slot 0 of `reforge`. Quote first, then roll with the quoted item and a copper price cap. |
 | 钓鱼 / Fishing | `fish({action:'cast',slot,x,y})` 用快捷栏鱼竿抛竿。`fishing_status` 读血月和鱼漂。`fish({action:'wait_reel',slot,wait_seconds})` 等原版咬钩并收杆。Cast to a world tile, then wait and reel in one call. Confirm the catch from inventory or an observed NPC spawn. |
+
+## 常用组合动作 / Common action combinations
+
+- `container_transfer({direction:'take',expected_container,item_type,count})` 在已打开的容器和普通背包之间定量转移，`deposit` 为存入。空间或来源不足时看实际 `transferred`。Transfer a quantity between the open container and inventory slots 0–49. The receipt reports the actual quantity, including partial transfers.
+- `craft_to_slot({item_type,slot,crafts:1})` 从当前可用配方制作到指定槽。`crafts` 是制作次数，`deposited` 是物品件数。若产物无法放下，产物留在光标上供后续处理。Craft into an exact inventory slot. The receipt distinguishes recipe runs from items deposited, and reports any output left on the cursor.
 
 ## 验证
 

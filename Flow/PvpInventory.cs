@@ -77,6 +77,80 @@ public static class PvpInventory
     static bool ContainerOpen(int id) => id is >= -5 and <= -2
         || id >= 0 && id < Main.chest.Length && Main.chest[id] != null;
 
+    internal static JsonObject TransferContainer(JsonObject args)
+    {
+        var p = Main.LocalPlayer;
+        int id = p.chest;
+        if (!ContainerOpen(id) || !Main.playerInventory) return new JsonObject { ["error"] = "container_not_open" };
+        if (args["expected_container"]?.GetValue<int>() != id)
+            return new JsonObject { ["error"] = "container_changed", ["container"] = id };
+        if (Main.gameMenu || !p.active || p.dead || Main.editChest || p.itemAnimation != 0 || p.itemTime != 0
+            || ItemUseCoordinator.IsActive || PlaceAnywhere.IsRunning)
+            return new JsonObject { ["error"] = "inventory_busy" };
+        string direction = args["direction"]?.GetValue<string>();
+        int type = args["item_type"]?.GetValue<int>() ?? 0, wanted = args["count"]?.GetValue<int>() ?? 0;
+        int? prefix = args["prefix"]?.GetValue<int>();
+        if (direction is not ("take" or "deposit") || type <= 0 || wanted <= 0 || prefix < 0)
+            return new JsonObject { ["error"] = "invalid_container_transfer" };
+
+        ChestUI.GetContainerUsageInfo(out bool syncChest, out var chest);
+        bool take = direction == "take";
+        var source = take ? chest : p.inventory;
+        var target = take ? p.inventory : chest;
+        int sourceCount = take ? chest.Length : 50, targetCount = take ? 50 : chest.Length;
+        var sourceChanged = new System.Collections.Generic.HashSet<int>();
+        var targetChanged = new System.Collections.Generic.HashSet<int>();
+        bool available = false;
+        int moved = 0;
+        for (int from = 0; from < sourceCount && moved < wanted; from++)
+        {
+            var item = source[from];
+            if (item.IsAir || item.type != type || prefix.HasValue && item.prefix != prefix
+                || !take && (item.favorited || ChestUI.IsBlockedFromTransferIntoChest(item, chest))) continue;
+            available = true;
+            for (int pass = 0; pass < 2 && !item.IsAir && moved < wanted; pass++)
+            for (int to = 0; to < targetCount && !item.IsAir && moved < wanted; to++)
+            {
+                var destination = target[to];
+                bool empty = destination.IsAir;
+                if (pass == 0 && (empty || destination.type != type || destination.stack >= destination.maxStack
+                    || !Terraria.ModLoader.ItemLoader.CanStack(destination, item)) || pass == 1 && !empty) continue;
+                int count = Math.Min(wanted - moved, Math.Min(item.stack, empty ? item.maxStack : destination.maxStack - destination.stack));
+                if (count <= 0) continue;
+                int before = item.stack;
+                if (empty)
+                    target[to] = Terraria.ModLoader.ItemLoader.TransferWithLimit(item, count);
+                else
+                {
+                    Terraria.ModLoader.ItemLoader.StackItems(destination, item, out _, numToTransfer: count);
+                    if (item.stack <= 0) item.TurnToAir();
+                }
+                int amount = before - (item.IsAir ? 0 : item.stack);
+                if (amount <= 0) continue;
+                moved += amount;
+                sourceChanged.Add(from);
+                targetChanged.Add(to);
+            }
+        }
+        if (moved > 0)
+        {
+            if (syncChest)
+                foreach (int index in take ? sourceChanged : targetChanged)
+                    NetMessage.SendData(MessageID.SyncChestItem, number: id, number2: index);
+            if (Main.netMode == NetmodeID.MultiplayerClient)
+                foreach (int index in take ? targetChanged : sourceChanged)
+                    NetMessage.SendData(MessageID.SyncEquipment, number: p.whoAmI, number2: index);
+            Recipe.FindRecipes();
+            PvpDuel.InventoryChanged();
+        }
+        return new JsonObject
+        {
+            ["ok"] = moved == wanted, ["outcome"] = moved == wanted ? "transferred" : moved > 0 ? "partial" : "unchanged",
+            ["error"] = moved == wanted ? null : !available ? "transfer_source_unavailable" : "transfer_incomplete",
+            ["transferred"] = moved, ["requested"] = wanted, ["container"] = id
+        };
+    }
+
     internal static JsonObject ContainerAction(string action, JsonObject args)
     {
         var player = Main.LocalPlayer;

@@ -74,6 +74,7 @@ namespace Terraria.UI
         }
         public static Action LootHandler;
         public static void LootAll() => LootHandler?.Invoke();
+        public static bool IsBlockedFromTransferIntoChest(Terraria.Item item, Terraria.Item[] slots) => false;
         public static Action<string> ButtonHandler;
         public static void DepositAll(Terraria.DataStructures.ContainerTransferContext _) => ButtonHandler?.Invoke("deposit_all");
         public static void QuickStack(Terraria.DataStructures.ContainerTransferContext _) => ButtonHandler?.Invoke("quick_stack");
@@ -271,6 +272,8 @@ namespace Terraria
         public string AffixName() => Name;
         public int createTile = -1;
         public void SetDefaults(int itemType) { type = itemType; createTile = -1; }
+        public Item Clone() => (Item)MemberwiseClone();
+        public void TurnToAir() { type = stack = prefix = 0; }
         public float shootSpeed;
         public int shoot, mana, width = 30, height = 30;
         public int useTime, useAnimation;
@@ -375,7 +378,7 @@ namespace Terraria.ID
         }
     }
     public static class NetmodeID { public const int SinglePlayer = 0, MultiplayerClient = 1, Server = 2; }
-    public static class MessageID { public const int TogglePVP = 30, SyncEquipment = 5; }
+    public static class MessageID { public const int TogglePVP = 30, SyncEquipment = 5, SyncChestItem = 32; }
     public static class AmmoID { public const int None = 0, Arrow = 40; }
     public static class MountID { public const int QueenSlime = 50; }
     public static class ContentSamples
@@ -403,6 +406,21 @@ namespace Terraria.ModLoader
         public static void PreReforge(Terraria.Item item) { }
         public static void PostReforge(Terraria.Item item) { }
         public static bool CanStack(Terraria.Item first, Terraria.Item second) => first.type == second.type && first.prefix == second.prefix;
+        public static void StackItems(Terraria.Item destination, Terraria.Item source, out int transferred,
+            bool infiniteSource = false, int? numToTransfer = null)
+        {
+            transferred = numToTransfer ?? Math.Min(source.stack, destination.maxStack - destination.stack);
+            destination.stack += transferred;
+            if (!infiniteSource) source.stack -= transferred;
+        }
+        public static Terraria.Item TransferWithLimit(Terraria.Item source, int limit)
+        {
+            var transfer = source.Clone();
+            transfer.stack = Math.Min(limit, source.stack);
+            source.stack -= transfer.stack;
+            if (source.stack == 0) source.TurnToAir();
+            return transfer;
+        }
     }
     public static class NPCLoader { public static int NPCCount = 700; }
     public class GlobalNPC { public virtual void OnKill(Terraria.NPC npc) { } }

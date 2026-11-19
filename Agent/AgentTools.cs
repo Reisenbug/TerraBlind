@@ -918,6 +918,52 @@ public static partial class AgentTools
             ["produced"] = produced, ["cursor"] = new JsonObject { ["type"] = cursor.type, ["prefix"] = cursor.prefix, ["stack"] = cursor.stack } };
     }
 
+    static JsonObject CraftToSlot(JsonObject args)
+    {
+        var p = Main.LocalPlayer;
+        int type = Int(args, "item_type", -1), slot = Int(args, "slot", -1), count = Int(args, "crafts", 1);
+        if (type < 1 || slot is < 0 or >= 50 || count is < 1 or > 20)
+            return new JsonObject { ["error"] = "invalid_craft_destination" };
+        if (!Main.playerInventory || !Main.mouseItem.IsAir || p.itemAnimation != 0 || p.itemTime != 0
+            || ItemUseCoordinator.IsActive || PlaceAnywhere.IsRunning)
+            return new JsonObject { ["error"] = "craft_inventory_unavailable" };
+        int finished = 0, deposited = 0;
+        string error = null;
+        var address = new JsonObject { ["section"] = "inventory", ["slot"] = slot };
+        for (; finished < count; finished++)
+        {
+            var recipes = CraftAtCursor(new JsonObject { ["item_type"] = type }, execute: false)["recipes"] as JsonArray;
+            if (recipes == null || recipes.Count == 0) { error = "recipe_unavailable"; break; }
+            int index = recipes[0]["index"].GetValue<int>();
+            var output = Main.recipe[index].createItem;
+            var destination = p.inventory[slot];
+            int before = destination.IsAir ? 0 : destination.stack;
+            bool Fits(Item item) => destination.IsAir || destination.type == item.type
+                && Terraria.ModLoader.ItemLoader.CanStack(destination, item) && destination.maxStack - before >= item.stack;
+            if (!Fits(output)) { error = "craft_destination_conflict"; break; }
+            var crafted = CraftAtCursor(new JsonObject { ["index"] = index, ["expected_type"] = type }, execute: true);
+            if (!Bool(crafted, "ok") || !Fits(Main.mouseItem))
+            {
+                error = !Main.mouseItem.IsAir ? "crafted_item_on_cursor" : "craft_not_observed";
+                break;
+            }
+            var observed = PvpInventory.Slot(address, click: false);
+            var click = (JsonObject)address.DeepClone();
+            click["button"] = "left";
+            click["expected_item"] = observed["item"].DeepClone();
+            click["expected_cursor"] = observed["cursor"].DeepClone();
+            int produced = Int(crafted, "produced");
+            PvpInventory.Slot(click, click: true);
+            var after = p.inventory[slot];
+            int actual = after.type == type ? Math.Max(0, after.stack - before) : 0;
+            deposited += actual;
+            if (!Main.mouseItem.IsAir || actual != produced) { error = "craft_deposit_incomplete"; break; }
+        }
+        return new JsonObject { ["ok"] = finished == count, ["error"] = error, ["slot"] = slot,
+            ["completed_crafts"] = finished, ["deposited"] = deposited, ["requested_crafts"] = count,
+            ["cursor"] = new JsonObject { ["type"] = Main.mouseItem.type, ["stack"] = Main.mouseItem.stack } };
+    }
+
     static JsonObject Housing(JsonObject args)
     {
         string action = Text(args, "action");
@@ -1342,7 +1388,7 @@ public static partial class AgentTools
             or "place_at" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap" or "combat_reposition"
             or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat"
             or "slot_click" or "container_action" or "game_input" or "craft_recipe" or "housing" or "mod_input"
-            or "pylon_use" or "reforge" or "fish";
+            or "pylon_use" or "reforge" or "fish" or "container_transfer" or "craft_to_slot";
         bool action = external || name is "fight" or "fight_player";
         bool startsPrimary = name == "action_start" && Text(args, "tool") != "fight";
         if ((external || startsPrimary) && string.IsNullOrEmpty(taskNode)
@@ -2350,6 +2396,9 @@ public static partial class AgentTools
             case "container_action":
                 result = await NativeAgent.OnMain(() => PvpInventory.ContainerAction(Text(args, "action"), args), token);
                 break;
+            case "container_transfer":
+                result = await NativeAgent.OnMain(() => PvpInventory.TransferContainer(args), token);
+                break;
             case "reforge":
                 result = await NativeAgent.OnMain(() => PvpInventory.Reforge(args), token);
                 break;
@@ -2375,6 +2424,9 @@ public static partial class AgentTools
                 return (await NativeAgent.OnMain(() => CraftAtCursor(args, execute: false), token)).ToJsonString();
             case "craft_recipe":
                 result = await NativeAgent.OnMain(() => CraftAtCursor(args, execute: true), token);
+                break;
+            case "craft_to_slot":
+                result = await NativeAgent.OnMain(() => CraftToSlot(args), token);
                 break;
             case "housing":
                 result = await NativeAgent.OnMain(() => Housing(args), token);

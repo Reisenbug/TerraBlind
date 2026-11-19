@@ -124,9 +124,9 @@ public sealed class ControlTrial : ModSystem
             return;
         }
         string containerMode = Environment.GetEnvironmentVariable("TB_CONTAINER_CHAIN");
-        if (containerMode is "script" or "live")
+        if (containerMode is "script" or "live" or "combo")
         {
-            await ContainerChain(containerMode == "live");
+            await ContainerChain(containerMode);
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_NATIVE_PRIMITIVES") == "1")
@@ -420,8 +420,9 @@ public sealed class ControlTrial : ModSystem
         }
     }
 
-    async Task ContainerChain(bool live)
+    async Task ContainerChain(string mode)
     {
+        bool live = mode == "live", combo = mode == "combo";
         var chest = await OnMain(() =>
         {
             Config.I.AgentEnabled = true;
@@ -445,9 +446,14 @@ public sealed class ControlTrial : ModSystem
             Check(id >= 0, "container_chain_fixture_placement_failed");
             var fixture = Main.chest[id];
             fixture.item[0].SetDefaults(ItemID.Wood);
-            fixture.item[0].stack = 10;
+            fixture.item[0].stack = combo ? 6 : 10;
             fixture.item[1].SetDefaults(ItemID.Torch);
             fixture.item[1].stack = 5;
+            if (combo)
+            {
+                fixture.item[2].SetDefaults(ItemID.Wood);
+                fixture.item[2].stack = 9;
+            }
             return (Id: id, fixture.x, fixture.y);
         });
         JsonObject Snapshot()
@@ -463,7 +469,7 @@ public sealed class ControlTrial : ModSystem
                 ["open_container"] = p.chest
             };
         }
-        bool Complete(JsonObject state) => state["wood_in_chest"].GetValue<int>() == 0
+        bool Complete(JsonObject state) => state["wood_in_chest"].GetValue<int>() == (combo ? 5 : 0)
             && state["torches_in_chest"].GetValue<int>() == 5
             && state["workbench_in_fifth_hotbar_slot"].GetValue<int>() == 1 && state["cursor_empty"].GetValue<bool>();
         var before = await OnMain(Snapshot);
@@ -490,6 +496,24 @@ public sealed class ControlTrial : ModSystem
                 await Task.Delay(50);
             }
             await OnMain(() => { NativeAgent.Stop(); return true; });
+        }
+        else if (combo)
+        {
+            string script = $$"""
+                const opened = tool('interact', {x:{{chest.x}}, y:{{chest.y}}});
+                if (opened.outcome !== 'opened') throw new Error('could not open chest');
+                const move = (direction,count) => tool('container_transfer',
+                    {direction,count,expected_container:opened.chest,item_type:{{ItemID.Wood}}});
+                const taken = move('take',10);
+                if (!taken.ok || taken.transferred !== 10) throw new Error(JSON.stringify(taken));
+                const deposited = move('deposit',3);
+                if (!deposited.ok || deposited.transferred !== 3) throw new Error(JSON.stringify(deposited));
+                if (!move('take',3).ok) throw new Error('could not take returned wood');
+                const made = tool('craft_to_slot',{item_type:{{ItemID.WorkBench}},slot:4,crafts:1});
+                if (!made.ok || made.deposited !== 1) throw new Error(JSON.stringify(made));
+                return {ok:true,taken:taken.transferred,deposited:deposited.transferred};
+                """;
+            result = await Call("run_script", new JsonObject { ["code"] = script });
         }
         else
         {
@@ -520,7 +544,7 @@ public sealed class ControlTrial : ModSystem
             result = await Call("run_script", new JsonObject { ["code"] = script });
         }
         var after = await OnMain(Snapshot);
-        var report = new JsonObject { ["mode"] = live ? "live" : "script", ["elapsed_ms"] = clock.ElapsedMilliseconds,
+        var report = new JsonObject { ["mode"] = mode, ["elapsed_ms"] = clock.ElapsedMilliseconds,
             ["before"] = before, ["after"] = after, ["script"] = result, ["timeline"] = timeline };
         File.WriteAllText(Path.Combine(Main.SavePath, "container-chain.json"), report.ToJsonString());
         Check(Complete(after) && (live || result["ok"]?.GetValue<bool>() == true

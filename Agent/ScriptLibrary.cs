@@ -26,7 +26,7 @@ public sealed class ScriptLibrary
     public static JsonObject Example(string name)
     {
         if (name == "build_block_pattern") return Template(name,
-            "就地复建8×8以内的完整砖和半砖。input含x、y、pattern（block_region的结果）。Rebuild a nearby block pattern with full and half blocks. Exact foreground verification, preserves occupied cells.",
+            "蓝图功能暂未完成：目前只在当前站位放置8×8以内的完整砖和半砖。input含x、y、pattern（block_region的结果）。Blueprint support is incomplete: local placement only, without automatic repositioning.",
             """
             const {x,y,pattern}=input;
             const size=n=>Number.isInteger(n)&&n>=1&&n<=8;
