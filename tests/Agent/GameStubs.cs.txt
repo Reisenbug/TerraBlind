@@ -194,6 +194,8 @@ namespace Terraria
         public bool active = true, dead, suffocating, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
         public bool HasAmmunition = true;
         public bool noFallDmg;
+        public bool waterWalk, waterWalk2, slowFall, gravControl, gravControl2;
+        public int breath = 200, breathMax = 200;
         public bool honeyWet, ignoreWater;
         public float gravDir = 1, maxFallSpeed = 10;
         public int fallStart, extraFall;

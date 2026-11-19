@@ -36,7 +36,7 @@ namespace TerraBlind
 
 			// 关背板时标一行。录像和日志都得自己说明当时是哪一组,不然事后分不清
 			Line(sb, font, ref x, ref y,
-				BossBook.UseKnowledge ? "[Jev]" : "[Jev] no playbook",
+				BossBook.UseKnowledge ? "[Decision]" : "[Decision] no playbook",
 				BossBook.UseKnowledge ? Color.Gold : Color.Orange);
 			if (Dodge.Enabled)
 			{
@@ -62,14 +62,14 @@ namespace TerraBlind
 				_intents = AgentScript.IntentStatus;
 			}
 			if (_decisions.Count == 0 && _intents == null) return;
-			var entries = new List<(string Text, Color Color)> { ("Jev 决策", Color.Gold) };
+			var entries = new List<(string Text, Color Color)> { ("Decision", Color.Gold) };
 			if (_intents != null)
 			{
 				string current = _intents["current"]?["description"]?.ToString();
-				entries.Add((current == null ? "状态：" + Label(_intents["status"]?.ToString()) : "当前：" + current, Color.White));
-				if (_intents["prepared"]?["description"] is JsonNode next) entries.Add(("预备：" + next, Color.LightCyan));
+				entries.Add((current == null ? "Status: " + Label(_intents["status"]?.ToString()) : "Current: " + current, Color.White));
+				if (_intents["prepared"]?["description"] is JsonNode next) entries.Add(("Next: " + next, Color.LightCyan));
 				if (_intents["feedback"] is JsonObject feedback)
-					entries.Add(("反馈：" + (feedback["verified"]?.GetValue<bool>() == true ? "已核对 " : "受阻 ")
+					entries.Add(("Result: " + (feedback["verified"]?.GetValue<bool>() == true ? "Verified " : "Blocked ")
 						+ feedback["description"] + " " + feedback["error"], feedback["verified"]?.GetValue<bool>() == true ? Color.LightGreen : Color.Orange));
 			}
 			foreach (var row in _decisions)
@@ -79,9 +79,9 @@ namespace TerraBlind
 					if (answer?["choice"] is JsonNode choice) choices.Add(Choice(choice.ToString()));
 					else if (answer?["noul"] is JsonNode probability) choices.Add(probability.ToString());
 				string status = row["status"]?.ToString();
-				string text = Label(row["channel"].ToString()) + "：" + (choices.Count > 0 ? string.Join(" / ", choices) : Label(status));
+				string text = Label(row["channel"].ToString()) + ": " + (choices.Count > 0 ? string.Join(" / ", choices) : Label(status));
 				if (row["elapsed_ms"] is JsonNode ms) text += "  " + ms + "ms";
-				if (row["in_flight"]?.GetValue<bool>() == true) text += " · 更新中";
+				if (row["in_flight"]?.GetValue<bool>() == true) text += " · updating";
 				if (row["error"] is JsonNode error) text += " · " + error;
 				entries.Add((text, status == "failed" ? Color.Orange : status == "ready" ? Color.LightGreen : Color.LightGray));
 			}
@@ -107,26 +107,26 @@ namespace TerraBlind
 
 		static string Choice(string choice)
 		{
-			if (choice.StartsWith("cover_left_")) return "向左搭挡墙";
-			if (choice.StartsWith("cover_right_")) return "向右搭挡墙";
+			if (choice.StartsWith("cover_left_")) return "Build cover to the left";
+			if (choice.StartsWith("cover_right_")) return "Build cover to the right";
 			int split = choice.IndexOf("_weapon_", StringComparison.Ordinal);
 			if (split >= 0 && int.TryParse(choice[(split + 8)..], out int weapon))
 				return Label(choice[..split]) + " · " + Lang.GetItemNameValue(weapon);
-			if (choice.StartsWith("resource_") && int.TryParse(choice[9..], out int resource)) return "采集 " + Lang.GetItemNameValue(resource);
-			if (choice.StartsWith("slot_")) return "武器槽 " + choice[5..];
+			if (choice.StartsWith("resource_") && int.TryParse(choice[9..], out int resource)) return "Collect " + Lang.GetItemNameValue(resource);
+			if (choice.StartsWith("slot_")) return "Weapon slot " + choice[5..];
 			return Label(choice);
 		}
 
 		static string Label(string text) => text switch
 		{
-			"local_intents" => "意图", "combat" => "战术", "loadout" or "weapon" => "武器", "survival" => "生存",
-			"task_progress" => "进度", "movement" or "travel_intent" => "移动", "opportunity" => "顺路机会",
-			"continue" or "keep" => "继续", "review" or "needs_review" => "需要调整", "pending" => "判断中",
-			"ready" => "已返回", "failed" or "blocked" => "受阻", "executing" => "执行中", "completed" => "阶段完成",
-			"yield" => "片段结束", "verified" => "已核对", "interrupted" => "已中断", "recall" => "回城",
-			"follow_route" or "travel" => "继续赶路", "left" => "向左", "right" => "向右",
-			"jump_left" => "向左跳", "jump_right" => "向右跳", "terrain" => "调整地形", "equipment" => "调整装备",
-			"ranged_weapon" => "准备远程攻击", "take" => "顺路收集", "pass" => "继续原目标", _ => text ?? ""
+			"local_intents" => "Intent", "combat" => "Combat", "loadout" or "weapon" => "Weapon", "survival" => "Survival",
+			"task_progress" => "Progress", "movement" or "travel_intent" => "Movement", "opportunity" => "Opportunity",
+			"continue" or "keep" => "Continue", "review" or "needs_review" => "Needs review", "pending" => "Pending",
+			"ready" => "Ready", "failed" or "blocked" => "Blocked", "executing" => "Executing", "completed" => "Completed",
+			"yield" => "Handed off", "verified" => "Verified", "interrupted" => "Interrupted", "recall" => "Recall",
+			"follow_route" or "travel" => "Follow route", "left" => "Move left", "right" => "Move right",
+			"jump_left" => "Jump left", "jump_right" => "Jump right", "terrain" => "Adjust terrain", "equipment" => "Change equipment",
+			"ranged_weapon" => "Ready ranged weapon", "take" => "Collect on the way", "pass" => "Continue the goal", _ => text ?? ""
 		};
 
 		// 置信低就变暗:一眼看出它是在判断还是在猜

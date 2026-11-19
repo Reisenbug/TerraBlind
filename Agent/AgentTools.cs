@@ -1063,7 +1063,9 @@ public static partial class AgentTools
         {
             ["no_fall_damage"] = healthPlayer.noFallDmg, ["fall_start_tile_y"] = healthPlayer.fallStart,
             ["extra_fall_tiles"] = healthPlayer.extraFall, ["extra_jump_usable"] = healthPlayer.AnyExtraJumpUsable(),
-            ["wing_time_frames"] = healthPlayer.wingTime
+            ["wing_time_frames"] = healthPlayer.wingTime, ["water_walk"] = healthPlayer.waterWalk || healthPlayer.waterWalk2,
+            ["featherfall"] = healthPlayer.slowFall, ["gravity_control"] = healthPlayer.gravControl || healthPlayer.gravControl2,
+            ["breath"] = healthPlayer.breath, ["max_breath"] = healthPlayer.breathMax
         };
         if (selected == null || selected.Contains("movement_capabilities"))
             state["movement_capabilities"]["fall_forecast"] = NavigationSurvival.AssessFall(healthPlayer);
@@ -1512,7 +1514,7 @@ public static partial class AgentTools
                 Recovery.Record(name, args, result.ToJsonString());
                 result["task_plan"] = Plan.Summary();
                 DiagLog.Write($"[agent] tool_exception {name}: {ex.Message}");
-                NativeAgent.Progress("执行失败：" + name, "等待模型决策", false);
+                NativeAgent.Progress("Failed " + name, "waiting for decision", visible: false);
                 return result.ToJsonString();
             }, token);
         }
@@ -1787,13 +1789,11 @@ public static partial class AgentTools
 
     static async Task<string> ExecuteCore(string name, JsonObject args, CancellationToken token)
     {
-        bool localIntent = AgentScript.CurrentIntent.Value != null;
         var before = await NativeAgent.OnMain(() =>
         {
             DiagLog.Write($"[agent] tool {name} {args}");
             if (!ObservationTool(name) && name is not ("say" or "ask" or "nav_intent"))
-                NativeAgent.Progress("开始执行：" + name, "执行 " + name,
-                    !localIntent && !PvpDuel.Active && !name.StartsWith("combat_"));
+                NativeAgent.Progress("Starting " + name, "running " + name, visible: false);
             return name is "get_state" or "say" or "ask" or "wiki_search" or "wiki_page" ? null : Inventory();
         }, token);
         if (name == "get_state") return await State(token, Bool(args, "include_tiles"), Bool(args, "include_watch_history"), args["fields"] as JsonArray);
@@ -2530,7 +2530,7 @@ public static partial class AgentTools
                             break;
                         }
                     }
-                    var weapons = player.inventory.Take(10).Where(item => CombatLoadout.Usable(item)
+                    var weapons = player.inventory.Take(50).Where(item => CombatLoadout.Usable(item)
                         && (CombatLoadout.PreferredType == 0 || item.type == CombatLoadout.PreferredType)
                         && (item.useAmmo == 0 || player.HasAmmo(item)) && item.mana * player.manaCost <= player.statMana).ToArray();
                     JsonArray HittingWeapons(Microsoft.Xna.Framework.Vector2 source) => new(weapons
@@ -2575,10 +2575,10 @@ public static partial class AgentTools
                     if (args["weapon_type"] != null)
                     {
                         int weaponType = Int(args, "weapon_type");
-                        if (weaponType < 0 || weaponType > 0 && !Main.LocalPlayer.inventory.Take(10).Any(item =>
+                        if (weaponType < 0 || weaponType > 0 && !Main.LocalPlayer.inventory.Take(50).Any(item =>
                             item.type == weaponType && CombatLoadout.Usable(item)))
-                            return new JsonObject { ["error"] = "weapon_type_must_be_usable_in_hotbar" };
-                        var weapon = weaponType > 0 ? Main.LocalPlayer.inventory.Take(10).First(item =>
+                            return new JsonObject { ["error"] = "weapon_type_must_be_usable_in_inventory" };
+                        var weapon = weaponType > 0 ? Main.LocalPlayer.inventory.Take(50).First(item =>
                             item.type == weaponType && CombatLoadout.Usable(item)) : null;
                         if (weapon != null && weapon.useAmmo > 0 && !Main.LocalPlayer.HasAmmo(weapon))
                             return new JsonObject { ["error"] = "weapon_missing_ammo", ["requested_weapon_type"] = weaponType,
@@ -3127,8 +3127,7 @@ public static partial class AgentTools
         {
             DiagLog.Write($"[agent] result {name} {output}");
             if (!ObservationTool(name))
-                NativeAgent.Progress(localIntent ? "局部意图完成：" + name : "执行结束：" + name + "，等待下一步决策。",
-                    localIntent ? "局部行动续接" : "等待模型决策", !localIntent && !PvpDuel.Active && !name.StartsWith("combat_"));
+                NativeAgent.Progress("Finished " + name, localIntent ? "continuing locally" : "waiting for decision", visible: false);
             return output;
         }, token);
     }
