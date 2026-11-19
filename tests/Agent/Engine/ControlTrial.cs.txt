@@ -48,12 +48,12 @@ public sealed class ControlTrial : ModSystem
         explorationPauseTrial = enabled && Environment.GetEnvironmentVariable("TB_EXPLORATION_PAUSE_CHECK") == "1";
         if (explorationPauseTrial) explorationObjective = Environment.GetEnvironmentVariable("TB_EXPLORATION_OBJECTIVE");
         if (explorationPauseTrial && explorationObjective == null) On_PlayerInput.UpdateInput += CheckExplorationPauseInput;
-    }
-    public override void Unload()
-    {
         if (enabled && Environment.GetEnvironmentVariable("TB_NATIVE_PRIMITIVES") == "1")
             PrimitiveBindingProbe.Binding = KeybindLoader.RegisterKeybind(Mod, "PrimitiveInputProbe", "F10");
         if (enabled) { IL_Main.DoUpdate += Focus; On_Main.Update += OpenWorld; On_Player.PickTile += ObservePick; }
+    }
+    public override void Unload()
+    {
         if (explorationPauseTrial && explorationObjective == null) On_PlayerInput.UpdateInput -= CheckExplorationPauseInput;
         if (enabled) { IL_Main.DoUpdate -= Focus; On_Main.Update -= OpenWorld; On_Player.PickTile -= ObservePick; }
     }
@@ -64,11 +64,11 @@ public sealed class ControlTrial : ModSystem
         if (Main.gameMenu || !Main.LocalPlayer.active || finished) return;
         try
         {
+            const string key = "DragonLens/Pause";
+            var pressed = PlayerInput.Triggers.JustPressed.KeyStatus;
             switch (++explorationInputFrames)
             {
                 case 30:
-            const string key = "DragonLens/Pause";
-            var pressed = PlayerInput.Triggers.JustPressed.KeyStatus;
                     Check(pressed.ContainsKey(key), "dragonlens_pause_key_unregistered");
                     pressed[key] = true;
                     break;
@@ -82,10 +82,10 @@ public sealed class ControlTrial : ModSystem
                     break;
                 case 50:
                     Check(!FreezeSystem.IsFrozen && Main.time != explorationWorldTime, "world_did_not_resume");
+                    Check(JevCombat.HasKey, "jev_credential_not_found");
                     var text = Terraria.Localization.Language.GetTextValue("Mods.TerraBlind.Exploration.Paused");
                     Check(text.StartsWith("Exploration paused.", StringComparison.Ordinal), "pause_english_localization_missing: " + text);
                     Console.WriteLine("EXPLORATION_PAUSE_COMPLETE dragonlens=true frozen_frames=14 resumed=true english_localized=true jev_key_loaded=true");
-                    Check(JevCombat.HasKey, "jev_credential_not_found");
                     File.WriteAllText(Path.Combine(Main.SavePath, "agent-engine-result.json"), "{\"ok\":true}");
                     finished = true;
                     break;
@@ -116,10 +116,18 @@ public sealed class ControlTrial : ModSystem
         original(game, time);
         if (opened || Main.menuMode != 0) return;
         opened = true;
+        if (explorationObjective != null) Concessions.Enabled = false;
         if (Terraria.Social.SocialAPI.Cloud != null) Terraria.Social.SocialAPI.Cloud.EnabledByDefault = false;
         WorldGen.clearWorld();
         WorldFile.GetAllMetadata(Path.Combine(Main.SavePath, "Worlds", "Checks.wld"), false).SetAsActive();
-        var file = PlayerFileData.CreateAndSave(new Player { name = "Control trial" });
+        var player = new Player { name = "Control trial" };
+        if (explorationObjective != null)
+        {
+            player.inventory[0] = new Item(ItemID.CopperShortsword);
+            player.inventory[1] = new Item(ItemID.CopperPickaxe);
+            player.inventory[2] = new Item(ItemID.CopperAxe);
+        }
+        var file = PlayerFileData.CreateAndSave(player);
         Check(!file.IsCloudSave && file.Path.StartsWith(Main.SavePath, StringComparison.Ordinal), "player_not_isolated");
         Player.LoadPlayer(file.Path, false).SetAsActive();
         WorldGen.playWorld();
@@ -159,6 +167,11 @@ public sealed class ControlTrial : ModSystem
         {
             if (explorationObjective != null && !Main.gameMenu && Main.LocalPlayer.active && ++frames == 90)
             {
+                Check(Main.LocalPlayer.CountItem(ItemID.Starfury) == 0, "exploration_starfury_in_starting_inventory");
+                Check(Main.LocalPlayer.CountItem(ItemID.CopperShortsword) > 0
+                    && Main.LocalPlayer.CountItem(ItemID.CopperPickaxe) > 0 && Main.LocalPlayer.CountItem(ItemID.CopperAxe) > 0,
+                    "exploration_missing_copper_starter_gear");
+                Console.WriteLine("EXPLORATION_STARTING_GEAR copper_sword_pick_axe=true starfury=false");
                 Config.I.AgentEnabled = true;
                 Config.I.AiClient = false;
                 Config.I.AgentUseCodex = true;
@@ -168,12 +181,12 @@ public sealed class ControlTrial : ModSystem
             }
             return;
         }
-        if (gravityFrames != null)
-        {
-            var p = Main.LocalPlayer;
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         frames++;
+        if (gravityFrames != null)
+        {
+            var p = Main.LocalPlayer;
             gravityFrames.Add(new JsonObject { ["frame"] = frames, ["x"] = p.position.X, ["y"] = p.position.Y,
                 ["gravity"] = p.gravDir, ["gravitation_buff"] = p.HasBuff(BuffID.Gravitation), ["chest"] = p.chest });
         }
