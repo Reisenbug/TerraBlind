@@ -201,9 +201,12 @@ export const cases = {
   '07-altars-hardmode-ores': (i, h) => {
     const world = h.call('get_state', {fields: ['world']}).world;
     if (!world.hardmode) return h.blocked('hardmode_required');
-    h.check(i.altars.length === 9 && new Set(i.altars.map(a => a.x + ',' + a.y)).size === 9, 'need_nine_distinct_altar_anchors');
+    const miningOnly = i.phase === 'mining_and_crafting';
+    const altars = miningOnly ? [] : i.altars;
+    h.check(miningOnly || altars.length === 9 && new Set(altars.map(a => a.x + ',' + a.y)).size === 9,
+      'need_nine_distinct_altar_anchors');
     const smashed = [];
-    for (const altar of i.altars) {
+    for (const altar of altars) {
       const p = h.call('get_state', {fields: ['player']}).player;
       if (Math.abs((p.pos.x + p.width / 2) / 16 - altar.x) > 3
         || Math.abs((p.pos.y + p.height) / 16 - altar.y) > 3) h.move(altar.stand.x, altar.stand.y);
@@ -216,7 +219,9 @@ export const cases = {
     }
     if (!i.stages?.length) return h.blocked('mining_and_crafting_stages_missing', {smashed});
     for (const stage of i.stages) {
+      if (stage.mine_stand) h.move(stage.mine_stand.x, stage.mine_stand.y);
       for (const target of stage.ores) h.gather([target], stage.source_area);
+      if (stage.craft_stand) h.move(stage.craft_stand.x, stage.craft_stand.y);
       for (const output of stage.craft) {
         h.craft(output.item_type, output.count);
         h.check(h.stock(output.item_type) >= output.count, 'crafted_output_missing', output);
@@ -227,7 +232,8 @@ export const cases = {
       }
     }
     h.check(i.armor_types.length === 3 && i.armor_types.every(type => h.stock(type) > 0), 'hardmode_armor_incomplete');
-    return h.done({altars_smashed: smashed.length, armor_types: i.armor_types});
+    return h.done({phase: miningOnly ? 'mining_and_crafting' : 'complete', altars_smashed: smashed.length,
+      armor_types: i.armor_types});
   },
 
   '08-single-damage-class': (i, h) => h.blocked('no_task_wide_damage_class_allowlist_for_all_weapon_writers',

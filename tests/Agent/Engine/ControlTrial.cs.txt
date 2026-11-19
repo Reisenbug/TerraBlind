@@ -168,6 +168,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CASEBOOK_ORECHAIN") == "1")
+        {
+            await TaskCaseOreChain();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CASEBOOK_ALTARS") == "1")
         {
             await TaskCaseAltars();
@@ -364,6 +369,84 @@ public sealed class ControlTrial : ModSystem
             { ["code"] = template.Replace("\"__TB_FIXTURE__\"", inputs.ToJsonString()) });
         Console.WriteLine($"TASK_CASE {id} " + (result["value"]?.ToJsonString() ?? result["detail"]?.ToString()));
         return result;
+    }
+
+    async Task TaskCaseOreChain()
+    {
+        var site = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            Main.hardMode = true;
+            var p = Main.LocalPlayer;
+            int x = (int)p.Center.X / 16, y = (int)p.Bottom.Y / 16 + 4;
+            for (int tx = x - 8; tx <= x + 152; tx++)
+            for (int row = y - 9; row <= y + 5; row++)
+            {
+                var tile = Main.tile[tx, row];
+                tile.ClearEverything();
+                if (row >= y) tile.ResetToType(TileID.Stone);
+            }
+            foreach (var (first, width, type) in new[] { (10, 17, TileID.Cobalt), (30, 35, TileID.Mythril), (68, 83, TileID.Adamantite) })
+                for (int tx = x + first; tx < x + first + width; tx++)
+                for (int row = y - 6; row <= y - 4; row++)
+                    Main.tile[tx, row].ResetToType(type);
+            WorldGen.Place3x2(x - 3, y - 1, TileID.Furnaces);
+            WorldGen.PlaceTile(x - 1, y - 1, TileID.Anvils, mute: true);
+            p.position = new Vector2(x * 16, y * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.MoltenPickaxe);
+            p.inventory[1].SetDefaults(ItemID.Hellforge);
+            return (X: x, Y: y);
+        });
+        JsonObject At(int offset) => new() { ["x"] = site.X + offset, ["y"] = site.Y - 1 };
+        JsonObject Output(int item, int count = 1) => new() { ["item_type"] = item, ["count"] = count };
+        JsonObject Station(int offset, int item, int tile)
+        {
+            var at = At(offset);
+            at["item_type"] = item; at["tile_type"] = tile;
+            return at;
+        }
+        JsonObject Stage(int first, int width, int item, int count, string tile, params JsonObject[] products) => new()
+        {
+            ["mine_stand"] = At(first), ["craft_stand"] = At(0),
+            ["source_area"] = new JsonObject { ["x"] = site.X + first, ["y"] = site.Y - 7, ["width"] = width, ["height"] = 8 },
+            ["ores"] = new JsonArray(new JsonObject { ["item_type"] = item, ["count"] = count, ["tile_names"] = new JsonArray(tile) }),
+            ["craft"] = new JsonArray(products)
+        };
+        var cobalt = Stage(10, 17, ItemID.CobaltOre, 45, "Cobalt", Output(ItemID.CobaltBar, 15), Output(ItemID.CobaltPickaxe));
+        var mythril = Stage(30, 35, ItemID.MythrilOre, 100, "Mythril", Output(ItemID.MythrilBar, 25), Output(ItemID.MythrilAnvil));
+        mythril["station"] = Station(2, ItemID.MythrilAnvil, TileID.MythrilAnvil);
+        var adamantite = Stage(68, 83, ItemID.AdamantiteOre, 246, "Adamantite", Output(ItemID.AdamantiteForge));
+        adamantite["station"] = Station(5, ItemID.AdamantiteForge, TileID.AdamantiteForge);
+        int[] armor = { ItemID.AdamantiteHelmet, ItemID.AdamantiteBreastplate, ItemID.AdamantiteLeggings };
+        await DelayFrames(10);
+        var receipt = await RunTaskCase("07-altars-hardmode-ores", new JsonObject
+        {
+            ["phase"] = "mining_and_crafting",
+            ["armor_types"] = new JsonArray(armor.Select(type => (JsonNode)JsonValue.Create(type)).ToArray()),
+            ["stages"] = new JsonArray(cobalt, mythril,
+                new JsonObject { ["ores"] = new JsonArray(), ["craft"] = new JsonArray(Output(ItemID.MythrilPickaxe)) },
+                adamantite, new JsonObject { ["ores"] = new JsonArray(), ["craft"] = new JsonArray(
+                    Output(ItemID.AdamantiteBar, 54), Output(armor[0]), Output(armor[1]), Output(armor[2])) })
+        });
+        var proof = await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            return new JsonObject { ["armor_complete"] = armor.All(type => p.CountItem(type) == 1),
+                ["cobalt_pickaxe"] = p.CountItem(ItemID.CobaltPickaxe), ["mythril_pickaxe"] = p.CountItem(ItemID.MythrilPickaxe),
+                ["anvil_placed"] = Main.tile[site.X + 2, site.Y - 1].TileType == TileID.MythrilAnvil,
+                ["forge_placed"] = Main.tile[site.X + 5, site.Y - 1].TileType == TileID.AdamantiteForge };
+        });
+        File.WriteAllText(Path.Combine(Main.SavePath, "task-casebook-ore-chain.json"),
+            new JsonObject { ["receipt"] = receipt, ["proof"] = proof }.ToJsonString());
+        Check(receipt["value"]?["ok"]?.GetValue<bool>() == true && proof["armor_complete"].GetValue<bool>()
+            && proof["anvil_placed"].GetValue<bool>() && proof["forge_placed"].GetValue<bool>()
+            && proof["cobalt_pickaxe"].GetValue<int>() == 1 && proof["mythril_pickaxe"].GetValue<int>() == 1,
+            "casebook_hardmode_ore_chain_unverified");
+        Console.WriteLine("TASK_CASEBOOK_ORE_CHAIN_COMPLETE");
     }
 
     async Task TaskCaseAltars()
