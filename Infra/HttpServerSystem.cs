@@ -7,6 +7,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using Terraria;
+using Terraria.DataStructures;
+using Terraria.ID;
 using Terraria.ModLoader;
 
 namespace TerraBlind
@@ -73,20 +75,78 @@ namespace TerraBlind
 		internal static JsonObject InteractAt(int x, int y)
 		{
 			var p = Main.LocalPlayer;
-			if (p == null || !p.active || p.dead)
+			if (p == null || !p.active || p.dead || Main.gameMenu)
 			{
 				LastInteract = "no_living_player";
 				return new JsonObject { ["error"] = LastInteract, ["outcome"] = LastInteract };
 			}
+			if (!WorldGen.InWorld(x, y) || !Main.tile[x, y].HasUnactuatedTile)
+				return FinishInteraction(x, y, -1, "no_interactable_tile");
+			int type = Main.tile[x, y].TileType;
+			if (Main.gamePaused || Main.mapFullscreen)
+				return FinishInteraction(x, y, -1, "world_interaction_unavailable");
+			if (!TileID.Sets.BasicChest[type] && !TileID.Sets.BasicDresser[type]
+				&& type is not (TileID.FakeContainers or TileID.FakeContainers2))
+				return InteractWithTile(p, x, y);
 			var anchor = Terraria.ObjectData.TileObjectData.TopLeft(x, y);
 			int chest = TreasureGrab.OpenAt(x, y, out string reason);
-			string outcome = chest >= 0 ? "opened" : reason;
+			return FinishInteraction(anchor.X >= 0 ? anchor.X : x, anchor.Y >= 0 ? anchor.Y : y,
+				chest, chest >= 0 ? "opened" : reason);
+		}
+
+		static JsonObject FinishInteraction(int x, int y, int chest, string outcome)
+		{
 			LastInteract = outcome;
-			var result = new JsonObject { ["outcome"] = outcome, ["x"] = anchor.X >= 0 ? anchor.X : x,
-				["y"] = anchor.Y >= 0 ? anchor.Y : y, ["chest"] = chest };
+			var result = new JsonObject { ["outcome"] = outcome, ["x"] = x, ["y"] = y, ["chest"] = chest };
 			if (outcome == "pending") result["world_id"] = Main.worldID;
 			if (chest < 0 && outcome != "pending") result["error"] = outcome;
 			return result;
+		}
+
+		static JsonObject InteractWithTile(Player p, int x, int y)
+		{
+			if (!p.IsInTileInteractionRange(x, y, TileReachCheckSettings.Simple))
+				return FinishInteraction(x, y, -1, "out_of_reach");
+			(int Type, int FrameX, int FrameY, bool Actuated) TileState()
+			{
+				var tile = Main.tile[x, y];
+				return (tile.HasTile ? tile.TileType : -1, tile.TileFrameX, tile.TileFrameY, tile.IsActuated);
+			}
+			var tileBefore = Main.tile[x, y];
+			var before = TileState();
+			int doorTarget = TileLoader.OpenDoorID(tileBefore);
+			bool openingDoor = doorTarget >= 0;
+			if (!openingDoor) doorTarget = TileLoader.CloseDoorID(tileBefore);
+			int storage = p.chest;
+			bool wasMounted = p.mount.Active && p.mount.Cart;
+			var input = (p.tileInteractAttempted, p.releaseUseTile, p.tileInteractionHappened, Main.mouseRightRelease);
+			bool handled;
+			try
+			{
+				p.tileInteractAttempted = p.releaseUseTile = Main.mouseRightRelease = true;
+				p.tileInteractionHappened = false;
+				p.TileInteractionsCheck(x, y);
+				handled = p.tileInteractionHappened;
+			}
+			finally { (p.tileInteractAttempted, p.releaseUseTile, p.tileInteractionHappened, Main.mouseRightRelease) = input; }
+			var after = TileState();
+			bool doorShifted = doorTarget >= 0 && !openingDoor && after.Type < 0 && x > 0 && x < Main.maxTilesX - 1
+				&& (Main.tile[x - 1, y].HasTile && Main.tile[x - 1, y].TileType == doorTarget
+					|| Main.tile[x + 1, y].HasTile && Main.tile[x + 1, y].TileType == doorTarget);
+			if (doorTarget >= 0 && after.Type != doorTarget && !doorShifted)
+				return FinishInteraction(x, y, -1, "door_state_unchanged");
+			if (!handled && before == after && storage == p.chest)
+				return FinishInteraction(x, y, -1, "interaction_not_observed");
+			string outcome = doorTarget >= 0 ? openingDoor ? "door_opened" : "door_closed"
+				: storage != p.chest && p.chest < -1 ? "storage_opened"
+				: before.Type == TileID.MinecartTrack ? wasMounted ? "already_mounted" : "pending_minecart"
+				: before != after ? "tile_changed" : "handled";
+			LastInteract = outcome;
+			return new JsonObject { ["outcome"] = outcome, ["x"] = x, ["y"] = y, ["target_type"] = before.Type,
+				["tile_type_after"] = after.Type, ["container"] = p.chest, ["world_id"] = Main.worldID,
+				["frame_before"] = new JsonArray(before.FrameX, before.FrameY),
+				["frame_after"] = new JsonArray(after.FrameX, after.FrameY),
+				["verified"] = outcome is not ("handled" or "pending_minecart") };
 		}
 
 		internal static JsonObject LootOpenChest(bool makeRoom = false)

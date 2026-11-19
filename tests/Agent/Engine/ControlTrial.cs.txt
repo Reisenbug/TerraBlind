@@ -113,6 +113,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_WORLD_INTERACT") == "1")
+        {
+            await WorldInteractions();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_SOCIAL_INTERACTIONS") == "1")
         {
             await SocialInteractions();
@@ -228,6 +233,75 @@ public sealed class ControlTrial : ModSystem
         });
         Console.WriteLine($"CONTROL_ASSERTIONS paused_handle={handle} sand_unchanged={sandBefore} explicit_move=true native_restart_rejected=true");
         Console.WriteLine("CONTROL_REGION_ASSERTIONS original_destination_reached=true rejected_excavation_not_repeated=true navigation_enabled=true");
+    }
+
+    async Task WorldInteractions()
+    {
+        var fixture = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false;
+            var p = Main.LocalPlayer;
+            int x = (int)p.Center.X / 16;
+            int y = (int)p.Bottom.Y / 16 + 4;
+            for (int tx = x - 6; tx < x + 20; tx++)
+            for (int ty = y - 7; ty <= y; ty++)
+            {
+                var tile = Main.tile[tx, ty];
+                tile.ClearEverything();
+                if (ty == y) tile.ResetToType(TileID.Stone);
+            }
+            p.position = new Vector2(x * 16, y * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            Main.tile[x + 4, y - 4].ResetToType(TileID.Stone);
+            Check(WorldGen.PlaceDoor(x + 4, y - 2, TileID.ClosedDoor), "world_interact_door_fixture");
+            var toggle = Main.tile[x + 2, y - 1];
+            toggle.ResetToType(TileID.Switches);
+            toggle.WallType = WallID.Stone;
+            for (int tx = x + 9; tx <= x + 15; tx++)
+                Minecart.PlaceTrack(Main.tile[tx, y - 1], 0);
+            for (int tx = x + 9; tx <= x + 15; tx++)
+                Minecart.FrameTrack(tx, y - 1, pound: false, mute: true);
+            int chest = WorldGen.PlaceChest(x - 3, y - 1, TileID.Containers, false, 0);
+            Check(chest >= 0, "world_interact_chest_fixture");
+            return (X: x, Y: y, Chest: chest);
+        });
+        async Task<JsonObject> Click(int x, int y) => await Call("interact", new JsonObject { ["x"] = x, ["y"] = y });
+        var (cx, cy, chestIndex) = fixture;
+        int doorX = cx + 4, doorY = cy - 2;
+        var opened = await Click(doorX, doorY);
+        Check(opened["outcome"]?.ToString() == "door_opened" && opened["verified"]?.GetValue<bool>() == true
+            && await OnMain(() => Main.tile[doorX, doorY].TileType == TileID.OpenDoor), "world_interact_did_not_open_door");
+        int wing = await OnMain(() => Main.tile[doorX + 1, doorY].TileType == TileID.OpenDoor ? doorX + 1 : doorX - 1);
+        var closed = await Click(wing, doorY);
+        Check(closed["outcome"]?.ToString() == "door_closed" && await OnMain(() => Main.tile[doorX, doorY].TileType == TileID.ClosedDoor),
+            "world_interact_did_not_close_door");
+        short initialFrame = await OnMain(() => Main.tile[cx + 2, cy - 1].TileFrameY);
+        var toggled = await Click(cx + 2, cy - 1);
+        Check(toggled["outcome"]?.ToString() == "tile_changed" && await OnMain(() => Main.tile[cx + 2, cy - 1].TileFrameY != initialFrame),
+            "world_interact_switch_frame_unchanged");
+        var distant = await Click(cx + 12, cy - 1);
+        Check(distant["error"]?.ToString() == "out_of_reach", "world_interact_accepted_distant_track");
+        var inert = await Click(cx, cy);
+        Check(inert["error"]?.ToString() == "interaction_not_observed", "world_interact_claimed_effect_on_inert_tile");
+        var chestTile = await OnMain(() => (Main.chest[chestIndex].x, Main.chest[chestIndex].y));
+        var chest = await Click(chestTile.x, chestTile.y);
+        Check(chest["outcome"]?.ToString() == "opened" && chest["chest"]?.GetValue<int>() == chestIndex, "world_interact_chest_regression");
+        await OnMain(() =>
+        {
+            var p = Main.LocalPlayer;
+            p.position.X = (cx + 9) * 16;
+            p.velocity = Vector2.Zero;
+            return true;
+        });
+        var boarded = await Click(cx + 11, cy - 1);
+        Check(boarded["outcome"]?.ToString() == "minecart_mounted" && await OnMain(() => Main.LocalPlayer.mount is { Active: true, Cart: true }),
+            "world_interact_native_minecart_mount_not_observed");
+        File.WriteAllText(Path.Combine(Main.SavePath, "world-interact.json"), new JsonObject
+            { ["opened"] = opened, ["closed"] = closed, ["switch"] = toggled, ["distant"] = distant,
+                ["inert"] = inert, ["chest"] = chest, ["cart"] = boarded }.ToJsonString());
+        Console.WriteLine("WORLD_INTERACT_COMPLETE door_open_close=true switch_toggled=true chest_opened=true minecart_mounted=true");
     }
 
     async Task SocialInteractions()

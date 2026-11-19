@@ -129,6 +129,12 @@ return skill('travel_disarm_plates', 0, {x: input.x, y: input.y, allow_removal: 
 - `container_transfer({direction:'take',expected_container,item_type,count})` 在已打开的容器和普通背包之间定量转移，`deposit` 为存入。空间或来源不足时看实际 `transferred`。Transfer a quantity between the open container and inventory slots 0–49. The receipt reports the actual quantity, including partial transfers.
 - `craft_to_slot({item_type,slot,crafts:1})` 从当前可用配方制作到指定槽。`crafts` 是制作次数，`deposited` 是物品件数。若产物无法放下，产物留在光标上供后续处理。Craft into an exact inventory slot. The receipt distinguishes recipe runs from items deposited, and reports any output left on the cursor.
 
+## 世界右键 / World right-click
+
+`interact({x,y})` 在原版交互距离内右键世界格。箱子继续返回 `opened` 和容器 ID；门、开关和矿车分别依据门的实际状态、目标格变化和坐骑状态报告结果。通用 `handled` 回执配 `verified:false` 时，可另查实际效果。
+
+`interact({x,y})` right-clicks a world tile in native reach. Chests retain their `opened` receipt and container ID. Doors, switches, and minecarts report observed state changes. For other tiles, `handled` with `verified:false` means the input was accepted and its effect needs a separate check.
+
 ## 验证
 
 ~~~sh

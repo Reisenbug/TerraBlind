@@ -462,7 +462,7 @@
     "type": "function",
     "function": {
       "name": "interact",
-      "description": "与一个格坐标上的方块交互:开箱子、开门、按机关等(相当于右键那个方块)。先 nav_to 到方块旁边(交互有距离限制)。返回本次交互结果；联机开箱在服务器确认目标箱子打开后返回opened。开箱后用 get_state 看背包变化确认掏到了什么。",
+      "description": "按世界格坐标执行原版右键。开箱保持opened回执；门、开关和矿车返回已观测到的结果。Right-click a tile in native interaction range. For other tiles, handled with verified:false means the game handled the input; inspect its effect separately.",
       "parameters": {
         "type": "object",
         "properties": {

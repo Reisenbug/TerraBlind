@@ -2779,6 +2779,34 @@ public static partial class AgentTools
                     }
                     result = confirmed ?? new JsonObject { ["error"] = "chest_open_not_confirmed", ["x"] = x, ["y"] = y };
                 }
+                else if (Text(result, "outcome") == "pending_minecart")
+                {
+                    int world = Int(result, "world_id");
+                    var elapsed = Stopwatch.StartNew();
+                    while (elapsed.Elapsed.TotalSeconds < 3)
+                    {
+                        string state = await NativeAgent.OnMain(() =>
+                        {
+                            var p = Main.LocalPlayer;
+                            if (Main.gameMenu || Main.worldID != world || !p.active || p.dead || Manual.On) return "minecart_interrupted";
+                            return p.mount.Active && p.mount.Cart ? "minecart_mounted" : null;
+                        }, token);
+                        if (state != null)
+                        {
+                            result["outcome"] = state;
+                            result["verified"] = state == "minecart_mounted";
+                            if (state != "minecart_mounted") result["error"] = state;
+                            break;
+                        }
+                        await Task.Delay(20, token);
+                    }
+                    if (Text(result, "outcome") == "pending_minecart")
+                    {
+                        result["outcome"] = "unconfirmed";
+                        result["error"] = "minecart_boarding_not_confirmed";
+                    }
+                    HttpServerSystem.LastInteract = Text(result, "outcome");
+                }
                 break;
             case "loot_all":
                 result = await NativeAgent.OnMain(() => args["expected_container"] != null && Int(args, "expected_container") != Main.LocalPlayer.chest

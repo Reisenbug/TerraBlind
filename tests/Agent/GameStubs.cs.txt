@@ -290,7 +290,7 @@ namespace Terraria
         public int TileFrameX, TileFrameY;
         public bool RedWire, BlueWire, GreenWire, YellowWire;
     }
-    public class Mount { public bool Active; }
+    public class Mount { public bool Active, Cart; }
     public class Projectile
     {
         public static Action<Projectile> PrepareBomb;
