@@ -381,8 +381,9 @@ namespace TerraBlind
             }
             int weaponSlot = closeWeapon;
             NPC target = closeThreat ?? FindNearest(p, idle, out weaponSlot);
+            if (target != null) weaponSlot = CombatLoadout.ReadySlot(p, weaponSlot);
 
-            if (target == null)
+            if (target == null || weaponSlot < 0)
             {
                 if (!mining) p.controlUseItem = false;
                 else RememberAnimation(p, false);

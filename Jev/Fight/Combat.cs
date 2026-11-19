@@ -218,6 +218,8 @@ namespace TerraBlind
 			_target = n;
 
 			if (WorkBusy && !_call.InterruptWork) { Last = "placing, hold fire"; NoFire("在放置"); Release(); return; }
+			slot = CombatLoadout.ReadySlot(p, slot);
+			if (slot < 0) { Last = "waiting for a hotbar slot"; Release(); return; }
 			_noFire = "";
 
 			// 放置以外的持有者一律抢:寻路砸网砸罐、挖矿都能重来,挨打不能等
@@ -232,7 +234,6 @@ namespace TerraBlind
 
 			// 【自己按键,不走 ItemUseCoordinator】。那套是为挖和放做的:会把光标吸附到附近的 tile、
 			// 按挖掘距离判够不着。武器要的只是"对着这个坐标一直挥",怪那格通常是空气
-			if (slot >= 10) { Last = "weapon not in hotbar"; NoFire("武器不在热键栏"); return; }
 			p.selectedItem = slot;
 			Main.SmartCursorWanted_Mouse = false;
 			var aim = Aim(p, Main.npc[n], p.inventory[slot]);

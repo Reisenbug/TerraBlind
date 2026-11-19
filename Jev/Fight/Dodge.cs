@@ -230,14 +230,18 @@ namespace TerraBlind
 			TrackDps();
 			Hurt(p, boss, dist, _appliedAction.Direction, _appliedAction.Horizontal, _appliedAction.Vertical);
 			Fly(p, _appliedAction.Direction);
-			Last = $"{_lastApplied} boss {dist}格 {result.Reason}";
+			Last = $"{_lastApplied} boss {dist} tiles {result.Reason}";
 		}
 
 		static bool SelectWeapon(Player p)
 		{
 			if (FightCoordinator.HoldingFallProtection(p)) return false;
-			if (CombatLoadout.PreferredType <= 0) { _attack.SelectFirstWeapon(p); return true; }
-			int slot = CombatLoadout.Select(p);
+			if (CombatLoadout.PreferredType <= 0)
+			{
+				_attack.SelectFirstWeapon(p);
+				if (CombatLoadout.CanUse(p, p.HeldItem)) return true;
+			}
+			int slot = CombatLoadout.ReadySlot(p, CombatLoadout.Select(p));
 			if (slot < 0) return false;
 			p.selectedItem = slot;
 			return true;

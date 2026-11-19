@@ -78,6 +78,7 @@ static class ScriptTests
         await ActionReferences();
         await ProductiveMiningRecovery();
         await CombatApproach();
+        BackpackWeaponHandoff();
         await ReactiveTravelExample();
         await ComposedReactions();
         await DecisionPreconditions();
@@ -1468,6 +1469,40 @@ static class ScriptTests
             HttpServerSystem.Handler=handler;AgentTools.Stop();agent.Unload();
         }
         Console.WriteLine("PASS: descent queries retain observation ownership and complete while the game frame pump remains available");
+    }
+
+    static void BackpackWeaponHandoff()
+    {
+        var player = Terraria.Main.LocalPlayer;
+        var previous = player.inventory.Take(50).ToArray();
+        int selected = player.selectedItem, animation = player.itemAnimation, itemTime = player.itemTime;
+        int preferred = CombatLoadout.PreferredType;
+        try
+        {
+            for (int i = 0; i < previous.Length; i++) player.inventory[i] = new Terraria.Item();
+            player.selectedItem = 0;
+            player.itemAnimation = player.itemTime = 0;
+            var pickaxe = new Terraria.Item { type = 3509, stack = 1, pick = 35 };
+            var weapon = new Terraria.Item { type = 1, stack = 1, damage = 14 };
+            player.inventory[0] = pickaxe;
+            player.inventory[21] = weapon;
+            CombatLoadout.PreferredType = weapon.type;
+            Check(CombatLoadout.Select(player) == 21, "weapon lost after moving out of the hotbar");
+            player.itemAnimation = 3;
+            Check(CombatLoadout.ReadySlot(player, 21) == -1 && player.inventory[21] == weapon,
+                "weapon relocation interrupted the running item animation");
+            player.itemAnimation = 0;
+            int ready = CombatLoadout.ReadySlot(player, CombatLoadout.Select(player));
+            Check(ready is >= 1 and < 10 && player.inventory[ready] == weapon && player.inventory[0] == pickaxe,
+                "weapon was not returned to an available hotbar slot");
+            Console.WriteLine("PASS: a preferred backpack weapon returns to the hotbar after the current item animation");
+        }
+        finally
+        {
+            Array.Copy(previous, player.inventory, previous.Length);
+            player.selectedItem = selected; player.itemAnimation = animation; player.itemTime = itemTime;
+            CombatLoadout.PreferredType = preferred;
+        }
     }
 
     static async Task FeedbackCombatContracts()

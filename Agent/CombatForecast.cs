@@ -324,7 +324,7 @@ public sealed class CombatForecast : ModSystem
     static JsonArray Plans(Forecast forecast, JsonArray movements)
     {
         var player = Main.LocalPlayer;
-        var weapons = player.inventory.Take(10).Where(CombatLoadout.Usable).Where(w =>
+        var weapons = player.inventory.Take(50).Where(CombatLoadout.Usable).Where(w =>
             (w.useAmmo <= 0 || player.HasAmmo(w)) && w.mana * player.manaCost <= player.statMana).GroupBy(w => w.type).Select(g => g.First()).ToArray();
         var plans = new JsonArray();
         foreach (var movement in movements)
@@ -562,7 +562,7 @@ public sealed class CombatForecast : ModSystem
         var trajectory = movement["trajectory"].AsArray();
         var player = Main.LocalPlayer;
         int type = plan["weapon_type"].GetValue<int>();
-        if (type > 0 && !player.inventory.Take(10).Any(w => w.type == type && CombatLoadout.Usable(w)
+        if (type > 0 && !player.inventory.Take(50).Any(w => w.type == type && CombatLoadout.Usable(w)
             && (w.useAmmo <= 0 || player.HasAmmo(w)) && w.mana * player.manaCost <= player.statMana))
             return new JsonObject { ["error"] = "combat_candidate_weapon_unavailable" };
         var steps = new JsonArray();
