@@ -31,6 +31,8 @@ TB_CASEBOOK_CART=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 TB_CASEBOOK_RAIL=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
+TB_CASEBOOK_RESIDENCY=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
+  python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 ~~~
 
 储物场景跑 26、28、09。社交场景跑 34 和单件饰品的 13。原版右键场景额外跑 30，使用原版回弹挡板判定。矿车场景跑 18，记录车速、下车与蘑菇入包。重铸可能耗尽次数，此时验收物品是否归还。
@@ -41,8 +43,12 @@ Storage runs cases 26, 28, and 09. Social interactions runs 34 and tries 13 agai
 
 Cases 19 and 20 each run with and without a jump and write `task-casebook-rail.json`. It records applied inputs, Featherfall, mounting, rail contact, and speed. Both reached the rails in the current tModLoader 1.4.4.9 fixtures. Horizontal speed remained zero with left and right inputs released.
 
+入住场景跑 35 和 36，记录夜间 NPC 实际瞬移、原版晶塔居民校验由不满足变为满足，以及角色传送到目标晶塔。
+
+The residency fixture runs 35 and 36. It records native NPC relocation at night, the change from insufficient to sufficient pylon residency, and player arrival at the destination pylon.
+
 | 当前验证范围 / Current coverage | 编号 / IDs |
 | --- | --- |
-| 已在隔离实机验证 / Verified in isolated game | 02, 09, 13 (单件 / one accessory), 18, 26, 28, 30, 34 |
-| 有执行脚本，完整场景待验收 / Executable with scene-specific inputs, gameplay acceptance pending | 06, 07, 31, 35, 36, 37 |
+| 已在隔离实机验证 / Verified in isolated game | 02, 09, 13 (单件 / one accessory), 18, 26, 28, 30, 34, 35, 36 |
+| 有执行脚本，完整场景待验收 / Executable with scene-specific inputs, gameplay acceptance pending | 06, 07, 31, 37 |
 | 有分段验证或缺口探针，完整目标仍阻塞 / Partial execution or blocker probes | 01, 03, 04, 05, 08, 10–12, 14–17, 19–25, 27, 29, 32, 33, 38–40 |

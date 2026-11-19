@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.IO;
 using System.Text.Json.Nodes;
@@ -23,6 +24,9 @@ public sealed class ControlTrial : ModSystem
     bool enabled, started, opened, finished;
     int frames, sandX, floor, sandPickAttempts;
     int interactionNpc = -1;
+    int additionalResident = -1;
+    Dictionary<int, Vector2> residentPositions;
+    readonly HashSet<int> residentTeleports = new();
     JsonArray cartFrames;
     Task trial;
 
@@ -99,7 +103,13 @@ public sealed class ControlTrial : ModSystem
                 ["mushrooms"] = p.CountItem(ItemID.GlowingMushroom) });
         }
         foreach (var npc in Main.npc)
-            if (npc.whoAmI != interactionNpc) npc.active = false;
+            if (npc.whoAmI != interactionNpc && npc.whoAmI != additionalResident) npc.active = false;
+            else if (residentPositions != null && npc.active)
+            {
+                if (residentPositions.TryGetValue(npc.whoAmI, out var previous) && Vector2.Distance(previous, npc.Center) > 128)
+                    residentTeleports.Add(npc.whoAmI);
+                residentPositions[npc.whoAmI] = npc.Center;
+            }
         if (!started && frames >= 60)
         {
             started = true;
@@ -122,6 +132,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CASEBOOK_RESIDENCY") == "1")
+        {
+            await TaskCaseResidency();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CASEBOOK_RAIL") == "1")
         {
             await TaskCaseRail();
@@ -273,6 +288,110 @@ public sealed class ControlTrial : ModSystem
             { ["code"] = template.Replace("\"__TB_FIXTURE__\"", inputs.ToJsonString()) });
         Console.WriteLine($"TASK_CASE {id} " + (result["value"]?.ToJsonString() ?? result["detail"]?.ToString()));
         return result;
+    }
+
+    async Task TaskCaseResidency()
+    {
+        var origin = await OnMain(() => ((int)Main.LocalPlayer.Center.X / 16, (int)Main.rockLayer + 40));
+        var report = new JsonObject();
+        foreach (bool pylonTask in new[] { false, true })
+        {
+            var rooms = await OnMain(() =>
+            {
+                Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+                var p = Main.LocalPlayer;
+                var (x, y) = origin;
+                if (interactionNpc >= 0) Main.npc[interactionNpc].active = false;
+                Main.dayTime = false;
+                Main.time = 6000;
+                p.position = new Vector2(x * 16, y * 16 - p.height);
+                p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+                for (int tx = x - 54; tx <= x + 112; tx++)
+                for (int row = y - 8; row <= y + 4; row++)
+                {
+                    var tile = Main.tile[tx, row];
+                    tile.ClearEverything();
+                    if (row >= y) tile.ResetToType(TileID.Stone);
+                }
+                for (int row = y - 5; row < y; row++)
+                {
+                    Main.tile[x - 50, row].ResetToType(TileID.Stone);
+                    Main.tile[x - 42, row].ResetToType(TileID.Stone);
+                }
+                var entries = new JsonArray();
+                foreach (var (left, type) in new[] { (x - 34, NPCID.Guide), (x - 22, NPCID.Merchant) })
+                {
+                    if (!pylonTask && type != NPCID.Guide) continue;
+                    for (int tx = left; tx <= left + 8; tx++)
+                    for (int row = y - 6; row < y; row++)
+                    {
+                        var tile = Main.tile[tx, row];
+                        if (tx == left || tx == left + 8 || row == y - 6) tile.ResetToType(TileID.WoodBlock);
+                        else tile.WallType = WallID.Wood;
+                    }
+                    for (int row = y - 3; row < y; row++) Main.tile[left, row].ClearTile();
+                    Check(WorldGen.PlaceDoor(left, y - 2, TileID.ClosedDoor), "residency_door_not_placed");
+                    WorldGen.PlaceTile(left + 3, y - 1, TileID.WorkBenches, mute: true);
+                    WorldGen.PlaceTile(left + 5, y - 1, TileID.Chairs, mute: true);
+                    WorldGen.PlaceTile(left + 3, y - 3, TileID.Torches, mute: true);
+                    int index = NPC.NewNPC(new EntitySource_Misc("residency-fixture"), (x - 46) * 16, y * 16, type);
+                    Check(index < Main.maxNPCs, "residency_npc_not_spawned");
+                    Main.npc[index].homeless = true;
+                    if (type == NPCID.Guide) interactionNpc = index;
+                    else additionalResident = index;
+                    entries.Add(new JsonObject { ["npc_type"] = type, ["room"] = new JsonObject { ["x"] = left + 4, ["y"] = y - 3 } });
+                }
+                if (pylonTask)
+                {
+                    foreach (var (left, style) in new[] { (x - 10, 3), (x + 104, 8) })
+                    {
+                        for (int dx = 0; dx < 3; dx++)
+                        for (int dy = 0; dy < 4; dy++)
+                        {
+                            var tile = Main.tile[left + dx, y - 4 + dy];
+                            tile.ResetToType(TileID.TeleportationPylon);
+                            tile.TileFrameX = (short)(style * 54 + dx * 18);
+                            tile.TileFrameY = (short)(dy * 18);
+                        }
+                        TETeleportationPylon.Place(left, y - 4);
+                    }
+                }
+                residentTeleports.Clear();
+                residentPositions = new Dictionary<int, Vector2>();
+                return entries;
+            });
+            await DelayFrames(15);
+            var (x, y) = origin;
+            var args = new JsonObject { ["wait_at"] = new JsonObject { ["x"] = x + 103, ["y"] = y - 1 } };
+            string id = pylonTask ? "35-repair-pylon-residency" : "36-wait-npc-return";
+            if (pylonTask)
+            {
+                args["houses"] = rooms;
+                args["x"] = x - 10;
+                args["y"] = y - 4;
+            }
+            else
+            {
+                args["npc_type"] = NPCID.Guide;
+                args["room"] = rooms[0]["room"].DeepClone();
+            }
+            var receipt = await RunTaskCase(id, args);
+            var proof = await OnMain(() => new JsonObject
+            {
+                ["guide_teleported"] = residentTeleports.Contains(interactionNpc),
+                ["merchant_teleported"] = residentTeleports.Contains(additionalResident),
+                ["arrived"] = Math.Abs(Main.LocalPlayer.Center.X / 16f - (x - 10)) < 6
+            });
+            report[id] = new JsonObject { ["receipt"] = receipt, ["proof"] = proof };
+        }
+        File.WriteAllText(Path.Combine(Main.SavePath, "task-casebook-residency.json"), report.ToJsonString());
+        Check(report["36-wait-npc-return"]["receipt"]["value"]?["ok"]?.GetValue<bool>() == true
+            && report["36-wait-npc-return"]["proof"]["guide_teleported"].GetValue<bool>(), "casebook_npc_return_unverified");
+        Check(report["35-repair-pylon-residency"]["receipt"]["value"]?["ok"]?.GetValue<bool>() == true
+            && report["35-repair-pylon-residency"]["proof"]["arrived"].GetValue<bool>(), "casebook_pylon_repair_unverified");
+        Console.WriteLine("TASK_CASEBOOK_RESIDENCY_COMPLETE cases=2");
     }
 
     async Task TaskCaseRail()

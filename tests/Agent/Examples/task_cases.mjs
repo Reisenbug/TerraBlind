@@ -386,13 +386,21 @@ export const cases = {
   },
 
   '35-repair-pylon-residency': (i, h) => {
+    const destination = () => h.call('pylon_list').pylons.find(p => p.x === i.x && p.y === i.y);
+    const original = destination();
+    h.check(original && original.vanilla_residency_ok === false, 'requires_missing_pylon_residents', original);
     for (const housing of i.houses) h.assign(housing.room, h.npc(housing.npc_type)[0]);
     h.move(i.wait_at.x, i.wait_at.y);
-    const observed = h.call('pylon_list');
-    const pylon = observed.pylons.find(p => p.x === i.x && p.y === i.y);
-    if (pylon?.vanilla_residency_ok !== true) return h.blocked('pylon_residency_still_unconfirmed', {pylon});
-    const arrival = h.call('pylon_use', {x: i.x, y: i.y});
-    return arrival.outcome === 'arrived' ? h.done({arrival}) : h.blocked('pylon_arrival_unconfirmed', arrival);
+    for (let n = 0; n < Math.min(i.samples ?? 10, 20); n++) {
+      const pylon = destination();
+      if (pylon?.vanilla_residency_ok === true) {
+        const arrival = h.call('pylon_use', {x: i.x, y: i.y});
+        return arrival.outcome === 'arrived' ? h.done({arrival, residency: {before: false, after: true}})
+          : h.blocked('pylon_arrival_unconfirmed', arrival);
+      }
+      h.act([], 30);
+    }
+    return h.blocked('pylon_residency_still_unconfirmed', {pylon: destination()});
   },
 
   '36-wait-npc-return': (i, h) => {
@@ -401,13 +409,13 @@ export const cases = {
     const resident = h.npc(i.npc_type)[0];
     h.check(resident, 'resident_missing');
     const assigned = h.assign(i.room, resident);
+    const nearHome = n => n && Math.abs(n.cell[0] - assigned.home_x) <= 4 && Math.abs(n.cell[1] - assigned.home_y) <= 4;
+    if (nearHome(resident)) return h.blocked('resident_already_at_home', {actual: resident.cell});
     h.move(i.wait_at.x, i.wait_at.y);
-    const nearHome = n => n?.cell && Math.abs(n.cell[0] - assigned.home_x) <= 8 && Math.abs(n.cell[1] - assigned.home_y) <= 8;
-    const nearBefore = nearHome(resident);
     for (let n = 0; n < (i.samples ?? 10); n++) {
       const actual = h.npc(i.npc_type).find(npc => npc.idx === resident.idx);
       if (nearHome(actual)) return h.done({home: {x: assigned.home_x, y: assigned.home_y}, actual: actual.cell,
-        at_home_before: Boolean(nearBefore)});
+        before: resident.cell});
       h.act([], 30);
     }
     return h.blocked('npc_not_observed_at_home', {npc: resident.idx});
