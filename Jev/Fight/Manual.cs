@@ -1,4 +1,5 @@
 using Terraria;
+using Terraria.Localization;
 
 namespace TerraBlind
 {
@@ -10,7 +11,9 @@ namespace TerraBlind
 		public static void Toggle()
 		{
 			On = !On;
-			Main.NewText(On ? "[TerraBlind] 人工" : "[TerraBlind] 自动", 255, 220, 120);
+			string mode = Language.GetTextValue(On
+				? "Mods.TerraBlind.Exploration.ManualControl" : "Mods.TerraBlind.Exploration.AutomaticControl");
+			Main.NewText($"[TerraBlind] {mode}", 255, 220, 120);
 			DiagLog.Write($"[manual] {(On ? "转人工" : "恢复自动")}");
 		}
 	}

@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Terraria;
+using Terraria.Localization;
 using Terraria.ModLoader;
 
 namespace TerraBlind;
@@ -18,6 +19,8 @@ public sealed class ThinkingPause : ModSystem
     static int uncoveredFrames, uncoveredRun, longestUncoveredRun;
     static bool positionKnown;
     bool manualSwitch;
+    bool dragonLensWasPaused;
+    const string ExplorationPauseEvent = "exploration_paused";
     public static bool Frozen => frozenAt != 0;
     public static double FrozenMilliseconds => FrozenDuration.TotalMilliseconds;
     static TimeSpan FrozenDuration => TimeSpan.FromSeconds((frozenTicks
@@ -41,7 +44,7 @@ public sealed class ThinkingPause : ModSystem
     {
         frozenAt = frozenTicks = 0;
         worldFrames = transitions = 0;
-        reason = null; manualSwitch = false;
+        reason = null; manualSwitch = false; dragonLensWasPaused = false;
         history.Clear(); started = Stopwatch.GetTimestamp();
         uncoveredFrames = uncoveredRun = longestUncoveredRun = 0;
         positionKnown = false;
@@ -50,8 +53,46 @@ public sealed class ThinkingPause : ModSystem
 
     public override void OnWorldUnload()
     {
+        dragonLensWasPaused = false;
         SetFrozen(null);
         DiagLog.Write("[agent_freeze_summary] " + Snapshot());
+    }
+
+    public override void PostUpdateInput()
+    {
+        if (Main.gameMenu || Main.netMode != 0 || !Main.LocalPlayer.active) return;
+
+        bool paused = FreezeSystem.IsFrozen;
+        if (paused == dragonLensWasPaused) return;
+        dragonLensWasPaused = paused;
+        if (!paused)
+        {
+            Main.NewText(Language.GetTextValue("Mods.TerraBlind.Exploration.Unpaused"), 120, 220, 180);
+            return;
+        }
+
+        var player = Main.LocalPlayer;
+        var signal = new JsonObject
+        {
+            ["event"] = ExplorationPauseEvent,
+            ["world_id"] = Main.worldID,
+            ["tick"] = Main.GameUpdateCount,
+            ["x"] = (int)(player.Center.X / 16),
+            ["y"] = (int)(player.Bottom.Y / 16),
+            ["hp"] = player.statLife,
+            ["agent_status"] = NativeAgent.Status,
+            ["tool"] = AgentTools.ControlSession.Tool,
+            ["navigation_active"] = RecedingNav.Active,
+            ["navigation_state"] = NavCoordinator.State.ToString(),
+            ["navigation_reason"] = NavCoordinator.FailReason,
+            ["world_frozen"] = true
+        }.ToJsonString();
+        Mod.Logger.Info(signal);
+        DiagLog.WriteEvent(signal);
+        HttpServerSystem.PushEvent(ExplorationPauseEvent, signal);
+        NativeAgent.Stop();
+        if (RecedingNav.Active || ActExecutor.IsActive || FightCoordinator.IsActive) AgentTools.StopInputs();
+        Main.NewText(Language.GetTextValue("Mods.TerraBlind.Exploration.Paused"), 255, 220, 120);
     }
 
     public override void UpdateUI(GameTime gameTime)

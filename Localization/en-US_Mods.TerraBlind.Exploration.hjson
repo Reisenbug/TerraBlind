@@ -1,0 +1,4 @@
+Paused: Exploration paused. Issue marked in the log. Use DragonLens Pause again to unfreeze the world.
+Unpaused: Exploration pause cleared. Use /tb /goal resume to resume the agent goal.
+ManualControl: Manual control
+AutomaticControl: Automatic control

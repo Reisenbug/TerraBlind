@@ -60,6 +60,16 @@ return tool('collect_treasure', {x: chest.x, y: chest.y});
 
 工具的完整参数见 [Tools.json](Tools.json)。模型可读的运行约定见 [System.txt](System.txt)。
 
+## 自由探索 / Free exploration
+
+~~~text
+/tb /goal Explore freely. Choose your route, collect useful finds, and keep exploring until I stop you.
+~~~
+
+发现问题时，点 DragonLens 的 **Pause** 按钮，或者按你给这个按钮绑定的键。它会冻结单人世界，TerraBlind 会暂停 Agent，并把现场坐标、血量、当前工具和导航状态写入 `exploration_paused` 日志。用同一个按钮解冻，输入 `/tb /goal resume` 继续原目标。
+
+Use DragonLens **Pause**, or its assigned keybind, when you see a problem. DragonLens freezes the single-player world. TerraBlind stops the agent and writes an `exploration_paused` event with the location, health, active tool, and navigation status. Use the same button to unfreeze, then enter `/tb /goal resume` to continue the goal.
+
 ## 原版制作与 Mod 按键 / Native crafting and mod keybinds
 
 | 接口 / API | 用法 / Usage |

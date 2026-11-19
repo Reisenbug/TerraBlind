@@ -10,6 +10,7 @@ using Microsoft.Xna.Framework;
 using MonoMod.Cil;
 using Terraria;
 using Terraria.DataStructures;
+using Terraria.GameInput;
 using Terraria.GameContent.Tile_Entities;
 using Terraria.ID;
 using Terraria.ModLoader;
@@ -22,6 +23,10 @@ public sealed class ControlTrial : ModSystem
 {
     readonly ConcurrentQueue<Action> queue = new();
     bool enabled, started, opened, finished;
+    bool explorationPauseTrial;
+    string explorationObjective;
+    int explorationInputFrames;
+    double explorationWorldTime;
     int frames, sandX, floor, sandPickAttempts;
     int interactionNpc = -1;
     int additionalResident = -1;
@@ -43,8 +48,60 @@ public sealed class ControlTrial : ModSystem
         if (enabled && Environment.GetEnvironmentVariable("TB_NATIVE_PRIMITIVES") == "1")
             PrimitiveBindingProbe.Binding = KeybindLoader.RegisterKeybind(Mod, "PrimitiveInputProbe", "F10");
         if (enabled) { IL_Main.DoUpdate += Focus; On_Main.Update += OpenWorld; On_Player.PickTile += ObservePick; }
+        explorationPauseTrial = enabled && Environment.GetEnvironmentVariable("TB_EXPLORATION_PAUSE_CHECK") == "1";
+        if (explorationPauseTrial) explorationObjective = Environment.GetEnvironmentVariable("TB_EXPLORATION_OBJECTIVE");
+        if (explorationPauseTrial && explorationObjective == null) On_PlayerInput.UpdateInput += CheckExplorationPauseInput;
     }
-    public override void Unload() { if (enabled) { IL_Main.DoUpdate -= Focus; On_Main.Update -= OpenWorld; On_Player.PickTile -= ObservePick; } }
+    public override void Unload()
+    {
+        if (explorationPauseTrial && explorationObjective == null) On_PlayerInput.UpdateInput -= CheckExplorationPauseInput;
+        if (enabled) { IL_Main.DoUpdate -= Focus; On_Main.Update -= OpenWorld; On_Player.PickTile -= ObservePick; }
+    }
+
+    void CheckExplorationPauseInput(On_PlayerInput.orig_UpdateInput original)
+    {
+        original();
+        if (Main.gameMenu || !Main.LocalPlayer.active || finished) return;
+        try
+        {
+            switch (++explorationInputFrames)
+            {
+                case 30:
+                    ToggleDragonLensPause();
+                    break;
+                case 31:
+                    Check(FreezeSystem.IsFrozen, "dragonlens_did_not_pause");
+                    explorationWorldTime = Main.time;
+                    break;
+                case 45:
+                    Check(FreezeSystem.IsFrozen && Main.time == explorationWorldTime, "world_advanced_during_pause");
+                    ToggleDragonLensPause();
+                    break;
+                case 50:
+                    Check(!FreezeSystem.IsFrozen && Main.time != explorationWorldTime, "world_did_not_resume");
+                    var text = Terraria.Localization.Language.GetTextValue("Mods.TerraBlind.Exploration.Paused");
+                    Check(text.StartsWith("Exploration paused.", StringComparison.Ordinal), "pause_english_localization_missing: " + text);
+                    Console.WriteLine("EXPLORATION_PAUSE_COMPLETE dragonlens=true frozen_frames=14 resumed=true english_localized=true");
+                    File.WriteAllText(Path.Combine(Main.SavePath, "agent-engine-result.json"), "{\"ok\":true}");
+                    finished = true;
+                    break;
+            }
+        }
+        catch (Exception error)
+        {
+            Console.WriteLine("EXPLORATION_PAUSE_FAILED " + error);
+            File.WriteAllText(Path.Combine(Main.SavePath, "agent-engine-result.json"),
+                new JsonObject { ["ok"] = false, ["detail"] = error.Message }.ToJsonString());
+            finished = true;
+        }
+    }
+
+    static void ToggleDragonLensPause()
+    {
+        Check(ModLoader.TryGetMod("DragonLens", out var dragonLens), "dragonlens_missing");
+        var pause = dragonLens.Code.GetType("DragonLens.Content.Tools.Developer.Pause", throwOnError: true);
+        pause.GetMethod("OnActivate").Invoke(Activator.CreateInstance(pause, nonPublic: true), null);
+    }
     void ObservePick(On_Player.orig_PickTile original, Player player, int x, int y, int power)
     {
         if (shaftPicks != null && player == Main.LocalPlayer)
@@ -103,6 +160,19 @@ public sealed class ControlTrial : ModSystem
         while (queue.TryDequeue(out var work)) work();
         if (Main.gameMenu || !Main.LocalPlayer.active) return;
         frames++;
+        if (explorationPauseTrial)
+        {
+            if (explorationObjective != null && !Main.gameMenu && Main.LocalPlayer.active && ++frames == 90)
+            {
+                Config.I.AgentEnabled = true;
+                Config.I.AiClient = false;
+                Config.I.AgentUseCodex = true;
+                Config.I.AgentFreezeWhileThinking = false;
+                NativeAgent.Submit("/goal " + explorationObjective);
+                Console.WriteLine("EXPLORATION_OBJECTIVE_SUBMITTED");
+            }
+            return;
+        }
         if (gravityFrames != null)
         {
             var p = Main.LocalPlayer;

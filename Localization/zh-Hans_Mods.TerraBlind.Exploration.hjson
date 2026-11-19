@@ -1,0 +1,4 @@
+Paused: 探索已暂停，已标记问题现场。再点一次 DragonLens 的暂停按钮解冻世界。
+Unpaused: 已解除暂停。输入 /tb /goal resume 恢复 Agent 目标。
+ManualControl: 人工控制
+AutomaticControl: 自动控制
