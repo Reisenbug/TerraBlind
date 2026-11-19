@@ -61,6 +61,34 @@ function helpers() {
     if (at) step.at = at;
     return call('act', {steps: [step], timeout_frames: frames + 60});
   };
+  const railEntry = (input, featherfall = false) => {
+    const {track, jump = true} = input;
+    const placed = place(track, input.track_item);
+    check(placed.cells[0].verified === true, 'track_not_placed', placed);
+    if (featherfall) {
+      const potion = use(input.potion_slot, track);
+      check(potion.verified === true, 'featherfall_not_consumed', potion);
+    }
+    const fields = featherfall ? ['player', 'buffs'] : ['player'];
+    const before = call('get_state', {fields});
+    if (featherfall) check(before.buffs.some(buff => buff.id === 8 && buff.time_left > 0), 'featherfall_missing');
+    let boarding;
+    if (featherfall && jump) {
+      const p = before.player;
+      const at = [track.x - Math.floor((p.pos.x + p.width / 2 - 0.001) / 16),
+        track.y - Math.floor((p.pos.y + p.height - 2) / 16)];
+      boarding = call('act', {steps: [
+        {keys: ['up', 'jump'], until: {frames: 1}},
+        {keys: ['up', 'use_tile'], at, until: {frames: 30}},
+      ], timeout_frames: 90});
+    } else {
+      if (jump) act(['jump'], 1);
+      boarding = read('interact', track);
+    }
+    const after = call('get_state', {fields});
+    return blocked('entry_speed_gain_not_verified', {before: before.player.vel, after: after.player.vel,
+      boarding: boarding.outcome, featherfall: featherfall && after.buffs.some(buff => buff.id === 8 && buff.time_left > 0)});
+  };
   const assign = (room, resident) => {
     check(resident, 'resident_missing', room);
     check(call('housing', {action: 'check', ...room}).suitable === true, 'housing_invalid', room);
@@ -69,7 +97,7 @@ function helpers() {
     return result;
   };
   return {read, check, call, blocked, done, inventory, stock, itemAt, move, npc, tile, use, place,
-    click, open, transfer, craft, gather, editCells, act, assign, calls: () => callCount};
+    click, open, transfer, craft, gather, editCells, act, railEntry, assign, calls: () => callCount};
 }
 
 // Each function runs through the game's existing run_script host. A blocked result is a capability probe,
@@ -265,11 +293,9 @@ export const cases = {
     return h.blocked('station_stop_not_observed', {player: readPlayer()});
   },
 
-  '19-rail-boost': (i, h) => h.blocked('missing_same_clock_airborne_entry_and_velocity_verification',
-    {track: h.read('opportunity_assess', i.track)}),
+  '19-rail-boost': (i, h) => h.railEntry(i),
 
-  '20-featherfall-up-rail-boost': (i, h) => h.blocked('missing_buff_lifetime_and_upward_track_entry_frame_verification',
-    {track: h.read('opportunity_assess', i.track)}),
+  '20-featherfall-up-rail-boost': (i, h) => h.railEntry(i, true),
 
   '21-grapple-only': (i, h) => h.blocked('no_grapple_only_route_with_confirmed_attach_release',
     {site: h.read('inspect_terrain', {radius: 8}), destination: i.destination}),

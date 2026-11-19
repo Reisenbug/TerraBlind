@@ -29,11 +29,17 @@ TB_CASEBOOK_HOUSE=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 TB_CASEBOOK_CART=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
   python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
+TB_CASEBOOK_RAIL=1 TB_TASK_CASEBOOK=/tmp/tb-task-casebook-bundle.json \
+  python3 tests/Agent/Engine/run.py --control --world /path/to/Checks.wld
 ~~~
 
 储物场景跑 26、28、09。社交场景跑 34 和单件饰品的 13。原版右键场景额外跑 30，使用原版回弹挡板判定。矿车场景跑 18，记录车速、下车与蘑菇入包。重铸可能耗尽次数，此时验收物品是否归还。
 
 Storage runs cases 26, 28, and 09. Social interactions runs 34 and tries 13 against one accessory. The world-interaction fixture runs 30 and reads the vanilla bumper predicate. The house fixture runs 02, builds from materials and checks native housing. The minecart fixture runs 18 and records speed, dismount, and mushroom pickup. Reforging can hit the roll limit, in which case the fixture checks that the accessory was returned. The runner copies the world into an isolated save and prints each result as `TASK_CASE`.
+
+19 和 20 各跑有跳与无跳两次，报告写入 `task-casebook-rail.json`。记录实际按键、羽落、上车、接触铁轨和车速。当前 tModLoader 1.4.4.9 的无左右输入对照里，两项都已上轨，水平速度保持为零。
+
+Cases 19 and 20 each run with and without a jump and write `task-casebook-rail.json`. It records applied inputs, Featherfall, mounting, rail contact, and speed. Both reached the rails in the current tModLoader 1.4.4.9 fixtures. Horizontal speed remained zero with left and right inputs released.
 
 | 当前验证范围 / Current coverage | 编号 / IDs |
 | --- | --- |

@@ -95,6 +95,7 @@ public sealed class ControlTrial : ModSystem
             var p = Main.LocalPlayer;
             cartFrames.Add(new JsonObject { ["frame"] = frames, ["x"] = p.position.X, ["y"] = p.position.Y,
                 ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["cart"] = p.mount.Active && p.mount.Cart,
+                ["track"] = p.onTrack, ["up"] = p.controlUp, ["jump"] = p.controlJump, ["featherfall"] = p.HasBuff(BuffID.Featherfall),
                 ["mushrooms"] = p.CountItem(ItemID.GlowingMushroom) });
         }
         foreach (var npc in Main.npc)
@@ -121,6 +122,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CASEBOOK_RAIL") == "1")
+        {
+            await TaskCaseRail();
+            return;
+        }
         if (Environment.GetEnvironmentVariable("TB_CASEBOOK_CART") == "1")
         {
             await TaskCaseCart();
@@ -267,6 +273,76 @@ public sealed class ControlTrial : ModSystem
             { ["code"] = template.Replace("\"__TB_FIXTURE__\"", inputs.ToJsonString()) });
         Console.WriteLine($"TASK_CASE {id} " + (result["value"]?.ToJsonString() ?? result["detail"]?.ToString()));
         return result;
+    }
+
+    async Task TaskCaseRail()
+    {
+        var report = new JsonObject();
+        bool observed = true;
+        var origin = await OnMain(() => ((int)Main.LocalPlayer.Center.X / 16, (int)Main.LocalPlayer.Bottom.Y / 16 + 4));
+        foreach (bool featherfall in new[] { false, true })
+        foreach (bool jump in new[] { false, true })
+        {
+            var site = await OnMain(() =>
+            {
+                Config.I.AgentEnabled = true; Config.I.AiClient = false;
+                NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+                var p = Main.LocalPlayer;
+                if (p.mount.Active) p.QuickMount();
+                p.RemoveAllGrapplingHooks();
+                p.ClearBuff(BuffID.Featherfall);
+                var (x, y) = origin;
+                int ty = y - (featherfall ? 3 : 1);
+                for (int tx = x - 8; tx <= x + 18; tx++)
+                for (int row = y - 9; row <= y + 3; row++)
+                {
+                    var tile = Main.tile[tx, row];
+                    tile.ClearEverything();
+                    if (row >= y) tile.ResetToType(TileID.Stone);
+                }
+                for (int tx = x + 3; tx <= x + 14; tx++) Minecart.PlaceTrack(Main.tile[tx, ty], 0);
+                for (int tx = x + 3; tx <= x + 14; tx++) Minecart.FrameTrack(tx, ty, pound: false, mute: true);
+                p.position = new Vector2(x * 16, y * 16 - p.height);
+                p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+                foreach (var item in p.inventory) item.TurnToAir();
+                p.inventory[0].SetDefaults(ItemID.MinecartTrack);
+                p.inventory[0].stack = 10;
+                if (featherfall) p.inventory[1].SetDefaults(ItemID.FeatherfallPotion);
+                cartFrames = new JsonArray();
+                return (X: x + 2, Y: ty);
+            });
+            await DelayFrames(15);
+            string id = featherfall ? "20-featherfall-up-rail-boost" : "19-rail-boost";
+            var receipt = await RunTaskCase(id, new JsonObject
+            {
+                ["track"] = new JsonObject { ["x"] = site.X, ["y"] = site.Y },
+                ["track_item"] = (int)ItemID.MinecartTrack, ["potion_slot"] = 1, ["jump"] = jump
+            });
+            await DelayFrames(20);
+            var samples = await OnMain(() => { var result = cartFrames; cartFrames = null; return result; });
+            var mounted = samples.Where(s => s["cart"].GetValue<bool>()).ToArray();
+            var attached = mounted.FirstOrDefault();
+            var onRail = mounted.FirstOrDefault(s => s["track"].GetValue<bool>());
+            var launched = samples.FirstOrDefault(s => !s["cart"].GetValue<bool>() && s["jump"].GetValue<bool>()
+                && s["vy"].GetValue<float>() < 0);
+            int jumpFrame = launched?["frame"]?.GetValue<int>() ?? -1;
+            int mountFrame = attached?["frame"]?.GetValue<int>() ?? -1;
+            float? speed = mounted.Length == 0 ? null : mounted.Max(s => Math.Abs(s["vx"].GetValue<float>()));
+            bool controlsObserved = receipt["value"] != null && attached != null && onRail != null
+                && (jump ? jumpFrame >= 0 && mountFrame > jumpFrame : jumpFrame < 0)
+                && (!featherfall || attached["featherfall"].GetValue<bool>()
+                    && (!jump || attached["up"].GetValue<bool>() && onRail["up"].GetValue<bool>()));
+            observed &= controlsObserved;
+            report[id + (jump ? "-jump" : "-control")] = new JsonObject
+            {
+                ["receipt"] = receipt, ["frames"] = samples, ["controls_observed"] = controlsObserved,
+                ["jump_frame"] = jumpFrame, ["mount_frame"] = mountFrame, ["peak_horizontal_speed"] = speed
+            };
+        }
+        File.WriteAllText(Path.Combine(Main.SavePath, "task-casebook-rail.json"), report.ToJsonString());
+        Check(observed, "casebook_rail_control_or_contact_not_observed");
+        Console.WriteLine("TASK_CASEBOOK_RAIL_MEASURED attempts=4");
     }
 
     async Task TaskCaseCart()
