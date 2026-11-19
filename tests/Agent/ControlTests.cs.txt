@@ -90,6 +90,7 @@ static class ControlTests
         session.End(building);
         Check(session.Begin("hell_run", null, out long hell) == null, "legacy hell workflow could not acquire input");
         Check(session.CheckWorkflow("build_house") == null && session.CheckWorkflow("wof_prep") == null
+            && session.CheckWorkflow("wof_fight") == null
             && session.CheckWorkflow("start_run") != null && session.CheckWorkflow("collect_treasure") != null,
             "hell workflow blocked its own phases or admitted an unrelated workflow");
         session.End(hell);

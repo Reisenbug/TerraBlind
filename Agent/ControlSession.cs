@@ -103,7 +103,7 @@ public sealed class AgentControlSession
 
     public JsonObject CheckWorkflow(string ownerTool)
     {
-        bool child = tool == "hell_run" && ownerTool is "build_house" or "wof_prep";
+        bool child = tool == "hell_run" && ownerTool is "build_house" or "wof_prep" or "wof_fight";
         if (current != 0 && tool != ownerTool && !child)
             return new JsonObject { ["error"] = "workflow_owned_by_another_action", ["owner"] = tool, ["requested"] = ownerTool };
         return Check(ControlBehavior.Workflow, ControlChannels.All, delegated: true);
