@@ -11,8 +11,8 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch", "feedback_combat" };
-    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch", "feedback_combat" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates" };
+    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates" };
     internal static string BuiltinIndex => string.Join("\n", BuiltIns.Select(name =>
         name + "@0: " + Example(name)["detail"].ToString().Split('。')[0]));
 
@@ -25,6 +25,74 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "build_block_pattern") return Template(name,
+            "就地复建8×8以内的完整砖和半砖。input含x、y、pattern（block_region的结果）。Rebuild a nearby block pattern with full and half blocks. Exact foreground verification, preserves occupied cells.",
+            """
+            const {x,y,pattern}=input;
+            const size=n=>Number.isInteger(n)&&n>=1&&n<=8;
+            const key=c=>c.dx+','+c.dy;
+            if(!Number.isInteger(x)||!Number.isInteger(y)||!size(pattern?.width)||!size(pattern?.height)
+              ||!Array.isArray(pattern.cells)||pattern.cells.length===0
+              ||pattern.cells.some(c=>!Number.isInteger(c.dx)||!Number.isInteger(c.dy)||c.dx<0||c.dy<0
+                ||c.dx>=pattern.width||c.dy>=pattern.height||!Number.isInteger(c.type)||c.type<0||!['full','half'].includes(c.shape))
+              ||new Set(pattern.cells.map(key)).size!==pattern.cells.length) return {ok:false,error:'invalid_block_pattern'};
+            const region={x,y,width:pattern.width,height:pattern.height};
+            const snapshot=()=>tool('block_region',region);
+            const wanted=new Map(pattern.cells.map(c=>[key(c),c]));
+            let current=snapshot();
+            if(!current.ok) return current;
+            const conflict=current.cells.find(c=>!wanted.has(key(c))||wanted.get(key(c)).type!==c.type
+              ||c.shape!==wanted.get(key(c)).shape&&(c.shape!=='full'||wanted.get(key(c)).shape!=='half'));
+            if(conflict) return {ok:false,error:'block_pattern_occupied',cell:conflict};
+            const inventory=tool('inventory_review').inventory;
+            const materials=new Map(inventory.filter(i=>i.create_tile>=0&&!i.favorited).map(i=>[i.create_tile,i.type]));
+            const hammer=inventory.find(i=>i.hammer>0&&i.pick===0);
+            const existing=new Map(current.cells.map(c=>[key(c),c]));
+            const pending=pattern.cells.filter(c=>existing.get(key(c))?.shape!==c.shape);
+            const missing=pending.find(c=>!existing.has(key(c))&&!materials.has(c.type));
+            if(missing) return {ok:false,error:'block_material_missing',cell:missing};
+            if(!hammer&&pending.some(c=>c.shape==='half')) return {ok:false,error:'hammer_missing'};
+            let changed=0;
+            for(const c of pending.sort((a,b)=>b.dy-a.dy||a.dx-b.dx)){
+              const target={x:x+c.dx,y:y+c.dy};
+              if(!existing.has(key(c))){
+                const placed=tool('place_at',{...target,local:true,item:String(materials.get(c.type))});
+                if(!placed.ok) return {ok:false,error:'block_placement_failed',cell:c,changed,placement:placed.cells?.[0]};
+              }
+              if(c.shape==='half'){
+                const state=snapshot();
+                const tile=state.cells?.find(tile=>key(tile)===key(c));
+                if(!tile||tile.type!==c.type||tile.shape!=='full') return {ok:false,error:'hammer_target_changed',cell:c,changed};
+                const currentHammer=tool('inventory_review').inventory.find(i=>i.type===hammer.type&&i.hammer>0&&i.pick===0);
+                if(!currentHammer) return {ok:false,error:'hammer_missing',cell:c,changed};
+                const action=tool('use_item',{...target,slot:currentHammer.slot,strict:true,duration_ticks:120,target_shape:'half'});
+                if(!('verified' in action)||!action.verified) return {ok:false,error:'hammer_action_failed',cell:c,changed,action};
+              }
+              const actual=snapshot().cells?.find(tile=>key(tile)===key(c));
+              if(!actual||actual.type!==c.type||actual.shape!==c.shape)
+                return {ok:false,error:'block_pattern_cell_mismatch',cell:c,actual:actual??null,changed};
+              changed++;
+            }
+            current=snapshot();
+            const verified=current.ok&&current.cells.length===wanted.size
+              &&current.cells.every(c=>wanted.get(key(c))?.type===c.type&&wanted.get(key(c))?.shape===c.shape);
+            return {ok:verified,changed,verified,error:verified?null:'block_pattern_mismatch'};
+            """);
+        if (name == "travel_disarm_plates") return Template(name,
+            "沿导航走，发现压力板且允许拆除时，在踩到之前拆掉并接回原目的地。Travel to x/y with allow_removal:true to disarm observed pressure plates in reach and resume.",
+            """
+            if(!Number.isInteger(input.x)||!Number.isInteger(input.y)) return {ok:false,error:'invalid_destination'};
+            const route={x:input.x,y:input.y,mode:input.mode??'stand',avoid_pressure_plates:true};
+            let removed=0;
+            for(let i=0;i<9;i++){
+              const result=tool('nav_to',route);
+              if(!('error' in result)||result.error!=='navigation_near_trap'||!input.allow_removal||i===8)
+                return {...result,removed};
+              const fix=skill('recover_navigation',0,{error:'navigation_near_trap',allow_trigger_removal:true,local_only:true,traps:result.trap_tiles});
+              if(!fix.retry) return {...result,removed,disarm:fix};
+              removed+=fix.removed;
+            }
+            """);
         if (name == "feedback_combat") return Template(name,
             "实验性持续反馈控制。input含context、destination、instruction和上次intent/last_request；allow_navigation允许临时接管行进。Jev判断移动意图和武器，逐帧执行器持续按键，脚本异步更新；现场事实包括实际生效帧数、受阻帧数和已排队的导航按键。导航已满足移动意图时保留原轨迹。每个意图最多2秒，手动输入优先。需以实际受伤和推进效果评估。",
             """
@@ -374,8 +442,9 @@ public sealed class ScriptLibrary
                 return {retry:false,reason:'hazard_evidence_changed'};
               const action={slot:pick.slot,x:target.x,y:target.y,strict:true};
               if(contact) action.duration_ticks=16;
+              else if(input.local_only) action.duration_ticks=60;
               const result=tool('use_item',action);
-              if(result.error||result.outcome==='no_progress') return {retry:false,reason:result.error??result.reason??result.outcome};
+              if(('error' in result&&result.error)||result.outcome==='no_progress') return {retry:false,reason:result.error??result.reason??result.outcome};
               const checked=tool('opportunity_assess',{x:target.x,y:target.y});
               if(!checked.ok||checked.target.has_tile&&checked.target.tile_type===target.type)
                 return {retry:false,reason:'hazard_not_removed'};

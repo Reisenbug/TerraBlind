@@ -1280,7 +1280,7 @@ public static partial class AgentTools
     static long invocationSequence;
     internal static int QueriesInFlight;
     static readonly AsyncLocal<long> scriptInvocation = new();
-    static bool ObservationTool(string name) => name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain"
+    static bool ObservationTool(string name) => name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain" or "block_region"
         or "find_descent" or "find_biome"
         or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "jev_judge" or "item_info" or "wiki_search" or "wiki_page"
         or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status" or "action_query"
@@ -1785,6 +1785,9 @@ public static partial class AgentTools
                 return (await ManageControl(args, token)).ToJsonString();
             case "inspect_terrain":
                 return (await NativeAgent.OnMain(() => TerrainInspection.Read(Int(args, "radius", 6)), token)).ToJsonString();
+            case "block_region":
+                return (await NativeAgent.OnMain(() => TerrainInspection.BlockRegion(Int(args, "x", -1), Int(args, "y", -1),
+                    Int(args, "width"), Int(args, "height")), token)).ToJsonString();
             case "terrain_map":
                 return (await NativeAgent.OnMain(() => TerrainMap.Read(args), token)).ToJsonString(ModelJson);
             case "opportunity_assess":
@@ -2588,6 +2591,8 @@ public static partial class AgentTools
                 }
                 break;
             case "use_item":
+                bool shapeHalf = Text(args, "target_shape") == "half";
+                int shapeX = Int(args, "x"), shapeY = Int(args, "y");
                 var usedItem = await NativeAgent.OnMain(() =>
                 {
                     var player = Main.LocalPlayer;
@@ -2596,9 +2601,25 @@ public static partial class AgentTools
                     var item = player.inventory[slot];
                     return new JsonObject { ["type"] = item.type, ["consumable"] = item.consumable, ["heal_life"] = item.healLife,
                         ["started_tick"] = (ulong)Main.GameUpdateCount,
+                        ["hammer"] = item.hammer > 0 && item.pick == 0,
                         ["collect_tool"] = item.pick > 0 || item.axe > 0 || item.hammer > 0,
                         ["count"] = player.inventory.Where(i => i.type == item.type).Sum(i => i.stack) };
                 }, token);
+                if (shapeHalf && (usedItem?["hammer"]?.GetValue<bool>() != true
+                    || !Bool(args, "strict") || Int(args, "duration_ticks") is < 1 or > 120))
+                    return "{\"error\":\"half_block_needs_bounded_strict_hammer\"}";
+                JsonObject ObservedShape()
+                {
+                    if (!shapeHalf || !WorldGen.InWorld(shapeX, shapeY)) return null;
+                    var tile = Main.tile[shapeX, shapeY];
+                    return tile.HasUnactuatedTile && tile.IsHalfBlock
+                        ? new JsonObject { ["outcome"] = "shaped", ["verified"] = true } : null;
+                }
+                if (shapeHalf)
+                {
+                    var alreadyShaped = await NativeAgent.OnMain(ObservedShape, token);
+                    if (alreadyShaped != null) { result = alreadyShaped; break; }
+                }
                 bool boundedCollect = usedItem?["collect_tool"]?.GetValue<bool>() == true && Int(args, "duration_ticks") > 0;
                 if (usedItem?["collect_tool"]?.GetValue<bool>() == true && !boundedCollect)
                 {
@@ -2612,8 +2633,8 @@ public static partial class AgentTools
                 }, token);
                 if (!Rejected(result)) result = await Wait("/item_use_status", "active", "/item_use_stop", 60, token,
                     navigationProgress: boundedCollect ? _ => NativeAgent.OnMain(() =>
-                        Main.GameUpdateCount - usedItem["started_tick"].GetValue<ulong>() >= (ulong)Int(args, "duration_ticks")
-                            ? new JsonObject { ["outcome"] = "time_elapsed", ["duration_ticks"] = Int(args, "duration_ticks") } : null, token) : null,
+                        ObservedShape() ?? (Main.GameUpdateCount - usedItem["started_tick"].GetValue<ulong>() >= (ulong)Int(args, "duration_ticks")
+                            ? new JsonObject { ["outcome"] = "time_elapsed", ["duration_ticks"] = Int(args, "duration_ticks") } : null), token) : null,
                     reactionContext: new JsonObject { ["tool"] = name, ["args"] = args.DeepClone() },
                     onCompleted: async receipt =>
                     {
@@ -2635,6 +2656,9 @@ public static partial class AgentTools
                             return true;
                         }, token);
                     });
+                if (shapeHalf && !Rejected(result))
+                    result = await NativeAgent.OnMain(ObservedShape, token)
+                        ?? new JsonObject { ["error"] = "half_block_not_observed", ["use"] = result };
                 break;
             case "place_at":
                 result = await Place(args, token);
@@ -3097,9 +3121,12 @@ public static partial class AgentTools
         var region = await NativeAgent.OnMain(() => Control.CheckAt(ControlBehavior.Navigation, Int(args, "x"), Int(args, "y")), token);
         if (region != null) return region;
         JsonObject escapeBefore = null;
-        var acceptedTraps = args["accepted_traps"]?.AsArray();
+        bool avoidPlates = Bool(args, "avoid_pressure_plates");
+        var acceptedTraps = avoidPlates ? null : args["accepted_traps"]?.AsArray();
+        JsonObject NearbyHazard() => TerrainInspection.NavigationHazard(acceptedTraps, deferPressure: avoidPlates)
+            ?? (avoidPlates ? TerrainInspection.NavigationHazard(pressureOnly: true) : null);
         var hazard = await NativeAgent.OnMain(() =>
-        { escapeBefore = LastContactEscape; return TerrainInspection.NavigationHazard(acceptedTraps); }, token);
+        { escapeBefore = LastContactEscape; return NearbyHazard(); }, token);
         if (hazard != null) return hazard;
         var request = await NativeAgent.OnMain(() =>
         {
@@ -3119,7 +3146,7 @@ public static partial class AgentTools
                     reach = true;
             }
             return new JsonObject { ["gx"] = x, ["gy"] = y, ["exact"] = exact && !reach, ["reach"] = reach,
-                ["stand"] = stand };
+                ["stand"] = stand, ["avoid_pressure_plates"] = avoidPlates };
         }, token);
         var clearances = new JsonArray();
         var clearedSites = new HashSet<string>();
@@ -3197,7 +3224,7 @@ public static partial class AgentTools
                             ["reason"] = "goal_has_no_traversable_neighbor", ["field_cells"] = field.Count,
                             ["target"] = new JsonObject { ["x"] = gx, ["y"] = gy }, ["elapsed_seconds"] = elapsed };
                 }
-                var trap = TerrainInspection.NavigationHazard(acceptedTraps);
+                var trap = NearbyHazard();
                 if (trap != null) return trap;
                 if (player.suffocating)
                     return new JsonObject { ["error"] = "navigation_suffocating", ["outcome"] = "unsafe",
@@ -3231,7 +3258,7 @@ public static partial class AgentTools
                 var player = Main.LocalPlayer;
                 if (player.dead || player.suffocating || Text(escape, "status") != "controls_released"
                     || !Bool(escape, "contact_clear") || Collision.HurtTiles(player.position, player.width, player.height, player).type >= 0) return null;
-                remainingHazard = TerrainInspection.NavigationHazard(acceptedTraps);
+                remainingHazard = NearbyHazard();
                 if (remainingHazard != null) return null;
                 var hazards = (escape["hazard_tiles"] as JsonArray)?.OfType<JsonObject>().ToList() ?? new List<JsonObject>();
                 if (escape["predicted_tile"] is JsonObject predicted && !hazards.Any(tile =>
@@ -3265,6 +3292,8 @@ public static partial class AgentTools
         return await NativeAgent.OnMain(() =>
         {
             var p = Main.LocalPlayer;
+            if (avoidPlates && Text(result, "reason") == "pressure_plate_guard"
+                && RecedingNav.PressurePlateStop is JsonObject plateStop) return (JsonObject)plateStop.DeepClone();
             if (clearances.Count > 0) result["verified_clearances"] = clearances;
             if (!Bool(result, "done") && LastContactEscape != null && !ReferenceEquals(escapeBefore, LastContactEscape))
             {

@@ -1,4 +1,5 @@
 [
+  {"type":"function","function":{"name":"block_region","description":"读取附近至多8×8格的前景方块。坐标相对区域左上角；shape为full、half或unsupported。Read foreground blocks in a nearby rectangle up to 8×8. Returns relative positions and shapes; omitted cells are empty.","parameters":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"width":{"type":"integer","minimum":1,"maximum":8},"height":{"type":"integer","minimum":1,"maximum":8}},"required":["x","y","width","height"]}}},
 {"type":"function","function":{"name":"craft_into_inventory","description":"用名称name或物品编号item_type调用原版配方连续制作，成品直接收进背包。先核对空间，手持光标物品时拒绝；意外未入包的成品保留在光标。需要逐次控制光标时用craft_recipe。","parameters":{"type":"object","properties":{"name":{"type":"string"},"item_type":{"type":"integer","minimum":1},"amount":{"type":"integer","minimum":1,"maximum":9999}},"required":[]}}},
 {"type":"function","function":{"name":"mod_input_list","description":"列出已加载Mod注册的语义按键。可按Mod内部名筛选，每页40项；key用于mod_input。","parameters":{"type":"object","properties":{"mod":{"type":"string"},"offset":{"type":"integer","minimum":0}}}}},
 {"type":"function","function":{"name":"mod_input","description":"触发已注册的Mod按键，按key指定ModName/KeyName，可保持1..120个输入更新，结束时释放。返回输入是否派发，不代表Mod效果已发生。","parameters":{"type":"object","properties":{"key":{"type":"string"},"frames":{"type":"integer","minimum":1,"maximum":120}},"required":["key"]}}},
@@ -255,6 +256,10 @@
       "parameters": {
         "type": "object",
         "properties": {
+          "avoid_pressure_plates": {
+            "type": "boolean",
+            "description": "在导航输入前逐帧检查普通压力板，发现前方有压力板则停止。启用时不使用accepted_traps。Check vanilla pressure plates before each navigation frame and stop on detection. Overrides accepted_traps."
+          },
           "accepted_traps": {
             "type": "array",
             "description": "仅本次导航接受指定已观察机关的风险，可用于绕行或离开附近机关。按inspect_terrain或navigation_near_trap返回填入坐标、type和frame；新机关或不同变体仍会停止。不证明路线安全，不改变其他安全检查。",
@@ -380,6 +385,11 @@
           "slot": {
             "type": "integer",
             "description": "物品栏槽位号(0-based)"
+          },
+          "target_shape": {
+            "type": "string",
+            "enum": ["half"],
+            "description": "使用锤子并在目标变成半砖时停止。需要strict:true和1..120帧的duration_ticks。Stop and verify once the target becomes a half block. Requires strict:true and duration_ticks between 1 and 120."
           },
           "duration_ticks": {
             "type": "integer",

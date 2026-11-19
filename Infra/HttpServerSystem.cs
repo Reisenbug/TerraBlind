@@ -2094,7 +2094,8 @@ namespace TerraBlind
 					bool reach = System.Text.RegularExpressions.Regex.IsMatch(rb, "\"reach\":true");
 					var nmode = stand ? RecedingNav.Mode.Stand : reach ? RecedingNav.Mode.Reach
 						: exact ? RecedingNav.Mode.Mine : RecedingNav.Mode.Snap;
-					RecedingNav.Start(int.Parse(gxM.Groups[1].Value), int.Parse(gyM.Groups[1].Value), nmode);
+					bool avoidPlates = System.Text.RegularExpressions.Regex.IsMatch(rb, "\"avoid_pressure_plates\":true");
+					RecedingNav.Start(int.Parse(gxM.Groups[1].Value), int.Parse(gyM.Groups[1].Value), nmode, avoidPlates);
 					body = "{\"ok\":true}";
 				}
 			}

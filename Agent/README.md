@@ -98,6 +98,22 @@ if ('error' in open) return open;
 return tool('container_action', {action: 'quick_stack', expected_container: open.container});
 ~~~
 
+## 小型蓝图和压力板 / Block patterns and pressure plates
+
+- `block_region({x,y,width,height})` 读取附近最多 8×8 格的前景。把返回的 `width`、`height` 和 `cells` 保存到技能里，将来用对应的新左上角执行 `build_block_pattern`。Capture up to 8×8 foreground tiles. Save the size and relative cells in a script program, then pass them to `build_block_pattern` at a new origin.
+- 蓝图支持普通完整砖和半砖。施工需要现有支撑、足够的建材与可达格；半砖需要锤子。先查目标占用，最后逐格比较类型和形态。The builder uses existing supports, building material and a hammer. It checks occupied cells before building and verifies the final block types and shapes. Furniture, walls and slopes are outside the pattern format.
+- `nav_to({x,y,mode:'stand',avoid_pressure_plates:true})` 在每帧导航输入前检查普通压力板，发现后报告坐标并停下。The per-frame guard stops navigation on a nearby vanilla pressure plate. This check covers navigation input and cannot prevent displacement by enemies or independent triggers.
+
+~~~javascript
+// input.pattern = saved block_region result / 已保存的蓝图
+return skill('build_block_pattern', 0, {x: input.x, y: input.y, pattern: input.pattern});
+~~~
+
+~~~javascript
+// allow_removal permits disarming an observed plate from mining range / 允许在挖掘范围内拆除已发现压力板
+return skill('travel_disarm_plates', 0, {x: input.x, y: input.y, allow_removal: true});
+~~~
+
 ## 验证
 
 ~~~sh

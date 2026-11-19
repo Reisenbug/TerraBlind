@@ -136,17 +136,44 @@ public static class TerrainInspection
             ["limitations"] = "只检查当前方块、直线人物扫掠范围及目标周边4格。liquids报告种类及0..255水量，不等于危险判定；未判断头部浸没、呼吸余量、停留时长或液体对当前装备的影响。附近有水不等于必须涉水或溺水。挡路格数不是必挖数量；未模拟跳跃、落差、绕路、敌人、射出的机关或返程，不证明安全可达。由Agent/JS决定接近、跳过或进一步调查。" };
     }
 
-    internal static JsonObject NavigationHazard(JsonArray acceptedTraps = null)
+    internal static JsonObject BlockRegion(int x, int y, int width, int height)
+    {
+        if (width is < 1 or > 8 || height is < 1 or > 8 || !WorldGen.InWorld(x, y)
+            || !WorldGen.InWorld(x + width - 1, y + height - 1))
+            return new JsonObject { ["error"] = "invalid_block_region" };
+        var player = Main.LocalPlayer;
+        if (Math.Abs((int)(player.Center.X / 16) - x) > 32 || Math.Abs((int)(player.Center.Y / 16) - y) > 32)
+            return new JsonObject { ["error"] = "block_region_out_of_range" };
+        var cells = new JsonArray();
+        for (int dy = 0; dy < height; dy++)
+        for (int dx = 0; dx < width; dx++)
+        {
+            var tile = Main.tile[x + dx, y + dy];
+            if (!tile.HasTile) continue;
+            int type = tile.TileType;
+            bool supported = tile.HasUnactuatedTile && Main.tileSolid[type] && !Main.tileSolidTop[type]
+                && !Main.tileFrameImportant[type] && (int)tile.Slope == 0;
+            cells.Add(new JsonObject { ["dx"] = dx, ["dy"] = dy, ["type"] = type,
+                ["shape"] = !supported ? "unsupported" : tile.IsHalfBlock ? "half" : "full" });
+        }
+        return new JsonObject { ["ok"] = true, ["width"] = width, ["height"] = height, ["cells"] = cells };
+    }
+
+    internal static JsonObject NavigationHazard(JsonArray acceptedTraps = null, bool pressureOnly = false, bool deferPressure = false)
     {
         var player = Main.LocalPlayer;
         int px = (int)player.Center.X / 16, py = (int)player.Bottom.Y / 16;
         var hazards = new JsonArray();
-        for (int x = Math.Max(1, px - 4); x <= Math.Min(Main.maxTilesX - 2, px + 4); x++)
-        for (int y = Math.Max(1, py - 6); y <= Math.Min(Main.maxTilesY - 2, py + 2); y++)
+        int dx = pressureOnly ? (int)Math.Clamp(player.velocity.X * 6 / 16, -64, 64) : 0;
+        int dy = pressureOnly ? (int)Math.Clamp(player.velocity.Y * 6 / 16, -64, 64) : 0;
+        int side = pressureOnly ? 2 : 4;
+        for (int x = Math.Max(1, px - side + Math.Min(dx, 0)); x <= Math.Min(Main.maxTilesX - 2, px + side + Math.Max(dx, 0)); x++)
+        for (int y = Math.Max(1, py - 6 + Math.Min(dy, 0)); y <= Math.Min(Main.maxTilesY - 2, py + 2 + Math.Max(dy, 0)); y++)
         {
             var tile = Main.tile[x, y];
             if (!tile.HasUnactuatedTile) continue;
             bool trigger = tile.TileType == TileID.PressurePlates;
+            if (pressureOnly && !trigger || deferPressure && trigger) continue;
             bool explosive = tile.TileType == TileID.Explosives;
             bool rollingCactus = tile.TileType == TileID.RollingCactus;
             bool overheadBoulder = tile.TileType is TileID.Boulder or TileID.BouncyBoulder or TileID.LifeCrystalBoulder

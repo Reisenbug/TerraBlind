@@ -109,6 +109,11 @@ public sealed class ControlTrial : ModSystem
 
     async Task Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CONSTRUCTION_GUARD") == "1")
+        {
+            await ConstructionAndGuard();
+            return;
+        }
         string containerMode = Environment.GetEnvironmentVariable("TB_CONTAINER_CHAIN");
         if (containerMode is "script" or "live")
         {
@@ -214,6 +219,97 @@ public sealed class ControlTrial : ModSystem
         });
         Console.WriteLine($"CONTROL_ASSERTIONS paused_handle={handle} sand_unchanged={sandBefore} explicit_move=true native_restart_rejected=true");
         Console.WriteLine("CONTROL_REGION_ASSERTIONS original_destination_reached=true rejected_excavation_not_repeated=true navigation_enabled=true");
+    }
+
+    async Task ConstructionAndGuard()
+    {
+        int x = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false;
+            Combat.Enabled = Dodge.Enabled = false;
+            var p = Main.LocalPlayer;
+            int left = (int)p.Center.X / 16;
+            floor = (int)p.Bottom.Y / 16 + 3;
+            for (int tx = left - 9; tx <= left + 23; tx++)
+            for (int ty = floor - 7; ty <= floor + 2; ty++)
+            {
+                Main.tile[tx, ty].ClearEverything();
+                if (ty >= floor) Main.tile[tx, ty].ResetToType(TileID.Stone);
+            }
+            p.position = new Vector2(left * 16, floor * 16 - p.height);
+            p.velocity = Vector2.Zero;
+            p.fallStart = p.fallStart2 = (int)p.position.Y / 16;
+            foreach (var item in p.inventory) item.TurnToAir();
+            p.inventory[0].SetDefaults(ItemID.CopperPickaxe);
+            p.inventory[1].SetDefaults(ItemID.WoodenHammer);
+            p.inventory[2].SetDefaults(ItemID.Wood); p.inventory[2].stack = 30;
+            Main.tile[left - 4, floor - 1].ResetToType(TileID.WoodBlock);
+            Main.tile[left - 3, floor - 1].ResetToType(TileID.WoodBlock);
+            var half = Main.tile[left - 3, floor - 1];
+            half.IsHalfBlock = true;
+            return left;
+        });
+        var pattern = await Call("block_region", new JsonObject { ["x"] = x - 4, ["y"] = floor - 1, ["width"] = 2, ["height"] = 1 });
+        Check(pattern["cells"]?[0]?["shape"]?.ToString() == "full" && pattern["cells"]?[1]?["shape"]?.ToString() == "half", "capture_wrong_shapes");
+        var saved = await Call("script_program", new JsonObject { ["operation"] = "save", ["name"] = "test_half_block_pattern",
+            ["expected_revision"] = 0,
+            ["code"] = "return skill('build_block_pattern',0,{x:input.x,y:input.y,pattern:" + pattern.ToJsonString() + "});" });
+        int revision = saved["revision"]?.GetValue<int>() ?? 0;
+        Check(revision > 0, "pattern_not_saved");
+        for (int i = 0; i < 2; i++)
+        {
+            int destination = x + 3;
+            if (i > 0)
+            {
+                destination = x + 9;
+                await OnMain(() =>
+                {
+                    Main.LocalPlayer.position.X = (destination - 3) * 16;
+                    Main.LocalPlayer.velocity = Vector2.Zero;
+                    return true;
+                });
+            }
+            var built = await Call("run_script", new JsonObject { ["code"] = $"return skill('test_half_block_pattern',{revision},"
+                + new JsonObject { ["x"] = destination, ["y"] = floor - 1 }.ToJsonString() + ");" });
+            Check(built["value"]?["verified"]?.GetValue<bool>() == true, "pattern_build_failed: " + built);
+            Check(await OnMain(() => Main.tile[destination, floor - 1].TileType == TileID.WoodBlock
+                && !Main.tile[destination, floor - 1].IsHalfBlock && Main.tile[destination + 1, floor - 1].IsHalfBlock),
+                "pattern_world_geometry_mismatch");
+        }
+        Console.WriteLine("BLOCK_PATTERN_COMPLETE saved=true copies=2 full_and_half=true");
+
+        int plateX = x + 15, plateY = floor - 1, triggers = 0;
+        void ObserveSwitch(On_Wiring.orig_HitSwitch original, int tileX, int tileY)
+        {
+            if (tileX == plateX && tileY == plateY) triggers++;
+            original(tileX, tileY);
+        }
+        await OnMain(() =>
+        {
+            WorldGen.PlaceTile(plateX, plateY, TileID.PressurePlates, mute: true, forced: true);
+            Check(Main.tile[plateX, plateY].HasTile && Main.tile[plateX, plateY].TileType == TileID.PressurePlates, "plate_missing");
+            var plate = Main.tile[plateX, plateY];
+            plate.RedWire = true;
+            On_Wiring.HitSwitch += ObserveSwitch;
+            return true;
+        });
+        try
+        {
+            var result = await Call("run_script", new JsonObject { ["code"] = "return skill('travel_disarm_plates',0,"
+                + new JsonObject { ["x"] = x + 20, ["y"] = plateY, ["allow_removal"] = true }.ToJsonString() + ");" });
+            var actual = await OnMain(() => new JsonObject { ["x"] = (int)(Main.LocalPlayer.Center.X / 16),
+                ["triggers"] = triggers, ["plate_removed"] = !Main.tile[plateX, plateY].HasTile });
+            File.WriteAllText(Path.Combine(Main.SavePath, "construction-guard.json"), new JsonObject
+                { ["travel"] = result.DeepClone(), ["actual"] = actual, ["copies"] = 2 }.ToJsonString());
+            Check(result["value"]?["done"]?.GetValue<bool>() == true && actual["x"].GetValue<int>() >= x + 19
+                && actual["plate_removed"].GetValue<bool>() && triggers == 0, "plate_crossing_failed: " + actual.ToJsonString());
+            Console.WriteLine("PRESSURE_PLATE_GUARD_COMPLETE triggers=0 plate_removed=true real_navigation=true");
+        }
+        finally
+        {
+            await OnMain(() => { On_Wiring.HitSwitch -= ObserveSwitch; return true; });
+        }
     }
 
     async Task ContainerChain(bool live)

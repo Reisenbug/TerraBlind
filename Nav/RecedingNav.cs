@@ -1,4 +1,5 @@
 using Microsoft.Xna.Framework;
+using System.Text.Json.Nodes;
 using Terraria;
 
 namespace TerraBlind
@@ -14,6 +15,8 @@ namespace TerraBlind
         // outcome of the last run, for the HTTP bridge: null while running/never-ran,
         // "done" | "walled_in" | "loop_unresolved" | "stopped" after it ends.
         public static string LastStop;
+        static bool AvoidPressurePlates;
+        internal static JsonObject PressurePlateStop { get; private set; }
         const string Owner = "recede";
         static string _waitOn = "";   // 上一次被谁挡的,变了才打日志
         static int _goalWx, _goalWy;
@@ -224,6 +227,9 @@ namespace TerraBlind
             => Start(goalWx, goalWy, exact ? Mode.Mine : Mode.Snap);
 
         public static void Start(int goalWx, int goalWy, Mode mode)
+            => Start(goalWx, goalWy, mode, false);
+
+        internal static void Start(int goalWx, int goalWy, Mode mode, bool avoidPressurePlates)
         {
             if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
             { LastStop = "agent_navigation_forbidden"; Stop(); return; }
@@ -236,7 +242,9 @@ namespace TerraBlind
             // 拿原始值去比永远不相等,守卫等于没写
             if (mode == Mode.Snap)
                 goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
-            if (Active && _goalWx == goalWx && _goalWy == goalWy && _mode == mode) return;
+            if (Active && _goalWx == goalWx && _goalWy == goalWy && _mode == mode && AvoidPressurePlates == avoidPressurePlates) return;
+            AvoidPressurePlates = avoidPressurePlates;
+            PressurePlateStop = null;
             _startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
             int latencyRequest = NavigationLatency.Begin(requestedAt, goalWx, goalWy);
             _startupWalkReported = false;
@@ -342,6 +350,13 @@ namespace TerraBlind
             if (!Active) return;
             var p = Main.LocalPlayer;
             if (p == null || !p.active) { Stop(); return; }
+            if (AvoidPressurePlates && TerrainInspection.NavigationHazard(pressureOnly: true) is { } plates)
+            {
+                PressurePlateStop = plates;
+                LastStop = "pressure_plate_guard";
+                Stop();
+                return;
+            }
 
             // 【别人正拿着控制权就这一帧不动】。岩浆堤放一格要 90 帧,期间寻路把人挪走
             // 就 out_of_reach 作废(日志 29503 开填、29625"被挪开了"),两边都白干。

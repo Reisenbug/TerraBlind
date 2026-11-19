@@ -173,6 +173,7 @@ public static class PvpInventory
             fact["defense"] = item.defense; fact["accessory"] = item.accessory;
             fact["armor_slot"] = item.headSlot >= 0 ? 0 : item.bodySlot >= 0 ? 1 : item.legSlot >= 0 ? 2 : null;
             fact["damage"] = item.damage; fact["pick"] = item.pick; fact["axe"] = item.axe; fact["hammer"] = item.hammer;
+            fact["create_tile"] = item.createTile;
             fact["material"] = item.material; fact["consumable"] = item.consumable;
             fact["can_open"] = Terraria.ModLoader.ItemLoader.CanRightClick(item);
             fact["heal_life"] = item.healLife; fact["use_ammo"] = item.useAmmo;
