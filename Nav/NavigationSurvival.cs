@@ -29,14 +29,14 @@ public static class NavigationSurvival
 
     public static bool Apply(Player player)
     {
-        if (!(RecedingNav.Active || AgentTools.AutonomyActive) || player.dead
+        if (!(RecedingNav.Active || AgentTools.AutonomyActive) || player.dead || Manual.On
             || !AgentTools.ControlAllows(ControlBehavior.Survival, ControlChannels.All, delegated: true))
         {
             Reset(player);
             NavigationAirPocket.Reset(player);
             return false;
         }
-        if (RecedingNav.Active && NavigationAirPocket.Apply(player)) return true;
+        if (NavigationAirPocket.Apply(player)) return true;
         if (FallSafety.Immune(player))
         {
             Reset(player);
@@ -87,10 +87,15 @@ public static class NavigationSurvival
             }
             if (holdingPotion)
             {
+                if (player.HasBuff(BuffID.Featherfall) || player.inventory[heldSlot].type != heldType)
+                {
+                    Reset(player);
+                    return false;
+                }
                 ClearControls(player);
                 player.selectedItem = heldSlot;
                 player.delayUseItem = false; player.mouseInterface = false;
-                player.controlUseItem = !player.HasBuff(BuffID.Featherfall) && player.inventory[heldSlot].type == ItemID.FeatherfallPotion;
+                player.controlUseItem = true;
                 return true;
             }
             if (player.inventory[heldSlot].type is ItemID.Umbrella or ItemID.TragicUmbrella)
@@ -283,6 +288,8 @@ public static class NavigationSurvival
                 velocity.Y = player.maxFallSpeed * player.gravDir;
             var allowed = Collision.TileCollision(position, velocity, player.width, player.height,
                 false, false, (int)player.gravDir);
+            if (player.gravDir == 1 && (player.waterWalk || player.waterWalk2))
+                allowed = Collision.WaterCollision(position, allowed, player.width, player.height, player.controlDown, false, player.waterWalk);
             position += allowed;
             if (allowed.Y * player.gravDir < velocity.Y * player.gravDir)
                 return (position, true, frame + 1, FallSafety.LandingDamage(player, position, fallStart));

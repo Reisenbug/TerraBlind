@@ -111,7 +111,11 @@ namespace TerraBlind
         // support includes platforms (solidTop), unlike DigSolid
         static bool HasSupport(int x, int y)
         {
-            return Predicates.IsSolid(x, y);
+            if (Predicates.IsSolid(x, y)) return true;
+            var player = Main.LocalPlayer;
+            return player != null && player.gravDir == 1 && (player.waterWalk || player.waterWalk2)
+                && WorldGen.InWorld(x, y) && Main.tile[x, y].LiquidType == Terraria.ID.LiquidID.Water
+                && Main.tile[x, y].LiquidAmount > 0 && Main.tile[x, y - 1].LiquidAmount == 0;
         }
 
         static CellKey Cell(SSNode s)

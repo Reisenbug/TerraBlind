@@ -476,6 +476,7 @@ namespace TerraBlind
 		void ApplyPrimaryControls()
 		{
 			MazeWand.MarkMainThread();
+			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && NavigationSurvival.Apply(Player)) return;
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && AgentTools.Control.HasClaims)
 			{
 				if (Manual.On) return;
@@ -487,7 +488,6 @@ namespace TerraBlind
 					return;
 				}
 			}
-			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && NavigationSurvival.Apply(Player)) return;
 			if (VanillaNavigationDemo.Active)
 			{
 				if (VanillaNavigationDemo.Instance.NavigationOwned) { if (StartRun.IsRunning) StartRun.Tick(); RecedingNav.Tick(); }

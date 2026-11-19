@@ -10,7 +10,7 @@ public static class NavigationAirPocket
 {
     static readonly Queue<Point> dig = new();
     static readonly Queue<Point> seal = new();
-    static bool active, sealedPocket;
+    static bool active, sealedPocket, surfacing;
     static int slot, blockSlot, savedSlot, idle, elapsed, retry;
     static float destinationX;
     static int plannedFrames;
@@ -21,25 +21,45 @@ public static class NavigationAirPocket
         if (active) player.selectedItem = savedSlot;
         active = false;
         sealedPocket = false;
+        surfacing = false;
         dig.Clear();
         seal.Clear();
     }
 
     public static bool Apply(Player player)
     {
+        if (player.gills || player.accMerman || player.gravDir != 1)
+        { Reset(player); return false; }
+        if (!active && (surfacing || player.breath < player.breathMax - 25) && TrySurface(player))
+        {
+            if (!surfacing)
+            {
+                if (RecedingNav.Active) RecedingNav.InterruptForSurvival();
+                DiagLog.Write($"[survival-air] surfacing breath={player.breath}");
+                AgentChat.Say("Low air. Surfacing.");
+            }
+            surfacing = true;
+            player.controlLeft = player.controlRight = player.controlDown = player.controlUseItem = false;
+            player.controlUp = !player.gravControl && !player.gravControl2;
+            player.controlJump = player.accFlipper ? player.releaseJump : true;
+            return true;
+        }
+        surfacing = false;
         if (!active)
         {
             if (retry > 0) { retry--; return false; }
-            if (player.breath >= player.breathMax - 25 || player.gills || player.accMerman
-                || player.gravDir != 1 || player.velocity.Y != 0 || !player.wet) return false;
+            if (player.breath >= player.breathMax - 25 || player.velocity.Y != 0 || !player.wet) return false;
+            if (!AgentTools.ControlAllows(ControlBehavior.Mining, ControlChannels.ItemUse, delegated: true)) return false;
             slot = -1;
             for (int i = 0; i < 10; i++)
                 if (player.inventory[i].pick > 0 && (slot < 0 || player.inventory[i].pick > player.inventory[slot].pick)) slot = i;
-            if (slot < 0 || !FindPocket(player) && !FindSealedPocket(player)) { retry = 60; return false; }
-            RecedingNav.InterruptForSurvival();
+            bool canSeal = AgentTools.ControlAllows(ControlBehavior.Placement, ControlChannels.ItemUse, delegated: true);
+            if (slot < 0 || !FindPocket(player) && (!canSeal || !FindSealedPocket(player))) { retry = 60; return false; }
+            if (RecedingNav.Active) RecedingNav.InterruptForSurvival();
             savedSlot = player.selectedItem;
             active = true; idle = elapsed = 0;
             DiagLog.Write($"[survival-air] start breath={player.breath} target_x={destinationX} tiles={dig.Count} seal={seal.Count} planned_frames={plannedFrames} budget_frames={BreathBudget(player)} pick={player.inventory[slot].pick}");
+            AgentChat.Say("Low air. Making an air pocket.");
         }
         player.controlLeft = player.controlRight = player.controlJump = player.controlDown = player.controlUp = player.controlUseItem = false;
         if (player.breath >= player.breathMax)
@@ -101,6 +121,21 @@ public static class NavigationAirPocket
             if (!Collision.DrownCollision(player.position, player.width, player.height, player.gravDir)) idle = 0;
         }
         return true;
+    }
+
+    static bool TrySurface(Player player)
+    {
+        if (!Collision.DrownCollision(player.position, player.width, player.height, player.gravDir)) return false;
+        bool canSwim = player.accFlipper || player.wingTime > 0;
+        if (!surfacing && !canSwim && player.velocity.Y != 0 && !player.AnyExtraJumpUsable()) return false;
+        int reach = canSwim ? 128 : 32;
+        for (int pixels = 8; pixels <= reach; pixels += 8)
+        {
+            var rise = new Vector2(0, -pixels);
+            if (Collision.TileCollision(player.position, rise, player.width, player.height).Y != rise.Y) return false;
+            if (!Collision.DrownCollision(player.position + rise, player.width, player.height, player.gravDir)) return true;
+        }
+        return false;
     }
 
     static bool FindPocket(Player player)
