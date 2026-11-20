@@ -178,7 +178,7 @@ public sealed class ControlTrial : ModSystem
     public override void PostUpdateEverything()
     {
         if (!enabled || finished) return;
-        Main.soundVolume = Main.musicVolume = Main.ambientVolume = 0;
+        if (explorationObjective == null) Main.soundVolume = Main.musicVolume = Main.ambientVolume = 0;
         Main.autoPause = false;
         if (explorationPauseTrial)
         {
@@ -2052,6 +2052,9 @@ public sealed class ExplorationProgressProbe : ModSystem
     internal static bool Enabled { get; private set; }
     bool shine;
     string lastProgression;
+    long frameSampleStarted;
+    uint frameSampleTick;
+    int drawnFrames;
 
     public override void Load()
     {
@@ -2061,7 +2064,28 @@ public sealed class ExplorationProgressProbe : ModSystem
         shine = Enabled && Environment.GetEnvironmentVariable("TB_EXPLORATION_SHINE") == "1";
     }
 
-    public override void OnWorldLoad() => lastProgression = null;
+    public override void OnWorldLoad()
+    {
+        lastProgression = null;
+        frameSampleStarted = 0;
+    }
+
+    public override void PostDrawInterface(Microsoft.Xna.Framework.Graphics.SpriteBatch batch)
+    {
+        if (!Enabled || Main.gameMenu) return;
+        if (frameSampleStarted == 0)
+        {
+            frameSampleStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            frameSampleTick = Main.GameUpdateCount;
+            drawnFrames = 0;
+        }
+        drawnFrames++;
+        double seconds = System.Diagnostics.Stopwatch.GetElapsedTime(frameSampleStarted).TotalSeconds;
+        if (seconds < 5) return;
+        double drawRate = drawnFrames / seconds, updateRate = (Main.GameUpdateCount - frameSampleTick) / seconds;
+        Console.WriteLine(FormattableString.Invariant($"EXPLORATION_FPS draw={drawRate:0.0} updates={updateRate:0.0} focused={Main.hasFocus} nav={RecedingNav.Active} size={Main.screenWidth}x{Main.screenHeight} lighting={Lighting.Mode}"));
+        frameSampleStarted = 0;
+    }
 
     public override void PostUpdateEverything()
     {
