@@ -599,6 +599,7 @@ namespace TerraBlind
         public static void Reset() { }
         public static JsonObject Poll(JsonObject args, JsonObject scene) => new() { ["status"] = "unavailable", ["reason"] = "engine_not_linked" };
         public static JsonObject Prepare(JsonObject args) => PrepareHandler?.Invoke(args) ?? new() { ["error"] = "engine_not_linked" };
+        public static Task<JsonObject> CheckLavaAct(JsonObject args, CancellationToken token) => Task.FromResult<JsonObject>(null);
         public static Task<JsonObject> Refresh(JsonObject args, Func<JsonObject> observe, CancellationToken token) => RefreshHandler?.Invoke(args, token) ?? Task.FromResult(args);
         public static JsonObject Receipt(JsonObject args, JsonObject result) => result;
     }

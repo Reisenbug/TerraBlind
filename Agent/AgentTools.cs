@@ -3216,6 +3216,8 @@ public static partial class AgentTools
                     || cursorStep["slot"] != null || cursorStep["at"] == null && cursorStep["rel"] == null
                     || args["repeat"] != null || args["combat_candidate"] != null))
                     return "{\"error\":\"cursor_use_needs_one_aimed_frame\"}";
+                result = await CombatForecast.CheckLavaAct(args, token);
+                if (result != null) break;
                 if (!cursorInput && args["steps"] is JsonArray { Count: 1 } directSteps && directSteps[0] is JsonObject direct
                     && direct["at"] is JsonArray { Count: 2 } tileOffset && Bool(direct, "use")
                     && direct["until"]?["frames"] is JsonValue && direct["rel"] == null

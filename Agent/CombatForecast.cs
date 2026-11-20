@@ -181,6 +181,65 @@ public sealed class CombatForecast : ModSystem
     static bool NeedsLavaCoastCheck(Player player) => Collision.LavaCollision(
         player.position - new Vector2(24 * 16, 8 * 16), player.width + 48 * 16, player.height + 24 * 16);
 
+    internal static async Task<JsonObject> CheckLavaAct(JsonObject args, CancellationToken token)
+    {
+        if (args["combat_candidate"] != null || args["repeat"] != null || args["steps"] is not JsonArray steps) return null;
+        var controls = new List<int>();
+        foreach (var entry in steps)
+        {
+            if (entry is not JsonObject step || step["until"]?["frames"] is not JsonValue length || !length.TryGetValue<int>(out int frames)
+                || frames < 1 || frames > 48 - controls.Count || step["use"]?.GetValue<bool>() == true || step["slot"] != null
+                || step["invariant"] != null) return null;
+            VanillaKeys mask = VanillaKeys.None;
+            if (step["keys"] is JsonArray keys)
+            foreach (var key in keys)
+            {
+                var bit = key?.ToString() switch { "left" => VanillaKeys.Left, "right" => VanillaKeys.Right,
+                    "jump" => VanillaKeys.Jump, "up" => VanillaKeys.Up, "down" => VanillaKeys.Down, _ => VanillaKeys.None };
+                if (bit == VanillaKeys.None) return null;
+                mask |= bit;
+            }
+            controls.AddRange(Enumerable.Repeat((int)mask, frames));
+        }
+        if (args["timeout_frames"] is JsonValue timeout && timeout.TryGetValue<int>(out int limit) && limit > 0 && controls.Count > limit)
+            controls.RemoveRange(limit, controls.Count - limit);
+        if (!controls.Any(mask => mask != 0)) return null;
+        var snapshot = await NativeAgent.OnMain(() =>
+        {
+            var player = Main.LocalPlayer;
+            if (player.dead || !VanillaNavigationDemo.Instance.WorkerReady || !NeedsLavaCoastCheck(player)) return null;
+            int x = (int)player.Center.X / 16, y = (int)player.Center.Y / 16;
+            try
+            {
+                return VanillaFrame.Capture(player, Rectangle.Intersect(new Rectangle(x - 32, y - 16, 64, 96),
+                    new Rectangle(0, 0, Main.maxTilesX, Main.maxTilesY)), true);
+            }
+            catch (NotSupportedException) { return null; }
+        }, token);
+        if (snapshot == null) return null;
+        int requested = controls.Count;
+        controls.AddRange(Enumerable.Repeat(0, 32));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(120);
+        JsonObject batch;
+        try
+        {
+            batch = await VanillaNavigationDemo.Instance.Observe(new JsonObject { ["command"] = "combat_replays",
+                ["snapshot"] = snapshot, ["trace_damage"] = true, ["branches"] = new JsonArray(new JsonObject
+                { ["id"] = "act", ["controls"] = new JsonArray(controls.Select(key => (JsonNode)JsonValue.Create(key)).ToArray()) }) }, deadline.Token);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested) { return null; }
+        var hit = batch["branches"]?[0]?["hurt_events"]?.AsArray()
+            .FirstOrDefault(e => e["other_source"]?.GetValue<int>() == 2);
+        if (hit == null) return null;
+        var frame = batch["branches"][0]["frames"][hit["frame"].GetValue<int>() - 1];
+        var unsafeAct = new JsonObject { ["error"] = "act_lava_forecast", ["outcome"] = "unsafe",
+            ["input_frames"] = requested, ["frame"] = hit["frame"].DeepClone(), ["damage"] = hit["damage"].DeepClone(),
+            ["x"] = Number(frame["x"]) / 16, ["y"] = Number(frame["y"]) / 16 };
+        DiagLog.Write("[agent_act_lava_veto] " + unsafeAct.ToJsonString());
+        return unsafeAct;
+    }
+
     static async Task<JsonObject> Generate(long id, long tick, JsonObject snapshot, JsonObject scene, int[] prefix,
         JsonObject destination, (int Direction, float TargetX, float ArrivalPixels)? walk, bool nearLava,
         double captureMs, CancellationToken token,
