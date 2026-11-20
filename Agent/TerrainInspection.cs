@@ -46,6 +46,12 @@ public static class TerrainInspection
         return damage > 0 && Collision.CanTileHurt(tile.TileType, x, y, player) ? damage : 0;
     }
 
+    internal static bool UndergroundDesertWall(int x, int y) => WorldGen.InWorld(x, y, 1)
+        && Main.tile[x, y].WallType is WallID.Sandstone or WallID.HardenedSand
+            or WallID.CorruptSandstone or WallID.CorruptHardenedSand
+            or WallID.CrimsonSandstone or WallID.CrimsonHardenedSand
+            or WallID.HallowSandstone or WallID.HallowHardenedSand;
+
     public static JsonObject Opportunity(int x, int y, JsonObject destination)
     {
         var clock = Stopwatch.StartNew();

@@ -3488,11 +3488,7 @@ public static partial class AgentTools
                     for (int dx = -1; dx <= 1; dx++)
                     {
                         var tile = Main.tile[x + dx, y - dy];
-                        if (tile.WallType is Terraria.ID.WallID.Sandstone or Terraria.ID.WallID.HardenedSand
-                            or Terraria.ID.WallID.CorruptSandstone or Terraria.ID.WallID.CorruptHardenedSand
-                            or Terraria.ID.WallID.CrimsonSandstone or Terraria.ID.WallID.CrimsonHardenedSand
-                            or Terraria.ID.WallID.HallowSandstone or Terraria.ID.WallID.HallowHardenedSand)
-                            reason = "underground_desert";
+                        if (TerrainInspection.UndergroundDesertWall(x + dx, y - dy)) reason = "underground_desert";
                         if (dx == 0 && tile.HasUnactuatedTile && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType])
                             dig.Add((x, y - dy));
                     }
@@ -3546,7 +3542,17 @@ public static partial class AgentTools
     internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 0,
         Func<JsonObject> interruption = null)
     {
-        var region = await NativeAgent.OnMain(() => Control.CheckAt(ControlBehavior.Navigation, Int(args, "x"), Int(args, "y")), token);
+        var region = await NativeAgent.OnMain(() =>
+        {
+            int x = Int(args, "x"), y = Int(args, "y");
+            var denied = Control.CheckAt(ControlBehavior.Navigation, x, y);
+            if (denied != null) return denied;
+            if (!Bool(args, "allow_underground_desert") && !Main.hardMode && y >= Main.worldSurface
+                && TerrainInspection.UndergroundDesertWall(x, y))
+                return new JsonObject { ["error"] = "early_underground_desert_destination", ["x"] = x, ["y"] = y,
+                    ["recovery"] = "Choose a target through an observed forest, snow, or jungle descent, or allow the underground desert if required by the task." };
+            return null;
+        }, token);
         if (region != null) return region;
         JsonObject escapeBefore = null;
         bool avoidPlates = Bool(args, "avoid_pressure_plates");

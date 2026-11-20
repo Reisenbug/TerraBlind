@@ -267,6 +267,10 @@
       "parameters": {
         "type": "object",
         "properties": {
+          "allow_underground_desert": {
+            "type": "boolean",
+            "description": "前期目标确实需要进入地下沙漠时设为true。Allow a pre-Hardmode destination inside the Underground Desert when the task requires it."
+          },
           "avoid_pressure_plates": {
             "type": "boolean",
             "description": "在导航输入前逐帧检查普通压力板，发现前方有压力板则停止。启用时不使用accepted_traps。Check vanilla pressure plates before each navigation frame and stop on detection. Overrides accepted_traps."

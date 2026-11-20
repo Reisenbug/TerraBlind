@@ -97,6 +97,11 @@ static class RuntimeTests
                 var route = await Call("early_descent", new JsonObject());
                 Check(route["route"]["biome"].ToString() == "snow" && route["candidates"][0]["reason"].ToString() == "underground_desert",
                     "short underground desert route was not rejected");
+                Game.worldSurface = 40;
+                var risky = await Call("nav_to", new JsonObject { ["x"] = 30, ["y"] = 55 });
+                Check(risky["error"]?.ToString() == "early_underground_desert_destination",
+                    "an early resource waypoint inside the underground desert was silently accepted");
+                Game.worldSurface = 200;
             }
             finally { desert.WallType = originalWall; Game.tile[30, 55] = desert; }
             Game.invasionType = 3; Game.invasionSize = 25;

@@ -137,6 +137,7 @@ namespace Terraria
         public static int mouseX, mouseY;
         public static Microsoft.Xna.Framework.Vector2 screenPosition;
         public static double worldSurface, rockLayer;
+        public static bool hardMode;
         public static GameContent.ItemDropRules.ItemDropDatabase ItemDropsDB = new();
         public static Player[] player = Enumerable.Range(0, maxPlayers).Select(id => new Player { whoAmI = id }).ToArray();
         public static Player LocalPlayer = player[0];
