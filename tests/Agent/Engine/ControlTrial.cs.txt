@@ -26,6 +26,7 @@ public sealed class ControlTrial : ModSystem
     bool explorationPauseTrial, resumeExploration;
     string explorationObjective;
     int explorationInputFrames;
+    int explorationWoodReserve, woodSinceReport;
     double explorationWorldTime;
     int frames, sandX, floor, sandPickAttempts;
     int interactionNpc = -1;
@@ -51,6 +52,8 @@ public sealed class ControlTrial : ModSystem
         {
             explorationObjective = Environment.GetEnvironmentVariable("TB_EXPLORATION_OBJECTIVE");
             resumeExploration = explorationObjective != null && Environment.GetEnvironmentVariable("TB_EXPLORATION_REUSE_PLAYER") == "1";
+            if (int.TryParse(Environment.GetEnvironmentVariable("TB_EXPLORATION_WOOD_RESERVE"), out int wood))
+                explorationWoodReserve = Math.Clamp(wood, 0, 9999);
         }
         if (explorationPauseTrial && explorationObjective == null) On_PlayerInput.UpdateInput += CheckExplorationPauseInput;
         if (enabled && Environment.GetEnvironmentVariable("TB_NATIVE_PRIMITIVES") == "1")
@@ -163,6 +166,26 @@ public sealed class ControlTrial : ModSystem
         return result.Task;
     }
     static void Check(bool valid, string message) { if (!valid) throw new Exception(message); }
+    void RefillExplorationWood(Player player)
+    {
+        int missing = explorationWoodReserve - player.CountItem(ItemID.Wood);
+        if (missing <= 0) return;
+        var items = player.inventory.Take(50);
+        var stack = items.FirstOrDefault(item => item.type == ItemID.Wood && item.stack < item.maxStack)
+            ?? items.FirstOrDefault(item => item.IsAir);
+        if (stack == null) return;
+        int before = stack.IsAir ? 0 : stack.stack;
+        if (stack.IsAir) stack.SetDefaults(ItemID.Wood);
+        int added = Math.Min(missing, stack.maxStack - before);
+        if (added <= 0) return;
+        stack.stack = before + added;
+        woodSinceReport += added;
+        if (frames == 0 || woodSinceReport >= 25)
+        {
+            Console.WriteLine($"EXPLORATION_WOOD_REFILL added={woodSinceReport} inventory={player.CountItem(ItemID.Wood)} target={explorationWoodReserve}");
+            woodSinceReport = 0;
+        }
+    }
     static async Task<JsonObject> Call(string tool, JsonObject args)
     {
         var result = JsonNode.Parse(await AgentTools.Execute(tool, args, default)).AsObject();
@@ -182,6 +205,9 @@ public sealed class ControlTrial : ModSystem
         Main.autoPause = false;
         if (explorationPauseTrial)
         {
+            if (explorationObjective != null && explorationWoodReserve > 0 && !Main.gameMenu
+                && Main.LocalPlayer is { active: true, dead: false } suppliedPlayer)
+                RefillExplorationWood(suppliedPlayer);
             if (explorationObjective != null && !Main.gameMenu && Main.LocalPlayer.active && ++frames == 90)
             {
                 if (!resumeExploration)
@@ -193,13 +219,6 @@ public sealed class ControlTrial : ModSystem
                     Console.WriteLine("EXPLORATION_STARTING_GEAR copper_sword_pick_axe=true starfury=false");
                 }
                 else Console.WriteLine($"EXPLORATION_PLAYER_RESTORED hp={Main.LocalPlayer.statLife} max_hp={Main.LocalPlayer.statLifeMax}");
-                if (int.TryParse(Environment.GetEnvironmentVariable("TB_EXPLORATION_START_WOOD"), out int wood) && wood > 0)
-                {
-                    var player = Main.LocalPlayer;
-                    int missing = wood - player.CountItem(ItemID.Wood);
-                    if (missing > 0) player.QuickSpawnItem(new EntitySource_Misc("TerraBlindExplorationSupplies"), ItemID.Wood, missing);
-                    Console.WriteLine($"EXPLORATION_WOOD_SUPPLIED added={Math.Max(0, missing)} inventory={player.CountItem(ItemID.Wood)}");
-                }
                 Config.I.AgentEnabled = true;
                 Config.I.AiClient = false;
                 Config.I.AgentUseCodex = true;
