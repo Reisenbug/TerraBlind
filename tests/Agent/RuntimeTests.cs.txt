@@ -4890,7 +4890,8 @@ static class RuntimeTests
         {
             AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
             Game.tile[100, 100] = default;
-            foreach (string outcome in new[] { "out_of_box", "stalled", "no_tiles", "unbreakable", "out_of_reach", "no_pickaxe", "stopped", "lava_risk", "done" })
+            foreach (string outcome in new[] { "out_of_box", "stalled", "no_tiles", "unbreakable", "pick_power_insufficient",
+                "out_of_reach", "no_pickaxe", "stopped", "lava_risk", "done" })
             {
                 AgentTools.Watches.Reset(); AgentTools.Recovery.Reset(); AgentTools.Workflows.Remove(workflow);
                 AgentTools.Workflows.Remove(workflow + "-background");

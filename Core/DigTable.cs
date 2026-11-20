@@ -119,6 +119,12 @@ namespace TerraBlind
         // 蜂蜜流一地、小蜜蜂满天、还招蜂王。见 MineableWith。
         public static bool IsForbidden(int type) => type == TileID.Hive;
 
+        internal static bool VanillaPickPowerInsufficient(int x, int y, int pickPower)
+        {
+            var tile = Main.tile[x, y];
+            return tile.TileType < TileID.Count && GetPickaxeDamage(x, y, pickPower, tile) <= 0;
+        }
+
         // 挖开的【后果】,不是挖它要多久。蜂蜜块软,纯按耗时算规划器专挑它走。但踩上去移动力暴跌。
         private const int HivePenalty = 3000;
         private static int Trouble(int type)

@@ -247,6 +247,14 @@ namespace TerraBlind
 				Finish("unbreakable", $"({tx},{ty}) 上面压着东西,原版不许破坏,换镐没用");
 				return;
 			}
+			if (DigTable.VanillaPickPowerInsufficient(tx, ty, p.inventory[slot].pick))
+			{
+				p.controlLeft = p.controlRight = p.controlDown = false;
+				string evidence = $"tile=({tx},{ty}) type={Main.tile[tx, ty].TileType} pick={p.inventory[slot].pick}";
+				DiagLog.Write($"[mine] pick_power_insufficient {evidence}");
+				Finish("pick_power_insufficient", evidence);
+				return;
+			}
 
 			// 【够不着就别空挥】。vanilla 够不着时根本不破坏方块,而这里原来只管瞄准+按键,
 			// 于是挥满 StallMax 帧一格没掉,上层重选又选中同一条边,再挥。死循环。
