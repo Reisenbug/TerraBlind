@@ -9,12 +9,14 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Terraria;
+using Terraria.ID;
 using Terraria.ModLoader;
 
 namespace TerraBlind;
 
 public class NativeAgent : ModSystem
 {
+    const int CleanupFreeSlots = 3;
     static readonly ConcurrentQueue<Action> MainQueue = new();
     static readonly ConcurrentQueue<Action> FrameQueue = new();
     static readonly ConcurrentQueue<Action> WorldFrameQueue = new();
@@ -358,15 +360,17 @@ public class NativeAgent : ModSystem
             if (items.Any(i => i["accessory"]?.GetValue<bool>() == true || i["armor_slot"] != null)
                 && equipment.Any(i => i["unlocked"]?.GetValue<bool>() == true))
                 _parallel.Offer("inventory:equip", revision, ct => propose("equip", scene, ct), answer => ApplyEquipment(bag, answer), token);
-            var plan = AgentTools.Plan.Snapshot();
-            var protectedTypes = ProtectedItems(plan);
-            var candidates = items.Where(i => DiscardCandidate(i, protectedTypes)).ToArray();
-            if (candidates.Length > 0)
+            if (free <= CleanupFreeSlots)
             {
-                var cleanup = (JsonObject)scene.DeepClone();
-                cleanup["candidates"] = new JsonArray(candidates.Select(i => i["slot"].DeepClone()).ToArray());
-                _parallel.Offer("inventory:cleanup", revision, ct => propose("cleanup", cleanup, ct),
-                    answer => ApplyCleanup(bag, candidates, answer), token);
+                var protectedTypes = ProtectedItems(AgentTools.Plan.Snapshot());
+                var candidates = items.Where(i => DiscardCandidate(i, protectedTypes)).ToArray();
+                if (candidates.Length > 0)
+                {
+                    var cleanup = (JsonObject)scene.DeepClone();
+                    cleanup["candidates"] = new JsonArray(candidates.Select(i => i["slot"].DeepClone()).ToArray());
+                    _parallel.Offer("inventory:cleanup", revision, ct => propose("cleanup", cleanup, ct),
+                        answer => ApplyCleanup(bag, candidates, answer), token);
+                }
             }
         }
         if (now < _preparationTick || !AgentTools.Actions.HasPrimaryControl || !AgentTools.Plan.RequiresNodeExecution) return;
@@ -404,6 +408,7 @@ public class NativeAgent : ModSystem
         => ReadNumber(item["slot"]) >= 10 && item["favorited"]?.GetValue<bool>() != true && item["accessory"]?.GetValue<bool>() != true
             && item["armor_slot"] == null && ReadNumber(item["heal_life"]) <= 0
             && ReadNumber(item["damage"]) <= 0 && ReadNumber(item["pick"]) <= 0 && ReadNumber(item["axe"]) <= 0 && ReadNumber(item["hammer"]) <= 0
+            && ReadNumber(item["create_tile"]) is not (TileID.Painting3X3 or TileID.Painting4X3 or TileID.Painting6X4 or TileID.Painting2X3 or TileID.Painting3X2)
             && !protectedTypes.Contains(ReadNumber(item["type"])) && ReadNumber(item["type"]) is not (>= 71 and <= 74);
 
     static bool InventoryBusy()
@@ -436,6 +441,7 @@ public class NativeAgent : ModSystem
         if (answer?["trash_slots"] is not JsonArray slots || slots.Count == 0) return new JsonObject();
         if (InventoryBusy()) return null;
         var now = PvpInventory.Review();
+        if (now["empty_slots"].AsArray().Count > CleanupFreeSlots) return new JsonObject();
         var trash = now["trash"];
         if (!JsonNode.DeepEquals(trash, bag["trash"]) || ReadNumber(trash["type"]) > 0 && !JsonNode.DeepEquals(trash, _lastAutomaticTrash))
             return new JsonObject();

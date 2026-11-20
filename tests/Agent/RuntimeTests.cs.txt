@@ -262,12 +262,20 @@ static class RuntimeTests
                 "independent proposals lost a valid sibling or overwrote a revised node");
 
             var player = Game.LocalPlayer;
-            var original = (player.inventory[20], player.inventory[21], player.trashItem, Game.mouseItem);
+            var original = (player.inventory.ToArray(), player.trashItem, Game.mouseItem);
             try
             {
+                for (int slot = 0; slot < 50; slot++) player.inventory[slot] = new Terraria.Item();
                 player.inventory[20] = new Terraria.Item { type = 443, stack = 3 };
                 player.inventory[21] = new Terraria.Item { type = 444, stack = 2 };
+                player.inventory[22] = new Terraria.Item { type = 5254, stack = 1, createTile = Terraria.ID.TileID.Painting2X3 };
                 player.trashItem = Game.mouseItem = new Terraria.Item();
+                var answer = new JsonObject { ["trash_slots"] = new JsonArray(20, 21, 22) };
+                var roomyBag = PvpInventory.Review();
+                Check(Agent.ApplyCleanup(roomyBag, roomyBag["inventory"].AsArray().OfType<JsonObject>().ToArray(), answer).Count == 0
+                    && player.inventory[20].stack == 3, "cleanup discarded a stack without inventory pressure");
+                for (int slot = 0; slot < 50; slot++)
+                    if (player.inventory[slot].IsAir) player.inventory[slot] = new Terraria.Item { type = 2, stack = 1, favorited = true };
                 var bag = PvpInventory.Review();
                 var facts = new JsonObject { ["bag"] = bag.DeepClone(), ["candidates"] = new JsonArray(20) };
                 foreach (double chance in new[] { 0.51, 0.96 })
@@ -283,18 +291,21 @@ static class RuntimeTests
                     Check(chance < 0.9 ? judged == null : judged?["trash_slots"]?[0]?.GetValue<int>() == 20,
                         "uncertain Jev decisions did not defer to the inventory agent, or a decisive answer was lost");
                 }
-                var candidate = bag["inventory"].AsArray().OfType<JsonObject>().Where(i => i["slot"].GetValue<int>() is 20 or 21).ToArray();
-                var answer = new JsonObject { ["trash_slots"] = new JsonArray(20, 21) };
+                var candidate = bag["inventory"].AsArray().OfType<JsonObject>().Where(i => i["slot"].GetValue<int>() is 20 or 21 or 22).ToArray();
                 player.inventory[20].stack++;
                 var discarded = Agent.ApplyCleanup(bag, candidate, answer);
-                Check(discarded.Count == 0 && player.inventory[20].stack == 4 && player.inventory[21].stack == 2,
-                    "cleanup discarded a changed stack or a protected goal item");
+                Check(discarded.Count == 0 && player.inventory[20].stack == 4 && player.inventory[21].stack == 2 && player.inventory[22].stack == 1,
+                    "cleanup discarded a changed stack, a protected goal item or a painting");
                 player.inventory[20].stack--;
                 discarded = Agent.ApplyCleanup(bag, candidate, answer);
                 Check(discarded["slots_freed"]?.GetValue<int>() == 1 && player.inventory[20].IsAir && player.inventory[21].stack == 2,
                     "the completed inventory proposal did not immediately free the verified slot");
             }
-            finally { (player.inventory[20], player.inventory[21], player.trashItem, Game.mouseItem) = original; }
+            finally
+            {
+                Array.Copy(original.Item1, player.inventory, player.inventory.Length);
+                (player.trashItem, Game.mouseItem) = (original.Item2, original.Item3);
+            }
         }
         finally { AgentTools.Plan.Reset(); }
         Console.WriteLine("PASS: parallel agents run independent jobs concurrently, apply the first valid result, and preserve newer revisions and protected items");

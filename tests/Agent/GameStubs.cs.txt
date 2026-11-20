@@ -441,6 +441,7 @@ namespace Terraria.ID
         public const int FixtureSource = 1, FixtureOther = 2;
         public const int Containers = 21, Dressers = 88, Containers2 = 467, FakeContainers = 441, FakeContainers2 = 468;
         public const int PressurePlates = 135, Traps = 137, Boulder = 138, Explosives = 141, MinecartTrack = 314;
+        public const int Painting3X3 = 240, Painting4X3 = 241, Painting6X4 = 242, Painting2X3 = 245, Painting3X2 = 246;
         public const int SandstoneBrick = 151, RollingCactus = 484, BouncyBoulder = 664, LifeCrystalBoulder = 665;
         public static class Sets
         {
