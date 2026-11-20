@@ -46,7 +46,7 @@ public sealed class AgentControlSession
         or "use_item" or "place_at" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap"
         or "combat_reposition" or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat" or "fight" or "fight_player"
         or "slot_click" or "container_action" or "game_input" or "craft_recipe" or "housing" or "mod_input"
-        or "pylon_use" or "reforge" or "fish" or "container_transfer" or "craft_to_slot";
+        or "pylon_use" or "reforge" or "fish" or "container_transfer" or "craft_to_slot" or "shop_buy";
 
     public static void DescribeClaims(JsonArray schemas)
     {
@@ -125,7 +125,7 @@ public sealed class AgentControlSession
         if (name == "fight") return ControlChannels.ItemUse;
         if (name == "game_input" && args["action"]?.ToString() == "quick_mount") return ControlChannels.Movement;
         if (name is "slot_click" or "container_action" or "game_input" or "craft_recipe" or "housing" or "reforge"
-            or "container_transfer" or "craft_to_slot") return ControlChannels.ItemUse;
+            or "container_transfer" or "craft_to_slot" or "shop_buy") return ControlChannels.ItemUse;
         if (name != "act") return ControlChannels.All;
         if (args["combat_candidate"] != null) return ControlChannels.Movement;
         var channels = ControlChannels.None;

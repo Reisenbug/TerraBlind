@@ -58,7 +58,9 @@ namespace Terraria.UI
         {
             public const int InventoryItem = 0, InventoryCoin = 1, InventoryAmmo = 2, ChestItem = 3, BankItem = 4;
             public const int PrefixItem = 5, TrashItem = 6, EquipArmor = 8, EquipArmorVanity = 9, EquipAccessory = 10, EquipAccessoryVanity = 11, VoidItem = 32;
+            public const int ShopItem = 15;
         }
+        public static bool ShiftInUse;
         public static Action<Terraria.Item[], int, int> LeftClickHandler;
         public static void LeftClick(Terraria.Item[] items, int context, int slot) => LeftClickHandler?.Invoke(items, context, slot);
         public static Action<Terraria.Item[], int, int> RightClickHandler;
@@ -114,10 +116,13 @@ namespace Terraria
 {
     public enum PopupTextContext { ItemReforge }
     public static class PopupText { public static void NewText(PopupTextContext context, Item item, int stack, bool noStack) { } }
-    public static class Main
+    public class Main
     {
         public static bool dedServ, gameMenu, gamePaused, playerInventory, editChest;
         public static bool InReforgeMenu, bloodMoon;
+        public static Main instance = new();
+        public Chest[] shop = new Chest[100];
+        public static int npcShop, stackSplit, superFastStack;
         public static Item reforgeItem = new();
         public static readonly Terraria.GameContent.TeleportPylonsSystem PylonSystem = new();
         public static string npcChatText = "", defaultChestName = "";
@@ -173,6 +178,8 @@ namespace Terraria
         public bool discountAvailable;
         public (float PriceAdjustment, int unused) currentShoppingSettings = (1f, 0);
         public bool CanAfford(int cost) => coins >= cost;
+        public bool CanAfford(long cost, int currency) => coins >= cost;
+        public void GetItemExpectedPrice(Item item, out long sell, out long buy) => sell = buy = item.value;
         public bool BuyItem(int cost)
         {
             if (!CanAfford(cost)) return false;
@@ -191,6 +198,7 @@ namespace Terraria
         public void QuickBuff() { }
         public void AdjTiles() { }
         public static int tileTargetX, tileTargetY;
+        public static int tileRangeX = 5, tileRangeY = 4;
         public Item trashItem = new();
         public Item[] armor = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
         public bool IsItemSlotUnlockedAndUsable(int slot) => slot < 8 || slot >= 10 && slot < 18;
@@ -257,6 +265,7 @@ namespace Terraria
         public Microsoft.Xna.Framework.Vector2 velocity;
         public Microsoft.Xna.Framework.Vector2 position;
         public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
+        public Microsoft.Xna.Framework.Rectangle Hitbox => new((int)position.X, (int)position.Y, width, height);
     }
     public static class Lang
     {
@@ -270,6 +279,8 @@ namespace Terraria
     {
         public Microsoft.Xna.Framework.Rectangle Hitbox => new((int)position.X, (int)position.Y, width, height);
         public bool active, consumable;
+        public bool buyOnce;
+        public int shopSpecialCurrency = -1;
         public bool favorited, accessory, material;
         public int defense, headSlot = -1, bodySlot = -1, legSlot = -1;
         public int healLife;

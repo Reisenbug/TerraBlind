@@ -1554,7 +1554,7 @@ public static partial class AgentTools
     static readonly AsyncLocal<long> scriptInvocation = new();
     static bool ReadsHousing(string name, JsonObject args) => name == "housing" && Text(args, "action") is "list" or "check";
     static bool ObservationTool(string name) => name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain" or "block_region"
-        or "pylon_list" or "fishing_status"
+        or "pylon_list" or "fishing_status" or "shop_list"
         or "find_descent" or "find_biome" or "early_descent" or "invasion_status"
         or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "jev_judge" or "item_info" or "wiki_search" or "wiki_page"
         or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status" or "action_query"
@@ -1615,7 +1615,7 @@ public static partial class AgentTools
             or "place_at" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap" or "combat_reposition"
             or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat"
             or "slot_click" or "container_action" or "game_input" or "craft_recipe" or "mod_input"
-            or "pylon_use" or "reforge" or "fish" or "container_transfer" or "craft_to_slot" || name == "housing" && !readsHousing;
+            or "pylon_use" or "reforge" or "fish" or "container_transfer" or "craft_to_slot" or "shop_buy" || name == "housing" && !readsHousing;
         bool action = external || name is "fight" or "fight_player";
         bool startsPrimary = name == "action_start" && Text(args, "tool") != "fight";
         if ((external || startsPrimary) && string.IsNullOrEmpty(taskNode)
@@ -2687,6 +2687,11 @@ public static partial class AgentTools
                 break;
             case "npc_dialogue_status":
                 return (await NativeAgent.OnMain(NpcDialogue.Snapshot, token)).ToJsonString();
+            case "shop_list":
+                return (await NativeAgent.OnMain(() => PvpInventory.OpenShop(args, buy: false), token)).ToJsonString();
+            case "shop_buy":
+                result = await NativeAgent.OnMain(() => PvpInventory.OpenShop(args, buy: true), token);
+                break;
             case "npc_chat":
                 string chatAction = Text(args, "action");
                 if (chatAction == "close")

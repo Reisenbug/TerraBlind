@@ -9,6 +9,7 @@ static class InventoryTests
     public static void Run()
     {
         OpenContainers();
+        ShopReceipts();
         var self = Game.LocalPlayer;
         var old0 = self.inventory[0]; var old12 = self.inventory[12];
         int net = Game.netMode;
@@ -78,6 +79,47 @@ static class InventoryTests
             self.trashItem = oldTrash;
         }
         Console.WriteLine("PASS: inventory swap validates busy/stale states, preserves both items and emits two slot syncs");
+    }
+
+    static void ShopReceipts()
+    {
+        var p = Game.LocalPlayer;
+        var before = (p.talkNPC, p.coins, Game.npcShop, Game.playerInventory, Game.mouseItem, Game.npc[0],
+            Game.instance.shop[1], Terraria.UI.ItemSlot.RightClickHandler);
+        try
+        {
+            p.talkNPC = 0; p.coins = 40; Game.npcShop = 1; Game.playerInventory = true;
+            Game.npc[0] = new Terraria.NPC { active = true, type = 38, position = new(p.position.X, p.position.Y) };
+            Game.instance.shop[1] = new Terraria.Chest();
+            var stock = Game.instance.shop[1].item;
+            stock[0] = new Terraria.Item { type = 167, stack = 1, value = 20 };
+            Game.mouseItem = new Terraria.Item();
+            Terraria.UI.ItemSlot.RightClickHandler = (items, context, slot) =>
+            {
+                if (items != stock || context != Terraria.UI.ItemSlot.Context.ShopItem || slot != 0 || !Game.mouseRight)
+                    throw new Exception("shop purchase bypassed the native shop slot");
+                if (!p.BuyItem(items[slot].value)) return;
+                Game.mouseItem.type = items[slot].type;
+                Game.mouseItem.stack++;
+            };
+            var listing = PvpInventory.OpenShop(new JsonObject(), buy: false);
+            var order = new JsonObject { ["npc"] = 0, ["npc_type"] = 38, ["shop"] = 1, ["slot"] = 0, ["expected_type"] = 167,
+                ["unit_price"] = 19L, ["count"] = 3 };
+            if (listing["items"][0]["unit_price"].GetValue<long>() != 20
+                || PvpInventory.OpenShop(order, buy: true)["bought"].GetValue<int>() != 0 || p.coins != 40)
+                throw new Exception("a stale price spent coins");
+            order["unit_price"] = 20L;
+            var bought = PvpInventory.OpenShop(order, buy: true);
+            if (bought["outcome"].ToString() != "partial" || bought["reason"].ToString() != "insufficient_funds"
+                || bought["bought"].GetValue<int>() != 2 || Game.mouseItem.stack != 2 || p.coins != 0)
+                throw new Exception("shop purchase did not verify the actual paid quantity");
+            Console.WriteLine("PASS: NPC shop purchase uses the native slot, exact quote and observed cursor quantity");
+        }
+        finally
+        {
+            (p.talkNPC, p.coins, Game.npcShop, Game.playerInventory, Game.mouseItem, Game.npc[0],
+                Game.instance.shop[1], Terraria.UI.ItemSlot.RightClickHandler) = before;
+        }
     }
 
     static void OpenContainers()

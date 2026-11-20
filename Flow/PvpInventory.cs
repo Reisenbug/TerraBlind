@@ -215,6 +215,64 @@ public static class PvpInventory
         finally { (Main.npcChatText, Main.defaultChestName) = saved; }
     }
 
+    public static JsonObject OpenShop(JsonObject args, bool buy)
+    {
+        var player = Main.LocalPlayer;
+        int npc = player.talkNPC;
+        if (Main.gameMenu || player.dead || !player.active || !Main.playerInventory || Main.npcShop <= 0
+            || npc < 0 || npc >= Main.npc.Length || Main.npc[npc] is not { active: true } vendor
+            || Main.instance.shop[Main.npcShop]?.item is not Item[] stock)
+            return new JsonObject { ["error"] = "shop_not_open" };
+        var range = new Microsoft.Xna.Framework.Rectangle((int)player.Center.X - Player.tileRangeX * 16,
+            (int)player.Center.Y - Player.tileRangeY * 16, Player.tileRangeX * 32, Player.tileRangeY * 32);
+        if (!range.Intersects(vendor.Hitbox)) return new JsonObject { ["error"] = "npc_out_of_reach" };
+        long Price(Item item)
+        {
+            player.GetItemExpectedPrice(item, out _, out long price);
+            return price;
+        }
+        if (!buy)
+        {
+            var items = new JsonArray();
+            for (int i = 0; i < stock.Length; i++)
+                if (stock[i] is { IsAir: false } item)
+                    items.Add(new JsonObject { ["slot"] = i, ["item"] = ItemState(item),
+                        ["unit_price"] = Price(item), ["currency"] = item.shopSpecialCurrency, ["finite_stock"] = item.buyOnce });
+            return new JsonObject { ["npc"] = npc, ["npc_type"] = vendor.type, ["shop"] = Main.npcShop, ["items"] = items };
+        }
+        if (args["npc"]?.GetValue<int>() != npc || args["npc_type"]?.GetValue<int>() != vendor.type
+            || args["shop"]?.GetValue<int>() != Main.npcShop)
+            return new JsonObject { ["error"] = "shop_changed" };
+        if (player.itemAnimation > 0 || player.itemTime > 0) return new JsonObject { ["error"] = "inventory_busy" };
+        int slot = args["slot"]?.GetValue<int>() ?? -1, type = args["expected_type"]?.GetValue<int>() ?? 0;
+        int count = args["count"]?.GetValue<int>() ?? 1;
+        long offered = args["unit_price"]?.GetValue<long>() ?? -1;
+        if (slot < 0 || slot >= stock.Length || type <= 0 || offered < 0 || count is < 1 or > 100)
+            return new JsonObject { ["error"] = "invalid_shop_order" };
+        if (!Main.mouseItem.IsAir || ItemSlot.ShiftInUse) return new JsonObject { ["error"] = "shop_cursor_busy" };
+        var input = (Main.mouseRight, Main.mouseRightRelease, Main.stackSplit, Main.superFastStack);
+        int bought = 0;
+        string reason = "";
+        try
+        {
+            Main.mouseRight = Main.mouseRightRelease = true;
+            Main.superFastStack = 0;
+            for (; bought < count; bought++)
+            {
+                var item = stock[slot];
+                if (item.IsAir || item.type != type || Price(item) != offered) { reason = "offer_changed"; break; }
+                if (!Main.mouseItem.IsAir && Main.mouseItem.stack >= Main.mouseItem.maxStack) { reason = "cursor_stack_full"; break; }
+                if (!player.CanAfford(offered, item.shopSpecialCurrency)) { reason = "insufficient_funds"; break; }
+                Main.stackSplit = 0;
+                ItemSlot.RightClick(stock, ItemSlot.Context.ShopItem, slot);
+                if (Main.mouseItem.type != type || Main.mouseItem.stack != bought + 1) { reason = "purchase_not_observed"; break; }
+            }
+        }
+        finally { (Main.mouseRight, Main.mouseRightRelease, Main.stackSplit, Main.superFastStack) = input; }
+        return new JsonObject { ["ok"] = bought > 0, ["outcome"] = bought == count ? "bought" : bought > 0 ? "partial" : "not_bought",
+            ["bought"] = bought, ["wanted"] = count, ["reason"] = reason, ["cursor"] = ItemState(Main.mouseItem) };
+    }
+
     public static JsonObject Slot(JsonObject args, bool click)
     {
         var player = Main.LocalPlayer;
