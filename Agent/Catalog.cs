@@ -7,6 +7,14 @@ namespace TerraBlind;
 
 public static class AgentCatalog
 {
+    internal static string[] BossNames(int type)
+    {
+        if (!Terraria.ID.ContentSamples.NpcsByNetId.TryGetValue(type, out var npc) || !npc.boss) return Array.Empty<string>();
+        string internalName = Terraria.ID.NPCID.Search.GetName(type);
+        if (type == Terraria.ID.NPCID.SkeletronHead) return new[] { "Skeletron", "骷髅王", Terraria.Lang.GetNPCNameValue(type), internalName };
+        return new[] { Terraria.Lang.GetNPCNameValue(type), internalName };
+    }
+
     public static JsonObject ResolvePlanTypes(JsonObject args)
     {
         var resolved = (JsonObject)args.DeepClone();

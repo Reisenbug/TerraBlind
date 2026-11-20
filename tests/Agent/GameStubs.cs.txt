@@ -429,7 +429,10 @@ namespace Terraria.ID
             PotionOfReturn = 4870, Shellphone = 5358, ShellphoneSpawn = 5359;
     }
     public static class NPCID { public const int GoblinTinkerer = 107, FixtureEnemy = 222, Lihzahrd = 198, LihzahrdCrawler = 199, FlyingSnake = 226;
-        public const int EyeofCthulhu = 4, TheDestroyer = 134, Retinazer = 125, SkeletronPrime = 127; }
+        public const int EyeofCthulhu = 4, TheDestroyer = 134, Retinazer = 125, SkeletronPrime = 127, SkeletronHead = 35, WallofFlesh = 113;
+        public static readonly NpcSearch Search = new();
+        public sealed class NpcSearch { public string GetName(int type) => type.ToString(); }
+    }
     public static class PrefixID { public const int Hard = 62, Warding = 65; }
     public static class SoundID { public static readonly int Item37 = 37; }
     public static class ProjectileID
@@ -464,6 +467,7 @@ namespace Terraria.ID
     public static class MountID { public const int QueenSlime = 50; }
     public static class ContentSamples
     {
+        public static Dictionary<int, Terraria.NPC> NpcsByNetId = new();
         public static Dictionary<int, Terraria.Projectile> ProjectilesByType = new();
         public static Dictionary<int, Terraria.Item> ItemsByType = new();
     }

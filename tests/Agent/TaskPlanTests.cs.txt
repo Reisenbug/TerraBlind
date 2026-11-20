@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text.Json.Nodes;
 using TerraBlind;
 using Terraria;
@@ -52,6 +53,7 @@ static class TaskPlanTests
         VerifyDag();
         VerifyPreparation();
         VerifyDagInsertion();
+        VerifyHardmodeOrder();
         VerifyChestEvidence();
         VerifyPosition();
         VerifyBiome();
@@ -165,6 +167,39 @@ static class TaskPlanTests
         Main.LocalPlayer.inventory[5] = new Item();
         Console.WriteLine("PASS: task plan verifies permanent health, typed items and fresh kills; preserves cursor/failure and rejects skips/unsafe replacement");
         PatchChecks();
+    }
+
+    static void VerifyHardmodeOrder()
+    {
+        var plan = new AgentTaskPlan();
+        var request = Parse("""
+            {"goal":"model claims to require Skeletron first","mode":"dag","steps":[
+              {"id":"stock","description":"buy Dynamite","script":"return {};","depends_on":[],"conditions":[{"kind":"item","count":1,"type":167}]},
+              {"id":"dungeon","description":"open the Dungeon","script":"return {};","depends_on":[],"conditions":[{"kind":"npc_kills","count":1,"type":35}]},
+              {"id":"gear","description":"get gear","depends_on":["dungeon"],"conditions":[{"kind":"equipped","count":1,"type":83}]},
+              {"id":"wall","description":"enter Hardmode","depends_on":["stock","gear"],"conditions":[{"kind":"npc_kills","count":1,"type":113}]}]}
+            """);
+        string[] Names(int type) => type == 35 ? new[] { "Skeletron", "骷髅王" } : Array.Empty<string>();
+        plan.SetObjective("用雷管击败肉山并确认进入困难模式。之后继续推进，尝试击败月亮领主。", Names);
+        try { plan.Create(request, _ => 0); throw new Exception("optional boss gated Hardmode on fresh or resumed plan"); }
+        catch (InvalidOperationException error) when (error.Message.StartsWith("unrequested_boss_prerequisite")) { }
+        request["steps"][3]["depends_on"] = new JsonArray("stock");
+        request["steps"][1]["depends_on"] = new JsonArray("wall");
+        plan.Create(request, _ => 0);
+        var before = plan.Snapshot();
+        var change = new JsonObject { ["expected_revision"] = before["revision"].DeepClone(), ["reason"] = "get stronger",
+            ["nodes"] = new JsonArray(new JsonObject { ["id"] = "dungeon", ["depends_on"] = new JsonArray() },
+                new JsonObject { ["id"] = "wall", ["depends_on"] = new JsonArray("stock", "gear") }) };
+        try { plan.Revise(change, _ => 0); throw new Exception("revised DAG made the side branch mandatory"); }
+        catch (InvalidOperationException error) when (error.Message.StartsWith("unrequested_boss_prerequisite")) { }
+        Check(JsonNode.DeepEquals(before, plan.Snapshot()) && plan.Advance("stock", _ => 1)["verified"].GetValue<bool>()
+            && plan.Snapshot()["ready_steps"].AsArray().Single().ToString() == "wall", "blocked proposal mutated the live DAG or prevented advancement");
+        plan.Reset();
+        plan.SetObjective("先击败骷髅王，然后用雷管击败肉山并确认进入困难模式。", Names);
+        request["steps"][3]["depends_on"] = new JsonArray("stock", "gear");
+        request["steps"][1]["depends_on"] = new JsonArray();
+        plan.Create(request, _ => 0);
+        Console.WriteLine("PASS: premature boss prerequisite is denied on create and revision; explicit user order remains valid");
     }
 
     static void VerifyChestEvidence()

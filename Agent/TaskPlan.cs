@@ -13,6 +13,8 @@ public sealed class AgentTaskPlan
     int _progress;
     int _revision;
     bool _dag;
+    string _beforeHardmode;
+    Func<int, string[]> _bossNames;
     public int Cursor => _cursor;
     internal string CurrentDescription => _cursor < _steps.Count ? _steps[_cursor]["description"]?.ToString() : null;
     public int Progress => _progress;
@@ -40,7 +42,49 @@ public sealed class AgentTaskPlan
             .Select(s => s["id"].DeepClone()).ToArray());
     }
 
-    public void Reset() { _steps.Clear(); _goal = null; _cursor = _progress = 0; _dag = false; _revision++; }
+    public void Reset() { _steps.Clear(); _goal = null; _cursor = _progress = 0; _dag = false; SetObjective(null, null); _revision++; }
+
+    internal void SetObjective(string objective, Func<int, string[]> bossNames)
+    {
+        var milestone = System.Text.RegularExpressions.Regex.Match(objective ?? "",
+            @"肉山|血肉墙|Wall\s*of\s*Flesh|进入困难模式|enter(?:ing)?\s+hardmode", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        _beforeHardmode = milestone.Success ? objective[..milestone.Index] : null;
+        _bossNames = bossNames;
+    }
+
+    void ValidateProgression(List<JsonObject> steps)
+    {
+        if (_beforeHardmode == null || _bossNames == null) return;
+        var byId = steps.ToDictionary(step => step["id"].ToString());
+        var gates = steps.Where(step => step["conditions"].AsArray().Any(condition =>
+            condition["kind"].ToString() == "npc_kills" && condition["type"].GetValue<int>() == Terraria.ID.NPCID.WallofFlesh))
+            .Select(step => step["id"].ToString()).ToHashSet();
+        if (gates.Count == 0) return;
+        foreach (var step in steps)
+        {
+            foreach (var condition in step["conditions"].AsArray().Where(c => c["kind"].ToString() == "npc_kills"))
+            {
+                int type = condition["type"].GetValue<int>();
+                if (type == Terraria.ID.NPCID.WallofFlesh) continue;
+                var names = _bossNames(type);
+                if (names != null && names.Length > 0 && !names.Any(name => !string.IsNullOrWhiteSpace(name)
+                    && _beforeHardmode.Contains(name, StringComparison.OrdinalIgnoreCase)) && !FollowsHardmode(step))
+                    throw new InvalidOperationException($"unrequested_boss_prerequisite: {step["id"]} ({names[0]}) must follow Wall of Flesh when the player's objective does not request it before Hardmode.");
+            }
+        }
+        bool FollowsHardmode(JsonObject step)
+        {
+            var found = new HashSet<string>();
+            var required = new Stack<string>(step["depends_on"].AsArray().Select(dependency => dependency.ToString()));
+            while (required.TryPop(out string id))
+            {
+                if (gates.Contains(id)) return true;
+                if (found.Add(id))
+                    foreach (var dependency in byId[id]["depends_on"].AsArray()) required.Push(dependency.ToString());
+            }
+            return false;
+        }
+    }
 
     public JsonObject Create(JsonObject args, Func<JsonObject, int> measure)
     {
@@ -52,6 +96,7 @@ public sealed class AgentTaskPlan
         bool dag = args["mode"]?.ToString() == "dag";
         var parsed = ParseSteps(steps, dag, measure);
         ValidateDependencies(parsed);
+        if (dag) ValidateProgression(parsed);
         _steps.Clear(); _steps.AddRange(parsed); _goal = goal; _cursor = _progress = 0;
         _dag = dag;
         SelectReady();
@@ -237,6 +282,7 @@ public sealed class AgentTaskPlan
         }
         revised.AddRange(added);
         ValidateDependencies(revised);
+        ValidateProgression(revised);
         _steps.Clear(); _steps.AddRange(revised);
         if (!Ready(_steps[_cursor]))
         {

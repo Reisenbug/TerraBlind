@@ -690,6 +690,7 @@ public class NativeAgent : ModSystem
         _cancel = new CancellationTokenSource();
         var token = _cancel.Token;
         AgentTools.NewTask(goal, allowPassingChestLoot: goalOptions != null);
+        AgentTools.Plan.SetObjective(goalOptions?["objective"]?.ToString(), AgentCatalog.BossNames);
         _inventoryReviewTick = _chestReviewRevision = _preparationTick = 0;
         _lastAutomaticTrash = null;
         if (goalOptions != null && goalOptions["tokenBudget"] == null && useCodex)
