@@ -161,9 +161,22 @@ namespace TerraBlind
 			why = "";
 			var p = Main.LocalPlayer;
 			if (p == null) { why = "no_player"; return false; }
-			_rooms = rooms < 1 ? 1 : rooms;
+			int roomCount = System.Math.Max(1, rooms);
+			int torches = HaveTorch();
+			if (torches < roomCount && Terraria.Program.IsMainThread)
+			{
+				CraftCoordinator.Craft(H_TORCH, roomCount - torches);
+				torches = HaveTorch();
+			}
+			if (torches < roomCount)
+			{
+				why = $"missing_torches: have {torches}, need {roomCount}; collect torches or craft with Gel and Wood";
+				return false;
+			}
+			_rooms = roomCount;
 			_dir = dir >= 0 ? 1 : -1;
 			_x0 = ax; _ay = ay;
+			AgentTools.ReserveHousingConstruction(ax, ay, ax + _dir * Width, ay - PillarH - 1);
 			_floorRow = ay;
 			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0; _fixTried = false;
 			_retryPh = Ph.Idle; _retryN = 0;

@@ -39,6 +39,19 @@ static class RuntimeTests
             housingPlan.Create(housingGoal, AgentTaskEvidence.Measure);
             Check(housingPlan.Advance("base", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(),
                 "existing suitable rooms could not complete a housing goal before construction");
+            var oldResident = Game.npc[2];
+            try
+            {
+                Game.npc[2] = new Terraria.NPC { whoAmI = 2, type = 22, active = true, townNPC = true,
+                    homeTileX = 100, homeTileY = 123 };
+                Terraria.WorldGen.numRoomTiles = 2;
+                Terraria.WorldGen.roomX[0] = Terraria.WorldGen.roomX[1] = 100;
+                Terraria.WorldGen.roomY[0] = 123; Terraria.WorldGen.roomY[1] = 122;
+                var occupied = await Call("housing", new JsonObject { ["action"] = "remember", ["x"] = 100, ["y"] = 120 });
+                Check(occupied["suitable"].GetValue<bool>() && occupied["occupants"].AsArray().Single()["npc"].GetValue<int>() == 2,
+                    "housing rejected the assigned resident whose native home tile is one row below the room interior");
+            }
+            finally { Game.npc[2] = oldResident; Terraria.WorldGen.numRoomTiles = 0; }
             RecedingNav.Active = true;
             Check(AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, 98, 119)
                 && AgentTools.Control.ForbiddenAt(ControlBehavior.Placement, 100, 120)
@@ -940,6 +953,7 @@ static class RuntimeTests
     static async Task TestInlinePauseResume()
     {
         var previous = HttpServerSystem.Handler;
+        uint originalTick = Game.GameUpdateCount;
         AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); AgentTools.NewTask();
         int starts = 0;
         bool observedGap = false;
@@ -974,6 +988,11 @@ static class RuntimeTests
                 "continuity monitor interrupted an executing anonymous recovery script: " + result);
             await Execute(AgentTools.Actions.Control(handle, "pause", null, default));
             AgentTools.ObserveContinuity();
+            Game.GameUpdateCount += 119;
+            AgentTools.ObserveContinuity();
+            Check(!AgentTools.Watches.HasInterrupting, "a brief action handoff woke the model before two seconds");
+            Game.GameUpdateCount++;
+            AgentTools.ObserveContinuity();
             Check(AgentTools.Watches.HasInterrupting, "finished inline script permanently suppressed a real execution gap");
             string originalScript = AgentTools.Plan.Script("travel")["code"].ToString();
             var single = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
@@ -991,6 +1010,7 @@ static class RuntimeTests
             ActionTasks.NodeContext.Value = null;
             AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
             HttpServerSystem.Handler = previous;
+            Game.GameUpdateCount = originalTick;
         }
     }
 

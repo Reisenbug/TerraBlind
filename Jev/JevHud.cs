@@ -62,14 +62,16 @@ namespace TerraBlind
 				_intents = AgentScript.IntentStatus;
 			}
 			string bossMove = Dodge.DecisionLabel;
-			if (_decisions.Count == 0 && _intents == null && bossMove == null) return;
+			string current = _intents?["current"]?["description"]?.ToString();
+			if (current == null && NativeAgent.WorkPending) current = AgentTools.Plan.CurrentDescription;
+			if (_decisions.Count == 0 && _intents == null && bossMove == null && current == null) return;
 			var entries = new List<(string Text, Color Color)> { ("Decision", Color.Gold) };
+			if (current != null) entries.Add(("Current: " + current, Color.White));
 			if (bossMove != null)
 				entries.Add(($"Boss dodge: {bossMove} · {Dodge.LatencyMs}ms", Tint(Dodge.Confidence)));
 			if (_intents != null)
 			{
-				string current = _intents["current"]?["description"]?.ToString();
-				entries.Add((current == null ? "Status: " + Label(_intents["status"]?.ToString()) : "Current: " + current, Color.White));
+				if (current == null) entries.Add(("Status: " + Label(_intents["status"]?.ToString()), Color.White));
 				if (_intents["prepared"]?["description"] is JsonNode next) entries.Add(("Next: " + next, Color.LightCyan));
 				if (_intents["feedback"] is JsonObject feedback)
 					entries.Add(("Result: " + (feedback["verified"]?.GetValue<bool>() == true ? "Verified " : "Blocked ")

@@ -402,6 +402,7 @@ public static partial class AgentTools
     internal static string PreparationNotifiedContext { get; private set; }
     static ulong? gapStarted;
     static bool gapReported;
+    const ulong ExecutionGapReviewFrames = 120;
 
     internal static string PreparationContext(string attempt, string node)
     {
@@ -449,7 +450,8 @@ public static partial class AgentTools
         string kind = action != null ? "prepare_successor" : "execution_gap";
         if (action == null)
         {
-            if (Watches.LocalDelivery || ExecutionContinuity?["reason"]?.ToString() is not ("no_executable_action" or "event_review_without_action"))
+            if (Watches.LocalDelivery || !gapReported
+                || ExecutionContinuity?["reason"]?.ToString() is not ("no_executable_action" or "event_review_without_action"))
                 return Task.CompletedTask;
             action = Actions.LatestFinishedPrimary();
         }
@@ -525,8 +527,8 @@ public static partial class AgentTools
                     LastContinuation["resolved_tick"] = Main.GameUpdateCount;
                 }
             }
-            if (gapStarted != null)
-                DiagLog.Write($"[execution_gap_end] frames={Main.GameUpdateCount - gapStarted.Value} handle={Actions.ActiveHandle}");
+            if (gapStarted is ulong began && Main.GameUpdateCount - began >= ExecutionGapReviewFrames)
+                DiagLog.Write($"[execution_gap_end] frames={Main.GameUpdateCount - began} handle={Actions.ActiveHandle}");
             gapStarted = null;
             gapReported = false;
             ExecutionContinuity = new JsonObject { ["status"] = Main.LocalPlayer.dead ? "waiting_respawn"
@@ -543,7 +545,8 @@ public static partial class AgentTools
             ["last_handle"] = last["handle"]?.DeepClone(), ["last_tool"] = last["tool"]?.DeepClone(),
             ["last_status"] = last["status"]?.DeepClone(), ["task_node"] = last["task_node"]?.DeepClone(),
             ["current_node"] = Plan.Snapshot()["current_step"]?.DeepClone() };
-        if (!gapReported && !dispatching && !scriptRunning)
+        bool failed = last["status"]?.ToString() == "failed";
+        if (!gapReported && !dispatching && !scriptRunning && (failed || Main.GameUpdateCount - gapStarted.Value >= ExecutionGapReviewFrames))
         {
             gapReported = true;
             DiagLog.Write("[execution_gap] " + ExecutionContinuity.ToJsonString());
@@ -1121,6 +1124,17 @@ public static partial class AgentTools
         RefreshHousingProtection();
     }
 
+    static (int World, int Left, int Top, int Right, int Bottom)? housingConstruction;
+
+    internal static void ReserveHousingConstruction(int x, int y, int endX, int roof)
+        => housingConstruction = (Main.worldID, Math.Min(x, endX), roof, Math.Max(x, endX), y);
+
+    internal static void ClearHousingConstruction() => housingConstruction = null;
+
+    static bool TacticalCoverProtected(int x, int y)
+        => Control.InHousing(x, y) || housingConstruction is { } site && site.World == Main.worldID
+            && x >= site.Left && x <= site.Right && y >= site.Top && y <= site.Bottom;
+
     internal static void RefreshHousingProtection()
     {
         var areas = KnownRooms().Select(point => WorldGen.StartRoomCheck(point.x, point.y)
@@ -1133,14 +1147,22 @@ public static partial class AgentTools
     {
         bool closed = WorldGen.StartRoomCheck(x, y);
         int left = WorldGen.roomX1, right = WorldGen.roomX2, top = WorldGen.roomY1, bottom = WorldGen.roomY2;
+        bool Contains(int column, int row)
+        {
+            for (int i = 0; i < WorldGen.numRoomTiles; i++)
+                if (WorldGen.roomX[i] == column && WorldGen.roomY[i] == row) return true;
+            return false;
+        }
         var occupants = closed ? residents.Where(npc => !npc.homeless && npc.homeTileX > left && npc.homeTileX < right
-            && npc.homeTileY >= top && npc.homeTileY <= bottom).ToArray() : Array.Empty<NPC>();
+            && npc.homeTileY - 1 >= top && npc.homeTileY - 1 <= bottom
+            && Contains(npc.homeTileX, npc.homeTileY) && Contains(npc.homeTileX, npc.homeTileY - 1)).ToArray() : Array.Empty<NPC>();
         bool suitable = closed && WorldGen.RoomNeeds(0)
             && !WorldGen.houseTile[Terraria.ID.TileID.StinkbugHousingBlocker]
             && !WorldGen.houseTile[Terraria.ID.TileID.StinkbugHousingBlockerEcho];
         if (suitable)
         {
-            WorldGen.ScoreRoom(occupants.FirstOrDefault()?.whoAmI ?? -1, 0);
+            var resident = occupants.FirstOrDefault();
+            WorldGen.ScoreRoom(resident?.whoAmI ?? -1, resident?.type ?? 0);
             suitable = WorldGen.hiScore > 0;
         }
         return new JsonObject { ["x"] = x, ["y"] = y, ["closed"] = closed, ["suitable"] = suitable, ["surface"] = y < Main.worldSurface,
@@ -3935,6 +3957,7 @@ public static partial class AgentTools
             && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) <= radius * 16)
             .OrderBy(n => Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center)).Take(8);
         return new JsonObject { ["tick"] = Main.GameUpdateCount, ["recent_damage"] = LastDamage?.DeepClone(),
+            ["defense_permitted"] = AgentPermissions.CanAttack(delegated: true),
             ["rail_routes"] = ReachableRailRoutes(p),
             ["movement_intent"] = FeedbackControl.Snapshot(),
             ["navigation_controls"] = new JsonObject {
@@ -4065,7 +4088,8 @@ public static partial class AgentTools
                     && Main.tile[x, bottom - i].TileType == item.createTile).Count();
                 int cost = 4 - existing;
                 if (cost == 0 || item.stack < cost) continue;
-                bool Fits(int y) => !Main.tile[x, y].HasTile && (Main.tile[x, y].LiquidAmount == 0 || Main.tile[x, y].LiquidType != Terraria.ID.LiquidID.Lava)
+                bool Fits(int y) => !TacticalCoverProtected(x, y) && !Main.tile[x, y].HasTile
+                    && (Main.tile[x, y].LiquidAmount == 0 || Main.tile[x, y].LiquidType != Terraria.ID.LiquidID.Lava)
                     && Reach.CanPlace(player, x, y) && !Control.ForbiddenAt(ControlBehavior.Placement, x, y);
                 if (!Enumerable.Range(existing, cost).All(i => Fits(bottom - i))) continue;
                 bool Crosses(Microsoft.Xna.Framework.Vector2 target)

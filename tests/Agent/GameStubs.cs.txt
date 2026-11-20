@@ -339,6 +339,8 @@ namespace Terraria
         public static bool spawnEye;
         public static int spawnHardBoss;
         public static int prioritizedTownNPCType, roomX1, roomX2, roomY1, roomY2, hiScore = 1;
+        public static int numRoomTiles;
+        public static int[] roomX = new int[750], roomY = new int[750];
         public static bool[] houseTile = new bool[1000];
         public static Func<int, int, bool> RoomCheck;
         public static bool StartRoomCheck(int x, int y)

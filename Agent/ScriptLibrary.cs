@@ -426,9 +426,16 @@ public sealed class ScriptLibrary
                 ?{x:event.execution.args.x,y:event.execution.args.y}:{x:Math.floor(p.pos.x/16),y:Math.floor(p.pos.y/16)};
               const idle=['idle','fight'].includes(event.execution?.tool)
                 ||event.execution?.tool==='gather'&&event.execution.phase==='observe_sources';
+              const close=c.targets?.filter(n=>n.attackable&&n.contact_damage>0&&n.distance_tiles<12)??[];
+              const simpleFight=c.defense_permitted&&close.length===1&&close[0].distance_tiles<=4
+                &&p.hp>4*close[0].contact_damage&&!c.projectiles?.length&&(c.fall_forecast?.damage??0)<=0
+                &&close[0].weapons.some(w=>w.slot<10&&!w.consumable&&w.mana_available&&w.has_ammo&&w.line_or_reach_passed
+                  &&(!c.preferred_weapon_type||c.preferred_weapon_type===w.type)
+                  &&Math.max(1,w.damage-Math.ceil((close[0].defense??0)/2))*2>=close[0].hp);
               if(!idle)idleDestination=null;
               if(!idle&&!destination)movementIntent=null;
-              if(!c.boss_present&&(destination||idle)&&(c.targets?.some(n=>n.contact_damage>0&&n.distance_tiles<12)
+              if(simpleFight)movementIntent=null;
+              if(!simpleFight&&!c.boss_present&&(destination||idle)&&(c.targets?.some(n=>n.contact_damage>0&&n.distance_tiles<12)
                   ||c.projectiles?.length||(c.fall_forecast?.damage??0)>0)){
                 if(idle) destination=idleDestination??={x:Math.floor(p.pos.x/16),y:Math.floor(p.pos.y/16)};
                 const useFeedback=(idle&&feedbackIdle&&event.execution?.tool!=='gather'
@@ -869,7 +876,8 @@ public sealed class ScriptLibrary
             }
             else if(choice==='keep_current') applied={};
             else if(!plan?.movement_available) applied={error:'landing_unresolved'};
-            else if(plan.movement==='follow_route') applied=plan.weapon_type>0?tool('set_combat',{weapon_type:plan.weapon_type}):{};
+            else if(plan.movement==='follow_route') applied=plan.weapon_type>0&&plan.weapon_type!==c.preferred_weapon_type
+              ?tool('set_combat',{weapon_type:plan.weapon_type}):{};
             else applied=move(plan,r.input_state.forecast_id);
             if(applied.status==='combat_preparing')return {status:applied.status,request_id:r.request_id,intent,applied:false,agent_review:agentReview};
             print({...record,choice:r.result.answers.response.choice,action:applied.error??applied.outcome??'follow_route',

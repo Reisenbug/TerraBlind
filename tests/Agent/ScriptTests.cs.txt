@@ -1261,6 +1261,12 @@ static class ScriptTests
                 "protect construction cell", (blockedX, 49, 1, 1));
             Check(Read().Count == 1, "cover generation ignored a placement veto");
             AgentTools.Control.Release(denied);
+            AgentTools.Control.ReplaceHousing(new[] { (blockedX, 46, blockedX, 49) });
+            Check(Read().Count == 1, "cover generation proposed a wall in a house during idle defense");
+            AgentTools.Control.ReplaceHousing(Array.Empty<(int, int, int, int)>());
+            AgentTools.ReserveHousingConstruction(blockedX, 49, blockedX, 46);
+            Check(Read().Count == 1, "cover generation proposed a wall inside an unfinished house");
+            AgentTools.ClearHousingConstruction();
             Terraria.Main.npc[0].noTileCollide = true;
             Check(Read().Count == 0, "tile-ignoring threat was described as intercepted");
             Terraria.Main.npc[0].noTileCollide = false; p.inventory[8].favorited = true;
@@ -1282,6 +1288,8 @@ static class ScriptTests
             foreach (var tile in tiles) Terraria.Main.tile[tile.X, tile.Y] = tile.Tile;
             Array.Copy(inventory, p.inventory, inventory.Length); Terraria.Main.npc = npcs; Terraria.Main.projectile = shots;
             p.position = position; p.velocity = velocity; p.selectedItem = slot; p.dead = dead; p.gravDir = gravity;
+            AgentTools.Control.ReplaceHousing(Array.Empty<(int, int, int, int)>());
+            AgentTools.ClearHousingConstruction();
             AgentTools.NewTask();
         }
         Console.WriteLine("PASS: cover candidates check threat side, material, footing and permissions without changing selected equipment");

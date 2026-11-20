@@ -18,6 +18,7 @@ public static class NavigationAirPocket
     static int slot, blockSlot, savedSlot, idle, elapsed, retry;
     static float destinationX;
     static int plannedFrames;
+    const int EscapeReserveFrames = 150;
     public static int Recoveries { get; private set; }
 
     public static void Reset(Player player)
@@ -35,17 +36,25 @@ public static class NavigationAirPocket
     {
         if (player.gills || player.accMerman || player.gravDir != 1)
         { Reset(player); return false; }
-        if (!active && ApplySurface(player)) return true;
+        bool submerged = Collision.DrownCollision(player.position, player.width, player.height, player.gravDir);
+        int budget = BreathBudget(player);
+        if (!active && ApplySurface(player, submerged, budget)) return true;
         if (!active)
         {
             if (retry > 0) { retry--; return false; }
-            if (player.breath >= player.breathMax - 25 || player.velocity.Y != 0 || !player.wet) return false;
+            if (!submerged || player.velocity.Y != 0) return false;
             if (!AgentTools.ControlAllows(ControlBehavior.Mining, ControlChannels.ItemUse, delegated: true)) return false;
             slot = -1;
             for (int i = 0; i < 10; i++)
                 if (player.inventory[i].pick > 0 && (slot < 0 || player.inventory[i].pick > player.inventory[slot].pick)) slot = i;
             bool canSeal = AgentTools.ControlAllows(ControlBehavior.Placement, ControlChannels.ItemUse, delegated: true);
             if (slot < 0 || !FindPocket(player) && (!canSeal || !FindSealedPocket(player))) { retry = 60; return false; }
+            if (budget > plannedFrames + EscapeReserveFrames)
+            {
+                dig.Clear(); seal.Clear(); sealedPocket = false;
+                retry = Math.Clamp((budget - plannedFrames - EscapeReserveFrames) / 2, 1, 60);
+                return false;
+            }
             if (RecedingNav.Active) RecedingNav.InterruptForSurvival();
             savedSlot = player.selectedItem;
             active = true; idle = elapsed = 0;
@@ -114,7 +123,7 @@ public static class NavigationAirPocket
         return true;
     }
 
-    static bool ApplySurface(Player player)
+    static bool ApplySurface(Player player, bool submerged, int budget)
     {
         if (player.breath >= player.breathMax)
         {
@@ -122,14 +131,14 @@ public static class NavigationAirPocket
             surfacing = surfaceFailed = false;
             return false;
         }
-        if (!surfacing && player.breath >= player.breathMax - 25) return false;
-        bool submerged = Collision.DrownCollision(player.position, player.width, player.height, player.gravDir);
         bool canSwim = player.accFlipper || player.wingTime > 0;
         if (!surfacing)
         {
             if (!submerged) return false;
             if (surfaceFailed && Vector2.DistanceSquared(player.position, failedSurfaceOrigin) < 32 * 32) return false;
-            if (!CanReachAirAbove(player, canSwim)) return false;
+            if (budget > EscapeReserveFrames + 110) return false;
+            int rise = AirRise(player, canSwim);
+            if (rise == 0 || budget > EscapeReserveFrames + 24 + rise / 2) return false;
             if (RecedingNav.Active) RecedingNav.InterruptForSurvival();
             surfacing = true;
             surfaceOrigin = player.position;
@@ -137,7 +146,7 @@ public static class NavigationAirPocket
             surfacePeakY = player.position.Y;
             surfaceBestBreath = player.breath;
             surfaceIdle = 0;
-            DiagLog.Write($"[survival-air] surfacing breath={player.breath} x={surfaceOrigin.X:0.##} y={surfaceOrigin.Y:0.##}");
+            DiagLog.Write($"[survival-air] surfacing breath={player.breath} budget_frames={budget} rise={rise} x={surfaceOrigin.X:0.##} y={surfaceOrigin.Y:0.##}");
             AgentChat.Say("Low air. Surfacing.");
         }
         else
@@ -170,17 +179,17 @@ public static class NavigationAirPocket
         return true;
     }
 
-    static bool CanReachAirAbove(Player player, bool canSwim)
+    static int AirRise(Player player, bool canSwim)
     {
-        if (!canSwim && player.velocity.Y != 0 && !player.AnyExtraJumpUsable()) return false;
+        if (!canSwim && player.velocity.Y != 0 && !player.AnyExtraJumpUsable()) return 0;
         int reach = canSwim ? 128 : 32;
         for (int pixels = 8; pixels <= reach; pixels += 8)
         {
             var rise = new Vector2(0, -pixels);
-            if (Collision.TileCollision(player.position, rise, player.width, player.height).Y != rise.Y) return false;
-            if (!Collision.DrownCollision(player.position + rise, player.width, player.height, player.gravDir)) return true;
+            if (Collision.TileCollision(player.position, rise, player.width, player.height).Y != rise.Y) return 0;
+            if (!Collision.DrownCollision(player.position + rise, player.width, player.height, player.gravDir)) return pixels;
         }
-        return false;
+        return 0;
     }
 
     static bool FindPocket(Player player)
@@ -263,7 +272,7 @@ public static class NavigationAirPocket
         return true;
     }
 
-    static int BreathBudget(Player player) => Math.Max(0, player.breath - 1) * 6;
+    static int BreathBudget(Player player) => Math.Max(0, player.breath * Math.Max(1, player.breathCDMax) - player.breathCD);
 
     static bool CanDig(Player player, int x, int y)
         => Reach.CanMine(player, x, y, player.inventory[slot])
