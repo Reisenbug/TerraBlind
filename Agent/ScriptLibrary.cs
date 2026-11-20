@@ -143,11 +143,11 @@ public sealed class ScriptLibrary
                 let stocked=supplies.outcome==='enough';
                 if(supplies.outcome==='source_unavailable'){
                   const needed=Number(shortage[2]);
-                  const candidates=tool('find_tiles',{name:'Containers',n:12,max_dist:64}).tiles??[];
                   const visited=[];
-                  for(const point of candidates){
-                    if(visited.length>=3)break;
-                    if(point.locked||visited.some(p=>Math.abs(p.x-point.x)<=1&&Math.abs(p.y-point.y)<=1))continue;
+                  while(visited.length<3){
+                    const candidates=tool('find_tiles',{name:'Containers',n:12,max_dist:visited.length?96:64}).tiles??[];
+                    const point=candidates.find(c=>!c.locked&&!visited.some(p=>Math.abs(p.x-c.x)<=1&&Math.abs(p.y-c.y)<=1));
+                    if(!point)break;
                     visited.push(point);
                     tool('collect_treasure',{x:point.x,y:point.y});
                     const counts=tool('get_state',{fields:['inventory_counts']}).inventory_counts??{};
@@ -156,7 +156,8 @@ public sealed class ScriptLibrary
                   }
                 }
                 if(stocked)result=tool('build_house',site.build_args);
-                else return {ok:false,outcome:'construction_supply_unavailable',item_type:23,supplies};
+                else return {ok:false,outcome:supplies.outcome==='source_unavailable'?'source_unavailable':'construction_supply_unavailable',
+                  reason:'missing_torches',item_type:23,supplies};
               }
             }
             const after=tool('housing',{action:'list'});
