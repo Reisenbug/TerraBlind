@@ -30,10 +30,21 @@ public static class NavigationSurvival
 
     internal static void ApplyLavaRedirect(Player player)
     {
-        if (!RecedingNav.Active || player.dead || player.lavaImmune || player.lavaTime > 0 || player.gravDir != 1
+        const int horizon = 45;
+        bool navigating = RecedingNav.Active;
+        if (!(navigating || AgentTools.AutonomyActive) || player.dead || player.lavaImmune || player.lavaTime > 0 || player.gravDir != 1
             || player.velocity.Y <= 0 || player.mount.Active || player.grappling[0] >= 0
             || !AgentTools.ControlAllows(ControlBehavior.Survival, ControlChannels.Movement, delegated: true))
         { lavaRedirect = 0; return; }
+
+        if (!navigating && lavaRedirect == 0)
+        {
+            int horizontal = (int)System.MathF.Ceiling(horizon * System.Math.Max(System.MathF.Abs(player.velocity.X),
+                System.Math.Max(player.maxRunSpeed, player.accRunSpeed)));
+            int vertical = (int)System.MathF.Ceiling(horizon * System.Math.Max(player.velocity.Y, player.maxFallSpeed));
+            if (!Collision.LavaCollision(player.position - new Vector2(horizontal, 0),
+                player.width + 2 * horizontal, player.height + vertical)) return;
+        }
 
         (bool Lava, bool Safe) Forecast(int direction)
         {
@@ -42,7 +53,7 @@ public static class NavigationSurvival
             bool up = Collision.up, down = Collision.down;
             try
             {
-                for (int frame = 0; frame < 45; frame++)
+                for (int frame = 0; frame < horizon; frame++)
                 {
                     if (direction != 0)
                     {
@@ -77,8 +88,8 @@ public static class NavigationSurvival
             {
                 if (direction == current || !Forecast(direction).Safe) continue;
                 lavaRedirect = direction;
-                RecedingNav.InterruptForSurvival();
-                DiagLog.Write($"[survival] action=lava_redirect direction={direction} pos=({player.position.X:0.##},{player.position.Y:0.##}) vx={player.velocity.X:0.##} vy={player.velocity.Y:0.##}");
+                if (navigating) RecedingNav.InterruptForSurvival();
+                DiagLog.Write($"[survival] action=lava_redirect navigation={navigating} direction={direction} pos=({player.position.X:0.##},{player.position.Y:0.##}) vx={player.velocity.X:0.##} vy={player.velocity.Y:0.##}");
                 break;
             }
         }
