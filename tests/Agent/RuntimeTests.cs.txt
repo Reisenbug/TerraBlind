@@ -117,6 +117,31 @@ static class RuntimeTests
                 Game.worldSurface = 200;
             }
             finally { desert.WallType = originalWall; Game.tile[30, 55] = desert; }
+
+            var slopes = Enumerable.Range(50, 31).Select(y => (x: y, y)).ToArray();
+            var shaft = Enumerable.Range(50, 31).Select(y => (x: 90, y)).ToArray();
+            var savedTiles = slopes.Concat(shaft).ToDictionary(p => p, p => Game.tile[p.x, p.y]);
+            var solid = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+            try
+            {
+                foreach (var (x, y) in savedTiles.Keys) Game.tile[x, y] = solid;
+                HttpServerSystem.Handler = (_, body) =>
+                {
+                    var points = JsonNode.Parse(body)["name"].ToString() == "snow" ? slopes : shaft;
+                    var line = new JsonArray(points.Select(p => (JsonNode)new JsonArray(p.x, p.y)).ToArray());
+                    return (200, new JsonObject { ["line"] = line }.ToJsonString());
+                };
+                var route = await Call("early_descent", new JsonObject { ["biome"] = "snow" });
+                Check(route["route"]?["estimated_dig_tiles"]?.GetValue<int>() == 0
+                    && route["route"]["waypoints"][0]["y"].GetValue<int>() == 49,
+                    "walkable slope steps were charged as excavation or returned an occupied waypoint");
+                var blocked = await Call("early_descent", new JsonObject { ["biome"] = "jungle" });
+                Check(blocked["found"].GetValue<bool>() == false
+                    && blocked["candidates"][0]["reason"].ToString() == "surface_excavation",
+                    "a continuous solid shaft was accepted as a walkable slope");
+            }
+            finally { foreach (var (point, tile) in savedTiles) Game.tile[point.x, point.y] = tile; }
+
             Game.invasionType = 3; Game.invasionSize = 25;
             var facts = await Call("invasion_status", new JsonObject());
             Check(facts["kind"].ToString() == "pirate_invasion" && facts["remaining"].GetValue<int>() == 25, "native invasion progress was lost");

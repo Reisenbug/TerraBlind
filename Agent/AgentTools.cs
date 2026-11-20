@@ -3536,6 +3536,11 @@ public static partial class AgentTools
             new JsonObject { ["name"] = name, ["limit"] = 512 }, token))));
         return await NativeAgent.OnMain(() =>
         {
+            static bool BlocksBody(int x, int y)
+            {
+                var tile = Main.tile[x, y];
+                return tile.HasUnactuatedTile && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
+            }
             var findings = new List<JsonObject>();
             foreach (var (name, route) in routes)
             {
@@ -3549,23 +3554,24 @@ public static partial class AgentTools
                 int targetDepth = Math.Min((int)Main.rockLayer, ey + 72);
                 var dig = new HashSet<(int, int)>();
                 string reason = null;
-                var waypoints = new JsonArray(new JsonObject { ["x"] = ex, ["y"] = ey });
+                var waypoints = new JsonArray();
                 int index = 0;
                 for (; index < line.Count; index++)
                 {
                     int x = line[index][0].GetValue<int>(), y = line[index][1].GetValue<int>();
                     if (!WorldGen.InWorld(x, y, 4)) { reason = "world_edge"; break; }
+                    int arrivalY = BlocksBody(x, y) && !BlocksBody(x, y - 1)
+                        && !BlocksBody(x, y - 2) && !BlocksBody(x, y - 3) ? y - 1 : y;
                     for (int dy = 0; dy < 3; dy++)
                     for (int dx = -1; dx <= 1; dx++)
                     {
-                        var tile = Main.tile[x + dx, y - dy];
-                        if (TerrainInspection.UndergroundDesertWall(x + dx, y - dy)) reason = "underground_desert";
-                        if (dx == 0 && tile.HasUnactuatedTile && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType])
-                            dig.Add((x, y - dy));
+                        int bodyY = arrivalY - dy;
+                        if (TerrainInspection.UndergroundDesertWall(x + dx, bodyY)) reason = "underground_desert";
+                        if (dx == 0 && BlocksBody(x, bodyY)) dig.Add((x, bodyY));
                     }
                     if (reason != null || dig.Count > 8) { reason ??= "surface_excavation"; break; }
-                    if (index > 0 && (index % 20 == 0 || y >= targetDepth))
-                        waypoints.Add(new JsonObject { ["x"] = x, ["y"] = y });
+                    if (index % 20 == 0 || y >= targetDepth)
+                        waypoints.Add(new JsonObject { ["x"] = x, ["y"] = arrivalY });
                     if (y >= targetDepth) break;
                 }
                 reason ??= index == line.Count ? "short_descent" : null;
