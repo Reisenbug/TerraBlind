@@ -46,6 +46,13 @@ public static class TerrainInspection
         return damage > 0 && Collision.CanTileHurt(tile.TileType, x, y, player) ? damage : 0;
     }
 
+    internal static bool BurnsOnContact(Player player, int x, int y)
+    {
+        var tile = Main.tile[x, y];
+        return tile.HasUnactuatedTile && TileID.Sets.TouchDamageHot[tile.TileType]
+            && Collision.CanTileHurt(tile.TileType, x, y, player);
+    }
+
     internal static bool UndergroundDesertWall(int x, int y) => WorldGen.InWorld(x, y, 1)
         && Main.tile[x, y].WallType is WallID.Sandstone or WallID.HardenedSand
             or WallID.CorruptSandstone or WallID.CorruptHardenedSand
@@ -99,6 +106,7 @@ public static class TerrainInspection
             if (active && TileID.Sets.Falling[tile.TileType]) hazards.Add(Fact("falling_block"));
             if (active && TileID.Sets.CrackedBricks[tile.TileType]) hazards.Add(Fact("breaks_on_contact"));
             if (ContactDamage(player, ix, iy) > 0) hazards.Add(Fact("contact_damage"));
+            if (BurnsOnContact(player, ix, iy)) hazards.Add(Fact("burning_contact"));
             if (tile.LiquidAmount > 0)
             {
                 var liquid = Fact(tile.LiquidType switch
@@ -229,11 +237,12 @@ public static class TerrainInspection
                 bool falling = active && TileID.Sets.Falling[tile.TileType];
                 bool solid = active && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
                 int touchDamage = ContactDamage(player, x, y);
+                bool burning = BurnsOnContact(player, x, y);
                 bool fragile = active && TileID.Sets.CrackedBricks[tile.TileType];
                 if (fragile) unstable.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
                     ["kind"] = "breaks_on_contact" });
-                if (touchDamage > 0) contacts.Add(new JsonObject { ["x"] = x, ["y"] = y,
-                    ["type"] = tile.TileType, ["damage"] = touchDamage });
+                if (touchDamage > 0 || burning) contacts.Add(new JsonObject { ["x"] = x, ["y"] = y,
+                    ["type"] = tile.TileType, ["damage"] = touchDamage, ["applies_burning"] = burning });
                 if (active && ((int)tile.Slope != 0 || tile.IsHalfBlock))
                     shapes.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
                         ["solid"] = solid, ["slope"] = (int)tile.Slope, ["half_block"] = tile.IsHalfBlock });
@@ -243,12 +252,12 @@ public static class TerrainInspection
                         ["active"] = active, ["frame_x"] = tile.TileFrameX, ["frame_y"] = tile.TileFrameY,
                         ["red_wire"] = tile.RedWire, ["blue_wire"] = tile.BlueWire,
                         ["green_wire"] = tile.GreenWire, ["yellow_wire"] = tile.YellowWire });
-                row.Append(touchDamage > 0 ? 'H' : fragile ? 'C' : falling ? 'F' : solid ? '#' : active && Main.tileSolidTop[tile.TileType] ? '='
+                row.Append(touchDamage > 0 || burning ? 'H' : fragile ? 'C' : falling ? 'F' : solid ? '#' : active && Main.tileSolidTop[tile.TileType] ? '='
                     : tile.LiquidAmount > 0 ? tile.LiquidType == LiquidID.Lava ? 'L' : '~' : active ? '*' : '.');
                 if (tile.HasTile && x >= bodyLeft - 1 && x <= bodyRight + 1 && y >= bodyTop - 1 && y <= bodyBottom + 1)
                     nearby.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = tile.TileType,
                         ["solid"] = solid, ["falling"] = falling, ["breaks_on_contact"] = fragile,
-                        ["suffocates"] = TileID.Sets.Suffocate[tile.TileType], ["touch_damage"] = touchDamage,
+                        ["suffocates"] = TileID.Sets.Suffocate[tile.TileType], ["touch_damage"] = touchDamage, ["applies_burning"] = burning,
                         ["slope"] = (int)tile.Slope, ["half_block"] = tile.IsHalfBlock,
                         ["in_body"] = x >= bodyLeft && x <= bodyRight && y >= bodyTop && y <= bodyBottom });
             }

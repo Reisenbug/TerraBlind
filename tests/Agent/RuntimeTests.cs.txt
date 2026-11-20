@@ -2502,6 +2502,7 @@ static class RuntimeTests
 
             var savedTiles = Game.tile;
             bool savedSolid = Game.tileSolid[1];
+            const int hotTile = 58;
             try
             {
                 Game.tile = new Terraria.Tile[1000, 1000];
@@ -2522,11 +2523,17 @@ static class RuntimeTests
                 Game.tile[20, 13] = new Terraria.Tile { LiquidAmount = 200, LiquidType = LiquidID.Honey };
                 Game.tile[20, 14] = new Terraria.Tile { LiquidAmount = 255, LiquidType = LiquidID.Shimmer };
                 Game.tile[21, 12] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.PressurePlates };
+                Game.tile[16, 12] = new Terraria.Tile { HasUnactuatedTile = true, TileType = hotTile };
+                TileID.Sets.TouchDamageHot[hotTile] = true;
+                var heat = TerrainInspection.Read(12)["contact_damage_tiles"].AsArray().Single();
+                Check(heat["x"].GetValue<int>() == 16 && heat["applies_burning"].GetValue<bool>()
+                    && heat["damage"].GetValue<int>() == 0, "hot tiles with no immediate damage disappeared from the scratch map");
                 var assessed = JsonNode.Parse(await Execute(AgentTools.Execute("opportunity_assess", new JsonObject
                     { ["x"] = 20, ["y"] = 11, ["destination"] = new JsonObject { ["x"] = 40, ["y"] = 11 } }, default)));
                 Check(assessed["direct_corridor_solid_cells"].AsArray().Any(t => t["x"].GetValue<int>() == 15)
                     && assessed["hazards"].AsArray().Any(t => t["kind"].ToString() == "lava")
-                    && assessed["hazards"].AsArray().Any(t => t["kind"].ToString() == "trap_tile"),
+                    && assessed["hazards"].AsArray().Any(t => t["kind"].ToString() == "trap_tile")
+                    && assessed["hazards"].AsArray().Any(t => t["kind"].ToString() == "burning_contact"),
                     "opportunity hid direct obstruction, target lava or nearby trap");
                 Check(assessed["liquids"].AsArray().Count == 4
                     && assessed["liquids"].AsArray().Any(t => t["kind"].ToString() == "water" && t["amount"].GetValue<int>() == 117)
@@ -2586,7 +2593,11 @@ static class RuntimeTests
                 var changedVariant = await Execute(variantGather.Act(variants["candidates"][0].AsObject(), default));
                 Check(changedVariant["error"].ToString() == "target_changed", "gather executed stale variant selection");
             }
-            finally { Game.tile = savedTiles; Game.LocalPlayer.position = savedPosition; Game.tileSolid[1] = savedSolid; }
+            finally
+            {
+                TileID.Sets.TouchDamageHot[hotTile] = false;
+                Game.tile = savedTiles; Game.LocalPlayer.position = savedPosition; Game.tileSolid[1] = savedSolid;
+            }
 
             var oldPlate = Game.tile[4, 6];
             try

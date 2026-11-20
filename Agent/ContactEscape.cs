@@ -22,15 +22,17 @@ public class AgentContactEscape : ModSystem
     int lavaStillFrames;
     bool lavaItemStarted;
     bool drowningEmergency, triedGills, triedWaterRecall;
+    (int X, int Y)? reportedHotTile;
 
-    bool UseEmergencyItem(Player player)
+    bool UseEmergencyItem(Player player, bool onHotTile)
     {
         if (lavaItem != null)
         {
             frames++;
             bool protectedNow = drowningEmergency
                 ? player.gills || !Collision.DrownCollision(player.position, player.width, player.height, player.gravDir)
-                : !player.suffocating && (player.lavaImmune || player.lavaTime > 0);
+                : !player.suffocating && (player.lavaImmune || player.lavaTime > 0)
+                    && (AgentTools.LastContactEscape["reason"]?.ToString() != "burning_contact" || player.fireWalk);
             bool returned = Vector2.DistanceSquared(player.position, lavaPosition) > 256 * 256;
             if (protectedNow || returned || frames >= 180 || lavaItemStarted && !ItemUseCoordinator.IsActive)
             {
@@ -55,11 +57,11 @@ public class AgentContactEscape : ModSystem
         bool submerged = player.wet && Collision.DrownCollision(player.position, player.width, player.height, player.gravDir);
         if (!submerged) triedGills = triedWaterRecall = false;
         bool drowning = !lava && !suffocating && NavigationAirPocket.NeedsEmergencyItem(player, submerged);
-        if (AgentTools.ContactEscapeActive || !lava && !suffocating && !drowning)
+        if (AgentTools.ContactEscapeActive || !lava && !suffocating && !drowning && !onHotTile)
         { lavaStillFrames = 0; lavaPosition = player.position; return false; }
         lavaStillFrames = Vector2.DistanceSquared(player.position, lavaPosition) < 4 ? lavaStillFrames + 1 : 0;
         lavaPosition = player.position;
-        int slot = lava && !suffocating
+        int slot = (lava || onHotTile) && !suffocating
             ? Array.FindIndex(player.inventory, 0, 50, item => !item.IsAir && item.buffType == BuffID.ObsidianSkin) : -1;
         if (drowning && !triedGills)
             slot = Array.FindIndex(player.inventory, 0, 50, item => !item.IsAir && item.buffType == BuffID.Gills);
@@ -81,10 +83,18 @@ public class AgentContactEscape : ModSystem
         frames = 0; lavaItemStarted = false;
         AgentTools.ContactEscapeActive = true;
         AgentTools.LastContactEscape = new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["status"] = "using_emergency_item",
-            ["reason"] = drowning ? "drowning" : suffocating ? "suffocation" : "unprotected_lava", ["item_type"] = itemType, ["hp_start"] = player.statLife,
+            ["reason"] = drowning ? "drowning" : suffocating ? "suffocation" : lava ? "unprotected_lava" : "burning_contact",
+            ["item_type"] = itemType, ["hp_start"] = player.statLife,
             ["start_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y } };
         DiagLog.Write((drowning ? "[agent_air_escape] " : "[agent_lava_escape] ") + AgentTools.LastContactEscape.ToJsonString());
         return true;
+    }
+
+    static Collision.HurtTile CurrentHotTile(Player player)
+    {
+        var hit = Collision.HurtTiles(player.position, player.width, player.height, player);
+        return hit.type >= 0 && TerrainInspection.BurnsOnContact(player, hit.x, hit.y)
+            ? hit : new Collision.HurtTile { type = -1 };
     }
 
     static bool SafeAfterRemoval(Player player, int x, int y)
@@ -160,7 +170,8 @@ public class AgentContactEscape : ModSystem
                 && y >= Math.Floor((player.position.Y - 1) / 16) && y <= Math.Floor((player.position.Y + player.height) / 16);
             bool trigger = includeTriggers && tile.HasUnactuatedTile && tile.TileType is TileID.PressurePlates or TileID.WeightedPressurePlate
                 && (tile.RedWire || tile.BlueWire || tile.GreenWire || tile.YellowWire);
-            if (!previous && (TerrainInspection.ContactDamage(player, x, y) > 0 || trigger)
+            if (!previous && (TerrainInspection.ContactDamage(player, x, y) > 0
+                || TerrainInspection.BurnsOnContact(player, x, y) || trigger)
                 || includeLava && tile.LiquidAmount > 0 && tile.LiquidType == LiquidID.Lava) return true;
         }
         return false;
@@ -209,8 +220,10 @@ public class AgentContactEscape : ModSystem
             AgentTools.ContactEscapeActive = false; attemptedDamageTick = -1; return;
         }
         if (lavaItem != null && !AgentTools.ContactEscapeActive) { ItemUseCoordinator.Stop(); lavaItem = null; }
-        if (UseEmergencyItem(player)) return;
-        bool touching = Harmful(player.position, player, includeLava: false);
+        var hot = CurrentHotTile(player);
+        if (UseEmergencyItem(player, hot.type >= 0)) return;
+        if (hot.type < 0) reportedHotTile = null;
+        bool touching = hot.type >= 0 || Harmful(player.position, player, includeLava: false);
         if (!AgentTools.ContactEscapeActive)
         {
             var predicted = touching ? Collision.HurtTiles(player.position, player.width, player.height, player) : PredictedContact(player);
@@ -222,12 +235,23 @@ public class AgentContactEscape : ModSystem
             direction = clearing != null ? 0 : SafeSide(player, -1) ? -1 : SafeSide(player, 1) ? 1 : 0;
             clearing ??= direction == 0 ? ClearContact(player) : null;
             if (direction == 0 && clearing == null)
-            { DiagLog.Write("[agent_escape] no_checked_side"); return; }
+            {
+                if (hot.type >= 0 && reportedHotTile != (hot.x, hot.y))
+                {
+                    reportedHotTile = (hot.x, hot.y);
+                    AgentTools.Watches.Request("burning_contact", new JsonObject { ["x"] = hot.x, ["y"] = hot.y,
+                        ["tile_type"] = hot.type, ["hp"] = player.statLife });
+                    DiagLog.Write($"[agent_escape] burning_contact x={hot.x} y={hot.y} hp={player.statLife} no_checked_side");
+                }
+                else if (hot.type < 0) DiagLog.Write("[agent_escape] no_checked_side");
+                return;
+            }
             AgentTools.StopInputs();
             AgentTools.ContactEscapeActive = true;
             frames = clearedTiles = 0; clearingStarted = false; startX = player.position.X;
             AgentTools.LastContactEscape = new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["status"] = clearing == null ? "moving" : "clearing_contact",
                 ["reason"] = touching ? "contact_damage" : "predicted_contact", ["direction"] = direction < 0 ? "left" : direction > 0 ? "right" : "none",
+                ["direction"] = direction < 0 ? "left" : direction > 0 ? "right" : "none",
                 ["start_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y }, ["hp_start"] = player.statLife,
                 ["damage_event"] = damage?.DeepClone(),
                 ["predicted_tile"] = new JsonObject { ["x"] = predicted.x, ["y"] = predicted.y, ["type"] = predicted.type },
@@ -288,5 +312,5 @@ public class AgentContactEscape : ModSystem
     }
 
     public override void OnWorldUnload()
-    { AgentTools.ContactEscapeActive = false; AgentTools.LastContactEscape = null; attemptedDamageTick = -1; lavaItem = null; lavaStillFrames = 0; }
+    { AgentTools.ContactEscapeActive = false; AgentTools.LastContactEscape = null; attemptedDamageTick = -1; lavaItem = null; lavaStillFrames = 0; reportedHotTile = null; }
 }
