@@ -60,7 +60,7 @@ public static class Gather
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
         var timer = Stopwatch.StartNew();
         var attempts = new Dictionary<string, int>();
-        var unreachable = new HashSet<string>();
+        var unreachable = new Dictionary<string, string>();
         var combatBlocked = new Dictionary<string, string>();
         var inventoryBefore = new Dictionary<int, int>();
         var unproductiveTiles = new Dictionary<int, JsonArray>();
@@ -115,7 +115,7 @@ public static class Gather
                 var candidate = available
                     .Where(CanPickup)
                     .Where(c => c["blocked_reason"] == null)
-                    .Where(c => !unreachable.Contains(c["id"].ToString()))
+                    .Where(c => !unreachable.ContainsKey(c["id"].ToString()))
                     .Where(c => !combatBlocked.ContainsKey(c["id"].ToString()))
                     .Where(c => attempts.GetValueOrDefault(c["id"].ToString()) < 2)
                     .OrderBy(c => c["distance"].GetValue<float>() + (c["kind"].ToString() == "drop" ? -1000 : c["kind"].ToString() == "npc" ? -20 : 0))
@@ -125,11 +125,13 @@ public static class Gather
                     outcome = available.Any(c => !CanPickup(c)) || targets.Any(t => Count(t) < t.Count
                         && scene["item_space"]?[t.ItemType.ToString()]?.GetValue<bool>() == false)
                         ? "inventory_full" : available.Length == 0 ? "source_unavailable"
-                        : available.All(c => unreachable.Contains(c["id"].ToString())) ? "navigation_no_progress"
+                        : available.All(c => unreachable.GetValueOrDefault(c["id"].ToString()) == "early_underground_desert_destination")
+                            ? "early_underground_desert_destination"
+                        : available.All(c => unreachable.ContainsKey(c["id"].ToString())) ? "navigation_no_progress"
                         : available.All(c => c["blocked_reason"] != null)
                             ? available[0]["blocked_reason"]?.ToString() ?? "source_blocked"
                             : available.Select(c => combatBlocked.GetValueOrDefault(c["id"].ToString())).FirstOrDefault(reason => reason != null) ?? "attempt_limit";
-                    foreach (var source in available.Where(c => !unreachable.Contains(c["id"].ToString()) && !combatBlocked.ContainsKey(c["id"].ToString())))
+                    foreach (var source in available.Where(c => !unreachable.ContainsKey(c["id"].ToString()) && !combatBlocked.ContainsKey(c["id"].ToString())))
                         blockedSources.Add(new JsonObject { ["candidate"] = source.DeepClone(),
                             ["reason"] = !CanPickup(source) ? "inventory_full"
                                 : source["blocked_reason"] != null
@@ -145,11 +147,15 @@ public static class Gather
                 last["result"] = await world.Act(candidate, budget.Token);
                 if (last["result"]?["outcome"]?.ToString() == "inventory_full")
                 { outcome = "inventory_full"; break; }
-                if (last["result"]?["navigation"]?["outcome"]?.ToString() == "no_route")
+                var navigation = last["result"]?["navigation"];
+                string blocked = navigation?["error"]?.ToString() == "early_underground_desert_destination"
+                    ? "early_underground_desert_destination"
+                    : navigation?["outcome"]?.ToString() == "no_route" ? "navigation_no_route" : null;
+                if (blocked != null)
                 {
-                    unreachable.Add(id);
+                    unreachable[id] = blocked;
                     blockedSources.Add(new JsonObject { ["candidate"] = candidate.DeepClone(),
-                        ["reason"] = "navigation_no_route", ["attempts"] = attempts[id], ["result"] = last["result"].DeepClone() });
+                        ["reason"] = blocked, ["attempts"] = attempts[id], ["result"] = last["result"].DeepClone() });
                     continue;
                 }
                 if (last["result"]?["navigation"]?["outcome"]?.ToString() == "no_progress"
@@ -160,7 +166,7 @@ public static class Gather
                             && c["item_type"].ToString() == candidate["item_type"].ToString()
                             && Math.Abs(c["x"].GetValue<int>() - candidate["x"].GetValue<int>()) <= 1
                             && Math.Abs(c["y"].GetValue<int>() - candidate["y"].GetValue<int>()) <= 1))
-                        unreachable.Add(source["id"].ToString());
+                        unreachable[source["id"].ToString()] = "navigation_no_progress";
                     blockedSources.Add(new JsonObject { ["candidate"] = candidate.DeepClone(),
                         ["reason"] = "navigation_no_progress", ["attempts"] = attempts[id],
                         ["result"] = last["result"].DeepClone() });

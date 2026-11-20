@@ -1342,14 +1342,17 @@ static class RuntimeTests
             Check(observedGap && result["ok"]?.GetValue<bool>() == true && result["value"]?["status"]?.ToString() == "running"
                 && !AgentTools.Watches.HasInterrupting,
                 "continuity monitor interrupted an executing anonymous recovery script: " + result);
+            AgentTools.ObserveContinuity();
             await Execute(AgentTools.Actions.Control(handle, "pause", null, default));
-            AgentTools.ObserveContinuity();
-            Game.GameUpdateCount += 119;
-            AgentTools.ObserveContinuity();
-            Check(!AgentTools.Watches.HasInterrupting, "a brief action handoff woke the model before two seconds");
+            long gapStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            long second = System.Diagnostics.Stopwatch.Frequency;
+            AgentTools.ObserveContinuity(gapStart);
+            Game.GameUpdateCount += 29;
+            AgentTools.ObserveContinuity(gapStart + 999 * second / 1000);
+            Check(!AgentTools.Watches.HasInterrupting, "a brief action handoff woke the model before one second");
             Game.GameUpdateCount++;
-            AgentTools.ObserveContinuity();
-            Check(AgentTools.Watches.HasInterrupting, "finished inline script permanently suppressed a real execution gap");
+            AgentTools.ObserveContinuity(gapStart + 1001 * second / 1000);
+            Check(AgentTools.Watches.HasInterrupting, "a real execution gap over one second did not request recovery");
             string originalScript = AgentTools.Plan.Script("travel")["code"].ToString();
             var single = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
             {
@@ -5325,15 +5328,23 @@ static class RuntimeTests
         int oldHealth = Game.LocalPlayer.statLifeMax;
         try
         {
-            foreach (string scenario in new[] { "prepared", "late", "blocked", "stale", "verified", "inline", "inline_blocked", "chained" })
+            foreach (string scenario in new[] { "prepared", "late", "blocked", "stale", "verified", "inline", "inline_blocked", "chained", "failed", "inline_failed" })
             {
                 AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask(); AgentTools.Workflows.Clear();
                 Game.LocalPlayer.statLifeMax = 100;
                 int starts = 0;
                 int finishThrough = 0;
-                HttpServerSystem.Handler = (path, _) =>
+                bool failed = scenario is "failed" or "inline_failed";
+                int lastDestination = 0;
+                HttpServerSystem.Handler = (path, body) =>
                 {
-                    if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
+                    if (path == "/nav_recede")
+                    {
+                        starts++; RecedingNav.Active = true;
+                        lastDestination = JsonNode.Parse(body)["gx"].GetValue<int>();
+                    }
+                    if (path == "/nav_recede_done" && failed && starts == 1 && finishThrough == 1)
+                        return (200, """{"done":false,"status":"failed","reason":"local_escape_search_budget"}""");
                     return (200, path == "/nav_recede_done"
                         ? new JsonObject { ["done"] = starts > 0 && starts <= finishThrough }.ToJsonString()
                         : "{\"accepted\":true}");
@@ -5352,7 +5363,7 @@ static class RuntimeTests
                      "conditions":[{"kind":"permanent_health","count":220}]}
                     """));
                 AgentTools.Plan.Create(plan, AgentTaskEvidence.Measure);
-                bool inline = scenario is "inline" or "inline_blocked";
+                bool inline = scenario is "inline" or "inline_blocked" or "inline_failed";
                 var execution = AgentTools.Execute("run_script", new JsonObject { ["task_node"] = "prepare", ["background"] = !inline }, default);
                 if (!inline) await Execute(execution);
                 await PumpUntil(() => starts == 1);
@@ -5382,7 +5393,8 @@ static class RuntimeTests
                         { ["id"] = "prepare", ["on_failure"] = "" }) }, AgentTaskEvidence.Measure);
                 async Task Publish(TaskCompletionSource<JsonObject> output, string source, int expectedReceipts)
                 {
-                    output.SetResult(new JsonObject { ["script"] = source });
+                    output.SetResult(new JsonObject { ["script"] = source, ["on_failure"] = failed
+                        ? "if(failure.result==null)throw Error('missing failure');return tool('nav_to',{x:18,y:34});" : null });
                     await PumpUntil(() =>
                     {
                         jobs.Poll(default);
@@ -5418,10 +5430,12 @@ static class RuntimeTests
                     timer.Restart();
                     AgentTools.ContinuePreparedNode(default);
                 }
-                if (scenario is "prepared" or "late" or "inline" or "chained")
+                if (scenario is "prepared" or "late" or "inline" or "chained" or "failed" or "inline_failed")
                 {
                     await PumpUntil(() => starts == predecessorActions + 1 && AgentTools.LastContinuation?["started_handle"] != null);
-                    Check(AgentTools.LastContinuation?["mode"]?.ToString() == "prepared_followup" && AgentTools.Actions.HasPrimaryControl
+                    Check(AgentTools.LastContinuation?["mode"]?.ToString() == (failed ? "prepared_failure" : "prepared_followup")
+                        && AgentTools.Actions.HasPrimaryControl
+                        && lastDestination == (failed ? 18 : 16)
                         && AgentTools.Plan.Incomplete && timer.ElapsedMilliseconds < 1000,
                         "completion waited for another decision or marked unmet work complete");
                     Console.WriteLine($"ACTION_FOLLOWUP scenario={scenario} handoff_ms={timer.ElapsedMilliseconds} completion_model_calls=0");

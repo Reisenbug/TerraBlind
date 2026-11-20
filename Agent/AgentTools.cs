@@ -348,9 +348,9 @@ public static partial class AgentTools
     static readonly AsyncLocal<bool> preparedDispatch = new();
     static string pendingNode;
     internal static JsonObject LastContinuation;
-    sealed record PreparedFollowup(string ActionKey, string Node, string Revision, string Code);
+    sealed record PreparedFollowup(string ActionKey, string Node, string Revision, string Code, string OnFailure);
     static PreparedFollowup preparedFollowup;
-    static (string Attempt, bool CleanHandoff) lastInlineHandoff;
+    static (string Attempt, bool CleanHandoff, bool RecoverableFailure) lastInlineHandoff;
     static ulong nextIdleNodeScan;
     static readonly HashSet<(int, int)> routeChests = new();
     static readonly Dictionary<(int, int), long> routeChestRetries = new();
@@ -405,8 +405,9 @@ public static partial class AgentTools
     static bool inventoryPreparationNotified;
     internal static string PreparationNotifiedContext { get; private set; }
     static ulong? gapStarted;
-    static bool gapReported;
-    const ulong ExecutionGapReviewFrames = 120;
+    static long gapTimestamp;
+    static bool gapReported, gapLimitExceeded, primaryObserved;
+    const int ExecutionGapLimitMs = 1000;
 
     internal static string PreparationContext(string attempt, string node)
     {
@@ -428,16 +429,21 @@ public static partial class AgentTools
 
     internal static JsonObject StageActionFollowup(string actionKey, string node, string revision, JsonObject answer)
     {
-        if (answer?["script"] is not JsonValue value || !value.TryGetValue<string>(out var code)
-            || code.Length > 10000 || !AgentScript.ContainsInput(code)) return new JsonObject();
+        string ReadScript(string key) => answer?[key] is JsonValue value && value.TryGetValue<string>(out var source)
+            && source.Length <= 10000 && AgentScript.ContainsInput(source) ? source : null;
+        string code = ReadScript("script"), onFailure = ReadScript("on_failure");
+        if (code == null && onFailure == null) return new JsonObject();
         var action = Actions.HasPrimaryControl ? Actions.RunningPrimary() : Actions.LatestFinishedPrimary();
         if (FollowupKey(action) != actionKey || action?["task_node"]?.ToString() != node || Actions.HasQueuedSuccessor)
             return new JsonObject();
         var step = Plan.Snapshot()["steps"].AsArray().FirstOrDefault(n => n["id"].ToString() == node);
-        if (step == null || step["status"]?.ToString() == "completed" || StepVersion(step) != revision
-            || step["script"]?.ToString().Trim() == code.Trim()) return new JsonObject();
-        preparedFollowup = new PreparedFollowup(actionKey, node, revision, code);
-        return new JsonObject { ["prepared_followup"] = node, ["after_attempt"] = ActionAttempt(action) };
+        if (step == null || step["status"]?.ToString() == "completed" || StepVersion(step) != revision)
+            return new JsonObject();
+        if (step["script"]?.ToString().Trim() == code?.Trim()) code = null;
+        if (code == null && onFailure == null) return new JsonObject();
+        preparedFollowup = new PreparedFollowup(actionKey, node, revision, code, onFailure);
+        return new JsonObject { ["prepared_followup"] = node, ["after_attempt"] = ActionAttempt(action),
+            ["has_failure_branch"] = onFailure != null };
     }
 
     static bool RecordInlineHandoff(long invocation, JsonObject receipt)
@@ -446,8 +452,27 @@ public static partial class AgentTools
         if (action == null) return false;
         lastInlineHandoff = (ActionAttempt(action), action["status"]?.ToString() == "completed"
             && Bool(receipt, "ok") && Bool(receipt, "input_effects") && receipt["failure"] == null
-            && PlainHandoff(receipt["value"] as JsonObject));
-        return lastInlineHandoff.CleanHandoff && preparedFollowup is { } staged && staged.ActionKey == FollowupKey(action);
+            && PlainHandoff(receipt["value"] as JsonObject),
+            action["status"]?.ToString() == "failed" && RecoverableFollowupFailure(receipt));
+        return preparedFollowup is { } staged && staged.ActionKey == FollowupKey(action)
+            && (lastInlineHandoff.CleanHandoff && staged.Code != null
+                || lastInlineHandoff.RecoverableFailure && staged.OnFailure != null);
+    }
+
+    static bool RecoverableFollowupFailure(JsonNode result)
+    {
+        if (result is not JsonObject receipt || (receipt["value"] as JsonObject)?["wake"] != null
+            || receipt["error"]?.ToString() is "interrupted_by_death" or "script_interrupted")
+            return false;
+        var evidence = (receipt["failure"] as JsonObject)?["evidence"] as JsonObject ?? receipt;
+        var lastResult = (evidence["last_result"] as JsonObject)?["result"] as JsonObject;
+        var navigation = evidence["navigation"] as JsonObject ?? lastResult?["navigation"] as JsonObject ?? evidence;
+        return ActionTasks.SourceExhausted(evidence?["outcome"]?.ToString())
+            || navigation?["outcome"]?.ToString() is "no_route" or "no_progress" or "navigation_no_progress"
+            || navigation?["error"]?.ToString() == "early_underground_desert_destination"
+            || navigation?["error"]?.ToString() == "navigation_near_trap"
+                && navigation["trap_tiles"] is JsonArray { Count: > 0 } traps
+                && traps.All(tile => tile?["kind"]?.ToString() == "overhead_boulder");
     }
 
     static bool PlainHandoff(JsonObject value) => value?["status"]?.ToString() == "yield"
@@ -557,10 +582,11 @@ public static partial class AgentTools
         }
     }
 
-    internal static void ObserveContinuity()
+    internal static void ObserveContinuity(long? timestamp = null)
     {
         var last = Actions.LatestPrimary();
         if (last == null) return;
+        long now = timestamp ?? Stopwatch.GetTimestamp();
         bool scriptOwnsInput = Actions.HasPrimaryControl && last["tool"]?.ToString() == "run_script";
         if (ControlSession.PrimaryActive || Actions.HasPrimaryControl && !scriptOwnsInput || !Plan.Incomplete || Main.LocalPlayer.dead)
         {
@@ -574,15 +600,21 @@ public static partial class AgentTools
                     LastContinuation["resolved_tick"] = Main.GameUpdateCount;
                 }
             }
-            if (gapStarted is ulong began && Main.GameUpdateCount - began >= ExecutionGapReviewFrames)
-                DiagLog.Write($"[execution_gap_end] frames={Main.GameUpdateCount - began} handle={Actions.ActiveHandle}");
+            if (gapStarted is ulong began && Stopwatch.GetElapsedTime(gapTimestamp, now).TotalMilliseconds > ExecutionGapLimitMs)
+                DiagLog.Write($"[execution_gap_end] frames={Main.GameUpdateCount - began} elapsed_ms={Stopwatch.GetElapsedTime(gapTimestamp, now).TotalMilliseconds:0} handle={Actions.ActiveHandle}");
             gapStarted = null;
-            gapReported = false;
+            gapReported = gapLimitExceeded = false;
+            primaryObserved |= ControlSession.PrimaryActive || Actions.HasPrimaryControl && !scriptOwnsInput;
             ExecutionContinuity = new JsonObject { ["status"] = Main.LocalPlayer.dead ? "waiting_respawn"
                 : !Plan.Incomplete ? "completed" : "executing", ["active_handle"] = Actions.ActiveHandle };
             return;
         }
-        gapStarted ??= Main.GameUpdateCount;
+        if (gapStarted == null)
+        {
+            gapStarted = Main.GameUpdateCount;
+            gapTimestamp = now;
+        }
+        double elapsedMs = Stopwatch.GetElapsedTime(gapTimestamp, now).TotalMilliseconds;
         bool awaitingPreparation = pendingNode != null && Plan.NeedsPreparation(pendingNode, AgentTaskEvidence.Measure);
         bool dispatching = !continuation.IsCompleted || pendingNode != null && !awaitingPreparation;
         bool scriptRunning = Volatile.Read(ref executingScripts) > 0 || Workflows.Values.Any(w => w.Running);
@@ -591,11 +623,17 @@ public static partial class AgentTools
             : Watches.HasInterrupting ? "event_review_without_action" : "no_executable_action";
         ExecutionContinuity = new JsonObject { ["status"] = "execution_gap", ["reason"] = reason,
             ["started_tick"] = gapStarted.Value, ["gap_frames"] = Main.GameUpdateCount - gapStarted.Value,
+            ["elapsed_ms"] = Math.Round(elapsedMs), ["before_first_action"] = !primaryObserved,
             ["last_handle"] = last["handle"]?.DeepClone(), ["last_tool"] = last["tool"]?.DeepClone(),
             ["last_status"] = last["status"]?.DeepClone(), ["task_node"] = last["task_node"]?.DeepClone(),
             ["current_node"] = Plan.Snapshot()["current_step"]?.DeepClone() };
         bool failed = last["status"]?.ToString() == "failed";
-        if (!gapReported && !dispatching && !scriptRunning && (failed || Main.GameUpdateCount - gapStarted.Value >= ExecutionGapReviewFrames))
+        if (primaryObserved && !gapLimitExceeded && elapsedMs > ExecutionGapLimitMs)
+        {
+            gapLimitExceeded = true;
+            DiagLog.Write("[execution_gap_over_1s] " + ExecutionContinuity.ToJsonString());
+        }
+        if (!gapReported && !dispatching && !scriptRunning && (failed || elapsedMs > ExecutionGapLimitMs))
         {
             gapReported = true;
             DiagLog.Write("[execution_gap] " + ExecutionContinuity.ToJsonString());
@@ -647,10 +685,20 @@ public static partial class AgentTools
         {
             var nextAction = preparedFollowup;
             if (!verified && !prepared && action["script_invocation"]?.GetValue<long>() > 0 && lastInlineHandoff.Attempt != execution) return;
-            bool compatible = !verified && !prepared && nextAction.Revision == StepVersion(previous)
-                && FollowupCanRun(action, workflow);
-            if (compatible && (Watches.HasRecoveryBlocker || Main.LocalPlayer.suffocating)) return;
+            bool currentRevision = !verified && !prepared && nextAction.Revision == StepVersion(previous);
+            bool compatible = currentRevision && nextAction.Code != null && FollowupCanRun(action, workflow);
+            bool recover = currentRevision && nextAction.OnFailure != null
+                && (action["tool"]?.ToString() == "run_script" || action["script_invocation"]?.GetValue<long>() is not > 0
+                    ? RecoverableFollowupFailure(action["result"]) : lastInlineHandoff.RecoverableFailure);
+            if ((compatible || recover) && (Watches.HasRecoveryBlocker || Main.LocalPlayer.suffocating)) return;
             preparedFollowup = null;
+            if (recover)
+            {
+                continuedActions.Add(attempt);
+                Watches.AcknowledgeResult(action);
+                StartPreparedNode(owner, handle, token, nextAction.OnFailure, followup: true);
+                return;
+            }
             if (compatible)
             {
                 Plan.Revise(new JsonObject { ["expected_revision"] = plan["revision"].DeepClone(),
@@ -778,7 +826,7 @@ public static partial class AgentTools
             ["status"] = "starting", ["tick"] = Main.GameUpdateCount };
         var report = LastContinuation;
         if (recovery != null) report["mode"] = "recovery";
-        if (followup) report["mode"] = "prepared_followup";
+        if (followup) report["mode"] = recovery == null ? "prepared_followup" : "prepared_failure";
         continuation = Task.Run(async () =>
         {
             preparedDispatch.Value = true;
@@ -1089,7 +1137,8 @@ public static partial class AgentTools
         lastInlineHandoff = default;
         nextIdleNodeScan = 0;
         inventoryPreparationNotified = false; LastContinuation = ExecutionContinuity = LastRouteLoot = null;
-        routeChests.Clear(); routeChestRetries.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset();
+        routeChests.Clear(); routeChestRetries.Clear(); routeLootEnabled = false; gapStarted = null;
+        gapReported = gapLimitExceeded = primaryObserved = false; Watches.Reset();
         Watches.DefaultRouteLoot = allowPassingChestLoot;
         Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask();
     }
