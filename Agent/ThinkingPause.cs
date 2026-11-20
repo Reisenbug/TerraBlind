@@ -18,6 +18,9 @@ public sealed class ThinkingPause : ModSystem
     static readonly JsonArray history = new();
     static Vector2 previousPosition;
     static int uncoveredFrames, uncoveredRun, longestUncoveredRun;
+    static long stationarySince;
+    static bool stationaryLogged;
+    static string stationaryReason;
     static bool positionKnown;
     bool manualSwitch;
     bool dragonLensWasPaused;
@@ -49,6 +52,9 @@ public sealed class ThinkingPause : ModSystem
         reason = null; manualSwitch = false; dragonLensWasPaused = false;
         history.Clear(); started = Stopwatch.GetTimestamp();
         uncoveredFrames = uncoveredRun = longestUncoveredRun = 0;
+        stationarySince = 0;
+        stationaryLogged = false;
+        stationaryReason = null;
         positionKnown = false;
         AgentTools.WorldFramesRequired = 0;
     }
@@ -129,8 +135,45 @@ public sealed class ThinkingPause : ModSystem
         longestUncoveredRun = Math.Max(longestUncoveredRun, uncoveredRun);
         if (uncoveredRun == 7)
             DiagLog.Write($"[agent_uncovered_frames] tick={Main.GameUpdateCount} run={uncoveredRun} tool={AgentTools.ControlSession.Tool} nav={RecedingNav.Active} field_ready={RecedingNav.FieldReady} mine={MineCoordinator.IsActive} use_item={ItemUseCoordinator.IsActive} status={NativeAgent.Status}");
+        ObserveStationary(stationary && !Main.gameMenu && !Manual.On && player.active && !player.dead
+            && player.itemAnimation == 0 && player.itemTime == 0
+            && (NativeAgent.WorkPending || AgentTools.Actions.HasActive || AgentTools.ControlSession.Active || RecedingNav.Active));
         previousPosition = player.position; positionKnown = true;
     }
+
+    static void ObserveStationary(bool waiting)
+    {
+        if (!waiting)
+        {
+            stationarySince = 0; stationaryReason = null; stationaryLogged = false; return;
+        }
+        if (stationarySince == 0) stationarySince = Stopwatch.GetTimestamp();
+        if (Stopwatch.GetElapsedTime(stationarySince).TotalSeconds < .5) return;
+        stationaryReason = RecedingNav.Active ? NavigationWait()
+            : ActExecutor.IsActive ? "Script input is active; no displacement"
+            : HouseBuilder.IsRunning ? "Construction is active"
+            : MineCoordinator.IsActive || ItemUseCoordinator.IsActive || PlaceAnywhere.IsRunning ? "Waiting for item action"
+            : AgentTools.ControlSession.Tool is string tool ? "Waiting on " + tool
+            : NativeAgent.WorkPending ? NativeAgent.Status
+            : "Waiting for the next prepared action";
+        if (stationaryLogged || Stopwatch.GetElapsedTime(stationarySince).TotalSeconds < 2) return;
+        stationaryLogged = true;
+        DiagLog.Write($"[agent_stationary] reason={stationaryReason} nav_goal={RecedingNav.DisplayGoal} status={NativeAgent.Status}");
+    }
+
+    static string NavigationWait()
+    {
+        if (!string.IsNullOrEmpty(RecedingNav.MovementWaitOwner)) return "Movement held by " + RecedingNav.MovementWaitOwner;
+        if (!RecedingNav.FieldReady) return "Building navigation field";
+        if (LegacyNativePrediction.Computing) return "Simulating a movement segment";
+        if (TrapEscape.Busy) return "Searching for a local escape";
+        if (MineCoordinator.IsActive || ItemUseCoordinator.IsActive || PlaceAnywhere.IsRunning) return "Navigation is changing terrain";
+        if (StateSpacePlanner.ExecRunning) return "Executing route segment; no displacement";
+        return VanillaNavBridge.Enabled ? "Navigation: " + VanillaNavBridge.Stage : "Selecting the next route segment";
+    }
+
+    internal static string StationaryLabel => stationaryReason == null ? null
+        : $"Wait {Stopwatch.GetElapsedTime(stationarySince).TotalSeconds:0.0}s · {stationaryReason}";
 
     bool CanPause(On_Main.orig_CanPauseGame original)
     {

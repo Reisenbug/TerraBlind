@@ -27,6 +27,8 @@ namespace TerraBlind
         // Reach = 目标悬空,站不上去也放不了东西,人挨着它伸手就算到
         public enum Mode { Snap, Mine, Stand, Reach }
         static Mode _mode;
+        internal static (int X, int Y, Mode Mode)? DisplayGoal => Active ? (_goalWx, _goalWy, _mode) : null;
+        internal static string MovementWaitOwner => _waitOn;
         const float GoalDistPx = 24f;
         const float StandDistPx = 8f;    // 建房契约要求脚踩准那一格,±24px 会站到隔壁列
         static bool _braking;   // 位置到了,正在刹停

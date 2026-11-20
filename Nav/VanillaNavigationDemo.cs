@@ -434,8 +434,18 @@ public sealed class VanillaNavigationDemo : ModSystem
 
     public override void PostDrawInterface(SpriteBatch batch)
     {
-        if (Main.gameMenu || Status == "未启动") return;
-        Utils.DrawBorderString(batch, "原版移动实验：" + Status, new Vector2(24, 92), Color.Cyan, .85f);
+        if (Main.gameMenu) return;
+        if (RecedingNav.DisplayGoal is { } routeGoal)
+        {
+            string intent = AgentTools.Plan.CurrentDescription ?? routeGoal.Mode.ToString();
+            if (intent.Length > 90) intent = intent[..90] + "…";
+            Utils.DrawBorderString(batch, $"Navigation ({routeGoal.X}, {routeGoal.Y}) · {intent}", new Vector2(24, 92), Color.Cyan, .85f);
+        }
+        else if (running && !NavigationOwned)
+            Utils.DrawBorderString(batch, $"Navigation ({(int)(goal.X / 16)}, {(int)(goal.Y / 16)}) · Predict movement",
+                new Vector2(24, 92), Color.Cyan, .85f);
+        if (ThinkingPause.StationaryLabel is string wait)
+            Utils.DrawBorderString(batch, wait, new Vector2(24, 113), Color.Gold, .8f);
     }
 
     public override void OnWorldUnload() { Stop(closeWorker: true); route = Array.Empty<Vector2>(); Status = "未启动"; }

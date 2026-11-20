@@ -14,6 +14,7 @@ public sealed class AgentTaskPlan
     int _revision;
     bool _dag;
     public int Cursor => _cursor;
+    internal string CurrentDescription => _cursor < _steps.Count ? _steps[_cursor]["description"]?.ToString() : null;
     public int Progress => _progress;
     internal int ExecutionRevision(string id) => (_steps.FirstOrDefault(step => step["id"]?.ToString() == id)?["revisions"] as JsonArray)?.Count ?? 0;
     public bool RequiresNodeExecution => _dag && Incomplete;
