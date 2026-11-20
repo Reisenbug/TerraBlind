@@ -145,6 +145,13 @@ public static class Gather
                 last["result"] = await world.Act(candidate, budget.Token);
                 if (last["result"]?["outcome"]?.ToString() == "inventory_full")
                 { outcome = "inventory_full"; break; }
+                if (last["result"]?["navigation"]?["outcome"]?.ToString() == "no_route")
+                {
+                    unreachable.Add(id);
+                    blockedSources.Add(new JsonObject { ["candidate"] = candidate.DeepClone(),
+                        ["reason"] = "navigation_no_route", ["attempts"] = attempts[id], ["result"] = last["result"].DeepClone() });
+                    continue;
+                }
                 if (last["result"]?["navigation"]?["outcome"]?.ToString() == "no_progress"
                     || candidate["kind"].ToString() == "drop" && last["result"]?["outcome"]?.ToString() == "no_progress")
                 {

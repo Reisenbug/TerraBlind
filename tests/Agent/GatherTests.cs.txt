@@ -88,6 +88,13 @@ static class GatherTests
             && stalledResult["blocked_sources"].AsArray().Count == 2
             && stalledResult["last_result"]["result"]["navigation"]["reason"].ToString() == "local_oscillation",
             "gather failed to try distinct sources once or lost their navigation blockers");
+        var isolatedSource = new World { NavigationIsolated = true };
+        var isolated = await Gather.Run(Targets, 5, isolatedSource, default);
+        Check(isolatedSource.Actions.Count == 2 && isolated["outcome"].ToString() == "navigation_no_progress"
+            && isolated["blocked_sources"].AsArray().All(source => source["reason"].ToString() == "navigation_no_route"
+                && source["attempts"].GetValue<int>() == 1
+                && source["result"]?["navigation"]?["error"]?.ToString() == "navigation_goal_isolated"),
+            "gather retried an isolated goal or lost the original route evidence");
         var alternateSource = new World { FirstNavigationStalled = true };
         var alternateResult = await Gather.Run(Targets, 5, alternateSource, default);
         Check(alternateSource.Actions.SequenceEqual(new[] { "npc", "tile" })
@@ -1193,6 +1200,7 @@ static class GatherTests
         public bool Gain = true, Drop, Empty, Dead, WaitForever, Unsafe, Ambiguous, Obstructed, NavigationStalled, CollectionStalled, OutsideMiningRange;
         public bool LostMiningReach, RecoverOnRetry, PickupBlocked, FullDuringAction, TypeSpaceBlocked;
         public bool FarEnemy, EnemyApproaches, FirstNavigationStalled;
+        public bool NavigationIsolated;
         public int MiningDamage;
         public CancellationTokenSource Cancel;
         public int Stops;
@@ -1219,6 +1227,8 @@ static class GatherTests
             if (FullDuringAction) return new JsonObject { ["outcome"] = "inventory_full", ["item_type"] = candidate["item_type"].DeepClone() };
             Cancel?.Cancel(); token.ThrowIfCancellationRequested();
             if (WaitForever) await Task.Delay(Timeout.Infinite, token);
+            if (NavigationIsolated) return new JsonObject { ["error"] = "cannot_reach_collect_target",
+                ["navigation"] = new JsonObject { ["outcome"] = "no_route", ["error"] = "navigation_goal_isolated" } };
             if (NavigationStalled || FirstNavigationStalled && Actions.Count == 1) return new JsonObject { ["error"] = "cannot_reach_collect_target",
                 ["navigation"] = new JsonObject { ["outcome"] = "no_progress", ["reason"] = "local_oscillation" } };
             if (CollectionStalled) return new JsonObject { ["outcome"] = "no_progress", ["reason"] = "tool_weak" };
