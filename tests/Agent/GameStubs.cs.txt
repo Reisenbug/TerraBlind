@@ -139,6 +139,8 @@ namespace Terraria
         public static int mouseX, mouseY;
         public static Microsoft.Xna.Framework.Vector2 screenPosition;
         public static double worldSurface, rockLayer;
+        public static double time;
+        public static bool dayTime = true;
         public static bool hardMode;
         public static GameContent.ItemDropRules.ItemDropDatabase ItemDropsDB = new();
         public static Player[] player = Enumerable.Range(0, maxPlayers).Select(id => new Player { whoAmI = id }).ToArray();
@@ -334,6 +336,8 @@ namespace Terraria
     }
     public static class WorldGen
     {
+        public static bool spawnEye;
+        public static int spawnHardBoss;
         public static int prioritizedTownNPCType, roomX1, roomX2, roomY1, roomY2, hiScore = 1;
         public static bool[] houseTile = new bool[1000];
         public static Func<int, int, bool> RoomCheck;
@@ -406,7 +410,8 @@ namespace Terraria.ID
         public const int MagicMirror = 50, RecallPotion = 2350, CellPhone = 3124, IceMirror = 3199,
             PotionOfReturn = 4870, Shellphone = 5358, ShellphoneSpawn = 5359;
     }
-    public static class NPCID { public const int GoblinTinkerer = 107, FixtureEnemy = 222, Lihzahrd = 198, LihzahrdCrawler = 199, FlyingSnake = 226; }
+    public static class NPCID { public const int GoblinTinkerer = 107, FixtureEnemy = 222, Lihzahrd = 198, LihzahrdCrawler = 199, FlyingSnake = 226;
+        public const int EyeofCthulhu = 4, TheDestroyer = 134, Retinazer = 125, SkeletronPrime = 127; }
     public static class PrefixID { public const int Hard = 62, Warding = 65; }
     public static class SoundID { public static readonly int Item37 = 37; }
     public static class ProjectileID

@@ -419,7 +419,10 @@ public static partial class AgentTools
             return SendTactical();
         async Task SendTactical()
         {
-            bool accepted = await codex.Steer("实时决策模型请求调整方案。当前动作继续，原目标与进度保留。根据现场证据核对装备或地形，准备具体修改，再按需要交接。现场："
+            string instruction = tactical.Any(notice => notice["kind"]?.ToString() == "boss_warning")
+                ? "收到原版自然生成预警。当前动作继续。按装备、任务和地表刷出条件决定是否进入地下避战、继续做事或准备接战。现场："
+                : "实时决策模型请求调整方案。当前动作继续，原目标与进度保留。根据现场证据核对装备或地形，准备具体修改，再按需要交接。现场：";
+            bool accepted = await codex.Steer(instruction
                 + tactical.ToJsonString(ModelJson), token);
             if (accepted) await NativeAgent.OnMain(() => { Watches.AcknowledgeTacticalAdvisories(tactical); return true; }, token);
             DiagLog.Write("[agent_tactical_review] accepted=" + accepted + " events=" + tactical.Count);
@@ -1259,6 +1262,7 @@ public static partial class AgentTools
         state["terrain"] = TerrainInspection.Read(6);
         state["invasion"] = InvasionStatus();
         var healthPlayer = Main.LocalPlayer;
+        if (selected == null || selected.Contains("upcoming_boss")) state["upcoming_boss"] = NativeAgent.UpcomingBoss(healthPlayer);
         if (state["enemies"] is JsonArray enemies)
             foreach (var enemy in enemies.OfType<JsonObject>())
             {

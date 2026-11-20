@@ -207,6 +207,25 @@ public class NativeAgent : ModSystem
     public override void PostUpdateEverything()
         => UpdateAgent(true);
 
+    internal static JsonObject UpcomingBoss(Player player)
+    {
+        if (Main.dayTime || Main.netMode == Terraria.ID.NetmodeID.MultiplayerClient) return null;
+        int type = WorldGen.spawnEye ? Terraria.ID.NPCID.EyeofCthulhu : WorldGen.spawnHardBoss switch
+        {
+            1 => Terraria.ID.NPCID.TheDestroyer,
+            2 => Terraria.ID.NPCID.Retinazer,
+            3 => Terraria.ID.NPCID.SkeletronPrime,
+            _ => 0
+        };
+        if (type == 0) return null;
+        return new JsonObject { ["type"] = type, ["boss"] = WorldGen.spawnHardBoss == 2 && !WorldGen.spawnEye ? "The Twins" : Lang.GetNPCNameValue(type),
+            ["surface_spawn_eligible"] = player.position.Y < Main.worldSurface * 16 || Main.spawnTileY > Main.worldSurface,
+            ["game_ticks_until_earliest_spawn"] = Math.Max(0, 4861 - (int)Main.time),
+            ["x"] = player.Center.X / 16, ["y"] = player.Center.Y / 16,
+            ["hp"] = player.statLife, ["max_hp"] = player.statLifeMax2, ["held_item_type"] = player.HeldItem.type,
+            ["mana"] = player.statMana };
+    }
+
     public override void UpdateUI(Microsoft.Xna.Framework.GameTime gameTime)
     {
         if (Main.gamePaused) UpdateAgent(false);
@@ -255,6 +274,7 @@ public class NativeAgent : ModSystem
             AgentTools.Watches.Observe(new JsonObject { ["hp"] = p.statLife, ["max_hp"] = p.statLifeMax2,
                 ["dead"] = p.dead, ["suffocating"] = p.suffocating,
                 ["invasion"] = AgentTools.InvasionStatus(targets: false),
+                ["upcoming_boss"] = UpcomingBoss(p),
                 ["tick"] = (long)Main.GameUpdateCount, ["honey_slowed"] = p.honeyWet && !p.ignoreWater,
                 ["last_damage"] = AgentTools.LastDamage?.DeepClone(), ["last_death"] = AgentTools.LastDeath?.DeepClone(),
                 ["item_counts"] = new JsonObject(p.inventory.Where(item => !item.IsAir).GroupBy(item => item.type)

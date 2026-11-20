@@ -125,6 +125,7 @@ public sealed class AgentWatch
         && e["kind"]?.ToString() != "honey_slowdown"
         && e["kind"]?.ToString() != "inventory_full"
         && e["kind"]?.ToString() != "tactical_review"
+        && e["kind"]?.ToString() != "boss_warning"
         && e["kind"]?.ToString() is not ("action_finished" or "target_acquired")
         && !(e["kind"]?.ToString() == "nearby_chest" && e["key"]?.ToString() == currentChestTarget)
         && !passive.Contains(e["kind"]?.ToString());
@@ -140,8 +141,10 @@ public sealed class AgentWatch
         if (!events.Contains("target_acquired")) passive.Add("target_acquired");
         passive.Add("honey_slowdown");
         passive.Add("invasion_started");
+        passive.Add("boss_warning");
         events.UnionWith(new[] { "action_finished", "target_acquired", "low_health", "suffocating", "player_died", "boss_appeared", "inventory_full", "honey_slowdown" });
         events.Add("invasion_started");
+        events.Add("boss_warning");
         if (!configured)
         {
             events.Add("nearby_chest");
@@ -224,7 +227,7 @@ public sealed class AgentWatch
     {
         var requested = args["events"]?.AsArray().Select(x => x.GetValue<string>()).ToArray()
             ?? throw new ArgumentException("需要events数组；空数组取消观察。");
-        if (requested.Any(x => x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "nearby_npc_killed" or "action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died" or "boss_appeared" or "inventory_full" or "honey_slowdown")))
+        if (requested.Any(x => x is not ("nearby_tile" or "nearby_chest" or "nearby_drop" or "nearby_npc_killed" or "action_finished" or "target_acquired" or "low_health" or "suffocating" or "player_died" or "boss_appeared" or "boss_warning" or "inventory_full" or "honey_slowdown")))
             throw new ArgumentException("不支持的观察事件。");
         int radius = args["radius"]?.GetValue<int>() ?? 25;
         int? health = args["health_below"]?.GetValue<int>();
@@ -304,6 +307,16 @@ public sealed class AgentWatch
         }
         if (state["inventory_full"]?.GetValue<bool>() == true) Emit("inventory_full", "task", state);
         else if (state["inventory_full"]?.GetValue<bool>() == false) seen.Remove("inventory_full:task");
+        if (state["upcoming_boss"] is JsonObject warning) Emit("boss_warning", warning["type"].ToString(), warning);
+        else if (state.ContainsKey("upcoming_boss") && seen.RemoveWhere(key => key.StartsWith("boss_warning:", StringComparison.Ordinal)) > 0)
+        {
+            int count = pending.Count;
+            for (int i = 0; i < count; i++)
+            {
+                var item = pending.Dequeue();
+                if (item["kind"]?.ToString() != "boss_warning") pending.Enqueue(item);
+            }
+        }
         if (state["invasion"] is JsonObject invasion)
         {
             if (invasion["active"]?.GetValue<bool>() == true) Emit("invasion_started", invasion["type"].ToString(), invasion);
@@ -399,7 +412,7 @@ public sealed class AgentWatch
         }
         return result;
     }
-    static int ReviewPriority(JsonObject item) => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "boss_appeared" or "decision_point" or "execution_gap" or "honey_slowdown"
+    static int ReviewPriority(JsonObject item) => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "boss_appeared" or "boss_warning" or "decision_point" or "execution_gap" or "honey_slowdown"
         || item["kind"]?.ToString() == "action_finished" && item["evidence"]?["status"]?.ToString() == "failed" ? 0 : 1;
 
     public JsonObject Pending(bool recoveryOnly = false)
@@ -442,7 +455,7 @@ public sealed class AgentWatch
             if (dx * dx + dy * dy > Radius * Radius) return false;
         }
         return !advised.Contains(item["id"].GetValue<int>())
-            && (kind is "nearby_chest" or "nearby_tile" or "nearby_drop" or "honey_slowdown" or "inventory_full" or "tactical_review"
+            && (kind is "nearby_chest" or "nearby_tile" or "nearby_drop" or "honey_slowdown" or "inventory_full" or "tactical_review" or "boss_warning"
                 || item["wake_deferred"]?.GetValue<bool>() != true
                     && (kind == "target_acquired" && (!passive.Contains(kind) || background.Contains(kind))
                         || kind == "action_finished" && item["evidence"]?["status"]?.ToString() == "failed"));
@@ -495,7 +508,7 @@ public sealed class AgentWatch
     internal JsonArray TacticalAdvisories(bool acknowledge = true)
     {
         var result = new JsonArray();
-        foreach (var value in pending.Where(e => e["kind"]?.ToString() == "tactical_review" && IsAdvisory(e)))
+        foreach (var value in pending.Where(e => e["kind"]?.ToString() is "tactical_review" or "boss_warning" && IsAdvisory(e)))
         {
             if (acknowledge) advised.Add(value["id"].GetValue<int>());
             result.Add(value.DeepClone());

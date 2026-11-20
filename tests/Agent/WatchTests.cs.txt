@@ -10,6 +10,16 @@ static class WatchTests
 
     public static async Task Run()
     {
+        var alarm = new AgentWatch();
+        alarm.EnsureDefaults();
+        var warning = new JsonObject { ["upcoming_boss"] = new JsonObject { ["type"] = 4, ["surface_spawn_eligible"] = false } };
+        alarm.Observe(warning);
+        alarm.Observe(warning);
+        Check(alarm.HasAdvisories && !alarm.HasInterrupting && alarm.TacticalAdvisories().Count == 1,
+            "the spawn warning was lost, repeated or forcibly interrupted the current action");
+        alarm.Observe(new JsonObject { ["upcoming_boss"] = null });
+        Check(!alarm.HasPending, "an expired boss warning remained pending");
+
         var healthWatch = new AgentWatch();
         healthWatch.EnsureDefaults();
         foreach (int hp in new[] { 100, 80, 30 })
