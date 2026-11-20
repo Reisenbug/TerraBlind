@@ -2801,7 +2801,7 @@ public static partial class AgentTools
             case "collect_treasure":
                 int targetChestX = Int(args, "x"), targetChestY = Int(args, "y");
                 await NativeAgent.OnMain(() => { ControlSession.BindChestTarget(targetChestX, targetChestY); return true; }, token);
-                result = await Navigate(new JsonObject { ["x"] = targetChestX, ["y"] = targetChestY, ["reach"] = true }, token);
+                result = await NavigateTreasure(new JsonObject { ["x"] = targetChestX, ["y"] = targetChestY, ["reach"] = true }, token);
                 if (result["done"]?.GetValue<bool>() != true) break;
                 var chestBefore = await NativeAgent.OnMain(() => AgentTaskEvidence.ObserveChest(targetChestX, targetChestY), token);
                 bool inventoryWasOpen = await NativeAgent.OnMain(() => Main.playerInventory, token);
@@ -3786,7 +3786,10 @@ public static partial class AgentTools
             bool Arrived(JsonObject result) => Bool(result, "done") || Text(result, "outcome") == "collect_target_in_reach";
             JsonObject Approach(string mode) => new() { ["x"] = x, ["y"] = y, ["mode"] = mode,
                 ["accepted_traps"] = target["accepted_traps"]?.DeepClone() };
-            var approach = await Navigate(Approach(Bool(target, "solid") ? "mine" : "interact"), token, interruption: ReadyToCollect);
+            Task<JsonObject> ReachTarget(string mode) => Bool(target, "solid")
+                ? Navigate(Approach(mode), token, interruption: ReadyToCollect)
+                : NavigateTreasure(Approach(mode), token, ReadyToCollect);
+            var approach = await ReachTarget(Bool(target, "solid") ? "mine" : "interact");
             var completed = completion == null ? null : await NativeAgent.OnMain(completion, token);
             if (completed != null) return completed;
             if (!Arrived(approach))
@@ -3796,7 +3799,7 @@ public static partial class AgentTools
             bool reachable = await NativeAgent.OnMain(() => InMiningRange(collectSlot), token);
             if (!reachable && !Bool(target, "solid"))
             {
-                approach = await Navigate(Approach("stand"), token, interruption: ReadyToCollect);
+                approach = await ReachTarget("stand");
                 completed = completion == null ? null : await NativeAgent.OnMain(completion, token);
                 if (completed != null) return completed;
                 if (!Arrived(approach))
@@ -3915,8 +3918,16 @@ public static partial class AgentTools
         return route;
     }
 
+    static async Task<JsonObject> NavigateTreasure(JsonObject args, CancellationToken token, Func<JsonObject> interruption = null)
+    {
+        string rule = await NativeAgent.OnMain(() => Control.Deny(new[] { ControlBehavior.Mining }, ControlLifetime.Task,
+            null, "Use open terrain to approach treasure", (0, 0, Main.maxTilesX, Main.maxTilesY)), token);
+        try { return await Navigate(args, token, interruption: interruption, openTreasureRoute: true); }
+        finally { await NativeAgent.OnMain(() => { if (Control.Contains(rule)) Control.Release(rule); return true; }, default); }
+    }
+
     internal static async Task<JsonObject> Navigate(JsonObject args, CancellationToken token, int seconds = 0,
-        Func<JsonObject> interruption = null)
+        Func<JsonObject> interruption = null, bool openTreasureRoute = false)
     {
         var region = await NativeAgent.OnMain(() =>
         {
@@ -4029,6 +4040,10 @@ public static partial class AgentTools
                 var field = planning ? null : MazeWand.PeekFieldOrNull(gx, gy);
                 if (!planning && !Reach.CanInteract(player, gx, gy))
                 {
+                    if (openTreasureRoute && field != null
+                        && !field.ContainsKey(StateSpacePlanner.StandCell(player.position.X, player.position.Y)))
+                        return new JsonObject { ["error"] = "no_open_treasure_route", ["outcome"] = "no_progress",
+                            ["target"] = new JsonObject { ["x"] = gx, ["y"] = gy } };
                     if (field?.Count == 1 && field.ContainsKey((gx, gy)))
                         return new JsonObject { ["error"] = "navigation_goal_isolated", ["outcome"] = "no_route",
                             ["reason"] = "goal_has_no_traversable_neighbor", ["field_cells"] = field.Count,

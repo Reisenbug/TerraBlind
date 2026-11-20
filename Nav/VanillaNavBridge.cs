@@ -383,6 +383,7 @@ public static class VanillaNavBridge
         {
             if (pick < 0 || !Predicates.InBounds(x, y)) return;
             if (VanillaTerrainPlan.IsRouteObstacle(Main.tile[x, y], belowFeet) && seen.Add((x, y))
+                && !AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, x, y)
                 && LavaSafety.CanMine(x, y) && WorldGen.CanKillTile(x, y) && Reach.CanMine(player, x, y)
                 && DigTable.CostFrames(x, y) < DigTable.Unmineable)
                 edits.Enqueue(new Edit(x, y, -1, pick));
@@ -675,7 +676,8 @@ public static class VanillaNavBridge
     static bool StartExcavation(Player player)
     {
         var candidate = VanillaExcavation.Create(player, corridor);
-        if (candidate == null) return false;
+        if (candidate == null || candidate.Request.MineTiles.Any(tile => AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, tile.wx, tile.wy)))
+            return false;
         var demo = VanillaNavigationDemo.Instance;
         demo.CancelTerrain(); demo.PauseForTerrain();
         ItemUseCoordinator.Stop(); preparing = null; prepared = preparation = null;

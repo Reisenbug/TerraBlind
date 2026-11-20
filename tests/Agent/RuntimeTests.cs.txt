@@ -76,6 +76,35 @@ static class RuntimeTests
                 p.position = savedPosition; p.velocity = savedVelocity;
                 HouseBuilder.TestHasTorches = true; HttpServerSystem.Handler = handler;
             }
+            var previousField = MazeWand.Field;
+            var previousReach = Reach.InteractTest;
+            try
+            {
+                int starts = 0, stops = 0, loot = 0;
+                MazeWand.Field = new System.Collections.Generic.Dictionary<(int, int), int> { [(100, 120)] = 0 };
+                Reach.InteractTest = (_, _, _) => false;
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    if (path == "/nav_recede")
+                    {
+                        starts++;
+                        Check(AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, 20, 20)
+                            && !AgentTools.Control.ForbiddenAt(ControlBehavior.Placement, 20, 20),
+                            "treasure approach could excavate or unnecessarily banned placement");
+                    }
+                    if (path == "/nav_recede_stop") stops++;
+                    if (path == "/collect_treasure") loot++;
+                    return (200, path == "/nav_recede_done" ? """{"nav":true,"done":false}""" : """{"ok":true}""");
+                };
+                var blocked = await Call("collect_treasure", new JsonObject { ["x"] = 100, ["y"] = 120 });
+                Check(starts == 1 && stops == 1 && loot == 0 && blocked["error"]?.ToString() == "no_open_treasure_route"
+                    && !AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, 20, 20),
+                    "an enclosed treasure continued tunneling or leaked its scoped mining restriction");
+            }
+            finally
+            {
+                MazeWand.Field = previousField; Reach.InteractTest = previousReach; HttpServerSystem.Handler = handler;
+            }
             for (int i = 0; i < 4; i++)
                 await Call("housing", new JsonObject { ["action"] = "remember", ["x"] = 100 + i * 5, ["y"] = 120 });
             var list = await Call("housing", new JsonObject { ["action"] = "list" });
