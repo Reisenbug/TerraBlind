@@ -184,10 +184,8 @@ namespace TerraBlind
 			if (BossOnField())
 			{
 				if (Dodge.TryAttackBoss(p, out var bossAim))
-				{
 					AimTarget = bossAim;
-					Last = "boss attack";
-				}
+				Last = Dodge.AttackState;
 				return;
 			}
 			Dodge.EndBossAttack(p);

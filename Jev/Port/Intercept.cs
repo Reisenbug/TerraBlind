@@ -6,7 +6,7 @@ namespace TerraBlind.JevariaCombat;
 public static class Intercept
 {
     public static bool TrySolve(Vector2 origin, Vector2 target, Vector2 targetVelocity,
-        float shotSpeed, out Vector2 aimPoint)
+        float shotSpeed, out Vector2 aimPoint, float maxFrames = float.PositiveInfinity)
     {
         aimPoint = target;
         if (shotSpeed <= 0f) return false;
@@ -33,7 +33,7 @@ public static class Intercept
             if (second > 0d && second < time) time = second;
         }
 
-        if (time <= 0d || double.IsNaN(time) || double.IsInfinity(time)) return false;
+        if (time <= 0d || time > maxFrames || double.IsNaN(time) || double.IsInfinity(time)) return false;
         aimPoint = target + targetVelocity * (float)time;
         return true;
     }

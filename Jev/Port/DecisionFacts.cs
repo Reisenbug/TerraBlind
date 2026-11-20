@@ -11,6 +11,9 @@ public static class DecisionFacts
     public static string State(CombatSnapshot snapshot, string bossNotes) => State(snapshot, bossNotes, null);
 
     public static string State(CombatSnapshot snapshot, string bossNotes, System.Text.Json.Nodes.JsonObject agentConstraints)
+        => State(snapshot, bossNotes, agentConstraints, null);
+
+    internal static string State(CombatSnapshot snapshot, string bossNotes, System.Text.Json.Nodes.JsonObject agentConstraints, string attackState)
     {
         bool pillion = snapshot.MountType == MountID.QueenSlime;
         string mountName = pillion ? "Gelatinous Pillion" : "Slimy Saddle";
@@ -57,6 +60,7 @@ public static class DecisionFacts
                 below = Room(snapshot.SolidDistances.Down, snapshot.WorldDistances.Down)
             },
             boss_notes = bossNotes,
+            attack = attackState == null ? null : new { weapon = snapshot.WeaponName, last_state = attackState },
             agent_constraints = agentConstraints == null ? null : new
             {
                 units = "world tiles, y increases downward",

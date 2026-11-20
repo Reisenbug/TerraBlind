@@ -50,9 +50,8 @@ namespace TerraBlind
 		// jev判的概率分布。
 		public static string Probs = "";
 		public static string TopTwo = "";
-		// 上一条播报过的意图。
-		static string _saidAct = "";
-		static long _saidAt;
+		internal static string DecisionLabel => Enabled && !RandomBrain && _inFight && _actAt > _releasedAtMs
+			&& _clock.ElapsedMilliseconds - _actAt <= IntentTtlMs ? ActionName(Action) : null;
 
 		public const string Url = "https://api.typesafe.ai/v1/systemone";
 		public const string Model = "jev-latest";
@@ -247,17 +246,22 @@ namespace TerraBlind
 			return true;
 		}
 
+		internal static string AttackState { get; private set; } = "idle";
+
 		public static bool TryAttackBoss(Player p, out Vector2 target)
 		{
 			target = p.Center;
+			AttackState = "attack paused";
 			if (Main.gameMenu || Main.playerInventory && !NativeAgent.Processing) return false;
 			if (p.statLife < p.statLifeMax2 * 0.5f || p.lavaWet) p.QuickHeal();
-			if (!SelectWeapon(p)) return false;
+			if (!SelectWeapon(p)) { AttackState = "no usable boss weapon"; return false; }
 			_sensor.Observe(p);
 			var live = _sensor.Capture(p, (ulong)_appliedSequence, ToIntent(_appliedAction), 0);
 			if (live == null) return false;
 			if (_movementReason == "grapple") return false;
-			return _attack.TryAttack(p, live, out target);
+			bool attacking = _attack.TryAttack(p, live, out target);
+			AttackState = _attack.Status;
+			return attacking;
 		}
 
 		public static void EndBossAttack(Player p) => _attack.RestoreWeapon(p);
@@ -439,7 +443,8 @@ namespace TerraBlind
 			AxisLock.Release(Owner);
 		}
 
-		static string Facts(Player p, NPC boss) => Port.DecisionFacts.State(_snapshot, FieldBooks(boss), AgentTools.Control.Snapshot());
+		static string Facts(Player p, NPC boss) => Port.DecisionFacts.State(_snapshot, FieldBooks(boss), AgentTools.Control.Snapshot(),
+			Combat.Enabled && AgentPermissions.Attack ? AttackState : null);
 
 		static string ActionCriteria(Player p)
 		{
@@ -468,6 +473,7 @@ namespace TerraBlind
 			 + "Look at every boss part and shot, where each is heading and how soon it reaches me, and how much room I have. "
 			 + "Frames until contact assumes our current velocities stay constant; use enemy health to identify its phase. "
 			 + "Keep an escape route: do not run into a wall, floor or ceiling, or toward another threat. "
+			 + "When safe choices are similar, favor a usable firing distance or angle for the current weapon, using the last attack state as feedback. "
 			 + "Follow the boss notes. Each axis has its own magnitude. Small is ordinary movement, "
 			 + "horizontal or upward Medium uses a grapple, and vertical Large uses a mount. "
 			 + "Pick a tool only when its extra movement helps. "
@@ -570,16 +576,6 @@ namespace TerraBlind
 
 			Probs = Seg(aq, "probabilities") ?? "";
 			TopTwo = Rank(Probs);
-			// 意图变了或同一意图持续 4 秒才发到聊天栏
-			long now = _clock.ElapsedMilliseconds;
-			var said = ActionName(Action);
-			if (said != _saidAct || now - _saidAt > 4000)
-			{
-				string tag = said == _saidAct ? $"  [held {(now - _saidAt) / 1000}s]" : "";
-				_saidAct = said; _saidAt = now;
-				Main.NewText($"<Jev> {said}{tag}  ({TopTwo})  confidence {Confidence:0.00}  {ms}ms", 90, 230, 120);
-			}
-
 			var (x, y) = Vec(Action.Direction);
 			var picks = new List<(string Q, int Pick, int Options)> { ("direction", (int)Action.Direction, 9) };
 			if (x != 0) picks.Add(("horizontal_size", (int)Action.Horizontal, 2));

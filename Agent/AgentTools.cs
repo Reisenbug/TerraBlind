@@ -845,15 +845,33 @@ public static partial class AgentTools
     }
     static (bool Attack, bool Dodge, float Reserve)? bossBefore;
     static bool? requestedBossControl;
+    static (int Boss, int Weapon, ulong Since, bool Reported)? bossAttackBlocked;
     internal static bool HasBossControlOverride => bossBefore != null;
     internal static void ObserveBossControl(bool processing)
     {
         var player = Main.LocalPlayer;
         if (!processing || Main.gameMenu || Manual.On || player == null || !player.active || player.dead
             || requestedBossControl == false || PvpDuel.Active || PlayerCombat.Active
-            || !AgentPermissions.CanAttack(delegated: true) && !AgentPermissions.CanDodge(delegated: true)) return;
-        if (!Main.npc.Any(npc => npc is { active: true, boss: true, life: > 0 }
-            && Math.Abs(npc.Center.X - player.Center.X) + Math.Abs(npc.Center.Y - player.Center.Y) <= 200 * 16)) return;
+            || !AgentPermissions.CanAttack(delegated: true) && !AgentPermissions.CanDodge(delegated: true))
+        { bossAttackBlocked = null; return; }
+        var boss = Main.npc.FirstOrDefault(npc => npc is { active: true, boss: true, life: > 0 }
+            && Math.Abs(npc.Center.X - player.Center.X) + Math.Abs(npc.Center.Y - player.Center.Y) <= 200 * 16);
+        if (boss == null || !Combat.Enabled || !AgentPermissions.Attack
+            || Combat.Last is not ("no firing solution" or "flail out of reach" or "no usable boss weapon")) bossAttackBlocked = null;
+        else
+        {
+            int weapon = CombatLoadout.PreferredType > 0 ? CombatLoadout.PreferredType : player.HeldItem.type;
+            if (bossAttackBlocked is not { } prior || prior.Boss != boss.whoAmI || prior.Weapon != weapon)
+                bossAttackBlocked = (boss.whoAmI, weapon, Main.GameUpdateCount, false);
+            else if (!prior.Reported && Main.GameUpdateCount - prior.Since >= 180)
+            {
+                bossAttackBlocked = prior with { Reported = true };
+                Watches.RequestTacticalReview($"boss_attack:{boss.whoAmI}:{weapon}", "Boss attack has had no viable shot for 3 seconds.",
+                    new JsonObject { ["boss_type"] = boss.type, ["boss_hp"] = boss.life, ["weapon_type"] = weapon,
+                        ["attack_state"] = Combat.Last, ["distance_tiles"] = Microsoft.Xna.Framework.Vector2.Distance(player.Center, boss.Center) / 16f });
+            }
+        }
+        if (boss == null) return;
         if (Combat.Enabled && Dodge.Enabled) return;
         SetBossControl(true);
         DiagLog.Write("[agent_boss_handoff] controller=enabled source=nearby_boss");
@@ -926,6 +944,7 @@ public static partial class AgentTools
             Combat.Enabled = previous.Attack; Dodge.Enabled = previous.Dodge; Dodge.MovementReserveScale = previous.Reserve; bossBefore = null;
         }
         requestedBossControl = null;
+        bossAttackBlocked = null;
         StopInputs();
     }
 
@@ -1426,6 +1445,8 @@ public static partial class AgentTools
                         ["vertical"] = option.Intent.VerticalSize.ToString() }).ToArray())
             } : null,
             ["attack_state"] = Combat.Last, ["movement_state"] = Dodge.Last,
+            ["preferred_weapon_type"] = CombatLoadout.PreferredType, ["held_weapon_type"] = Main.LocalPlayer.HeldItem.type,
+            ["recent_boss_damage_per_second"] = Dodge.BossDps,
             ["requires_typesafe_key"] = true, ["config_key_present"] = !string.IsNullOrWhiteSpace(Config.I.TypeSafeKey),
             ["key_available"] = JevCombat.HasKey,
             ["active_bosses"] = new JsonArray(Main.npc.Where(n => n != null && n.active && n.boss && n.life > 0)
@@ -1559,7 +1580,7 @@ public static partial class AgentTools
     static bool ReadsHousing(string name, JsonObject args) => name == "housing" && Text(args, "action") is "list" or "check";
     static bool ObservationTool(string name) => name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain" or "block_region"
         or "pylon_list" or "fishing_status" or "shop_list"
-        or "find_descent" or "find_biome" or "early_descent" or "invasion_status"
+        or "find_descent" or "find_biome" or "find_pyramids" or "early_descent" or "invasion_status"
         or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "jev_judge" or "item_info" or "wiki_search" or "wiki_page"
         or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status" or "action_query"
         or "find_descent" or "descent_route" or "slot_state" or "craft_recipes" or "mod_input_list";
@@ -1693,7 +1714,7 @@ public static partial class AgentTools
                     try
                     {
                         var facts = JsonNode.Parse(output);
-                        if (name is "game_api" or "game_catalog" or "item_info" or "recipe" or "wiki_search" or "wiki_page" or "find_biome"
+                        if (name is "game_api" or "game_catalog" or "item_info" or "recipe" or "wiki_search" or "wiki_page" or "find_biome" or "find_pyramids"
                             or "find_tiles" or "tile_names" or "find_descent" or "descent_route" or "equipment_list" or "inventory_review" or "inspect_terrain")
                             if (!Rejected(facts as JsonObject)) Discoveries.Add(name + ":" + args.ToJsonString());
                         if (facts is JsonObject result && result.ContainsKey("task_plan"))
@@ -2865,6 +2886,8 @@ public static partial class AgentTools
             case "tile_names": case "recipe":
                 result = await Call("/" + name, args, token);
                 break;
+            case "find_pyramids":
+                return (await NativeAgent.OnMain(FindPyramids, token)).ToJsonString(ModelJson);
             case "find_tiles":
                 result = await FindTiles(args, token);
                 break;
@@ -3281,6 +3304,28 @@ public static partial class AgentTools
         ReadTileLight(Main.tile[x, y], x, y, ref random, ref color);
         return new JsonObject { ["r"] = color.X, ["g"] = color.Y, ["b"] = color.Z,
             ["emits_light"] = color.X > 0 || color.Y > 0 || color.Z > 0 };
+    }
+
+    internal static JsonObject FindPyramids()
+    {
+        var player = Main.LocalPlayer.Center / 16;
+        var candidates = new List<(int Index, int X, int Y, float Distance)>();
+        for (int i = 0; i < Main.chest.Length; i++)
+        {
+            if (Main.chest[i] is not { } chest) continue;
+            int x = chest.x, y = chest.y;
+            if (x < 1 || x >= Main.maxTilesX - 1 || y < 1 || y >= Main.maxTilesY - 2) continue;
+            var tile = Main.tile[x, y];
+            if (!tile.HasTile || tile.TileType != Terraria.ID.TileID.Containers || tile.TileFrameX != 36 || tile.TileFrameY != 0
+                || tile.WallType != Terraria.ID.WallID.SandstoneBrick) continue;
+            var floor = Main.tile[x, y + 2];
+            if (!floor.HasTile || floor.TileType != Terraria.ID.TileID.SandstoneBrick) continue;
+            float distance = Microsoft.Xna.Framework.Vector2.Distance(player, new Microsoft.Xna.Framework.Vector2(x + 1, y + 1));
+            candidates.Add((i, x, y, distance));
+        }
+        return new JsonObject { ["pyramids"] = new JsonArray(candidates.OrderBy(entry => entry.Distance)
+            .Select(entry => (JsonNode)new JsonObject { ["chest_x"] = entry.X, ["chest_y"] = entry.Y,
+                ["chest_id"] = entry.Index, ["distance_tiles"] = MathF.Round(entry.Distance, 1) }).ToArray()) };
     }
 
     internal static async Task<JsonObject> FindTiles(JsonObject args, CancellationToken token)

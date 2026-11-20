@@ -400,7 +400,7 @@ namespace Terraria.ID
 {
     public static class WallID
     {
-        public const int SpiderUnsafe = 62, Sandstone = 187, HardenedSand = 216, CorruptHardenedSand = 217,
+        public const int SandstoneBrick = 34, SpiderUnsafe = 62, Sandstone = 187, HardenedSand = 216, CorruptHardenedSand = 217,
             CrimsonHardenedSand = 218, HallowHardenedSand = 219, CorruptSandstone = 220, CrimsonSandstone = 221, HallowSandstone = 222;
     }
     public static class ProjAIStyleID { public const int ShortSword = 161, Spear = 19, Explosive = 16; }
@@ -430,7 +430,7 @@ namespace Terraria.ID
         public const int FixtureSource = 1, FixtureOther = 2;
         public const int Containers = 21, Dressers = 88, Containers2 = 467, FakeContainers = 441, FakeContainers2 = 468;
         public const int PressurePlates = 135, Traps = 137, Boulder = 138, Explosives = 141, MinecartTrack = 314;
-        public const int RollingCactus = 484, BouncyBoulder = 664, LifeCrystalBoulder = 665;
+        public const int SandstoneBrick = 151, RollingCactus = 484, BouncyBoulder = 664, LifeCrystalBoulder = 665;
         public static class Sets
         {
             public static bool[] Falling = new bool[1000], Suffocate = new bool[1000], CrackedBricks = new bool[1000];
@@ -636,6 +636,7 @@ namespace TerraBlind
         public static void Stop() => Stops++;
     }
     public static class Dodge { public static bool Enabled; public static string Last = "idle"; public static float MovementReserveScale = 1;
+        public static int BossDps;
         public static JevariaCombat.CombatSnapshot Snapshot; public static void Stop() { Last = "stopped"; } }
     public static class Equipment
     {

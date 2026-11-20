@@ -28,5 +28,33 @@ static class SurfaceBiomeTests
         Check(SurfaceBiomeSearch.Find(70, 65, 45, 8, 20, 20, 30, (x, y) => cells[x, y]) == null,
             "single signature tile was accepted without a biome-size neighborhood");
         Console.WriteLine("PASS: surface biome selection rejects covered pockets and isolated signature tiles, requiring measured local density");
+
+        var originalChests = Terraria.Main.chest;
+        var originalTiles = Terraria.Main.tile;
+        var originalPosition = Terraria.Main.LocalPlayer.position;
+        try
+        {
+            Terraria.Main.LocalPlayer.position = default;
+            Terraria.Main.chest = new Terraria.Chest[] { new() { x = 60, y = 20 }, new() { x = 20, y = 20 }, new() { x = 40, y = 20 } };
+            Terraria.Main.tile = new Terraria.Tile[70, 30];
+            foreach (var chest in Terraria.Main.chest)
+            {
+                Terraria.Main.tile[chest.x, chest.y] = new Terraria.Tile { HasUnactuatedTile = true,
+                    TileType = Terraria.ID.TileID.Containers, TileFrameX = 36,
+                    WallType = chest.x == 20 ? Terraria.ID.WallID.Sandstone : Terraria.ID.WallID.SandstoneBrick };
+                Terraria.Main.tile[chest.x, chest.y + 2] = new Terraria.Tile { HasUnactuatedTile = true, TileType = Terraria.ID.TileID.SandstoneBrick };
+            }
+            var found = AgentTools.FindPyramids()["pyramids"].AsArray();
+            Check(found.Count == 2 && found[0]["chest_x"].GetValue<int>() == 40 && found[1]["chest_x"].GetValue<int>() == 60,
+                "pyramid search accepted a desert chest or did not order pyramid chests by distance");
+            Check(found[0]["item"] == null && found[0]["loot"] == null, "pyramid search revealed unopened loot");
+            Console.WriteLine("PASS: pyramid search distinguishes native sandstone brick rooms and leaves chest loot unopened");
+        }
+        finally
+        {
+            Terraria.Main.chest = originalChests;
+            Terraria.Main.tile = originalTiles;
+            Terraria.Main.LocalPlayer.position = originalPosition;
+        }
     }
 }

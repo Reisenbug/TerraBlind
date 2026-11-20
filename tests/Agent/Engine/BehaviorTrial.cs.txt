@@ -2069,6 +2069,63 @@ public sealed partial class BehaviorTrial : ModSystem
             File.WriteAllText(Path.Combine(Main.SavePath, "wall-target.json"), proof.ToJsonString());
             if (proof.Any(field => field.Value?.GetValue<bool>() != true)) throw new Exception("native wall policy failed: " + proof);
             Console.WriteLine("WALL_TARGET_PASS native_collision=true native_projectile_defaults=true model_calls=0");
+            foreach (int weaponType in new[] { ItemID.ThrowingKnife, ItemID.Mace })
+            {
+                var aimer = new TerraBlind.JevariaCombat.ProjectileAim();
+                var sensor = new TerraBlind.JevariaCombat.GameSensor();
+                int initialHp = 0, remainingHp = 0, frames = 0, aimFrames = 0, shootFrames = 0;
+                bool flailThrown = false, flailRetracting = false, flailReturned = false;
+                string shotTrace = "";
+                await OnMain(() =>
+                {
+                    Combat.Enabled = false;
+                    var p = Main.LocalPlayer;
+                    int x = Main.spawnTileX, y = Main.spawnTileY;
+                    for (int tx = x; tx <= x + 18; tx++)
+                    for (int ty = y - 11; ty < y; ty++) Main.tile[tx, ty].ClearEverything();
+                    foreach (var projectile in Main.projectile) if (projectile.active && projectile.owner == p.whoAmI) projectile.Kill();
+                    foreach (var npc in Main.npc) npc.active = false;
+                    target = NPC.NewNPC(new EntitySource_Misc("boss-weapon-reach"), (int)p.Center.X + 116,
+                        (int)p.Center.Y, NPCID.BlueSlime);
+                    var enemy = Main.npc[target];
+                    enemy.boss = true;
+                    enemy.aiStyle = -1; enemy.noGravity = true; enemy.noTileCollide = true;
+                    enemy.velocity = Vector2.Zero;
+                    enemy.Center = p.MountedCenter + new Vector2(600, -24);
+                    enemy.life = enemy.lifeMax = initialHp = remainingHp = 500;
+                    p.inventory[0].SetDefaults(weaponType);
+                    p.inventory[0].stack = weaponType == ItemID.ThrowingKnife ? 20 : 1;
+                    p.selectedItem = 0; p.itemAnimation = p.itemTime = 0; p.releaseUseItem = true;
+                    var snapshot = sensor.Capture(p, 0, TerraBlind.JevariaCombat.DodgeIntent.Idle, 0);
+                    if (aimer.TryAttack(p, snapshot, out _) || p.controlUseItem) throw new Exception("out-of-range boss attack: " + weaponType);
+                    enemy.Center = p.MountedCenter + (weaponType == ItemID.Mace ? new Vector2(116, -20) : new Vector2(168, -32));
+                    BoundaryInputPlayer.Drive = player =>
+                    {
+                        remainingHp = enemy.life;
+                        frames++;
+                        var shot = Main.projectile.FirstOrDefault(projectile => projectile.active && projectile.owner == player.whoAmI
+                            && projectile.type == player.HeldItem.shoot);
+                        if (weaponType == ItemID.Mace)
+                        {
+                            flailThrown |= shot?.ai[0] == 1;
+                            flailRetracting |= shot?.ai[0] == 2;
+                            flailReturned |= flailRetracting && shot == null;
+                        }
+                        if (frames >= 90 || remainingHp < initialHp && (weaponType != ItemID.Mace || flailReturned)) return;
+                        var frame = sensor.Capture(player, 0, TerraBlind.JevariaCombat.DodgeIntent.Idle, 0);
+                        if (frame != null && aimer.TryAttack(player, frame, out _)) aimFrames++;
+                        if (player.controlUseItem) shootFrames++;
+                        if (shot != null || frames % 30 == 0)
+                            shotTrace = $"npc={enemy.active}/{enemy.Center} player={player.MountedCenter} item={player.itemAnimation}/{player.HeldItem.stack} shot={shot?.Center}/{shot?.velocity}";
+                    };
+                    return true;
+                });
+                try { while ((remainingHp >= initialHp || weaponType == ItemID.Mace && !flailReturned) && frames < 90) await Task.Delay(20); }
+                finally { await OnMain(() => { BoundaryInputPlayer.Drive = null; return true; }); }
+                if (remainingHp >= initialHp || weaponType == ItemID.Mace && (!flailThrown || !flailReturned))
+                    throw new Exception($"native boss attack failed type={weaponType} hp={remainingHp} frames={frames} aim={aimFrames} use={shootFrames} flail_thrown={flailThrown} flail_returned={flailReturned} {shotTrace}");
+                Console.WriteLine($"BOSS_WEAPON_REACH_PASS item={weaponType} far_blocked=true native_damage={initialHp - remainingHp} flail_thrown={flailThrown} flail_returned={flailReturned}");
+            }
             return;
         }
         if (Environment.GetEnvironmentVariable("TB_PLACEMENT_OCCUPANCY_PROBE") == "1")

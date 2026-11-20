@@ -61,8 +61,11 @@ namespace TerraBlind
 				_decisions = AgentTools.DecisionChannels.Snapshot();
 				_intents = AgentScript.IntentStatus;
 			}
-			if (_decisions.Count == 0 && _intents == null) return;
+			string bossMove = Dodge.DecisionLabel;
+			if (_decisions.Count == 0 && _intents == null && bossMove == null) return;
 			var entries = new List<(string Text, Color Color)> { ("Decision", Color.Gold) };
+			if (bossMove != null)
+				entries.Add(($"Boss dodge: {bossMove} · {Dodge.LatencyMs}ms", Tint(Dodge.Confidence)));
 			if (_intents != null)
 			{
 				string current = _intents["current"]?["description"]?.ToString();
