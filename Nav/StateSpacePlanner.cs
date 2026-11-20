@@ -746,7 +746,9 @@ namespace TerraBlind
             {
                 var (ex, ey) = StandCell(e.next.Px, e.next.Py);
                 if (AgentTools.Control.ForbiddenAt(ControlBehavior.Navigation, ex, ey)
-                    || e.digTiles?.Exists(tile => AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, tile.Item1, tile.Item2)) == true)
+                    || e.digTiles?.Exists(tile => AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, tile.Item1, tile.Item2)) == true
+                    || e.frames?.Exists(frame => frame.Place
+                        && AgentTools.Control.ForbiddenAt(ControlBehavior.Placement, frame.PlaceCx, frame.PlaceCy)) == true)
                     continue;
                 if (Predicates.IsLava(ex, ey)) continue;                      // 落点本身就是岩浆
                 if (e.frames != null && !FallSafety.SafeTrajectory(Main.LocalPlayer,

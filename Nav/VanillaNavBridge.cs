@@ -414,6 +414,7 @@ public static class VanillaNavBridge
         {
             int x = cell.x + offset, y = cell.y + 1 + vertical;
             if (!placements.Add((x, y)) || !Predicates.InBounds(x, y) || Main.tile[x, y].HasTile || LavaSafety.IsLava(x, y)
+                || AgentTools.Control.ForbiddenAt(ControlBehavior.Placement, x, y)
                 || !Reach.CanPlace(player, x, y) || !MazeWand.AnchorFor(x, y)
                 || player.Hitbox.Intersects(new Rectangle(x * 16, y * 16, 16, 16))
                     && (type != Terraria.ID.TileID.Platforms || y != (int)(player.Bottom.Y / 16) - 1 || routeGoal.Y >= player.position.Y)) continue;
