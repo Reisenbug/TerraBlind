@@ -432,6 +432,28 @@ static class GatherTests
             FightCoordinator.Tick(p, true);
             Check(FightCoordinator.AimTarget == Main.npc[1].Center && p.selectedItem == 2,
                 "incidental defense aimed past the recent attacker when the preferred weapon could not reach it");
+
+            FightCoordinator.Stop();
+            bool wasNavigating = RecedingNav.Active;
+            Check(AgentTools.ControlSession.Begin("hell_run", null, out long bridgeTicket) == null,
+                "could not acquire the underworld workflow's controls");
+            try
+            {
+                RecedingNav.Active = true;
+                FightCoordinator.Tick(p, true);
+                Check(p.controlUseItem && FightCoordinator.AimTarget == Main.npc[1].Center,
+                    "the walk to the bridge suppressed defense against a recent contact attacker");
+                FightCoordinator.Stop();
+                Main.npc[1].active = false;
+                FightCoordinator.Tick(p, true);
+                Check(!p.controlUseItem && FightCoordinator.AimTarget == null,
+                    "the walk to the bridge spent an attack on an uninvolved NPC");
+            }
+            finally
+            {
+                RecedingNav.Active = wasNavigating;
+                AgentTools.ControlSession.End(bridgeTicket);
+            }
         }
         finally
         {

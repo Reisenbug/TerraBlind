@@ -29,6 +29,7 @@ namespace TerraBlind
         public static Vector2? AimTarget { get; private set; }
         internal static bool OwnsUseInput => _usingItem;
         public static bool AttackAnimationActive => _animationSlot >= 0 && _animationAttack && Main.LocalPlayer.itemAnimation > 0;
+        static bool ApproachingHellSite => AgentTools.ControlSession.Tool == "hell_run" && RecedingNav.Active;
 
         static void RememberAnimation(Player p, bool attack)
         {
@@ -141,6 +142,8 @@ namespace TerraBlind
             bool currentJump = holdEvade || p.controlJump && (canStartJump || canHoldJump);
             if (!blocked && shots.Count == 0 && enemies.Count == 0) return (currentDirection, holdEvade, holdEvade);
             bool checkFall = RecedingNav.Active && !FallSafety.Immune(p);
+            bool checkLava = !p.lavaImmune && p.lavaTime <= 0;
+            bool escapingLava = checkLava && Collision.LavaCollision(p.position, p.width, p.height);
             float Risk(int direction, bool jump)
             {
                 Vector2 position = p.Center, velocity = p.velocity;
@@ -150,6 +153,7 @@ namespace TerraBlind
                 if (jump && canStartJump) velocity.Y = (-Player.jumpSpeed - p.jumpSpeedBoost) * p.gravDir;
                 int hold = !jump ? 0 : canStartJump ? Player.jumpHeight : p.jump;
                 bool landed = false;
+                bool inLava = escapingLava;
                 float score = direction == currentDirection ? 0 : .01f;
                 if (jump != currentJump) score += .02f;
                 for (int frame = 1; frame <= (checkFall ? 96 : 24); frame++)
@@ -167,6 +171,13 @@ namespace TerraBlind
                         p.controlDown, p.controlDown, (int)p.gravDir); }
                     finally { Collision.up = up; Collision.down = down; }
                     position += movement;
+                    if (checkLava)
+                    {
+                        bool touchesLava = Collision.LavaCollision(position - halfSize, p.width, p.height);
+                        if (touchesLava && !inLava) return float.PositiveInfinity;
+                        if (touchesLava) score += 25000;
+                        inLava = touchesLava;
+                    }
                     if (movement.X != velocity.X) velocity.X = 0;
                     if (checkFall)
                     {
@@ -370,7 +381,7 @@ namespace TerraBlind
             bool miningAction = AgentTools.ControlSession.Active
                 && AgentControlSession.Behavior(AgentTools.ControlSession.Tool) == ControlBehavior.Mining;
             bool itemBusy = placing || mining && !_attackNext && closeThreat == null || !mining && (primaryItemUse || ItemUseCoordinator.IsActive
-                || AgentTools.ControlSession.OwnsItemUse && !miningAction
+                || AgentTools.ControlSession.OwnsItemUse && !miningAction && !ApproachingHellSite
                     && AgentTools.ControlSession.Tool is not ("nav_to" or "fight" or "gather" or "collect_treasure"));
             if (itemBusy)
             {
@@ -435,6 +446,7 @@ namespace TerraBlind
             bool bestAttacker = false;
             var damage = AgentTools.LastDamage;
             var attacker = damage?["attacker"];
+            bool attackerOnly = ApproachingHellSite;
             long age = (long)Main.GameUpdateCount - (damage?["tick"]?.GetValue<long>() ?? -1000);
             for (int i = 0; i < Main.maxNPCs; i++)
             {
@@ -458,6 +470,7 @@ namespace TerraBlind
                 }
                 bool recentAttacker = age >= 0 && age <= 300 && attacker?["npc_index"]?.GetValue<int>() == i
                     && attacker?["npc_type"]?.GetValue<int>() == npc.type;
+                if (attackerOnly && !recentAttacker) continue;
                 int slot = CombatLoadout.Select(p, npc, allowPickaxeFallback: true,
                     allowAlternative: idle && recentAttacker && age <= 60 && attacker?["via"]?.ToString() == "contact");
                 if (slot < 0) continue;

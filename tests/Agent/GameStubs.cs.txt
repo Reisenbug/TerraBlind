@@ -221,6 +221,8 @@ namespace Terraria
         public bool active = true, dead, suffocating, gills, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
         public bool HasAmmunition = true;
         public bool noFallDmg;
+        public bool lavaImmune;
+        public int lavaTime;
         public bool waterWalk, waterWalk2, slowFall, gravControl, gravControl2;
         public int breath = 200, breathMax = 200;
         public bool wet, honeyWet, lavaWet, ignoreWater;
@@ -379,6 +381,8 @@ namespace Terraria
     {
         public static bool up, down;
         public static bool LavaCollision(Microsoft.Xna.Framework.Vector2 position, int width, int height) => false;
+        public static bool LavaCollision(System.Numerics.Vector2 position, int width, int height)
+            => LavaCollision(new Microsoft.Xna.Framework.Vector2(position.X, position.Y), width, height);
         public static bool CanTileHurt(int type, int x, int y, Player player) => true;
         public struct HurtTile { public int type; }
         public static Func<Microsoft.Xna.Framework.Vector2, int, int, Player, bool> HurtTest;
