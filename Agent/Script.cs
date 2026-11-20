@@ -706,15 +706,18 @@ public static class AgentScript
                     budget.Token.ThrowIfCancellationRequested();
                     int count = reactions.Handling ? ++handlerSkillCalls : ++mainSkillCalls;
                     if (count > 64) throw hostFailure = new InvalidOperationException($"单次脚本或事件的技能调用为{count}次，上限64次。");
-                    if (input.Length > 8000) throw hostFailure = new InvalidOperationException($"技能input为{input.Length}字符，上限8000字符。");
+                    if (input.Length > (reactions.Handling ? 32000 : 8000))
+                        throw hostFailure = new InvalidOperationException($"技能input为{input.Length}字符，上限{(reactions.Handling ? 32000 : 8000)}字符。");
                     if (skillCalls.Count >= 64 && skillCalls.All(call => call["status"]?.ToString() != "running")) skillCalls.Clear();
                     var saved = skills[name];
                     string executedCode = revision == saved["revision"].GetValue<int>() ? saved["code"].ToString() : saved["builtin_code"].ToString();
-                    skillCalls.Add(new JsonObject { ["name"] = name, ["revision"] = revision,
+                    var record = new JsonObject { ["name"] = name, ["revision"] = revision,
                         ["source_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
                             System.Text.Encoding.UTF8.GetBytes(executedCode))),
-                        ["input"] = JsonNode.Parse(input), ["key"] = key, ["status"] = "running",
-                        ["started_ms"] = clock.ElapsedMilliseconds, ["tool_calls_before"] = calls });
+                        ["key"] = key, ["status"] = "running", ["started_ms"] = clock.ElapsedMilliseconds, ["tool_calls_before"] = calls };
+                    if (input.Length <= 8000) record["input"] = JsonNode.Parse(input);
+                    else record["input_omitted_chars"] = input.Length;
+                    skillCalls.Add(record);
                     return skillCalls.Count - 1;
                 }));
                 engine.SetValue("__skillExit", new Action<int, string>((index, outcome) =>

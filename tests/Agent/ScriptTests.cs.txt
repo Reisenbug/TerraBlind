@@ -2991,6 +2991,22 @@ static class ScriptTests
             (_, _, _) => Task.FromResult("{}"), _ => Task.CompletedTask, default,
             programs: new JsonArray(ScriptLibrary.Example("travel_maneuver")));
         Check(!oversized["ok"].GetValue<bool>() && oversized["detail"].ToString().Contains("8003"), "skill input rejection lost the measured size");
+        var observe = new JsonObject { ["name"] = "observe_combat_input", ["revision"] = 0,
+            ["code"] = "return {handled:input.raw.length===9723};" };
+        var largeReaction = await AgentScript.Run("""
+            on('tick',()=>skill('observe_combat_input',0,{raw:'x'.repeat(9723)}));
+            return tool('nav_to',{x:50,y:20});
+            """, 5, (_, _) => { }, async (name, args, token) =>
+        {
+            Check(name == "nav_to", "unexpected action during combat input observation");
+            var reaction = await AgentScript.CurrentReactions.Value.Dispatch(new JsonObject { ["kind"] = "tick" }, token);
+            Check(reaction["handled"].GetValue<bool>(), "reaction did not receive the full observation");
+            return "{\"done\":true}";
+        }, _ => throw new Exception("large observation stopped navigation"), default, programs: new JsonArray(observe));
+        var inputRecord = largeReaction["skill_calls"]?.AsArray().Single();
+        Check(largeReaction["ok"].GetValue<bool>() && largeReaction["value"]?["done"]?.GetValue<bool>() == true
+            && inputRecord?["input"] == null && inputRecord?["input_omitted_chars"]?.GetValue<int>() > 9723,
+            "large scoped reaction input was copied into the report or interrupted navigation: " + largeReaction);
         Console.WriteLine("PASS: large combat observations stay outside nested skill arguments; oversize errors report actual characters");
     }
 
