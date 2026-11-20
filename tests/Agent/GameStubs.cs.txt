@@ -487,6 +487,7 @@ namespace Terraria.ModLoader
     }
     public static class ItemLoader
     {
+        public static bool CanChooseAmmo(Terraria.Item weapon, Terraria.Item ammo, Terraria.Player player) => weapon.useAmmo == ammo.ammo;
         public static int ItemCount = 6000;
         public static Func<Terraria.Item, bool> RightClickTest;
         public static bool CanRightClick(Terraria.Item item) => RightClickTest?.Invoke(item) == true;

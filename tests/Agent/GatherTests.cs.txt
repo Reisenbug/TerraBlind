@@ -330,7 +330,8 @@ static class GatherTests
         var p = Main.LocalPlayer;
         var inventory = p.inventory; var npcs = Main.npc; var damage = AgentTools.LastDamage;
         var position = p.position; var tick = Main.GameUpdateCount;
-        int preferred = CombatLoadout.PreferredType, selected = p.selectedItem;
+        int preferred = CombatLoadout.PreferredType, selected = p.selectedItem, backup = CombatLoadout.AmmoFallbackType;
+        bool previousAmmo = p.HasAmmunition;
         bool manual = Manual.On, dodge = AgentPermissions.Dodge;
         bool hadSample = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(77, out var sample);
         bool hadPassing = Terraria.ID.ContentSamples.ProjectilesByType.TryGetValue(78, out var passing);
@@ -348,6 +349,21 @@ static class GatherTests
             p.inventory[0] = new Item { type = 50, stack = 1, damage = 100, width = 30, height = 30 };
             p.inventory[1] = new Item { type = 51, stack = 1, damage = 20, shoot = 77 };
             p.inventory[2] = new Item { type = 52, stack = 1, damage = 15, shoot = 78 };
+            p.inventory[1].useAmmo = 2;
+            p.inventory[23] = new Item { type = 53, stack = 14, ammo = 2, consumable = true };
+            p.inventory[56] = new Item { type = 54, stack = 6, ammo = 2, consumable = true };
+            CombatLoadout.PreferredType = 51;
+            CombatLoadout.AmmoFallbackType = 52;
+            p.HasAmmunition = true;
+            Check(CombatLoadout.AmmoSupply(p)["units"].GetValue<int>() == 20 && CombatLoadout.Select(p) == 1,
+                "ammo supply missed carried stacks or switched weapons before exhaustion");
+            p.inventory[23].TurnToAir(); p.inventory[56].TurnToAir(); p.HasAmmunition = false;
+            Check(CombatLoadout.AmmoSupply(p)["units"].GetValue<int>() == 0 && CombatLoadout.Select(p) == 2,
+                "the permitted backup was not used at exhaustion");
+            p.inventory[56] = new Item { type = 54, stack = 40, ammo = 2, consumable = true }; p.HasAmmunition = true;
+            Check(CombatLoadout.Select(p) == 1, "restocking did not restore the primary weapon");
+            p.inventory[56].TurnToAir(); p.inventory[1].useAmmo = 0;
+            CombatLoadout.PreferredType = CombatLoadout.AmmoFallbackType = 0;
             Terraria.ID.ContentSamples.ProjectilesByType[77] = new Projectile { tileCollide = true };
             Terraria.ID.ContentSamples.ProjectilesByType[78] = new Projectile { tileCollide = false };
             var target = new NPC { type = 42, active = true, position = new(360, 160) };
@@ -459,7 +475,8 @@ static class GatherTests
         {
             FightCoordinator.Stop(); p.inventory = inventory; Main.npc = npcs; AgentTools.LastDamage = damage;
             p.position = position; p.selectedItem = selected; Main.GameUpdateCount = tick;
-            CombatLoadout.PreferredType = preferred; Manual.On = manual; AgentPermissions.Dodge = dodge;
+            CombatLoadout.PreferredType = preferred; CombatLoadout.AmmoFallbackType = backup;
+            p.HasAmmunition = previousAmmo; Manual.On = manual; AgentPermissions.Dodge = dodge;
             Collision.LineTest = null;
             if (hadSample) Terraria.ID.ContentSamples.ProjectilesByType[77] = sample;
             else Terraria.ID.ContentSamples.ProjectilesByType.Remove(77);

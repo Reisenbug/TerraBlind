@@ -36,6 +36,16 @@ static class WatchTests
         alarm.Observe(new JsonObject { ["lava_protection_warning"] = NativeAgent.LavaProtectionWarning(lavaPlayer) });
         Check(!alarm.HasPending, "leaving the hazard did not clear the old warning");
 
+        JsonObject Stock(int units) => new() { ["ammo_supply"] = new JsonObject { ["weapon_type"] = 51, ["units"] = units } };
+        alarm.Observe(Stock(20)); alarm.Observe(Stock(19));
+        Check(alarm.PendingCount == 1 && alarm.HasAdvisories && !alarm.HasInterrupting,
+            "low ammo was not notified once without interrupting the action");
+        alarm.Observe(Stock(0));
+        Check(alarm.PendingCount == 1 && alarm.Pending()["events"][0]["evidence"]["units"].GetValue<int>() == 0,
+            "empty ammunition retained stale stock evidence");
+        alarm.Observe(Stock(100));
+        Check(!alarm.HasPending, "restocked ammunition retained an old warning");
+
         var healthWatch = new AgentWatch();
         healthWatch.EnsureDefaults();
         foreach (int hp in new[] { 100, 80, 30 })

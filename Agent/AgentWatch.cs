@@ -91,6 +91,7 @@ public sealed class AgentWatch
     long? honeySince;
     bool configured;
     string currentChestTarget;
+    string ammoBand;
     JsonObject lastObservation;
     JsonObject itemCounts;
     public int Radius { get => Math.Max(radius, policyRadius); private set => radius = value; }
@@ -126,6 +127,7 @@ public sealed class AgentWatch
         && e["kind"]?.ToString() != "inventory_full"
         && e["kind"]?.ToString() != "tactical_review"
         && e["kind"]?.ToString() != "boss_warning"
+        && e["kind"]?.ToString() != "ammo_low"
         && e["kind"]?.ToString() is not ("action_finished" or "target_acquired")
         && !(e["kind"]?.ToString() == "nearby_chest" && e["key"]?.ToString() == currentChestTarget)
         && !passive.Contains(e["kind"]?.ToString());
@@ -143,10 +145,12 @@ public sealed class AgentWatch
         passive.Add("invasion_started");
         passive.Add("boss_warning");
         passive.Add("lava_protection_expiring");
+        passive.Add("ammo_low");
         events.UnionWith(new[] { "action_finished", "target_acquired", "low_health", "suffocating", "player_died", "boss_appeared", "inventory_full", "honey_slowdown" });
         events.Add("invasion_started");
         events.Add("boss_warning");
         events.Add("lava_protection_expiring");
+        events.Add("ammo_low");
         if (!configured)
         {
             events.Add("nearby_chest");
@@ -309,6 +313,23 @@ public sealed class AgentWatch
         }
         if (state["inventory_full"]?.GetValue<bool>() == true) Emit("inventory_full", "task", state);
         else if (state["inventory_full"]?.GetValue<bool>() == false) seen.Remove("inventory_full:task");
+        if (state.ContainsKey("ammo_supply"))
+        {
+            var supply = state["ammo_supply"] as JsonObject;
+            int units = supply?["units"]?.GetValue<int>() ?? int.MaxValue;
+            string band = units <= 20 ? supply["weapon_type"] + (units == 0 ? ":empty" : ":low") : null;
+            if (band != ammoBand)
+            {
+                ammoBand = band;
+                int count = pending.Count;
+                for (int i = 0; i < count; i++)
+                {
+                    var notice = pending.Dequeue();
+                    if (notice["kind"]?.ToString() != "ammo_low") pending.Enqueue(notice);
+                }
+                if (band != null) Emit("ammo_low", band + ":" + samples, supply);
+            }
+        }
         if (state["lava_protection_warning"] is JsonObject lava) Emit("lava_protection_expiring", "obsidian_skin", lava);
         else if (state.ContainsKey("lava_protection_warning") && seen.Remove("lava_protection_expiring:obsidian_skin"))
         {
@@ -424,7 +445,7 @@ public sealed class AgentWatch
         }
         return result;
     }
-    static int ReviewPriority(JsonObject item) => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "boss_appeared" or "boss_warning" or "decision_point" or "execution_gap" or "honey_slowdown" or "lava_protection_expiring"
+    static int ReviewPriority(JsonObject item) => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "boss_appeared" or "boss_warning" or "decision_point" or "execution_gap" or "honey_slowdown" or "lava_protection_expiring" or "ammo_low"
         || item["kind"]?.ToString() == "action_finished" && item["evidence"]?["status"]?.ToString() == "failed" ? 0 : 1;
 
     public JsonObject Pending(bool recoveryOnly = false)
@@ -467,7 +488,7 @@ public sealed class AgentWatch
             if (dx * dx + dy * dy > Radius * Radius) return false;
         }
         return !advised.Contains(item["id"].GetValue<int>())
-            && (kind is "nearby_chest" or "nearby_tile" or "nearby_drop" or "honey_slowdown" or "inventory_full" or "tactical_review" or "boss_warning" or "lava_protection_expiring"
+            && (kind is "nearby_chest" or "nearby_tile" or "nearby_drop" or "honey_slowdown" or "inventory_full" or "tactical_review" or "boss_warning" or "lava_protection_expiring" or "ammo_low"
                 || item["wake_deferred"]?.GetValue<bool>() != true
                     && (kind == "target_acquired" && (!passive.Contains(kind) || background.Contains(kind))
                         || kind == "action_finished" && item["evidence"]?["status"]?.ToString() == "failed"));
@@ -585,6 +606,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { SetPolicyWatch(null); events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); background.Clear(); advised.Clear(); verifiedCompletions.Clear(); continuedAttempts.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); scriptHandlers.Clear(); issued = wakeCount = samples = 0; nextOpportunityReview = 0; configured = LocalDelivery = LootChestsInReach = DefaultRouteLoot = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; honeySince = null; }
+    { SetPolicyWatch(null); events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); background.Clear(); advised.Clear(); verifiedCompletions.Clear(); continuedAttempts.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); scriptHandlers.Clear(); issued = wakeCount = samples = 0; nextOpportunityReview = 0; configured = LocalDelivery = LootChestsInReach = DefaultRouteLoot = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = ammoBand = null; navigation = null; honeySince = null; }
     public void End() { events.Clear(); pending.Clear(); scriptHandlers.Clear(); SetPolicyWatch(null); LootChestsInReach = false; }
 }

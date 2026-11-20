@@ -351,6 +351,7 @@ public static partial class AgentTools
     sealed record PreparedFollowup(string ActionKey, string Node, string Revision, string Code);
     static PreparedFollowup preparedFollowup;
     static (string Attempt, bool CleanHandoff) lastInlineHandoff;
+    static ulong nextIdleNodeScan;
     static readonly HashSet<(int, int)> routeChests = new();
     static readonly Dictionary<(int, int), long> routeChestRetries = new();
     static bool routeLootEnabled;
@@ -601,7 +602,7 @@ public static partial class AgentTools
             if (!Watches.HasInterrupting) Watches.ExecutionFault(ExecutionContinuity);
         }
     }
-    internal static void ContinuePreparedNode(CancellationToken token)
+    internal static void ContinuePreparedNode(CancellationToken token, bool startReadyWhileIdle = false)
     {
         if (token.IsCancellationRequested || !continuation.IsCompleted || Actions.HasPrimaryControl || ControlSession.PrimaryActive || Volatile.Read(ref actionScripts) > 0
             || !Plan.RequiresNodeExecution || Main.LocalPlayer.dead || ContactEscapeActive) return;
@@ -612,7 +613,11 @@ public static partial class AgentTools
             string ready = pendingNode;
             if (Plan.NeedsPreparation(ready, AgentTaskEvidence.Measure))
                 ready = NextPreparedNode(pendingPlan, allowPreparation: false);
-            if (ready == null) return;
+            if (ready == null)
+            {
+                if (startReadyWhileIdle) StartUntriedReadyNode(token);
+                return;
+            }
             pendingNode = null;
             if (pendingPlan["ready_steps"].AsArray().Any(n => n?.ToString() == ready))
                 StartPreparedNode(ready, LastContinuation?["after_handle"]?.ToString(), token);
@@ -623,7 +628,11 @@ public static partial class AgentTools
         string execution = ActionAttempt(action);
         string attempt = execution + ":" + Plan.ExecutionRevision(owner);
         bool followupArrived = preparedFollowup is { } staged && staged.ActionKey == FollowupKey(action) && staged.Node == owner;
-        if (handle == null || string.IsNullOrEmpty(owner) || !followupArrived && continuedActions.Contains(attempt)) return;
+        if (handle == null || string.IsNullOrEmpty(owner) || !followupArrived && continuedActions.Contains(attempt))
+        {
+            if (startReadyWhileIdle) StartUntriedReadyNode(token);
+            return;
+        }
         var plan = Plan.Snapshot();
         var previous = plan["steps"].AsArray().FirstOrDefault(s => s["id"]?.ToString() == owner);
         if (previous == null) return;
@@ -689,6 +698,29 @@ public static partial class AgentTools
         StartPreparedNode(next, handle, token);
     }
 
+    static void StartUntriedReadyNode(CancellationToken token)
+    {
+        if (Main.GameUpdateCount < nextIdleNodeScan || Manual.On || Main.LocalPlayer.suffocating
+            || Volatile.Read(ref pendingPrimaryActions) > 0 || Watches.HasRecoveryBlocker) return;
+        nextIdleNodeScan = Main.GameUpdateCount + 15;
+        var plan = Plan.Snapshot();
+        var ready = plan["ready_steps"].AsArray().Select(id => id.ToString()).ToHashSet();
+        var actions = Actions.CurrentNodeWork();
+        if (actions.Paused) return;
+        foreach (var step in plan["steps"].AsArray())
+        {
+            string id = step["id"].ToString(), workflowId = step["workflow"].ToString();
+            if (!ready.Contains(id) || Plan.NeedsPreparation(id, AgentTaskEvidence.Measure)
+                || actions.Started.Contains(id) || Workflows.ContainsKey(workflowId)
+                || !AgentScript.ContainsInput(step["script"].ToString())
+                || !continuedActions.Add("idle:" + id + ":" + StepVersion(step))) continue;
+
+            DiagLog.Write($"[dag-ready-dispatch] node={id} revision={Plan.ExecutionRevision(id)}");
+            StartPreparedNode(id, null, token, background: true);
+            return;
+        }
+    }
+
     static bool FollowupCanRun(JsonObject action, ScriptProgress workflow)
     {
         if (workflow?.Snapshot()["steps"].AsArray().Any(s => s["status"]?.ToString() == "uncertain") == true) return false;
@@ -739,7 +771,8 @@ public static partial class AgentTools
         return next == node ? null : next;
     }
 
-    static void StartPreparedNode(string next, string handle, CancellationToken token, string recovery = null, bool followup = false)
+    static void StartPreparedNode(string next, string handle, CancellationToken token, string recovery = null,
+        bool followup = false, bool background = false)
     {
         LastContinuation = new JsonObject { ["after_handle"] = handle, ["task_node"] = next,
             ["status"] = "starting", ["tick"] = Main.GameUpdateCount };
@@ -753,7 +786,7 @@ public static partial class AgentTools
             try
             {
                 var args = new JsonObject { ["task_node"] = next };
-                if (followup) args["background"] = true;
+                if (followup || background) args["background"] = true;
                 JsonObject failedAction = null;
                 if (recovery != null)
                 {
@@ -1054,6 +1087,7 @@ public static partial class AgentTools
         recoveredActions.Clear(); deferredNodes.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null;
         preparedFollowup = null;
         lastInlineHandoff = default;
+        nextIdleNodeScan = 0;
         inventoryPreparationNotified = false; LastContinuation = ExecutionContinuity = LastRouteLoot = null;
         routeChests.Clear(); routeChestRetries.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset();
         Watches.DefaultRouteLoot = allowPassingChestLoot;
@@ -1554,6 +1588,7 @@ public static partial class AgentTools
         state["control_overrides"] = Control.Snapshot();
         state["control_execution"] = ControlSession.Snapshot();
         state["idle_defense_active"] = FightCoordinator.IsIdleDefending;
+        state["ammo_supply"] = CombatLoadout.AmmoSupply(Main.LocalPlayer);
         state["watch"] = includeWatchHistory ? Watches.Snapshot() : Watches.Summary();
         state["task_policy"] = TaskPolicyStatus();
         state["recovery"] = Recovery.Snapshot();
@@ -2993,19 +3028,25 @@ public static partial class AgentTools
                     double? reserve = args["movement_reserve_scale"]?.GetValue<double>();
                     if (reserve is double scale && (!double.IsFinite(scale) || scale < .05 || scale > 1))
                         return new JsonObject { ["error"] = "movement_reserve_scale_needs_0_05_to_1" };
-                    if (args["weapon_type"] != null)
+                    if (args["weapon_type"] != null || args["ammo_fallback_type"] != null)
                     {
-                        int weaponType = Int(args, "weapon_type");
-                        if (weaponType < 0 || weaponType > 0 && !Main.LocalPlayer.inventory.Take(50).Any(item =>
-                            item.type == weaponType && CombatLoadout.Usable(item)))
-                            return new JsonObject { ["error"] = "weapon_type_must_be_usable_in_inventory" };
-                        var weapon = weaponType > 0 ? Main.LocalPlayer.inventory.Take(50).First(item =>
+                        var player = Main.LocalPlayer;
+                        int weaponType = Int(args, "weapon_type", CombatLoadout.PreferredType);
+                        int fallbackType = Int(args, "ammo_fallback_type", weaponType == CombatLoadout.PreferredType ? CombatLoadout.AmmoFallbackType : 0);
+                        var weapon = weaponType > 0 ? player.inventory.Take(50).FirstOrDefault(item =>
                             item.type == weaponType && CombatLoadout.Usable(item)) : null;
-                        if (weapon != null && weapon.useAmmo > 0 && !Main.LocalPlayer.HasAmmo(weapon))
+                        if (weaponType < 0 || args["weapon_type"] != null && weaponType > 0 && weapon == null)
+                            return new JsonObject { ["error"] = "weapon_type_must_be_usable_in_inventory" };
+                        if (args["ammo_fallback_type"] != null && (fallbackType < 0 || fallbackType > 0
+                            && (weaponType == 0 || fallbackType == weaponType || !player.inventory.Take(50)
+                                .Any(item => item.type == fallbackType && CombatLoadout.CanUse(player, item)))))
+                            return new JsonObject { ["error"] = "ammo_fallback_must_be_an_available_backup" };
+                        if (weapon != null && weapon.useAmmo > 0 && !player.HasAmmo(weapon) && fallbackType == 0)
                             return new JsonObject { ["error"] = "weapon_missing_ammo", ["requested_weapon_type"] = weaponType,
                                 ["use_ammo"] = weapon.useAmmo, ["weapon_type"] = CombatLoadout.PreferredType,
                                 ["detail"] = "未修改战斗设置；补充匹配弹药或选择当前可用武器。" };
                         CombatLoadout.PreferredType = weaponType;
+                        CombatLoadout.AmmoFallbackType = fallbackType;
                     }
                     if (args["boss_control"] != null)
                     {
@@ -3030,6 +3071,7 @@ public static partial class AgentTools
                         ["frame_program"] = FrameProgram.Snapshot(),
                         ["movement_intent"] = FeedbackControl.Snapshot(),
                         ["weapon_type"] = CombatLoadout.PreferredType,
+                        ["ammo_fallback_type"] = CombatLoadout.AmmoFallbackType,
                         ["boss_control"] = BossStatus(fresh: true) };
                 }, token);
                 break;

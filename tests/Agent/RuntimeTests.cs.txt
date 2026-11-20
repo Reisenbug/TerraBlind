@@ -721,6 +721,55 @@ static class RuntimeTests
             }
         }
         Console.WriteLine("PASS: pending read-only scripts do not delay prepared actions; action-capable scripts retain their boundary");
+        await IdleReadyNodeHandoff();
+    }
+
+    static async Task IdleReadyNodeHandoff()
+    {
+        AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset();
+        var handler = HttpServerSystem.Handler;
+        var workflows = AgentTools.Workflows.Keys.ToHashSet();
+        var visited = new System.Collections.Generic.List<int>();
+        var gameTick = Game.GameUpdateCount;
+        try
+        {
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"continue two independent jobs","mode":"dag","steps":[
+                  {"id":"first","description":"first route","depends_on":[],
+                   "script":"tool('nav_to',{x:12,y:34});return {status:'yield',next:'review site'};",
+                   "conditions":[{"kind":"item","type":191,"count":9999}]},
+                  {"id":"dependent","description":"after first","depends_on":["first"],
+                   "script":"return tool('nav_to',{x:14,y:34});",
+                   "conditions":[{"kind":"item","type":191,"count":9999}]},
+                  {"id":"independent","description":"independent route","depends_on":[],
+                   "script":"return tool('nav_to',{x:16,y:34});",
+                   "conditions":[{"kind":"item","type":191,"count":9999}]}]}
+                """).AsObject(), _ => 0);
+            HttpServerSystem.Handler = (path, body) =>
+            {
+                if (path == "/nav_recede") visited.Add(JsonNode.Parse(body)["gx"].GetValue<int>());
+                return (200, path == "/nav_recede_done" ? "{\"done\":true}" : "{\"accepted\":true}");
+            };
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            await PumpUntil(() =>
+            {
+                Game.GameUpdateCount++;
+                AgentTools.ContinuePreparedNode(default, startReadyWhileIdle: true);
+                return visited.Count >= 2;
+            });
+            Check(visited.SequenceEqual(new[] { 12, 16 }) && timer.ElapsedMilliseconds < 2000,
+                "host idled, restarted the same route, or ran dependent work before verification: " + string.Join(",", visited));
+            Console.WriteLine($"READY_NODE_HANDOFF starts={visited.Count} elapsed_ms={timer.ElapsedMilliseconds} model_calls=0");
+        }
+        finally
+        {
+            AgentTools.Stop();
+            await PumpUntil(() => !AgentTools.Actions.HasActive && AgentTools.Workflows.Where(w => !workflows.Contains(w.Key)).All(w => !w.Value.Running));
+            AgentTools.Actions.Reset(); AgentTools.Plan.Reset();
+            foreach (string id in AgentTools.Workflows.Keys.Where(id => !workflows.Contains(id)).ToArray()) AgentTools.Workflows.Remove(id);
+            Game.GameUpdateCount = gameTick;
+            HttpServerSystem.Handler = handler;
+        }
     }
 
     static async Task TestPlacementReaction()

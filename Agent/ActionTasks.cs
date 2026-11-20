@@ -103,6 +103,16 @@ public sealed class ActionTasks
         }
     }
 
+    internal (HashSet<string> Started, bool Paused) CurrentNodeWork()
+    {
+        lock (gate)
+        {
+            var primary = entries.Values.Where(e => e.TaskSerial == taskSerial && e.Tool != "fight").ToArray();
+            return (primary.Select(e => e.Node).OfType<string>().ToHashSet(),
+                primary.Any(e => e.Status is "paused" or "pausing"));
+        }
+    }
+
     internal static bool Supports(string tool) => tool is "gather" or "nav_to" or "fight"
         or "mine_vein" or "chop_wood" or "collect_treasure" or "run_script";
 

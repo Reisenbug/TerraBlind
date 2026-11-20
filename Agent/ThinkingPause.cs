@@ -18,6 +18,7 @@ public sealed class ThinkingPause : ModSystem
     static readonly JsonArray history = new();
     static Vector2 previousPosition;
     static int uncoveredFrames, uncoveredRun, longestUncoveredRun;
+    static int decisionFrames, decisionIdleFrames, decisionIdleRun, longestDecisionIdleRun;
     static long stationarySince;
     static bool stationaryLogged;
     static string stationaryReason;
@@ -52,6 +53,7 @@ public sealed class ThinkingPause : ModSystem
         reason = null; manualSwitch = false; dragonLensWasPaused = false;
         history.Clear(); started = Stopwatch.GetTimestamp();
         uncoveredFrames = uncoveredRun = longestUncoveredRun = 0;
+        decisionFrames = decisionIdleFrames = decisionIdleRun = longestDecisionIdleRun = 0;
         stationarySince = 0;
         stationaryLogged = false;
         stationaryReason = null;
@@ -125,6 +127,16 @@ public sealed class ThinkingPause : ModSystem
         if (AgentTools.WorldFramesRequired > 0) AgentTools.WorldFramesRequired--;
         var player = Main.LocalPlayer;
         bool stationary = positionKnown && Vector2.DistanceSquared(previousPosition, player.position) <= .0025f;
+        bool deciding = NativeAgent.AwaitingDecision && !Main.gameMenu && player.active && !player.dead && !Manual.On;
+        if (deciding) decisionFrames++;
+        bool decisionMoving = positionKnown && !stationary && (RecedingNav.Active || ActExecutor.IsActive
+            || AgentTools.ControlSession.PrimaryActive || StateSpacePlanner.IsActive || FrameProgram.Active || AgentTools.ContactEscapeActive);
+        bool decisionIdle = deciding && !decisionMoving && player.itemAnimation == 0 && player.itemTime == 0;
+        decisionIdleRun = decisionIdle ? decisionIdleRun + 1 : 0;
+        if (decisionIdle) decisionIdleFrames++;
+        longestDecisionIdleRun = Math.Max(longestDecisionIdleRun, decisionIdleRun);
+        if (decisionIdleRun == 120)
+            DiagLog.Write($"[agent_decision_idle] tick={Main.GameUpdateCount} frames={decisionIdleRun} status={NativeAgent.Status} continuity={AgentTools.ExecutionContinuity?["reason"]}");
         bool uncovered = !Main.gameMenu && !Manual.On && !player.dead
             && (NativeAgent.WorkPending || AgentTools.Actions.HasActive || AgentTools.ControlSession.Active)
             && stationary && player.itemAnimation == 0 && player.itemTime == 0 && player.reuseDelay == 0
@@ -224,6 +236,8 @@ public sealed class ThinkingPause : ModSystem
         ["elapsed_ms"] = started == 0 ? 0 : Stopwatch.GetElapsedTime(started).TotalMilliseconds,
         ["frozen_ms"] = FrozenDuration.TotalMilliseconds, ["world_frames"] = worldFrames,
         ["uncovered_stationary_frames"] = uncoveredFrames, ["longest_uncovered_run_frames"] = longestUncoveredRun,
+        ["decision_frames"] = decisionFrames, ["decision_idle_frames"] = decisionIdleFrames,
+        ["longest_decision_idle_run_frames"] = longestDecisionIdleRun,
         ["transitions"] = transitions, ["recent"] = history.DeepClone()
     };
 

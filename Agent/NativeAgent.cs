@@ -69,6 +69,7 @@ public class NativeAgent : ModSystem
     internal static bool Processing => _instance?._running?.IsCompleted == false
         && _instance._cancel?.IsCancellationRequested == false && _instance._answer == null;
     internal static bool WorkPending => _instance?._pending != null || Processing;
+    internal static bool AwaitingDecision => Processing && status is "waiting for model" or "waiting for decision" or "continuing goal";
     internal static Func<TimeSpan> FrozenTime = () => TimeSpan.Zero;
     internal static int WorldWaiters;
     internal static JsonArray ObserveTiles(Player player)
@@ -581,7 +582,8 @@ public class NativeAgent : ModSystem
             && Status is not ("needs_repair" or "budgetLimited" or "failed");
         if (!Main.gameMenu && runtimeActive)
         {
-            AgentTools.ContinuePreparedNode(_cancel.Token);
+            AgentTools.ContinuePreparedNode(_cancel.Token,
+                startReadyWhileIdle: GoalState?["native"]?["status"]?.ToString() == "active");
             AgentTools.ObserveContinuity();
             if (worldAdvanced)
             {
@@ -606,6 +608,7 @@ public class NativeAgent : ModSystem
                 ["invasion"] = AgentTools.InvasionStatus(targets: false),
                 ["upcoming_boss"] = UpcomingBoss(p),
                 ["lava_protection_warning"] = LavaProtectionWarning(p),
+                ["ammo_supply"] = !p.dead && AgentPermissions.CanAttack(delegated: true) ? CombatLoadout.AmmoSupply(p) : null,
                 ["tick"] = (long)Main.GameUpdateCount, ["honey_slowed"] = p.honeyWet && !p.ignoreWater,
                 ["last_damage"] = AgentTools.LastDamage?.DeepClone(), ["last_death"] = AgentTools.LastDeath?.DeepClone(),
                 ["item_counts"] = new JsonObject(p.inventory.Where(item => !item.IsAir).GroupBy(item => item.type)
@@ -626,7 +629,7 @@ public class NativeAgent : ModSystem
             {
                 var danger = AgentTools.Watches.Pending()["events"].AsArray().LastOrDefault(e =>
                     e["id"].GetValue<int>() > _lastDangerNotice
-                    && (e["kind"].ToString() is "low_health" or "honey_slowdown" or "invasion_started" or "lava_protection_expiring" || !AgentTools.Watches.LocalDelivery
+                    && (e["kind"].ToString() is "low_health" or "honey_slowdown" or "invasion_started" or "lava_protection_expiring" or "ammo_low" || !AgentTools.Watches.LocalDelivery
                         && e["kind"].ToString() is "suffocating" or "player_died" or "boss_appeared"));
                 if (danger != null)
                 {
@@ -637,12 +640,15 @@ public class NativeAgent : ModSystem
                         ["last_damage"] = AgentTools.LastDamage?.DeepClone() };
                     bool bossAppeared = danger["kind"].ToString() == "boss_appeared";
                     bool lavaExpiring = danger["kind"].ToString() == "lava_protection_expiring";
+                    bool ammoLow = danger["kind"].ToString() == "ammo_low";
                     if (bossAppeared) observation["boss"] = danger["evidence"]?.DeepClone();
                     if (lavaExpiring) observation["lava_protection"] = danger["evidence"]?.DeepClone();
+                    if (ammoLow) observation["ammo_supply"] = danger["evidence"]?.DeepClone();
                     if (danger["kind"].ToString() == "honey_slowdown") observation["honey_slowed"] = true;
                     string instruction = bossAppeared
                         ? "宿主观察到附近Boss，原目标及进度保留。依据任务、战斗许可与现场，决定交接战斗、调整路线或继续当前行动。调整前核对当前动作句柄。现场："
                         : lavaExpiring ? "Obsidian Skin is expiring near lava. Reach dry footing or renew protection before it expires. Keep the goal and verified progress. Live evidence: "
+                        : ammoLow ? "Compatible ammunition is low. Keep the current action running. Prepare a craft or purchase with verified inputs and a reachable station or merchant, or use an approved backup. Live evidence: "
                         : "宿主实时危险观察，原目标和进度保留。低血量仅通知，当前动作继续；不得单凭低血量暂停、取消、原地回血或等待审阅。仅任务明确约束死亡时按该约束处理。请在行动期间调整后续方案：";
                     _dangerDelivery = _codex.Steer(instruction + observation.ToJsonString(AgentTools.ModelJson), _cancel.Token);
                 }
@@ -1013,6 +1019,7 @@ public class NativeAgent : ModSystem
         AgentTools.LastDamage = AgentTools.LastDeath = AgentTools.LastContactEscape = AgentTools.LastAutomaticHeal = null;
         AgentTools.ContactEscapeActive = false;
         CombatLoadout.PreferredType = 0;
+        CombatLoadout.AmmoFallbackType = 0;
         AgentTaskEvidence.Reset();
         PlayerCombat.Stop();
         PvpDuel.Stop();
