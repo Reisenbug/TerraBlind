@@ -85,6 +85,27 @@ static class RuntimeTests
                     return Task.FromResult("{\"outcome\":\"done\"}");
                 }, _ => Task.CompletedTask, default);
             Check(expanded["value"]?["ok"]?.GetValue<bool>() == true && buildCalls == 1, "multi-room construction was not verified in one call");
+            var supplyCalls = new System.Collections.Generic.List<string>();
+            var relit = await AgentScript.Run("const input={rooms:4};\n" + ScriptLibrary.Example("ensure_town_housing")["code"],
+                5, (_, _) => { }, (name, args, _) =>
+                {
+                    supplyCalls.Add(name);
+                    return Task.FromResult(name switch
+                    {
+                        "housing" => (supplyCalls.Count(n => n == "build_house") == 2 ? list : singleReport).ToJsonString(),
+                        "house_site" => "{\"found\":true,\"build_args\":{\"rooms\":4}}",
+                        "build_house" when supplyCalls.Count(n => n == name) == 1 => "{\"accepted\":false,\"reason\":\"missing_torches: have 0, need 4\"}",
+                        "build_house" => "{\"outcome\":\"done\"}",
+                        "recipe" => "{\"recipes\":[{\"amount\":3,\"ingredients\":[{\"type\":23,\"need\":1},{\"type\":9,\"need\":1,\"have\":100}],\"stations\":[]}]}",
+                        "npc_drop_sources" => "{\"sources\":[{\"npc_type\":1}]}",
+                        "gather" when args["targets"][0]["count"].GetValue<int>() == 2
+                            && args["targets"][0]["npc_types"][0].GetValue<int>() == 1 => "{\"outcome\":\"enough\"}",
+                        _ => throw new Exception("unexpected supply recovery " + name + ": " + args)
+                    });
+                }, _ => Task.CompletedTask, default);
+            Check(relit["value"]?["ok"]?.GetValue<bool>() == true && supplyCalls.SequenceEqual(new[]
+                { "housing", "house_site", "build_house", "recipe", "npc_drop_sources", "gather", "build_house", "housing" }),
+                "torch shortage interrupted the prepared build instead of gathering its verified ingredient: " + relit);
             Terraria.WorldGen.RoomCheck = (x, _) => x != 100;
             list = await Call("housing", new JsonObject { ["action"] = "list" });
             Check(!list["rooms"][0]["suitable"].GetValue<bool>(), "a damaged room was still reported suitable");

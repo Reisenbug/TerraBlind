@@ -127,11 +127,27 @@ public sealed class ScriptLibrary
               site=tool('house_site',{rooms:building,max_ladder:4,...(anchor?{from_x:anchor.x,from_y:anchor.y}:{})});
             }
             if(!site.found)return {ok:false,outcome:'no_expansion_site',deficit,site};
-            const result=tool('build_house',site.build_args);
+            let result=tool('build_house',site.build_args);
+            const shortage=result.reason?.match(/^missing_torches: have (\d+), need (\d+)/);
+            if(shortage){
+              const recipes=tool('recipe',{name:'Torch'}).recipes??[];
+              const missing=Number(shortage[2])-Number(shortage[1]);
+              const recipe=recipes.find(r=>r.amount>0&&!r.stations?.length&&r.ingredients?.some(ingredient=>ingredient.type===23)
+                &&r.ingredients.every(i=>i.type===23||i.have>=Math.ceil(missing/r.amount)*i.need));
+              if(recipe){
+                const gel=recipe.ingredients.find(ingredient=>ingredient.type===23);
+                const count=Math.ceil(missing/recipe.amount)*gel.need;
+                const sources=tool('npc_drop_sources',{item_type:23,limit:100}).sources??[];
+                const targets=[{item_type:23,count,npc_types:[...new Set(sources.map(source=>source.npc_type))]}];
+                const supplies=tool('gather',{targets});
+                if(supplies.outcome==='enough')result=tool('build_house',site.build_args);
+                else return {ok:false,outcome:'construction_supply_unavailable',item_type:23,supplies};
+              }
+            }
             const after=tool('housing',{action:'list'});
             const verified=local(after).length;
-            return {ok:verified>=requested&&verified-rooms.length>=deficit,outcome:result.outcome,
-              verified_rooms:verified,housing:after};
+            return {ok:verified>=requested&&verified-rooms.length>=deficit,outcome:result.outcome??'build_not_started',
+              reason:result.reason??result.error??null,verified_rooms:verified,housing:after};
             """);
         if (name == "invasion_response") return Template(name,
             "处理原版阵营入侵并按原版剩余数核验。input.defense可给已准备的安全接战位置。Fight observed invasion enemies and verify the remaining wave count.",

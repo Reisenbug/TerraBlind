@@ -402,12 +402,12 @@ public static class AgentScript
     }
 
     public static JsonArray EntryTools(JsonArray tools) => new(tools.Where(t =>
-        t["function"]?["name"]?.ToString() is "run_script" or "get_state" or "say" or "ask" or "game_api" or "terrain_map" or "action_query" or "script_program")
+        t["function"]?["name"]?.ToString() is "run_script" or "task_plan" or "get_state" or "say" or "ask" or "game_api" or "terrain_map" or "action_query" or "script_program")
         .Select(t => t.DeepClone()).ToArray());
 
     public static string Instructions(string system, JsonArray tools) =>
         "单次API用run_script({tool:名称,args:参数})；组合行为提交同步JavaScript，以tool(name,args)读取结果、循环和执行。"
-        + "顶层提供run_script、get_state、say、ask、game_api、terrain_map、action_query、script_program。action_query直接读取动作证据，script_program直接读取或修改技能源码；两者返回完整对象，组合行为时也可在JS内调用。terrain_map可直接返回现场图片。\n"
+        + "顶层可直接提交task_plan。留出可立即执行的首节点，宿主会启动就绪脚本，后续调查与准备可以同时进行。action_query读取动作证据，script_program读取或修改技能源码。terrain_map直接返回现场图片。\n"
         + system
         + RuntimeInstructions
         + "\n可直接调用的内置技能目录。编写节点时复用适用技能；script_program get读取入参、源码和限制，skill(name,0,input)执行。技能可以修改后保存为新版本，效果按现场核验。\n"
