@@ -1079,6 +1079,13 @@ public static partial class AgentTools
                 ["npc"] = npc.whoAmI, ["npc_type"] = npc.type }).ToArray()) };
     }
 
+    internal static int HousingCount(JsonObject condition)
+    {
+        int x = Int(condition, "x"), y = Int(condition, "y"), radius = Int(condition, "radius", 60);
+        return HousingList()["rooms"].AsArray().Count(node => node is JsonObject room && Bool(room, "surface")
+            && Bool(room, "suitable") && Math.Abs(Int(room, "x") - x) <= radius && Math.Abs(Int(room, "y") - y) <= radius);
+    }
+
     internal static JsonObject InvasionStatus(bool targets = true)
     {
         int type = Main.invasionType, remaining = Main.invasionSize;

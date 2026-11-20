@@ -31,6 +31,14 @@ static class RuntimeTests
                 await Call("housing", new JsonObject { ["action"] = "remember", ["x"] = 100 + i * 5, ["y"] = 120 });
             var list = await Call("housing", new JsonObject { ["action"] = "list" });
             Check(list["rooms"].AsArray().Count == 4, "recorded empty rooms disappear from the housing list");
+            var housingPlan = new AgentTaskPlan();
+            var housingGoal = JsonNode.Parse("""
+                {"goal":"Use a four-room surface base","steps":[{"id":"base","description":"Verify existing rooms",
+                "conditions":[{"kind":"housing","count":4,"x":100,"y":120}]}]}
+                """).AsObject();
+            housingPlan.Create(housingGoal, AgentTaskEvidence.Measure);
+            Check(housingPlan.Advance("base", AgentTaskEvidence.Measure)["verified"].GetValue<bool>(),
+                "existing suitable rooms could not complete a housing goal before construction");
             RecedingNav.Active = true;
             Check(AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, 98, 119)
                 && AgentTools.Control.ForbiddenAt(ControlBehavior.Placement, 100, 120)
@@ -67,6 +75,8 @@ static class RuntimeTests
             Terraria.WorldGen.RoomCheck = (x, _) => x != 100;
             list = await Call("housing", new JsonObject { ["action"] = "list" });
             Check(!list["rooms"][0]["suitable"].GetValue<bool>(), "a damaged room was still reported suitable");
+            Check(!housingPlan.VerifyFinal(AgentTaskEvidence.Measure)["verified"].GetValue<bool>(),
+                "a damaged room still counted toward the completed base");
             Game.worldID++;
             list = await Call("housing", new JsonObject { ["action"] = "list" });
             Check(list["rooms"].AsArray().Count == 0, "room coordinates crossed world saves");

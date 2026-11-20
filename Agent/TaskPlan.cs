@@ -88,18 +88,18 @@ public sealed class AgentTaskPlan
             {
                 var check = condition as JsonObject ?? throw new InvalidOperationException("条件必须是对象。");
                 string kind = check["kind"]?.GetValue<string>();
-                if (kind is not ("permanent_health" or "position" or "biome" or "tiles" or "item" or "equipped" or "npc_kills" or "npc_alive" or "chests_looted") || check["count"]?.GetValue<int>() is not > 0
-                    || kind is not ("permanent_health" or "position" or "biome" or "tiles" or "chests_looted") && check["type"]?.GetValue<int>() is not > 0)
-                    throw new InvalidOperationException("条件支持 permanent_health、position、biome、tiles、item、equipped、npc_kills、npc_alive、chests_looted；count及物品/NPC的type必须为正数。");
+                if (kind is not ("permanent_health" or "position" or "biome" or "tiles" or "housing" or "item" or "equipped" or "npc_kills" or "npc_alive" or "chests_looted") || check["count"]?.GetValue<int>() is not > 0
+                    || kind is not ("permanent_health" or "position" or "biome" or "tiles" or "housing" or "chests_looted") && check["type"]?.GetValue<int>() is not > 0)
+                    throw new InvalidOperationException("条件支持 permanent_health、position、biome、tiles、housing、item、equipped、npc_kills、npc_alive、chests_looted；count及物品/NPC的type必须为正数。");
                 var verified = new JsonObject { ["kind"] = kind, ["count"] = check["count"].DeepClone() };
                 if (kind == "chests_looted" && check["initially_locked"] != null)
                     verified["initially_locked"] = check["initially_locked"].GetValue<bool>();
-                if (kind == "position")
+                if (kind is "position" or "housing")
                 {
-                    int radius = check["radius"]?.GetValue<int>() ?? 2;
-                    if (check["count"].GetValue<int>() != 1 || check["x"]?.GetValue<int>() is not >= 0
+                    int radius = check["radius"]?.GetValue<int>() ?? (kind == "housing" ? 60 : 2);
+                    if (kind == "position" && check["count"].GetValue<int>() != 1 || check["x"]?.GetValue<int>() is not >= 0
                         || check["y"]?.GetValue<int>() is not >= 0 || radius is < 1 or > 60)
-                        throw new InvalidOperationException("position需要count=1、非负格坐标x/y、radius为1..60格（默认2）。");
+                        throw new InvalidOperationException($"{kind}需要非负格坐标x/y和1..60格radius；position的count为1。");
                     verified["x"] = check["x"].DeepClone();
                     verified["y"] = check["y"].DeepClone();
                     verified["radius"] = radius;

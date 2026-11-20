@@ -38,9 +38,10 @@ public sealed class ScriptLibrary
             if(!first.ok)return first;
             const surface=first.rooms.filter(room=>room.surface);
             const anchor=Number.isInteger(input?.x)&&Number.isInteger(input?.y)?input:
-                surface.find(room=>room.remembered)??surface[0];
+                surface.find(room=>room.remembered&&room.suitable)??surface.find(room=>room.suitable)??surface[0];
+            const radius=input?.radius??60;
             const local=report=>report.rooms.filter(room=>room.surface&&room.suitable&&(!anchor||
-                Math.abs(room.x-anchor.x)<=100&&Math.abs(room.y-anchor.y)<=35));
+                Math.abs(room.x-anchor.x)<=radius&&Math.abs(room.y-anchor.y)<=radius));
             const rooms=local(first);
             const vacant=rooms.filter(room=>room.occupants.length===0);
             const needs=first.homeless.length+(first.eligible_npc_type?1:0);
@@ -49,9 +50,9 @@ public sealed class ScriptLibrary
               tool('housing',{action:'assign',x:address.x,y:address.y,npc:npc.npc,npc_type:npc.npc_type});
             }
             const deficit=Math.max(requested-rooms.length,needs-vacant.length);
-            if(deficit<=0)return {ok:true,outcome:'housing_available',housing:tool('housing',{action:'list'})};
+            if(deficit<=0)return {ok:true,outcome:'housing_available',verified_rooms:rooms.length};
             const building=deficit>1?4:1;
-            const known=surface.filter(room=>!anchor||Math.abs(room.x-anchor.x)<=100&&Math.abs(room.y-anchor.y)<=35);
+            const known=surface.filter(room=>!anchor||Math.abs(room.x-anchor.x)<=radius&&Math.abs(room.y-anchor.y)<=radius);
             let site;
             if(known.length){
               const right=Math.max(...known.map(room=>room.right??room.x+2))+3;

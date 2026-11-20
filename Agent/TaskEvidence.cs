@@ -60,6 +60,7 @@ public class AgentTaskEvidence : GlobalNPC
             "position" => AtPosition(condition) ? 1 : 0,
             "biome" => AtBiome(condition) ? 1 : 0,
             "tiles" => CountTiles(condition),
+            "housing" => AgentTools.HousingCount(condition),
             "item" => Main.LocalPlayer.inventory.Where(item => item != null && !item.IsAir && item.type == type).Sum(item => item.stack),
             "equipped" => Enumerable.Range(0, 10).Where(slot => Main.LocalPlayer.IsItemSlotUnlockedAndUsable(slot)
                 && Main.LocalPlayer.armor[slot].type == type).Sum(slot => Main.LocalPlayer.armor[slot].stack),
