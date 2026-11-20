@@ -67,7 +67,7 @@ public sealed class GameSensor : ICombatSensor
             if (!npc.active || npc.friendly || bossIds.Contains(npc.whoAmI)) continue;
             if (bossIds.Contains(npc.realLife) || BossPart(npc.type))
             {
-                parts.Add(Entity(npc.whoAmI, npc.FullName, npc.Center, npc.velocity,
+                parts.Add(Entity(npc.whoAmI, BossName(npc), npc.Center, npc.velocity,
                     npc.width, npc.height, npc.damage));
                 float speed = (Math.Abs(npc.velocity.X) + Math.Abs(npc.velocity.Y)) * 60f / 16f;
                 float fastest = speed;
@@ -169,6 +169,13 @@ public sealed class GameSensor : ICombatSensor
     {
         NPCID.Spazmatism => "Spazmatism",
         NPCID.Retinazer => "Retinazer",
+        NPCID.SkeletronHead => "Skeletron Head",
+        NPCID.SkeletronHand => npc.ai[0] switch
+        {
+            -1f => "Skeletron Left Hand",
+            1f => "Skeletron Right Hand",
+            _ => $"Skeletron Hand {npc.whoAmI}"
+        },
         _ => npc.FullName
     };
 
