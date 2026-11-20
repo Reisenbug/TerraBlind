@@ -25,10 +25,24 @@ public sealed class AgentControlPolicy
 
     readonly Dictionary<string, Rule> rules = new();
     volatile Rule[] spatialRules = Array.Empty<Rule>();
+    volatile (int Left, int Top, int Right, int Bottom)[] houses = Array.Empty<(int, int, int, int)>();
     public long Revision { get; private set; }
     public bool HasClaims => rules.Values.Any(rule => rule.Channels != ControlChannels.None);
     public bool Contains(string id) => rules.ContainsKey(id);
-    public bool HasSpatial(ControlBehavior behavior) => spatialRules.Any(rule => rule.Behaviors.Contains(behavior));
+    public bool HasSpatial(ControlBehavior behavior) => ProtectsHousing(behavior) || spatialRules.Any(rule => rule.Behaviors.Contains(behavior));
+
+    internal bool InHousing(int x, int y)
+    {
+        foreach (var house in houses)
+            if (x >= house.Left && x <= house.Right && y >= house.Top && y <= house.Bottom) return true;
+        return false;
+    }
+
+    internal void ReplaceHousing((int Left, int Top, int Right, int Bottom)[] areas) => houses = areas;
+
+    bool ProtectsHousing(ControlBehavior behavior)
+        => behavior is ControlBehavior.Mining or ControlBehavior.Placement && houses.Length != 0
+            && RecedingNav.Active && !Manual.On;
 
     static void Validate(ControlLifetime lifetime, string action, string reason)
     {
@@ -99,6 +113,9 @@ public sealed class AgentControlPolicy
 
     public JsonObject CheckAt(ControlBehavior behavior, int x, int y)
     {
+        if (ProtectsHousing(behavior) && InHousing(x, y))
+            return new JsonObject { ["error"] = "housing_protected", ["x"] = x, ["y"] = y,
+                ["behavior"] = behavior.ToString().ToLowerInvariant() };
         foreach (var rule in spatialRules)
             if (rule.Region is { } area && rule.Behaviors?.Contains(behavior) == true
                 && rule.Outside != (x >= area.X && y >= area.Y && x < (long)area.X + area.Width && y < (long)area.Y + area.Height))
@@ -112,6 +129,7 @@ public sealed class AgentControlPolicy
 
     public bool ForbiddenAt(ControlBehavior behavior, int x, int y)
     {
+        if (ProtectsHousing(behavior) && InHousing(x, y)) return true;
         foreach (var rule in spatialRules)
             if (rule.Region is { } area && rule.Behaviors.Contains(behavior)
                 && rule.Outside != (x >= area.X && y >= area.Y && x < (long)area.X + area.Width && y < (long)area.Y + area.Height))

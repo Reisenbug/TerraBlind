@@ -23,7 +23,8 @@ public sealed class AgentWatch
     readonly HashSet<string> policyEvents = new();
     readonly HashSet<int> policyTiles = new();
     int radius = 25, policyRadius;
-    bool lootChests, policyLootChests;
+    bool lootChests;
+    bool? policyLootChests;
     internal void SetPolicyWatch(JsonObject args)
     {
         var validated = new AgentWatch();
@@ -31,7 +32,7 @@ public sealed class AgentWatch
         policyEvents.Clear(); policyEvents.UnionWith(validated.events);
         policyTiles.Clear(); policyTiles.UnionWith(validated.tileTypes);
         policyRadius = args == null ? 0 : validated.Radius;
-        policyLootChests = args != null && validated.LootChestsInReach;
+        policyLootChests = args?["loot_chests_in_reach"] == null ? null : validated.LootChestsInReach;
     }
     readonly HashSet<string> passive = new();
     readonly HashSet<string> background = new();
@@ -93,7 +94,8 @@ public sealed class AgentWatch
     JsonObject lastObservation;
     JsonObject itemCounts;
     public int Radius { get => Math.Max(radius, policyRadius); private set => radius = value; }
-    public bool LootChestsInReach { get => lootChests || policyLootChests; private set => lootChests = value; }
+    internal bool DefaultRouteLoot { get; set; }
+    public bool LootChestsInReach { get => configured ? lootChests : policyLootChests ?? DefaultRouteLoot; private set => lootChests = value; }
     int? healthOverride;
     int maxHealth = 100;
     public int HealthBelow => healthOverride ?? (int)Math.Ceiling(maxHealth * 0.3);
@@ -240,7 +242,7 @@ public sealed class AgentWatch
         passive.Clear(); passive.UnionWith(passiveEvents); passive.UnionWith(backgroundEvents);
         background.Clear(); background.UnionWith(backgroundEvents);
         LootChestsInReach = requested.Contains("nearby_chest")
-            && (args["loot_chests_in_reach"]?.GetValue<bool>() ?? lootChests);
+            && (args["loot_chests_in_reach"]?.GetValue<bool>() ?? LootChestsInReach);
         currentChestTarget = null;
         tileTypes.Clear(); tileTypes.UnionWith(types);
         events.Clear(); events.UnionWith(requested); Radius = radius; healthOverride = health;
@@ -558,6 +560,6 @@ public sealed class AgentWatch
     };
 
     public void Reset()
-    { SetPolicyWatch(null); events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); background.Clear(); advised.Clear(); verifiedCompletions.Clear(); continuedAttempts.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); scriptHandlers.Clear(); issued = wakeCount = samples = 0; nextOpportunityReview = 0; configured = LocalDelivery = LootChestsInReach = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; honeySince = null; }
+    { SetPolicyWatch(null); events.Clear(); seen.Clear(); visibleDrops.Clear(); visibleBosses.Clear(); tileTypes.Clear(); passive.Clear(); background.Clear(); advised.Clear(); verifiedCompletions.Clear(); continuedAttempts.Clear(); pending.Clear(); history.Clear(); scriptReaders.Clear(); scriptHandlers.Clear(); issued = wakeCount = samples = 0; nextOpportunityReview = 0; configured = LocalDelivery = LootChestsInReach = DefaultRouteLoot = false; lastObservation = itemCounts = null; healthOverride = null; maxHealth = 100; currentChestTarget = null; navigation = null; honeySince = null; }
     public void End() { events.Clear(); pending.Clear(); scriptHandlers.Clear(); SetPolicyWatch(null); LootChestsInReach = false; }
 }

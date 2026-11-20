@@ -1601,6 +1601,7 @@ namespace TerraBlind
 
         static bool CanPlaceReal(int wx, int wy)
         {
+            if (AgentTools.Control.ForbiddenAt(ControlBehavior.Placement, wx, wy)) return false;
             if (PhysicsSimulator.HasPreviewPlatforms) return CanPlaceRealUncached(wx, wy);
             if (_placeCache.TryGetValue((wx, wy), out bool hit)) return hit;
             bool r = CanPlaceRealUncached(wx, wy);
@@ -2351,7 +2352,9 @@ namespace TerraBlind
             if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
             { _execFailCode = "agent_navigation_forbidden"; StopNav(); return; }
             if (steps.Exists(step => AgentTools.Control.CheckAt(ControlBehavior.Navigation, step.TargetCx, step.TargetCy) != null
-                || step.MineTiles?.Exists(tile => AgentTools.Control.CheckAt(ControlBehavior.Mining, tile.wx, tile.wy) != null) == true))
+                || step.MineTiles?.Exists(tile => AgentTools.Control.CheckAt(ControlBehavior.Mining, tile.wx, tile.wy) != null) == true
+                || step.Frames?.Exists(frame => frame.Place
+                    && AgentTools.Control.ForbiddenAt(ControlBehavior.Placement, frame.PlaceCx, frame.PlaceCy)) == true))
             { RecedingNav.LastStop = "agent_region_forbidden"; RecedingNav.Stop(); return; }
             if (PreserveTerrain && steps.Exists(step => step.Dig || step.Pillar || step.Bridge
                 || step.MineTiles?.Count > 0 || step.Frames?.Exists(frame => frame.Place) == true))

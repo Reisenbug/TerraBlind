@@ -31,6 +31,13 @@ static class RuntimeTests
                 await Call("housing", new JsonObject { ["action"] = "remember", ["x"] = 100 + i * 5, ["y"] = 120 });
             var list = await Call("housing", new JsonObject { ["action"] = "list" });
             Check(list["rooms"].AsArray().Count == 4, "recorded empty rooms disappear from the housing list");
+            RecedingNav.Active = true;
+            Check(AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, 98, 119)
+                && AgentTools.Control.ForbiddenAt(ControlBehavior.Placement, 100, 120)
+                && !AgentTools.Control.ForbiddenAt(ControlBehavior.Navigation, 100, 120),
+                "navigation could modify the housing footprint or could no longer walk through it");
+            RecedingNav.Active = false;
+            Check(!AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, 100, 120), "housing protection blocked an explicit edit");
             var reused = await AgentScript.Run("const input={rooms:4};\n" + ScriptLibrary.Example("ensure_town_housing")["code"],
                 5, (_, _) => { }, (name, args, _) => Task.FromResult(name == "housing" && args["action"].ToString() == "list"
                     ? list.ToJsonString() : throw new Exception("a complete base should not build another room")),
@@ -85,18 +92,24 @@ static class RuntimeTests
             Game.invasionType = 3; Game.invasionSize = 25;
             var facts = await Call("invasion_status", new JsonObject());
             Check(facts["kind"].ToString() == "pirate_invasion" && facts["remaining"].GetValue<int>() == 25, "native invasion progress was lost");
-            var watch = new AgentWatch();
+            var watch = new AgentWatch { DefaultRouteLoot = true };
             watch.EnsureDefaults();
+            Check(watch.LootChestsInReach, "a default goal ignored close unlocked chests");
             watch.Observe(new JsonObject { ["invasion"] = facts.DeepClone() });
             watch.Observe(new JsonObject { ["invasion"] = facts.DeepClone() });
             Check(watch.Take().Count == 1, "invasion notifications were lost or duplicated");
-            Console.WriteLine("PASS: existing housing is reused and rechecked, desert routes are rejected, and invasion progress is observed once");
+            watch.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest"), ["loot_chests_in_reach"] = false });
+            watch.EnsureDefaults();
+            Check(!watch.LootChestsInReach, "an explicit skip-chest policy was ignored");
+            Console.WriteLine("PASS: housing is reused and protected from navigation, surface desert routes are rejected, and default loot can be disabled");
         }
         finally
         {
             (Game.SavePath, Game.worldID, Game.worldSurface, Game.rockLayer, Game.invasionType, Game.invasionSize) = saved;
             HttpServerSystem.Handler = handler;
             Terraria.WorldGen.RoomCheck = null;
+            RecedingNav.Active = false;
+            AgentTools.Control.ReplaceHousing(Array.Empty<(int, int, int, int)>());
             directory.Delete(recursive: true);
         }
     }

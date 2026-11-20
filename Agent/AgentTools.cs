@@ -278,6 +278,7 @@ public static partial class AgentTools
     static string pendingNode;
     internal static JsonObject LastContinuation;
     static readonly HashSet<(int, int)> routeChests = new();
+    static readonly Dictionary<(int, int), long> routeChestRetries = new();
     static bool routeLootEnabled;
     internal static JsonObject LastRouteLoot;
 
@@ -285,16 +286,19 @@ public static partial class AgentTools
     {
         if (!Watches.LootChestsInReach)
         { routeLootEnabled = false; return; }
-        if (!routeLootEnabled) { routeChests.Clear(); routeLootEnabled = true; }
+        if (!routeLootEnabled) { routeChests.Clear(); routeChestRetries.Clear(); routeLootEnabled = true; }
         var p = Main.LocalPlayer;
         if (!Actions.HasPrimaryControl || !Plan.Incomplete || Main.netMode != Terraria.ID.NetmodeID.SinglePlayer
             || p.dead || Manual.On || p.chest >= 0 || TreasureGrab.IsRunning || ContactEscapeActive
             || !ControlAllows(ControlBehavior.Workflow, ControlChannels.ItemUse, delegated: true)) return;
         foreach (var chest in Main.chest)
         {
-            if (chest == null || routeChests.Contains((chest.x, chest.y)) || !chest.item.Any(i => !i.IsAir)
-                || !Reach.CanInteract(p, chest.x, chest.y) || ControlSession.TargetsChest(chest.x, chest.y)) continue;
-            routeChests.Add((chest.x, chest.y));
+            if (chest == null || !WorldGen.InWorld(chest.x, chest.y) || routeChests.Contains((chest.x, chest.y)) || !chest.item.Any(i => !i.IsAir)
+                || !Reach.CanInteract(p, chest.x, chest.y) || ControlSession.TargetsChest(chest.x, chest.y)
+                || Control.InHousing(chest.x, chest.y) || Chest.IsLocked(chest.x, chest.y)
+                || Main.tile[chest.x, chest.y].TileType is Terraria.ID.TileID.FakeContainers or Terraria.ID.TileID.FakeContainers2
+                || routeChestRetries.TryGetValue((chest.x, chest.y), out long retry) && Main.GameUpdateCount < retry) continue;
+            routeChestRetries[(chest.x, chest.y)] = Main.GameUpdateCount + 120L;
             var before = AgentTaskEvidence.ObserveChest(chest.x, chest.y);
             bool inventoryOpen = Main.playerInventory;
             int opened = TreasureGrab.OpenAt(chest.x, chest.y, out string reason);
@@ -317,6 +321,7 @@ public static partial class AgentTools
                 ["outcome"] = reason, ["verified_transfer"] = verified, ["tick"] = Main.GameUpdateCount,
                 ["route_handle"] = Actions.ActiveHandle };
             DiagLog.Write("[route_loot] " + LastRouteLoot.ToJsonString());
+            if (verified && reason == "looted") routeChests.Add((chest.x, chest.y));
             return;
         }
     }
@@ -812,7 +817,7 @@ public static partial class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask(string instruction = null)
+    public static void NewTask(string instruction = null, bool allowPassingChestLoot = false)
     {
         AllowTaskRecall = instruction == null || !System.Text.RegularExpressions.Regex.IsMatch(instruction,
             @"(?:不要|不能|禁止|不许|不得)\s*回城|\b(?:no|never|don't|do not|must not)\s+recall\b",
@@ -820,7 +825,8 @@ public static partial class AgentTools
         ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear();
         recoveredActions.Clear(); deferredNodes.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null;
         inventoryPreparationNotified = false; LastContinuation = ExecutionContinuity = LastRouteLoot = null;
-        routeChests.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset();
+        routeChests.Clear(); routeChestRetries.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset();
+        Watches.DefaultRouteLoot = allowPassingChestLoot;
         Watches.EnsureDefaults(); Watches.IgnorePriorActions(Actions.Summary()); Recovery.Reset(); Actions.BeginTask(); Control.BeginTask();
     }
     public static void Stop()
@@ -1010,6 +1016,15 @@ public static partial class AgentTools
         Directory.CreateDirectory(Path.GetDirectoryName(path));
         File.WriteAllText(pending, JsonSerializer.Serialize(rooms.Select(room => new[] { room.x, room.y })));
         File.Move(pending, path, overwrite: true);
+        RefreshHousingProtection();
+    }
+
+    internal static void RefreshHousingProtection()
+    {
+        var areas = KnownRooms().Select(point => WorldGen.StartRoomCheck(point.x, point.y)
+            ? (WorldGen.roomX1 - 1, WorldGen.roomY1 - 1, WorldGen.roomX2 + 1, WorldGen.roomY2 + 1)
+            : (point.x - 3, point.y - 5, point.x + 3, point.y + 4)).Distinct().ToArray();
+        Control.ReplaceHousing(areas);
     }
 
     static JsonObject RoomFacts(int x, int y, IEnumerable<NPC> residents)

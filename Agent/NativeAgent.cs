@@ -304,7 +304,7 @@ public class NativeAgent : ModSystem
         _cancel?.Dispose();
         _cancel = new CancellationTokenSource();
         var token = _cancel.Token;
-        AgentTools.NewTask(goal);
+        AgentTools.NewTask(goal, allowPassingChestLoot: goalOptions != null);
         string safetyPolicy = AgentTools.AllowTaskRecall
             ? "skill('safety_reactions',0);"
             : "skill('safety_reactions',0,{allow_recall:false});";
@@ -592,6 +592,7 @@ public class NativeAgent : ModSystem
 
     public override void OnWorldLoad()
     {
+        if (!Main.dedServ) AgentTools.RefreshHousingProtection();
         if (Main.dedServ || !Config.I.AgentEnabled || _scriptWarmup != null) return;
         _scriptWarmup = new CancellationTokenSource();
         var token = _scriptWarmup.Token;
@@ -606,6 +607,7 @@ public class NativeAgent : ModSystem
         AgentTools.Workflows.Clear();
         AgentTools.Actions.Reset();
         AgentTools.Control.Reset();
+        AgentTools.Control.ReplaceHousing(Array.Empty<(int, int, int, int)>());
         AgentTools.ControlSession.Reset();
         AgentTools.LastDamage = AgentTools.LastDeath = AgentTools.LastContactEscape = AgentTools.LastAutomaticHeal = null;
         AgentTools.ContactEscapeActive = false;

@@ -396,7 +396,7 @@ namespace Terraria.ID
     {
         public const int StinkbugHousingBlocker = 630, StinkbugHousingBlockerEcho = 631;
         public const int FixtureSource = 1, FixtureOther = 2;
-        public const int Containers = 21, Dressers = 88, Containers2 = 467;
+        public const int Containers = 21, Dressers = 88, Containers2 = 467, FakeContainers = 441, FakeContainers2 = 468;
         public const int PressurePlates = 135, Traps = 137, Boulder = 138, Explosives = 141, MinecartTrack = 314;
         public const int RollingCactus = 484, BouncyBoulder = 664, LifeCrystalBoulder = 665;
         public static class Sets
