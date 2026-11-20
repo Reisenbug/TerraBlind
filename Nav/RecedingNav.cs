@@ -30,6 +30,7 @@ namespace TerraBlind
         const float GoalDistPx = 24f;
         const float StandDistPx = 8f;    // 建房契约要求脚踩准那一格,±24px 会站到隔壁列
         static bool _braking;   // 位置到了,正在刹停
+        static bool _standAlignmentTried;
         static (int, int)? _lastFrom;    // cell the last edge started FROM (to key the attention mismatch report)
         static (int, int)? _lastTarget;  // cell the last edge planned to land on (compared to the real landing)
         static bool _haveLast;
@@ -271,7 +272,7 @@ namespace TerraBlind
             // 按【在不在地狱】开,不按模式开:Stand 那一段照样会掉熔岩,而掉了就是重开。
             StateSpacePlanner.PreciseMode = goalWy >= Main.UnderworldLayer
                 || ActExecutor.OriginCy(Main.LocalPlayer) >= Main.UnderworldLayer;
-            _braking = false;
+            _braking = _standAlignmentTried = false;
             _goalWx = goalWx; _goalWy = goalWy; Active = true; LastStop = null; _haveLast = false; _lastTarget = null; _lastFrom = null;
             cycle.Reset();
             StateSpacePlanner.ResetFloor();   // 换目标=换场,旧地板的 H 是另一把尺子上的数,留着会误判
@@ -451,6 +452,12 @@ namespace TerraBlind
             {
                 float gx = _goalWx * 16f + 8f, gy = (_goalWy + 1) * 16f;
                 float cx = p.Center.X, fy = p.position.Y + p.height;
+                if (_mode == Mode.Stand && _braking)
+                {
+                    if (p.velocity.Y == 0f && SettleAt.IsRunning) return;
+                    SettleAt.Stop();
+                    _braking = false;
+                }
                 // Stand 的契约是"脚踩着那一格开工",±24px 会让人站在隔壁列上就报到达。建房那边整套
                 // 局部坐标就全偏一格。收到半格,并且要求真落地。
                 float tol = _mode == Mode.Stand ? StandDistPx : GoalDistPx;
@@ -459,6 +466,19 @@ namespace TerraBlind
                 {
                     DiagLog.Write($"[recede] reached goal mode={_mode} goal=({_goalWx},{_goalWy}) dx={cx - gx:0.#} dy={fy - gy:0.#} body=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
                     LastStop = "done"; Stop(); Chatter.Say("[TerraBlind] receding nav done"); return;
+                }
+                var standTarget = new Vector2(gx - p.width / 2f, p.position.Y);
+                if (_mode == Mode.Stand && !VanillaNavBridge.Enabled && !_standAlignmentTried && p.velocity.Y == 0f
+                    && System.MathF.Abs(fy - gy) <= StandDistPx
+                    && System.MathF.Abs(cx - gx) <= 16f
+                    && VanillaContactRegion.ConnectedSupport(p.position, standTarget, p.width, p.height)
+                    && SettleAt.Start(_goalWx, out _))
+                {
+                    InterruptForRecovery();
+                    if (VanillaNavigationDemo.Instance.NavigationOwned) VanillaNavigationDemo.Instance.Stop();
+                    _braking = _standAlignmentTried = true;
+                    DiagLog.Write($"[recede] align with stand goal=({_goalWx},{_goalWy}) dx={cx - gx:0.##} dy={fy - gy:0.##}");
+                    return;
                 }
             }
 
