@@ -1634,6 +1634,12 @@ public static partial class AgentTools
         }
     }
 
+    static JsonObject BusyAction(string handle) => new()
+    {
+        ["error"] = "action_busy", ["detail"] = "已有动作持有输入；可用 action_queue 排队后继，或用 action_control 暂停或取消。",
+        ["active_handle"] = handle, ["action_tasks"] = Actions.Summary(),
+    };
+
     static async Task<string> ExecuteObserved(string name, JsonObject args, CancellationToken token)
     {
         if (name == "script_report") return AgentModelOutput.Read(Text(args, "id")).ToJsonString(ModelJson);
@@ -1696,9 +1702,7 @@ public static partial class AgentTools
         if ((action || name is "action_start" or "combat_start" or "combat_reposition"
             || name == "action_control" && Text(args, "command") == "resume"
             || name == "set_combat" && Bool(args, "boss_control")) && Actions.ConflictsWith(requestedTool))
-            return new JsonObject { ["error"] = "action_busy", ["detail"] = "已有任务持有角色输入，请先action_control暂停或取消。",
-                ["active_handle"] = Actions.ActiveHandle,
-                ["action_tasks"] = Actions.Summary() }.ToJsonString();
+            return BusyAction(Actions.ActiveHandle).ToJsonString();
         long lease = 0;
         long controlTicket = 0;
         long script = scriptInvocation.Value;
@@ -2069,7 +2073,8 @@ public static partial class AgentTools
         var before = await NativeAgent.OnMain(() =>
         {
             DiagLog.Write($"[agent] tool {name} {args}");
-            if (!ObservationTool(name) && name is not ("say" or "ask" or "nav_intent"))
+            if (!ObservationTool(name) && name is not ("say" or "ask" or "nav_intent")
+                && (name != "run_script" || !Actions.HasPrimaryControl))
                 NativeAgent.Progress("Starting " + name, "running " + name, visible: false);
             return name is "get_state" or "say" or "ask" or "wiki_search" or "wiki_page" ? null : Inventory();
         }, token);
@@ -2189,7 +2194,7 @@ public static partial class AgentTools
                     return (await NativeAgent.OnMain(() =>
                     {
                         Plan.Script(node);
-                        if (Actions.HasPrimaryControl) throw new InvalidOperationException("已有主动作，先排队后继或暂停原句柄。");
+                        if (Actions.HasPrimaryControl) return BusyAction(Actions.PrimaryHandle);
                         Plan.Select(node);
                         Watches.EnsureDefaults();
                         string previous = ActionTasks.NodeContext.Value;

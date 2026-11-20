@@ -66,6 +66,8 @@ public sealed class ActionTasks
     }
     public bool HasAttack { get { lock (gate) return attack != null; } }
     public string ActiveHandle { get { lock (gate) return active?.Id ?? attack?.Id; } }
+    internal string PrimaryHandle { get { lock (gate) return active?.Id; } }
+    internal string PrimaryTool { get { lock (gate) return active?.Tool; } }
     internal string ActiveNode { get { lock (gate) return active?.Node; } }
     internal string ActiveAttempt { get { lock (gate) { var entry = active ?? attack; return entry == null ? null : entry.Id + ":" + entry.Attempt; } } }
     internal bool RunningScript { get { lock (gate) return active?.Tool == "run_script" && caller.Value == active.Id; } }

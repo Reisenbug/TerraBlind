@@ -3309,6 +3309,20 @@ static class RuntimeTests
                 Check(startConflict["error"]?.ToString() == "action_busy" && startConflict["active_handle"]?.ToString() == handle
                     && startConflict["handle"] == null && AgentTools.Actions.ActiveHandle == handle,
                     "background start conflict hid the input owner or returned a nonexistent new handle");
+                AgentTools.Plan.Create(JsonNode.Parse("""
+                    {"goal":"Check a competing script","mode":"dag","steps":[{"id":"next","description":"Next action",
+                    "depends_on":[],"script":"return {};","conditions":[{"kind":"permanent_health","count":200}]}]}
+                    """).AsObject(), AgentTaskEvidence.Measure);
+                try
+                {
+                    NativeAgent.Progress("Finished an auxiliary tool", "waiting for decision", visible: false);
+                    var scriptConflict = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+                        { ["task_node"] = "next", ["background"] = true }, default)));
+                    Check(scriptConflict["error"]?.ToString() == "action_busy" && scriptConflict["active_handle"]?.ToString() == handle
+                        && NativeAgent.Status == "running nav_to" && RecedingNav.Active,
+                        "a rejected background script hid ongoing navigation from its caller or status display");
+                }
+                finally { AgentTools.Plan.Reset(); }
                 Check(query["status"].ToString() == "running" && query["observation"]["hp"].GetValue<int>() == Game.LocalPlayer.statLife,
                     "background action died with the returning script or query lacked current observation");
                 var conflicting = JsonNode.Parse(await Execute(AgentTools.Execute("nav_to", new JsonObject { ["x"] = 0, ["y"] = 0 }, default)));

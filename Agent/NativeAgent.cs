@@ -55,7 +55,17 @@ public class NativeAgent : ModSystem
             while (_instance._combatMessages.TryDequeue(out string message)) messages.Add(message);
         return messages;
     }
-    public static string Status { get; private set; } = "idle";
+    static string status = "idle";
+    public static string Status
+    {
+        get
+        {
+            if (status != "waiting for decision") return status;
+            string tool = AgentTools.ControlSession.PrimaryActive ? AgentTools.ControlSession.Tool : AgentTools.Actions.PrimaryTool;
+            return tool == null ? status : "running " + tool;
+        }
+        private set => status = value;
+    }
     internal static bool Processing => _instance?._running?.IsCompleted == false
         && _instance._cancel?.IsCancellationRequested == false && _instance._answer == null;
     internal static bool WorkPending => _instance?._pending != null || Processing;
