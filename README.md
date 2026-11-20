@@ -12,6 +12,12 @@ TerraBlind uses Terraria as an environment for building a real-time game agent. 
 
 ![agent](https://img.shields.io/badge/AI-LLM%20Agent%20%2B%20Jev-brightgreen) ![runtime](https://img.shields.io/badge/runtime-tModLoader-blue)
 
+> **版本提示 / Version note**
+>
+> 已安装旧版？实时 Agent、寻路和战斗执行的最新改动在 [`dev/agent` 开发分支](https://github.com/Reisenbug/TerraBlind/tree/dev/agent)。想体验这些改动，可以从该分支自行构建。预编译 `.tmod` 可在 [Releases](https://github.com/Reisenbug/TerraBlind/releases) 下载。
+>
+> Running an older version? The latest changes to the real-time agent, navigation, and combat are on the [`dev/agent` development branch](https://github.com/Reisenbug/TerraBlind/tree/dev/agent). Build from that branch to try them, or visit [Releases](https://github.com/Reisenbug/TerraBlind/releases) for prebuilt `.tmod` packages.
+
 ## Demo
 
 **Jev 驱动的 Boss 战 / Jev-driven boss fights**
