@@ -246,7 +246,7 @@ public static class AgentScript
                             or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "item_info" or "wiki_search" or "wiki_page"
                             or "recipe" or "script_program" or "jev_judge" or "gather_observe" or "find_biome" or "tile_names" or "find_descent" or "descent_route"
                             or "equipment_list" or "inventory_review" or "npc_find" or "npc_drop_sources" or "npc_combat_observe" or "pylon_list" or "fishing_status"
-                            or "script_progress" or "script_report" or "house_site" or "action_query") queries++;
+                            or "script_progress" or "script_report" or "house_site" or "action_query" or "early_descent" or "invasion_status") queries++;
                     else dynamicOrAction = true;
                 }
                 foreach (var child in node.ChildNodes) Visit(child);

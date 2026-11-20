@@ -11,8 +11,8 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates" };
-    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response" };
+    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response" };
     internal static string BuiltinIndex => string.Join("\n", BuiltIns.Select(name =>
         name + "@0: " + Example(name)["detail"].ToString().Split('。')[0]));
 
@@ -25,6 +25,58 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "early_exploration_route") return Template(name,
+            "开荒通用采集与下洞先比较森林、雪地、丛林的天然下行路线，返回路点和浅层预计开挖量。input.biome可指定已确定的群系。Early exploration prefers natural caves over surface excavation.",
+            """
+            return tool('early_descent',input?.biome?{biome:input.biome}:{});
+            """);
+        if (name == "ensure_town_housing") return Template(name,
+            "按世界重验记过的地表房间，优先指派空房；只补目标总数或满足等待入住的NPC。input.rooms为所需总数，x/y可指定基地锚点。Reuse verified housing before extending a settlement.",
+            """
+            const requested=input?.rooms??1;
+            const first=tool('housing',{action:'list'});
+            if(!first.ok)return first;
+            const surface=first.rooms.filter(room=>room.surface);
+            const anchor=Number.isInteger(input?.x)&&Number.isInteger(input?.y)?input:
+                surface.find(room=>room.remembered)??surface[0];
+            const local=report=>report.rooms.filter(room=>room.surface&&room.suitable&&(!anchor||
+                Math.abs(room.x-anchor.x)<=100&&Math.abs(room.y-anchor.y)<=35));
+            const rooms=local(first);
+            const vacant=rooms.filter(room=>room.occupants.length===0);
+            const needs=first.homeless.length+(first.eligible_npc_type?1:0);
+            for(let i=0;i<Math.min(vacant.length,first.homeless.length);i++){
+              const address=vacant[i], npc=first.homeless[i];
+              tool('housing',{action:'assign',x:address.x,y:address.y,npc:npc.npc,npc_type:npc.npc_type});
+            }
+            const deficit=Math.max(requested-rooms.length,needs-vacant.length);
+            if(deficit<=0)return {ok:true,outcome:'housing_available',housing:tool('housing',{action:'list'})};
+            const building=deficit>=4?4:1;
+            const site=tool('house_site',{rooms:building,...(anchor?{from_x:anchor.x,from_y:anchor.y}:{} )});
+            if(!site.found)return {ok:false,outcome:'no_expansion_site',deficit,site};
+            const result=tool('build_house',site.build_args);
+            const after=tool('housing',{action:'list'});
+            const verified=local(after).length;
+            return {ok:verified>=requested&&verified-rooms.length>=deficit,outcome:result.outcome,
+              verified_rooms:verified,housing:after};
+            """);
+        if (name == "invasion_response") return Template(name,
+            "处理原版阵营入侵并按原版剩余数核验。input.defense可给已准备的安全接战位置。Fight observed invasion enemies and verify the remaining wave count.",
+            """
+            const before=tool('invasion_status');
+            if(!before.active)return {done:true,outcome:'invasion_inactive'};
+            const target=before.targets.find(npc=>npc.distance_tiles<=32);
+            if(!target&&input?.defense){
+              const move=tool('nav_to',{...input.defense,mode:'travel'});
+              if(!move.done)return {done:false,outcome:'defense_position_unreachable',move};
+            }
+            const seen=tool('invasion_status');
+            if(!seen.active)return {done:true,outcome:'invasion_ended',remaining:0};
+            const types=[...new Set(seen.targets.filter(npc=>npc.distance_tiles<=36).map(npc=>npc.type))];
+            if(!types.length)return {done:false,outcome:'no_invasion_targets_in_range',invasion:seen};
+            const result=tool('fight',{npc_types:types,seconds:8,max_dist:36});
+            const after=tool('invasion_status');
+            return {done:!after.active,outcome:result.outcome,remaining:after.remaining,progress:after.type===before.type?before.remaining-after.remaining:null};
+            """);
         if (name == "build_block_pattern") return Template(name,
             "蓝图功能暂未完成：目前只在当前站位放置8×8以内的完整砖和半砖。input含x、y、pattern（block_region的结果）。Blueprint support is incomplete: local placement only, without automatic repositioning.",
             """

@@ -3079,6 +3079,7 @@ namespace TerraBlind
 		// signature tiles that identify a biome, shared by /find_biome and /find_descent
 		static ushort[] BiomeSig(string biome) => biome switch
 		{
+			"forest" => new[] { Terraria.ID.TileID.Grass },
 			"jungle" => new[] { Terraria.ID.TileID.JungleGrass },
 			"snow" or "ice" or "tundra" => new[] { Terraria.ID.TileID.SnowBlock, Terraria.ID.TileID.IceBlock },
 			"desert" => new[] { Terraria.ID.TileID.Sandstone, Terraria.ID.TileID.HardenedSand },

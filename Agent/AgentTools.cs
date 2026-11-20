@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
@@ -989,10 +990,103 @@ public static partial class AgentTools
             ["cursor"] = new JsonObject { ["type"] = Main.mouseItem.type, ["stack"] = Main.mouseItem.stack } };
     }
 
+    static string HousingPath => Path.Combine(Main.SavePath, "TerraBlindAgent", "housing", Main.worldID + ".json");
+
+    static HashSet<(int x, int y)> KnownRooms()
+    {
+        if (!File.Exists(HousingPath)) return new();
+        return JsonSerializer.Deserialize<int[][]>(File.ReadAllText(HousingPath))
+            .Where(point => point.Length == 2 && WorldGen.InWorld(point[0], point[1], 10))
+            .Select(point => (point[0], point[1])).ToHashSet();
+    }
+
+    static void RememberRooms(IEnumerable<(int x, int y)> points)
+    {
+        var rooms = KnownRooms();
+        int before = rooms.Count;
+        rooms.UnionWith(points.Where(point => WorldGen.InWorld(point.x, point.y, 10)));
+        if (before == rooms.Count) return;
+        string path = HousingPath, pending = path + ".tmp";
+        Directory.CreateDirectory(Path.GetDirectoryName(path));
+        File.WriteAllText(pending, JsonSerializer.Serialize(rooms.Select(room => new[] { room.x, room.y })));
+        File.Move(pending, path, overwrite: true);
+    }
+
+    static JsonObject RoomFacts(int x, int y, IEnumerable<NPC> residents)
+    {
+        bool closed = WorldGen.StartRoomCheck(x, y);
+        int left = WorldGen.roomX1, right = WorldGen.roomX2, top = WorldGen.roomY1, bottom = WorldGen.roomY2;
+        var occupants = closed ? residents.Where(npc => !npc.homeless && npc.homeTileX > left && npc.homeTileX < right
+            && npc.homeTileY >= top && npc.homeTileY <= bottom).ToArray() : Array.Empty<NPC>();
+        bool suitable = closed && WorldGen.RoomNeeds(0)
+            && !WorldGen.houseTile[Terraria.ID.TileID.StinkbugHousingBlocker]
+            && !WorldGen.houseTile[Terraria.ID.TileID.StinkbugHousingBlockerEcho];
+        if (suitable)
+        {
+            WorldGen.ScoreRoom(occupants.FirstOrDefault()?.whoAmI ?? -1, 0);
+            suitable = WorldGen.hiScore > 0;
+        }
+        return new JsonObject { ["x"] = x, ["y"] = y, ["closed"] = closed, ["suitable"] = suitable, ["surface"] = y < Main.worldSurface,
+            ["left"] = left, ["right"] = right, ["top"] = top, ["bottom"] = bottom,
+            ["occupants"] = new JsonArray(occupants.Select(npc => (JsonNode)new JsonObject {
+                ["npc"] = npc.whoAmI, ["npc_type"] = npc.type }).ToArray()),
+            ["reason"] = !closed ? WorldGen.roomCheckFailureReason.ToString() : suitable ? null : "native_room_requirements" };
+    }
+
+    static JsonObject HousingList()
+    {
+        var residents = Main.npc.Where(npc => npc is { active: true, townNPC: true }).ToArray();
+        var remembered = KnownRooms();
+        var observed = remembered.Concat(residents.Where(npc => !npc.homeless && WorldGen.InWorld(npc.homeTileX, npc.homeTileY - 1, 10))
+            .Select(npc => (x: npc.homeTileX, y: npc.homeTileY - 1))).Distinct();
+        var bounds = new HashSet<(int, int, int, int)>();
+        var rooms = new JsonArray();
+        foreach (var point in observed)
+        {
+            var room = RoomFacts(point.x, point.y, residents);
+            if (Bool(room, "closed") && !bounds.Add((Int(room, "left"), Int(room, "right"), Int(room, "top"), Int(room, "bottom")))) continue;
+            room["remembered"] = remembered.Contains(point);
+            rooms.Add(room);
+        }
+        int pending = WorldGen.prioritizedTownNPCType;
+        return new JsonObject { ["ok"] = true, ["rooms"] = rooms,
+            ["eligible_npc_type"] = pending > 0 && !residents.Any(npc => npc.type == pending) ? JsonValue.Create(pending) : null,
+            ["homeless"] = new JsonArray(residents.Where(npc => npc.homeless).Select(npc => (JsonNode)new JsonObject {
+                ["npc"] = npc.whoAmI, ["npc_type"] = npc.type }).ToArray()) };
+    }
+
+    internal static JsonObject InvasionStatus(bool targets = true)
+    {
+        int type = Main.invasionType, remaining = Main.invasionSize;
+        bool active = type > 0 && remaining > 0;
+        var nearby = new JsonArray();
+        if (active && targets)
+        {
+            var player = Main.LocalPlayer;
+            foreach (var npc in Main.npc.Where(npc => npc is { active: true, type: > 0 }
+                && NPC.GetNPCInvasionGroup(npc.type) == type && npc.CanBeChasedBy(player))
+                .OrderBy(npc => Microsoft.Xna.Framework.Vector2.DistanceSquared(npc.Center, player.Center)).Take(10))
+                nearby.Add(new JsonObject { ["npc"] = npc.whoAmI, ["type"] = npc.type, ["name"] = Lang.GetNPCNameValue(npc.type),
+                    ["x"] = (int)(npc.Center.X / 16), ["y"] = (int)(npc.Center.Y / 16),
+                    ["distance_tiles"] = Microsoft.Xna.Framework.Vector2.Distance(npc.Center, player.Center) / 16, ["boss"] = npc.boss });
+        }
+        return new JsonObject { ["active"] = active, ["type"] = type,
+            ["kind"] = type switch { 1 => "goblin_army", 2 => "frost_legion", 3 => "pirate_invasion", 4 => "martian_madness", _ => null },
+            ["remaining"] = Math.Max(0, remaining), ["start_size"] = Main.invasionSizeStart, ["arrival_delay"] = Main.invasionDelay,
+            ["x"] = active ? JsonValue.Create((int)Main.invasionX) : null, ["targets"] = nearby };
+    }
+
     static JsonObject Housing(JsonObject args)
     {
         string action = Text(args, "action");
         int x = Int(args, "x", -1), y = Int(args, "y", -1), who = Int(args, "npc", -1);
+        if (action == "list") return HousingList();
+        if (action == "remember")
+        {
+            if (!WorldGen.InWorld(x, y, 10)) return new JsonObject { ["error"] = "invalid_housing_target" };
+            RememberRooms(new[] { (x, y) });
+            return RoomFacts(x, y, Main.npc.Where(npc => npc is { active: true, townNPC: true }));
+        }
         NPC npc = null;
         if (action is "assign" or "evict")
         {
@@ -1061,6 +1155,7 @@ public static partial class AgentTools
             tiles["detail_request"] = new JsonObject { ["tool"] = "get_state", ["args"] = new JsonObject { ["include_tiles"] = true } };
         }
         state["terrain"] = TerrainInspection.Read(6);
+        state["invasion"] = InvasionStatus();
         var healthPlayer = Main.LocalPlayer;
         if (state["enemies"] is JsonArray enemies)
             foreach (var enemy in enemies.OfType<JsonObject>())
@@ -1354,9 +1449,10 @@ public static partial class AgentTools
     static long invocationSequence;
     internal static int QueriesInFlight;
     static readonly AsyncLocal<long> scriptInvocation = new();
+    static bool ReadsHousing(string name, JsonObject args) => name == "housing" && Text(args, "action") is "list" or "check";
     static bool ObservationTool(string name) => name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain" or "block_region"
         or "pylon_list" or "fishing_status"
-        or "find_descent" or "find_biome"
+        or "find_descent" or "find_biome" or "early_descent" or "invasion_status"
         or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "jev_judge" or "item_info" or "wiki_search" or "wiki_page"
         or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status" or "action_query"
         or "find_descent" or "descent_route" or "slot_state" or "craft_recipes" or "mod_input_list";
@@ -1364,7 +1460,7 @@ public static partial class AgentTools
     {
         long id = Interlocked.Increment(ref invocationSequence);
         long started = Stopwatch.GetTimestamp();
-        bool query = ObservationTool(name);
+        bool query = ObservationTool(name) || ReadsHousing(name, args);
         if (query) Interlocked.Increment(ref QueriesInFlight);
         DiagLog.Write($"[agent_tool_begin] id={id} name={name} timestamp={started} node={ActionTasks.NodeContext.Value}");
         try { return await ExecuteObserved(name, args, token); }
@@ -1396,11 +1492,12 @@ public static partial class AgentTools
                 return observed.ToJsonString();
             }
         }
-        if (!ObservationTool(name) && Recovery.Revision > 0
+        bool readsHousing = ReadsHousing(name, args);
+        if (!ObservationTool(name) && !readsHousing && Recovery.Revision > 0
             && await NativeAgent.OnMain(() => Recovery.Denied(name, args), token))
             return new JsonObject { ["error"] = "repeated_failure_blocked", ["detail"] = "相同参数已失败3次，必须修正方案。",
                 ["recovery"] = await NativeAgent.OnMain(Recovery.Snapshot, token) }.ToJsonString();
-        bool needsLivingPlayer = AgentControlSession.ActionTool(name)
+        bool needsLivingPlayer = AgentControlSession.ActionTool(name) && !readsHousing
             || name is "combat_start" or "duel_player" or "set_combat"
             || name == "action_control" && Text(args, "command") == "resume";
         if (needsLivingPlayer
@@ -1414,8 +1511,8 @@ public static partial class AgentTools
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
             or "place_at" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap" or "combat_reposition"
             or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat"
-            or "slot_click" or "container_action" or "game_input" or "craft_recipe" or "housing" or "mod_input"
-            or "pylon_use" or "reforge" or "fish" or "container_transfer" or "craft_to_slot";
+            or "slot_click" or "container_action" or "game_input" or "craft_recipe" or "mod_input"
+            or "pylon_use" or "reforge" or "fish" or "container_transfer" or "craft_to_slot" || name == "housing" && !readsHousing;
         bool action = external || name is "fight" or "fight_player";
         bool startsPrimary = name == "action_start" && Text(args, "tool") != "fight";
         if ((external || startsPrimary) && string.IsNullOrEmpty(taskNode)
@@ -2632,6 +2729,8 @@ public static partial class AgentTools
                 break;
             case "boss_status":
                 return (await NativeAgent.OnMain(() => BossStatus(fresh: true), token)).ToJsonString();
+            case "invasion_status":
+                return (await NativeAgent.OnMain(() => InvasionStatus(), token)).ToJsonString();
             case "track":
                 result = await NativeAgent.OnMain(() =>
                 {
@@ -2642,6 +2741,9 @@ public static partial class AgentTools
                 break;
             case "descent_route":
                 result = await DescentRoute(args, token);
+                break;
+            case "early_descent":
+                result = await EarlyDescent(args, token);
                 break;
             case "find_descent":
                 result = await QueryDescent("/find_descent", args, token);
@@ -2794,7 +2896,19 @@ public static partial class AgentTools
             case "build_house":
                 result = await Call("/build_house", args, token);
                 if (!Rejected(result) && result["accepted"]?.GetValue<bool>() == true)
+                {
                     result = await Wait("/build_house_status", "running", "/build_house_stop", 0, token);
+                    if (Text(result, "outcome") == "done")
+                    {
+                        var built = result;
+                        await NativeAgent.OnMain(() =>
+                        {
+                            RememberRooms(Enumerable.Range(0, Int(built, "rooms"))
+                                .Select(i => (Int(built, "x0") + Int(built, "dir") * (2 + 5 * i), Int(built, "floor_row") - 2)));
+                            return true;
+                        }, token);
+                    }
+                }
                 break;
             case "hell_run":
                 result = await NativeAgent.OnMain(() => new JsonObject
@@ -3226,6 +3340,64 @@ public static partial class AgentTools
         if (response.Status >= 400 && result["error"] == null) result["error"] = $"status {response.Status}";
         return result;
     }, token);
+
+    static async Task<JsonObject> EarlyDescent(JsonObject args, CancellationToken token)
+    {
+        string biome = Text(args, "biome");
+        string[] candidates = biome == "" ? new[] { "forest", "snow", "jungle" } : new[] { biome };
+        if (candidates.Any(name => name is not ("forest" or "snow" or "jungle")))
+            return new JsonObject { ["error"] = "invalid_early_descent_biome" };
+        var routes = await Task.WhenAll(candidates.Select(async name => (name, route: await QueryDescent("/descent_main_route",
+            new JsonObject { ["name"] = name, ["limit"] = 512 }, token))));
+        return await NativeAgent.OnMain(() =>
+        {
+            var findings = new List<JsonObject>();
+            foreach (var (name, route) in routes)
+            {
+                if (route["line"] is not JsonArray { Count: > 0 } line)
+                {
+                    findings.Add(new JsonObject { ["biome"] = name, ["reason"] = route["reason"]?.DeepClone() ?? route["error"]?.DeepClone() });
+                    continue;
+                }
+                var entrance = line[0];
+                int ex = entrance[0].GetValue<int>(), ey = entrance[1].GetValue<int>();
+                int targetDepth = Math.Min((int)Main.rockLayer, ey + 72);
+                var dig = new HashSet<(int, int)>();
+                string reason = null;
+                var waypoints = new JsonArray(new JsonObject { ["x"] = ex, ["y"] = ey });
+                int index = 0;
+                for (; index < line.Count; index++)
+                {
+                    int x = line[index][0].GetValue<int>(), y = line[index][1].GetValue<int>();
+                    if (!WorldGen.InWorld(x, y, 4)) { reason = "world_edge"; break; }
+                    for (int dy = 0; dy < 3; dy++)
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        var tile = Main.tile[x + dx, y - dy];
+                        if (tile.WallType is Terraria.ID.WallID.Sandstone or Terraria.ID.WallID.HardenedSand
+                            or Terraria.ID.WallID.CorruptSandstone or Terraria.ID.WallID.CorruptHardenedSand
+                            or Terraria.ID.WallID.CrimsonSandstone or Terraria.ID.WallID.CrimsonHardenedSand
+                            or Terraria.ID.WallID.HallowSandstone or Terraria.ID.WallID.HallowHardenedSand)
+                            reason = "underground_desert";
+                        if (dx == 0 && tile.HasUnactuatedTile && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType])
+                            dig.Add((x, y - dy));
+                    }
+                    if (reason != null || dig.Count > 8) { reason ??= "surface_excavation"; break; }
+                    if (index > 0 && (index % 20 == 0 || y >= targetDepth))
+                        waypoints.Add(new JsonObject { ["x"] = x, ["y"] = y });
+                    if (y >= targetDepth) break;
+                }
+                reason ??= index == line.Count ? "short_descent" : null;
+                int approach = Math.Abs(ex - ActExecutor.OriginCx(Main.LocalPlayer)) + Math.Abs(ey - ActExecutor.OriginCy(Main.LocalPlayer));
+                findings.Add(new JsonObject { ["biome"] = name, ["reason"] = reason, ["estimated_dig_tiles"] = dig.Count,
+                    ["approach_tiles"] = approach, ["depth_target"] = targetDepth,
+                    ["score"] = approach + index + dig.Count * 20, ["waypoints"] = waypoints });
+            }
+            var best = findings.Where(candidate => candidate["reason"] == null).OrderBy(candidate => Int(candidate, "score")).FirstOrDefault();
+            return new JsonObject { ["found"] = best != null, ["route"] = best?.DeepClone(),
+                ["candidates"] = new JsonArray(findings.Select(candidate => (JsonNode)candidate).ToArray()) };
+        }, token);
+    }
 
     static async Task<JsonObject> DescentRoute(JsonObject args, CancellationToken token)
     {

@@ -124,6 +124,8 @@ namespace Terraria
         public static string SavePath = "/tmp/terrablind-agent-test-world";
         public static string worldName = "test";
         public static int worldID;
+        public static int invasionType, invasionSize, invasionSizeStart, invasionDelay;
+        public static double invasionX;
         public static int netMode, myPlayer, maxPlayers = 8, maxTilesX = 1000, maxTilesY = 1000;
         public static uint GameUpdateCount;
         public static int mouseX, mouseY;
@@ -237,6 +239,8 @@ namespace Terraria
     }
     public class NPC
     {
+        public static Func<int, int> InvasionGroup = _ => 0;
+        public static int GetNPCInvasionGroup(int type) => InvasionGroup(type);
         public bool homeless;
         public int homeTileX, homeTileY;
         public int whoAmI;
@@ -309,6 +313,16 @@ namespace Terraria
     }
     public static class WorldGen
     {
+        public static int prioritizedTownNPCType, roomX1, roomX2, roomY1, roomY2, hiScore = 1;
+        public static bool[] houseTile = new bool[1000];
+        public static Func<int, int, bool> RoomCheck;
+        public static bool StartRoomCheck(int x, int y)
+        {
+            (roomX1, roomX2, roomY1, roomY2) = (x - 1, x + 1, y - 2, y + 2);
+            return RoomCheck?.Invoke(x, y) ?? true;
+        }
+        public static bool RoomNeeds(int type) => true;
+        public static void ScoreRoom(int ignoreNPC, int type) { }
         public static string roomCheckFailureReason = "None";
         public static bool InWorld(int x, int y, int margin = 0)
             => x >= margin && y >= margin && x < Main.maxTilesX - margin && y < Main.maxTilesY - margin;
@@ -353,7 +367,11 @@ namespace Terraria
 }
 namespace Terraria.ID
 {
-    public static class WallID { public const int SpiderUnsafe = 62; }
+    public static class WallID
+    {
+        public const int SpiderUnsafe = 62, Sandstone = 187, HardenedSand = 216, CorruptHardenedSand = 217,
+            CrimsonHardenedSand = 218, HallowHardenedSand = 219, CorruptSandstone = 220, CrimsonSandstone = 221, HallowSandstone = 222;
+    }
     public static class ProjAIStyleID { public const int ShortSword = 161, Spear = 19, Explosive = 16; }
     public static class ItemID
     {
@@ -376,6 +394,7 @@ namespace Terraria.ID
     public static class LiquidID { public const int Water = 0, Lava = 1, Honey = 2, Shimmer = 3; }
     public static class TileID
     {
+        public const int StinkbugHousingBlocker = 630, StinkbugHousingBlockerEcho = 631;
         public const int FixtureSource = 1, FixtureOther = 2;
         public const int Containers = 21, Dressers = 88, Containers2 = 467;
         public const int PressurePlates = 135, Traps = 137, Boulder = 138, Explosives = 141, MinecartTrack = 314;

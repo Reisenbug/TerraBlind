@@ -232,6 +232,7 @@ public class NativeAgent : ModSystem
                     chests.Add(new JsonObject { ["x"] = chest.x, ["y"] = chest.y });
             AgentTools.Watches.Observe(new JsonObject { ["hp"] = p.statLife, ["max_hp"] = p.statLifeMax2,
                 ["dead"] = p.dead, ["suffocating"] = p.suffocating,
+                ["invasion"] = AgentTools.InvasionStatus(targets: false),
                 ["tick"] = (long)Main.GameUpdateCount, ["honey_slowed"] = p.honeyWet && !p.ignoreWater,
                 ["last_damage"] = AgentTools.LastDamage?.DeepClone(), ["last_death"] = AgentTools.LastDeath?.DeepClone(),
                 ["item_counts"] = new JsonObject(p.inventory.Where(item => !item.IsAir).GroupBy(item => item.type)
@@ -252,7 +253,7 @@ public class NativeAgent : ModSystem
             {
                 var danger = AgentTools.Watches.Pending()["events"].AsArray().LastOrDefault(e =>
                     e["id"].GetValue<int>() > _lastDangerNotice
-                    && (e["kind"].ToString() is "low_health" or "honey_slowdown" || !AgentTools.Watches.LocalDelivery
+                    && (e["kind"].ToString() is "low_health" or "honey_slowdown" or "invasion_started" || !AgentTools.Watches.LocalDelivery
                         && e["kind"].ToString() is "suffocating" or "player_died" or "boss_appeared"));
                 if (danger != null)
                 {

@@ -16,6 +16,69 @@ using Game = Terraria.Main;
 static class RuntimeTests
 {
     static readonly NativeAgent Agent = new();
+    public static async Task ProgressionSkills()
+    {
+        Agent.Load(); NativeAgent.Stop(); AgentTools.NewTask();
+        var saved = (Game.SavePath, Game.worldID, Game.worldSurface, Game.rockLayer, Game.invasionType, Game.invasionSize);
+        var handler = HttpServerSystem.Handler;
+        var directory = Directory.CreateTempSubdirectory("tb-progression-test-");
+        try
+        {
+            Game.SavePath = directory.FullName; Game.worldID = 17; Game.worldSurface = 200; Game.rockLayer = 80;
+            async Task<JsonNode> Call(string name, JsonObject args) =>
+                JsonNode.Parse(await Execute(AgentTools.Execute(name, args, default)));
+            for (int i = 0; i < 4; i++)
+                await Call("housing", new JsonObject { ["action"] = "remember", ["x"] = 100 + i * 5, ["y"] = 120 });
+            var list = await Call("housing", new JsonObject { ["action"] = "list" });
+            Check(list["rooms"].AsArray().Count == 4, "recorded empty rooms disappear from the housing list");
+            var reused = await AgentScript.Run("const input={rooms:4};\n" + ScriptLibrary.Example("ensure_town_housing")["code"],
+                5, (_, _) => { }, (name, args, _) => Task.FromResult(name == "housing" && args["action"].ToString() == "list"
+                    ? list.ToJsonString() : throw new Exception("a complete base should not build another room")),
+                _ => Task.CompletedTask, default);
+            Check(reused["value"]?["outcome"]?.ToString() == "housing_available", "existing rooms were not reused");
+            Terraria.WorldGen.RoomCheck = (x, _) => x != 100;
+            list = await Call("housing", new JsonObject { ["action"] = "list" });
+            Check(!list["rooms"][0]["suitable"].GetValue<bool>(), "a damaged room was still reported suitable");
+            Game.worldID++;
+            list = await Call("housing", new JsonObject { ["action"] = "list" });
+            Check(list["rooms"].AsArray().Count == 0, "room coordinates crossed world saves");
+
+            HttpServerSystem.Handler = (path, body) =>
+            {
+                Check(path == "/descent_main_route", "early descent used an unrelated endpoint");
+                string name = JsonNode.Parse(body)["name"].ToString();
+                int column = name == "forest" ? 30 : name == "snow" ? 54 : 90;
+                var line = new JsonArray(Enumerable.Range(50, 31).Select(y => (JsonNode)new JsonArray(column, y)).ToArray());
+                return (200, new JsonObject { ["found"] = true, ["line"] = line }.ToJsonString());
+            };
+            var desert = Game.tile[30, 55];
+            var originalWall = desert.WallType;
+            desert.WallType = WallID.Sandstone; Game.tile[30, 55] = desert;
+            try
+            {
+                var route = await Call("early_descent", new JsonObject());
+                Check(route["route"]["biome"].ToString() == "snow" && route["candidates"][0]["reason"].ToString() == "underground_desert",
+                    "short underground desert route was not rejected");
+            }
+            finally { desert.WallType = originalWall; Game.tile[30, 55] = desert; }
+            Game.invasionType = 3; Game.invasionSize = 25;
+            var facts = await Call("invasion_status", new JsonObject());
+            Check(facts["kind"].ToString() == "pirate_invasion" && facts["remaining"].GetValue<int>() == 25, "native invasion progress was lost");
+            var watch = new AgentWatch();
+            watch.EnsureDefaults();
+            watch.Observe(new JsonObject { ["invasion"] = facts.DeepClone() });
+            watch.Observe(new JsonObject { ["invasion"] = facts.DeepClone() });
+            Check(watch.Take().Count == 1, "invasion notifications were lost or duplicated");
+            Console.WriteLine("PASS: existing housing is reused and rechecked, desert routes are rejected, and invasion progress is observed once");
+        }
+        finally
+        {
+            (Game.SavePath, Game.worldID, Game.worldSurface, Game.rockLayer, Game.invasionType, Game.invasionSize) = saved;
+            HttpServerSystem.Handler = handler;
+            Terraria.WorldGen.RoomCheck = null;
+            directory.Delete(recursive: true);
+        }
+    }
     public static async Task ChestReceipts()
     {
         Agent.Load(); NativeAgent.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset();

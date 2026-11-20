@@ -137,7 +137,9 @@ public sealed class AgentWatch
     {
         if (!events.Contains("target_acquired")) passive.Add("target_acquired");
         passive.Add("honey_slowdown");
+        passive.Add("invasion_started");
         events.UnionWith(new[] { "action_finished", "target_acquired", "low_health", "suffocating", "player_died", "boss_appeared", "inventory_full", "honey_slowdown" });
+        events.Add("invasion_started");
         if (!configured)
         {
             events.Add("nearby_chest");
@@ -300,6 +302,11 @@ public sealed class AgentWatch
         }
         if (state["inventory_full"]?.GetValue<bool>() == true) Emit("inventory_full", "task", state);
         else if (state["inventory_full"]?.GetValue<bool>() == false) seen.Remove("inventory_full:task");
+        if (state["invasion"] is JsonObject invasion)
+        {
+            if (invasion["active"]?.GetValue<bool>() == true) Emit("invasion_started", invasion["type"].ToString(), invasion);
+            else seen.RemoveWhere(key => key.StartsWith("invasion_started:", StringComparison.Ordinal));
+        }
         if (state["bosses"] is JsonArray bosses)
         {
             string BossKey(JsonNode boss) => boss["who"] + ":" + boss["type"];
