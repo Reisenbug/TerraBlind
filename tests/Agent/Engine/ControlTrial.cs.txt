@@ -2024,3 +2024,39 @@ public sealed class PrimitiveBindingProbe : ModPlayer
         if (Binding.JustReleased) Released++;
     }
 }
+
+public sealed class ExplorationProgressProbe : ModSystem
+{
+    internal static bool Enabled { get; private set; }
+    string lastProgression;
+
+    public override void Load() => Enabled = !Main.dedServ
+        && Terraria.Program.LaunchParameters.ContainsKey("-agentcontrolcheck")
+        && Environment.GetEnvironmentVariable("TB_EXPLORATION_PAUSE_CHECK") == "1"
+        && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("TB_EXPLORATION_OBJECTIVE"));
+
+    public override void OnWorldLoad() => lastProgression = null;
+
+    public override void PostUpdateEverything()
+    {
+        if (!Enabled || Main.gameMenu || Main.GameUpdateCount % 60 != 0) return;
+        string progression = $"hardmode={Main.hardMode}"
+            + $" destroyer={NPC.downedMechBoss1} twins={NPC.downedMechBoss2} prime={NPC.downedMechBoss3}"
+            + $" plantera={NPC.downedPlantBoss} golem={NPC.downedGolemBoss} cultist={NPC.downedAncientCultist}"
+            + $" solar={NPC.downedTowerSolar} vortex={NPC.downedTowerVortex} nebula={NPC.downedTowerNebula}"
+            + $" stardust={NPC.downedTowerStardust} moon_lord={NPC.downedMoonlord}";
+        if (progression == lastProgression) return;
+        lastProgression = progression;
+        Console.WriteLine($"EXPLORATION_PROGRESSION tick={Main.GameUpdateCount} {progression}");
+    }
+}
+
+public sealed class ExplorationDamageProbe : GlobalNPC
+{
+    public override void OnHitByProjectile(NPC npc, Projectile projectile, NPC.HitInfo hit, int damageDone)
+    {
+        if (ExplorationProgressProbe.Enabled && npc.type is NPCID.WallofFlesh or NPCID.WallofFleshEye
+            && projectile.type == ProjectileID.Dynamite && projectile.owner == Main.myPlayer)
+            Console.WriteLine($"EXPLORATION_DYNAMITE tick={Main.GameUpdateCount} npc={npc.type} damage={damageDone} hp={npc.life}");
+    }
+}
