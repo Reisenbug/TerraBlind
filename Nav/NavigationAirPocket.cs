@@ -137,8 +137,8 @@ public static class NavigationAirPocket
             if (!submerged) return false;
             if (surfaceFailed && Vector2.DistanceSquared(player.position, failedSurfaceOrigin) < 32 * 32) return false;
             if (budget > EscapeReserveFrames + 110) return false;
-            int rise = AirRise(player, canSwim);
-            if (rise == 0 || budget > EscapeReserveFrames + 24 + rise / 2) return false;
+            var ascent = AirRise(player, canSwim);
+            if (ascent.Pixels == 0 || budget > EscapeReserveFrames + ascent.Frames) return false;
             if (RecedingNav.Active) RecedingNav.InterruptForSurvival();
             surfacing = true;
             surfaceOrigin = player.position;
@@ -146,7 +146,7 @@ public static class NavigationAirPocket
             surfacePeakY = player.position.Y;
             surfaceBestBreath = player.breath;
             surfaceIdle = 0;
-            DiagLog.Write($"[survival-air] surfacing breath={player.breath} budget_frames={budget} rise={rise} x={surfaceOrigin.X:0.##} y={surfaceOrigin.Y:0.##}");
+            DiagLog.Write($"[survival-air] surfacing breath={player.breath} budget_frames={budget} rise={ascent.Pixels} estimated_frames={ascent.Frames} x={surfaceOrigin.X:0.##} y={surfaceOrigin.Y:0.##}");
             AgentChat.Say("Low air. Surfacing.");
         }
         else
@@ -179,17 +179,27 @@ public static class NavigationAirPocket
         return true;
     }
 
-    static int AirRise(Player player, bool canSwim)
+    static (int Pixels, int Frames) AirRise(Player player, bool canSwim)
     {
-        if (!canSwim && player.velocity.Y != 0 && !player.AnyExtraJumpUsable()) return 0;
-        int reach = canSwim ? 128 : 32;
-        for (int pixels = 8; pixels <= reach; pixels += 8)
+        bool extraJump = player.AnyExtraJumpUsable();
+        if (!canSwim && player.velocity.Y != 0 && player.jump <= 0 && !extraJump) return default;
+        float waterScale = player.ignoreWater || player.trident ? 1f : player.honeyWet || player.shimmerWet ? 0.25f : 0.5f;
+        float speed = Player.jumpSpeed * waterScale;
+        int hold = player.velocity.Y == 0 ? Player.jumpHeight : player.jump;
+        int reach = canSwim ? 128 : Math.Min(128, Math.Max(extraJump ? 32 : 0, (int)(hold * speed)));
+        bool collisionUp = Collision.up, collisionDown = Collision.down;
+        try
         {
-            var rise = new Vector2(0, -pixels);
-            if (Collision.TileCollision(player.position, rise, player.width, player.height).Y != rise.Y) return 0;
-            if (!Collision.DrownCollision(player.position + rise, player.width, player.height, player.gravDir)) return pixels;
+            for (int pixels = 4; pixels <= reach; pixels += 4)
+            {
+                var rise = new Vector2(0, -pixels);
+                if (Collision.TileCollision(player.position, rise, player.width, player.height).Y != rise.Y) return default;
+                if (!Collision.DrownCollision(player.position + rise, player.width, player.height, player.gravDir))
+                    return (pixels, 24 + (int)Math.Ceiling(pixels / Math.Max(1f, canSwim ? 2f : speed)));
+            }
         }
-        return 0;
+        finally { Collision.up = collisionUp; Collision.down = collisionDown; }
+        return default;
     }
 
     static bool FindPocket(Player player)
