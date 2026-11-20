@@ -50,8 +50,24 @@ public sealed class ScriptLibrary
             }
             const deficit=Math.max(requested-rooms.length,needs-vacant.length);
             if(deficit<=0)return {ok:true,outcome:'housing_available',housing:tool('housing',{action:'list'})};
-            const building=deficit>=4?4:1;
-            const site=tool('house_site',{rooms:building,...(anchor?{from_x:anchor.x,from_y:anchor.y}:{} )});
+            const building=deficit>1?4:1;
+            const known=surface.filter(room=>!anchor||Math.abs(room.x-anchor.x)<=100&&Math.abs(room.y-anchor.y)<=35);
+            let site;
+            if(known.length){
+              const right=Math.max(...known.map(room=>room.right??room.x+2))+3;
+              const left=Math.min(...known.map(room=>room.left??room.x-2))-3;
+              const row=anchor.bottom??anchor.y;
+              const west=left-building*5;
+              const eastQuery={rooms:building,from_x:right,from_y:row,min_x:right,max_ladder:4};
+              const westQuery={rooms:building,from_x:west,from_y:row,max_x:left,max_ladder:4,dir:-1};
+              const sides=Math.abs(right-anchor.x)<=Math.abs(west-anchor.x)?[eastQuery,westQuery]:[westQuery,eastQuery];
+              for(const query of sides){
+                site=tool('house_site',query);
+                if(site.found)break;
+              }
+            }else{
+              site=tool('house_site',{rooms:building,max_ladder:4,...(anchor?{from_x:anchor.x,from_y:anchor.y}:{})});
+            }
             if(!site.found)return {ok:false,outcome:'no_expansion_site',deficit,site};
             const result=tool('build_house',site.build_args);
             const after=tool('housing',{action:'list'});

@@ -2885,7 +2885,7 @@ public static partial class AgentTools
             case "house_site":
                 int rooms = Int(args, "rooms", 1), direction = Int(args, "dir", 1);
                 var site = new JsonObject { ["w"] = rooms * 5 + 1, ["h"] = 10, ["range"] = Int(args, "range", 100) };
-                foreach (string field in new[] { "from_x", "from_y" })
+                foreach (string field in new[] { "from_x", "from_y", "min_x", "max_x", "max_ladder" })
                     if (args[field] != null) site[field] = args[field].DeepClone();
                 result = await Call("/scan_house", site, token);
                 if (Bool(result, "found"))

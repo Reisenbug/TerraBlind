@@ -2887,7 +2887,8 @@ namespace TerraBlind
 				int fx = Get("from_x", ph != null ? ActExecutor.OriginCx(ph) : 0);
 				int fy = Get("from_y", ph != null ? ActExecutor.OriginCy(ph) : 0);
 				int w = Get("w", 21), h = Get("h", 10), range = Get("range", 200);
-				bool fnd = Predicates.ScanHouse(fx, fy, w, h, range, out int hx2, out int hy2, out int sc2);
+				bool fnd = Predicates.ScanHouse(fx, fy, w, h, range, out int hx2, out int hy2, out int sc2,
+					minX: Get("min_x", 1), maxX: Get("max_x", Main.maxTilesX - 2), maxLadder: Get("max_ladder", int.MaxValue));
 				var sbh = new System.Text.StringBuilder();
 				sbh.Append("{\"found\":").Append(fnd ? "true" : "false");
 				sbh.Append(",\"from\":[").Append(fx).Append(',').Append(fy).Append(']');

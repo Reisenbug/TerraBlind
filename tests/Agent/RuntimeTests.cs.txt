@@ -36,6 +36,27 @@ static class RuntimeTests
                     ? list.ToJsonString() : throw new Exception("a complete base should not build another room")),
                 _ => Task.CompletedTask, default);
             Check(reused["value"]?["outcome"]?.ToString() == "housing_available", "existing rooms were not reused");
+            var single = list["rooms"][0].DeepClone();
+            var singleReport = new JsonObject { ["ok"] = true, ["rooms"] = new JsonArray(single),
+                ["homeless"] = new JsonArray() };
+            bool constructed = false;
+            int buildCalls = 0;
+            var expanded = await AgentScript.Run("const input={rooms:3};\n" + ScriptLibrary.Example("ensure_town_housing")["code"],
+                5, (_, _) => { }, (name, args, _) =>
+                {
+                    if (name == "housing") return Task.FromResult((constructed ? list : singleReport).ToJsonString());
+                    if (name == "house_site")
+                    {
+                        Check(args["rooms"].GetValue<int>() == 4 && args["max_ladder"].GetValue<int>() == 4
+                            && (args["min_x"]?.GetValue<int>() >= 104 || args["max_x"]?.GetValue<int>() <= 96),
+                            "expansion was not kept close to the surface and beside the existing room");
+                        return Task.FromResult("{\"found\":true,\"build_args\":{\"rooms\":4}}");
+                    }
+                    Check(name == "build_house" && args["rooms"].GetValue<int>() == 4, "expansion split into single rooms");
+                    constructed = true; buildCalls++;
+                    return Task.FromResult("{\"outcome\":\"done\"}");
+                }, _ => Task.CompletedTask, default);
+            Check(expanded["value"]?["ok"]?.GetValue<bool>() == true && buildCalls == 1, "multi-room construction was not verified in one call");
             Terraria.WorldGen.RoomCheck = (x, _) => x != 100;
             list = await Call("housing", new JsonObject { ["action"] = "list" });
             Check(!list["rooms"][0]["suitable"].GetValue<bool>(), "a damaged room was still reported suitable");

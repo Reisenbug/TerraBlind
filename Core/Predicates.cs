@@ -232,14 +232,15 @@ namespace TerraBlind
 		// needLadder=false:地狱起点悬空,底下常是岩浆,要梯子就一个候选都选不出(锚是人造的)
 		// needLava=true:整排底下必须是岩浆。肉山那套要把向导从房里捅下去
 		public static bool ScanHouse(int fromX, int fromY, int w, int h, int range,
-			out int hitX, out int hitY, out int scanned, bool needLadder = true, bool needLava = false)
+			out int hitX, out int hitY, out int scanned, bool needLadder = true, bool needLava = false,
+			int minX = 1, int maxX = int.MaxValue, int maxLadder = int.MaxValue)
 		{
 			hitX = hitY = -1; scanned = 0;
 			for (int d = 0; d <= range; d++)
 				for (int sgn = 0; sgn < (d == 0 ? 1 : 2); sgn++)
 				{
 					int x = d == 0 ? fromX : (sgn == 0 ? fromX - d : fromX + d);
-					if (x < 1 || x + w >= Main.maxTilesX - 1) continue;
+					if (x < minX || x < 1 || x + w - 1 > maxX || x + w >= Main.maxTilesX - 1) continue;
 					// 同一列里由近及远试各个高度,先到先得 → 返回的总是离出发点最近的合法位置。
 					for (int dy = 0; dy <= VertScan; dy++)
 						for (int vs = 0; vs < (dy == 0 ? 1 : 2); vs++)
@@ -248,7 +249,8 @@ namespace TerraBlind
 							if (!InBounds(x, y) || !InBounds(x + w - 1, y - h + 1)) continue;
 							scanned++;
 							// 房址可以悬空:平台梯从下面的地一路搭上来。要求那一列 L 格全空、L<=20、底下是地
-							if (needLadder && LadderLen(x, y) < 0) continue;
+							int ladder = needLadder ? LadderLen(x, y) : 0;
+							if (ladder < 0 || ladder > maxLadder) continue;
 							bool ok = true;
 							for (int ix = 0; ix < w && ok; ix++)
 								for (int iy = 0; iy < h && ok; iy++)
