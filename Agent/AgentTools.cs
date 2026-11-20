@@ -915,6 +915,17 @@ public static partial class AgentTools
             return true;
         }, token));
     static readonly Dictionary<string, int> Tracking = new();
+    static readonly Dictionary<string, HashSet<int>> PreparationMaterials = new();
+    internal static IReadOnlyCollection<int> MaterialsFor(string node) => PreparationMaterials.TryGetValue(node, out var items)
+        ? items : Array.Empty<int>();
+    internal static void RememberPreparationMaterials(string node, JsonArray recipes)
+    {
+        if (!PreparationMaterials.TryGetValue(node, out var items)) PreparationMaterials[node] = items = new HashSet<int>();
+        foreach (var recipe in recipes)
+            if (recipe?["ingredients"] is JsonArray ingredients)
+                foreach (var ingredient in ingredients)
+                    if (ingredient?["type"] is JsonValue type && type.TryGetValue<int>(out int id) && id > 0) items.Add(id);
+    }
     static readonly HashSet<string> Discoveries = new();
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
@@ -926,7 +937,7 @@ public static partial class AgentTools
         AllowTaskRecall = instruction == null || !System.Text.RegularExpressions.Regex.IsMatch(instruction,
             @"(?:不要|不能|禁止|不许|不得)\s*回城|\b(?:no|never|don't|do not|must not)\s+recall\b",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-        ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); Discoveries.Clear(); continuedActions.Clear();
+        ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); PreparationMaterials.Clear(); Discoveries.Clear(); continuedActions.Clear();
         recoveredActions.Clear(); deferredNodes.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null;
         inventoryPreparationNotified = false; LastContinuation = ExecutionContinuity = LastRouteLoot = null;
         routeChests.Clear(); routeChestRetries.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset();
@@ -2915,8 +2926,14 @@ public static partial class AgentTools
                 result = await QueryDescent("/find_descent", args, token);
                 break;
             case "item_info": case "find_biome":
-            case "tile_names": case "recipe":
+            case "tile_names":
                 result = await Call("/" + name, args, token);
+                break;
+            case "recipe":
+                string recipeNode = ActionTasks.NodeContext.Value;
+                result = await Call("/recipe", args, token);
+                if (!string.IsNullOrEmpty(recipeNode) && result["recipes"] is JsonArray recipes)
+                    await NativeAgent.OnMain(() => { RememberPreparationMaterials(recipeNode, recipes); return true; }, token);
                 break;
             case "find_pyramids":
                 return (await NativeAgent.OnMain(FindPyramids, token)).ToJsonString(ModelJson);

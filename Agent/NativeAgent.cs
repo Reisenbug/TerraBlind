@@ -398,9 +398,9 @@ public class NativeAgent : ModSystem
 
     static HashSet<int> ProtectedItems(JsonObject plan) => plan["steps"].AsArray().OfType<JsonObject>()
         .Where(s => s["status"]?.ToString() != "completed")
-        .SelectMany(s => s["conditions"].AsArray().OfType<JsonObject>())
-        .Where(c => c["kind"]?.ToString() is "item" or "equipped")
-        .Select(c => c["type"].GetValue<int>()).ToHashSet();
+        .SelectMany(s => s["conditions"].AsArray().OfType<JsonObject>()
+            .Where(c => c["kind"]?.ToString() is "item" or "equipped")
+            .Select(c => c["type"].GetValue<int>()).Concat(AgentTools.MaterialsFor(s["id"].ToString()))).ToHashSet();
 
     static int ReadNumber(JsonNode value) => value is JsonValue v && v.TryGetValue<int>(out int number) ? number : -1;
 

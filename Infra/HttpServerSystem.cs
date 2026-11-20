@@ -1053,7 +1053,8 @@ namespace TerraBlind
 								? Terraria.ID.ItemID.Search.GetName(ing.type) : "";
 							sbr.Append("{\"name\":\"").Append(JsonEsc(ing.Name ?? ""))
 							   .Append("\",\"internal\":\"").Append(JsonEsc(iinm))
-							   .Append("\",\"need\":").Append(ing.stack)
+							   .Append("\",\"type\":").Append(ing.type)
+							   .Append(",\"need\":").Append(ing.stack)
 							   .Append(",\"have\":").Append(have + inVoidBag)
 							   .Append(",\"in_inventory\":").Append(have)
 							   .Append(",\"in_void_bag\":").Append(inVoidBag).Append('}');

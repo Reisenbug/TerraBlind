@@ -299,8 +299,9 @@ static class RuntimeTests
                 player.inventory[20] = new Terraria.Item { type = 443, stack = 3 };
                 player.inventory[21] = new Terraria.Item { type = 444, stack = 2 };
                 player.inventory[22] = new Terraria.Item { type = 5254, stack = 1, createTile = Terraria.ID.TileID.Painting2X3 };
+                player.inventory[23] = new Terraria.Item { type = 445, stack = 4 };
                 player.trashItem = Game.mouseItem = new Terraria.Item();
-                var answer = new JsonObject { ["trash_slots"] = new JsonArray(20, 21, 22) };
+                var answer = new JsonObject { ["trash_slots"] = new JsonArray(20, 21, 22, 23) };
                 var roomyBag = PvpInventory.Review();
                 Check(Agent.ApplyCleanup(roomyBag, roomyBag["inventory"].AsArray().OfType<JsonObject>().ToArray(), answer).Count == 0
                     && player.inventory[20].stack == 3, "cleanup discarded a stack without inventory pressure");
@@ -321,7 +322,11 @@ static class RuntimeTests
                     Check(chance < 0.9 ? judged == null : judged?["trash_slots"]?[0]?.GetValue<int>() == 20,
                         "uncertain Jev decisions did not defer to the inventory agent, or a decisive answer was lost");
                 }
-                var candidate = bag["inventory"].AsArray().OfType<JsonObject>().Where(i => i["slot"].GetValue<int>() is 20 or 21 or 22).ToArray();
+                var candidate = bag["inventory"].AsArray().OfType<JsonObject>().Where(i => i["slot"].GetValue<int>() is >= 20 and <= 23).ToArray();
+                AgentTools.RememberPreparationMaterials("route", JsonNode.Parse("[{\"ingredients\":[{\"type\":445}]}]").AsArray());
+                var materials = new JsonObject { ["trash_slots"] = new JsonArray(23) };
+                Check(Agent.ApplyCleanup(bag, candidate, materials).Count == 0 && player.inventory[23].stack == 4,
+                    "a queued inventory proposal discarded a recipe ingredient newly needed by a pending node");
                 player.inventory[20].stack++;
                 var discarded = Agent.ApplyCleanup(bag, candidate, answer);
                 Check(discarded.Count == 0 && player.inventory[20].stack == 4 && player.inventory[21].stack == 2 && player.inventory[22].stack == 1,
