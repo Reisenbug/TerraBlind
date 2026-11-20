@@ -122,6 +122,7 @@ namespace TerraBlind
 			DiagLog.Write($"[deck] start 料={(itemName.Length == 0 ? "任意方块:" + PickBlock() : itemName)} 共{line.Count}格 从i={_idx} ({line[_idx].x},{line[_idx].y})");
 			return true;
 		}
+		internal static int ResumeIndex => System.Math.Clamp(_idx, 0, _line.Count - 1);
 
 		public static void Stop()
 		{

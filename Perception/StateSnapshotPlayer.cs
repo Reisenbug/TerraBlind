@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Terraria;
 using Terraria.ID;
 using Terraria.ModLoader;
@@ -39,6 +40,11 @@ namespace TerraBlind
 		private static System.Collections.Generic.List<(int x, int y)> _pendingDeck;
 		private static int _deckFrom;   // 房子沿线挪过之后,桥要从房子右端接着铺
 		private static bool _wofAfterDeck;   // 桥铺完接着走肉山那一套
+		internal sealed record HellConstruction(List<(int x, int y)> Line, int DeckFrom, int Direction, string Phase,
+			bool Replanned = false, int? DeckCursor = null, (int x, int y)? RecoveryFooting = null);
+		private static HellConstruction _hellConstruction, _pausedConstruction;
+		internal static string HellRecoveryFailure { get; private set; }
+		internal static bool HellConstructionResumed { get; private set; }
 		private static int _deckStarve;      // 铺桥期间 DeckBuilder.Tick 连着几帧没轮到
 
 		public override void ProcessTriggers(Terraria.GameInput.TriggersSet triggersSet)
@@ -81,6 +87,8 @@ namespace TerraBlind
 				// BridgeStart 已经把"放第一格 + 站上去 + 站稳60帧"全办了,这里只看它的结论
 				if (BridgeStart.Outcome != "done")
 				{
+					if (_hellConstruction is { Replanned: false } current && RecedingNav.LastStop == "walled_in"
+						&& TryAlternateHellSite(Main.LocalPlayer, current)) return;
 					// 【必须写日志】。原来只 Chatter.Say,而录视频时 Diag=false ---
 					// 房子没开工、屏幕和日志都一个字没有,只能靠猜
 					DiagLog.Write($"[reach-test] 没站上桥起点({sx2},{sy2}):{BridgeStart.Outcome}/{BridgeStart.Reason},房子起不了");
@@ -88,7 +96,7 @@ namespace TerraBlind
 				}
 				else
 				{
-					int hdir2 = ActExecutor.OriginCx(Main.LocalPlayer) < Main.maxTilesX / 2 ? 1 : -1;
+					int hdir2 = _hellConstruction?.Direction ?? (ActExecutor.OriginCx(Main.LocalPlayer) < Main.maxTilesX / 2 ? 1 : -1);
 					DiagLog.Write($"[reach-test] 第一格好了({sx2},{sy2}),盖房子 dir={hdir2}");
 					if (HouseBuilder.Start(1, hdir2, sx2, sy2, out string hw2))
 					{ _hellHouseStarted = true; Chatter.Say($"[TerraBlind] 爬上桥起点并盖房 ({sx2},{sy2})", 120, 255, 120); }
@@ -346,6 +354,13 @@ namespace TerraBlind
 			// 选址单独拆成 PickHellSite。【传送落点不走这儿】:那是 A 点,在这一步之前
 			var rr = PickHellSite(rbx, rdir);
 			if (!rr.Found) { why = $"算不出线:{rr.Why}"; return false; }
+			HellConstructionResumed = false;
+			return BeginHellConstruction(rp, rr, rdir, false, out why);
+		}
+
+		private static bool BeginHellConstruction(Player rp, HellLine.Result rr, int rdir, bool replanned, out string why)
+		{
+			why = "";
 			// 房子占前 RoomWidth+1 【列】,而线里变高处插了衔接格,下标不再等于列数 --
 			// 数到第 RoomWidth+1 个不同的列为止
 			_deckFrom = rr.Line.Count;
@@ -381,9 +396,92 @@ namespace TerraBlind
 			_hellHouseStarted = false;
 			_pendingStand = (rsx, rsy);
 			_pendingDeck = rr.Line;
-			DiagLog.Write($"[reach-test] 人({rbx},{ActExecutor.OriginCy(rp)}) → 桥起点({rsx},{rsy}) dir={rdir}");
+			_hellConstruction = new HellConstruction(rr.Line, _deckFrom, rdir, "bridge", replanned);
+			HellRecoveryFailure = null;
+			DiagLog.Write($"[reach-test] 人({ActExecutor.OriginCx(rp)},{ActExecutor.OriginCy(rp)}) → 桥起点({rsx},{rsy}) dir={rdir}");
 			Chatter.Say($"[TerraBlind] 去桥起点({rsx},{rsy})", 120, 255, 120);
 			return true;
+		}
+
+		private static bool TryAlternateHellSite(Player player, HellConstruction from)
+		{
+			if (player == null || player.dead || player.velocity.Y != 0f || !player.ZoneUnderworldHeight) return false;
+			int x = ActExecutor.OriginCx(player);
+			foreach (int dir in new[] { from.Direction, -from.Direction })
+			{
+				var next = PickHellSite(x, dir);
+				if (!next.Found || next.HouseLavaCols < HouseBuilder.RoomWidth + 1 || next.Line[0] == from.Line[0]) continue;
+				var (startX, startY) = next.Line[0];
+				if (!Reach.CanPlace(player, startX, startY) || Predicates.IsLava(startX, startY)
+					|| !Predicates.IsGround(startX, startY) && !MazeWand.PlatformAnchor(startX, startY)) continue;
+				if (BeginHellConstruction(player, next, dir, true, out _)) return true;
+			}
+			return false;
+		}
+
+		internal static HellConstruction CaptureHellConstruction()
+		{
+			if (_pausedConstruction != null) return _pausedConstruction;
+			if (_hellConstruction == null) return null;
+			if (_pendingStand.HasValue) return _hellConstruction with { Phase = "bridge" };
+			if (_pendingDeck != null && _hellHouseStarted)
+				return _hellConstruction with { Phase = HouseBuilder.Outcome == "done" ? "deck" : "house" };
+			if (_wofAfterDeck) return _hellConstruction with { Phase = "deck", DeckCursor = DeckBuilder.ResumeIndex };
+			return null;
+		}
+
+		internal static void RetainHellConstruction(HellConstruction plan) => _pausedConstruction = plan;
+
+		internal static void ResumeHellConstruction()
+		{
+			if (_pausedConstruction is not { } plan || AgentTools.ContactEscapeActive) return;
+			var player = Main.LocalPlayer;
+			if (player == null || player.dead || !player.active) return;
+			if (player.velocity.Y != 0f) return;
+			_pausedConstruction = null;
+			if (!player.ZoneUnderworldHeight || player.suffocating || !player.lavaImmune && player.lavaTime <= 0
+				&& Collision.LavaCollision(player.position, player.width, player.height))
+			{
+				HellRecoveryFailure = "no_safe_underworld_footing_after_escape";
+				return;
+			}
+			var (x, y) = plan.Line[0];
+			var footing = (ActExecutor.OriginCx(player), ActExecutor.OriginCy(player));
+			if (plan.Phase == "bridge" && plan.RecoveryFooting == footing)
+			{
+				if (!plan.Replanned && TryAlternateHellSite(player, plan)) HellConstructionResumed = true;
+				else HellRecoveryFailure = "same_footing_after_repeated_escape";
+				return;
+			}
+			string reason = "missing_platforms";
+			bool started;
+			if (plan.Phase == "deck")
+			{
+				int cursor = plan.DeckFrom;
+				while (cursor < (plan.DeckCursor ?? plan.DeckFrom) && DeckBuilder.DeckReady(plan.Line[cursor].x, plan.Line[cursor].y)) cursor++;
+				started = DeckBuilder.Start("", plan.Line, cursor, out reason);
+				_wofAfterDeck = started;
+			}
+			else if (plan.Phase == "house" && Predicates.IsGround(x, y) && Reach.CanPlace(player, x, y))
+			{
+				started = HouseBuilder.Start(1, plan.Direction, x, y, out reason);
+				_hellHouseStarted = started;
+				_pendingDeck = started ? plan.Line : null;
+			}
+			else
+			{
+				int item = Unstick.PlatformItem(player);
+				started = item > 0 && BridgeStart.Start(item.ToString(), x, y, out reason);
+				if (started) { _pendingStand = (x, y); _pendingDeck = plan.Line; }
+			}
+			if (started)
+			{
+				_hellConstruction = plan with { RecoveryFooting = footing };
+				_deckFrom = plan.DeckFrom;
+				HellConstructionResumed = true;
+			}
+			else HellRecoveryFailure = reason;
+			DiagLog.Write($"[hell-construction] resume={started} phase={plan.Phase} site=({x},{y}) reason={reason}");
 		}
 
 		public static void StopHellRun()
@@ -392,6 +490,9 @@ namespace TerraBlind
 			HouseBuilder.Stop(); DeckBuilder.Stop(); WofPrep.Stop();
 			if (WofFight.On) WofFight.Toggle();
 			_pendingStand = null; _pendingDeck = null; _wofAfterDeck = false; _hellHouseStarted = false;
+			_hellConstruction = _pausedConstruction = null;
+			HellRecoveryFailure = null;
+			HellConstructionResumed = false;
 			DiagLog.Write("[reach-test] 地狱流程停止");
 		}
 
@@ -405,6 +506,7 @@ namespace TerraBlind
 		// 跑到哪一步了。给 /hell_run_status 用。Python 靠它判断该不该继续等
 		public static string HellRunPhase()
 		{
+			if (_pausedConstruction != null) return "recovering_construction";
 			if (WofFight.On) return "fight";
 			if (WofPrep.IsRunning) return "wof:" + WofPrep.Phase;
 			if (DeckBuilder.IsRunning) return "deck";
@@ -718,7 +820,7 @@ namespace TerraBlind
 				_wofAfterDeck = false;
 				if (DeckBuilder.Outcome == "done")
 				{
-					int wdir = ActExecutor.OriginCx(Main.LocalPlayer) < Main.maxTilesX / 2 ? 1 : -1;
+				int wdir = _hellConstruction?.Direction ?? (ActExecutor.OriginCx(Main.LocalPlayer) < Main.maxTilesX / 2 ? 1 : -1);
 					if (WofPrep.Start(HouseBuilder.TorchWx, HouseBuilder.TorchWy, wdir, out string ww))
 						Chatter.Say("[TerraBlind] 桥好了,开始肉山流程", 120, 255, 120);
 					else Chatter.Say($"[TerraBlind] 起不了:{ww}", 255, 120, 120);

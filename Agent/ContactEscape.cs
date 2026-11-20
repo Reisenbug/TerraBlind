@@ -77,7 +77,7 @@ public class AgentContactEscape : ModSystem
             if (player.inventory[slot].buffType == BuffID.Gills) triedGills = true;
             else triedWaterRecall = true;
         }
-        AgentTools.StopInputs();
+        AgentTools.StopInputs(suspendHellConstruction: true);
         lavaItem = new ItemUseRequest { Slot = slot, TargetWx = (int)player.Center.X / 16,
             TargetWy = (int)player.Center.Y / 16, DurationTicks = 120 };
         frames = 0; lavaItemStarted = false;
@@ -246,7 +246,7 @@ public class AgentContactEscape : ModSystem
                 else if (hot.type < 0) DiagLog.Write("[agent_escape] no_checked_side");
                 return;
             }
-            AgentTools.StopInputs();
+            AgentTools.StopInputs(suspendHellConstruction: true);
             AgentTools.ContactEscapeActive = true;
             frames = clearedTiles = 0; clearingStarted = false; startX = player.position.X;
             AgentTools.LastContactEscape = new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["status"] = clearing == null ? "moving" : "clearing_contact",

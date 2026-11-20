@@ -1077,10 +1077,13 @@ public static partial class AgentTools
         StopInputs();
     }
 
-    internal static void StopInputs(bool preserveAttack = false)
+    internal static void StopInputs(bool preserveAttack = false, bool suspendHellConstruction = false)
     {
+        var interrupted = suspendHellConstruction && ControlSession.Tool == "hell_run"
+            ? StateSnapshotPlayer.CaptureHellConstruction() : null;
         Halt.All();
         StateSnapshotPlayer.StopRemoteTask();
+        if (interrupted != null) StateSnapshotPlayer.RetainHellConstruction(interrupted);
         if (!preserveAttack) FightCoordinator.Stop();
         ReplaySystem.Stop(); KeyPress.Clear();
         Combat.Stop(); Dodge.Stop();
@@ -3235,13 +3238,21 @@ public static partial class AgentTools
                 result = started.Result;
                 if (!Rejected(result))
                 {
-                    var ended = await Wait("/hell_run_status", "running", "/hell_run_stop", 0, token);
+                    var ended = await Wait("/hell_run_status", "running", "/hell_run_stop", 0, token,
+                        navigationProgress: _ => NativeAgent.OnMain<JsonObject>(() =>
+                        {
+                            StateSnapshotPlayer.ResumeHellConstruction();
+                            return null;
+                        }, token));
                     result = await NativeAgent.OnMain(() =>
                     {
                         if (Text(ended, "phase") != "idle") return ended;
                         ended["hardmode"] = Main.hardMode;
                         if (Main.hardMode) return ended;
-                        if (LastContactEscape != null && !ReferenceEquals(started.Escape, LastContactEscape))
+                        if (StateSnapshotPlayer.HellRecoveryFailure is string recoveryFailure)
+                            ended["construction_recovery_failure"] = recoveryFailure;
+                        if (LastContactEscape != null && !ReferenceEquals(started.Escape, LastContactEscape)
+                            && (!StateSnapshotPlayer.HellConstructionResumed || StateSnapshotPlayer.HellRecoveryFailure != null))
                         {
                             ended["error"] = "hell_run_contact_escape";
                             ended["outcome"] = "interrupted";

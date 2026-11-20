@@ -160,6 +160,49 @@ static class RuntimeTests
                 var interrupted = await Call("hell_run", new JsonObject());
                 Check(interrupted["error"]?.ToString() == "hell_run_contact_escape"
                     && interrupted["contact_escape"]?["reason"]?.ToString() == "predicted_contact", "survival takeover was reported as an idle result");
+
+                var construction = new object();
+                int polls = 0, resumed = 0;
+                StateSnapshotPlayer.HellStart = () => { StateSnapshotPlayer.ActiveConstruction = construction; return true; };
+                StateSnapshotPlayer.ResumeConstruction = () =>
+                {
+                    Check(ReferenceEquals(construction, StateSnapshotPlayer.HeldConstruction) && !AgentTools.ContactEscapeActive,
+                        "construction changed or resumed during emergency movement");
+                    StateSnapshotPlayer.ActiveConstruction = StateSnapshotPlayer.HeldConstruction;
+                    StateSnapshotPlayer.HeldConstruction = null;
+                    resumed++;
+                };
+                HttpServerSystem.Handler = (_, _) =>
+                {
+                    if (++polls == 1)
+                    {
+                        AgentTools.StopInputs(suspendHellConstruction: true);
+                        Check(ReferenceEquals(StateSnapshotPlayer.HeldConstruction, construction) && StateSnapshotPlayer.ActiveConstruction == null,
+                            "contact escape discarded the construction or left the old inputs active");
+                        AgentTools.ContactEscapeActive = true;
+                    }
+                    else if (polls == 2)
+                    {
+                        Check(resumed == 0, "construction moved while escape held inputs");
+                        AgentTools.ContactEscapeActive = false;
+                    }
+                    else if (resumed > 0)
+                    {
+                        Game.hardMode = true;
+                        return (200, "{\"phase\":\"idle\",\"running\":false}");
+                    }
+                    return (200, "{\"phase\":\"recovering_construction\",\"running\":true}");
+                };
+                var recovered = await Call("hell_run", new JsonObject());
+                Check(recovered["hardmode"]?.GetValue<bool>() == true && resumed == 1 && polls == 3,
+                    "original hell_run did not wait and resume without a new action");
+                AgentTools.StopInputs();
+                Check(StateSnapshotPlayer.ActiveConstruction == null && StateSnapshotPlayer.HeldConstruction == null,
+                    "explicit stop retained an automatic construction restart");
+                Console.WriteLine("PASS: emergency takeover keeps one hell_run alive until its construction can resume");
+
+                StateSnapshotPlayer.HellStart = () => true;
+                HttpServerSystem.Handler = (_, _) => (200, "{\"phase\":\"idle\",\"running\":false,\"wof_outcome\":\"idle\"}");
                 Game.hardMode = true;
                 var complete = await Call("hell_run", new JsonObject());
                 Check(complete["error"] == null && complete["hardmode"]?.GetValue<bool>() == true,
@@ -168,6 +211,9 @@ static class RuntimeTests
             finally
             {
                 StateSnapshotPlayer.HellStart = null;
+                StateSnapshotPlayer.ResumeConstruction = null;
+                StateSnapshotPlayer.ActiveConstruction = StateSnapshotPlayer.HeldConstruction = null;
+                AgentTools.ContactEscapeActive = false;
                 Game.hardMode = previousHardmode;
                 AgentTools.LastContactEscape = previousEscape;
             }

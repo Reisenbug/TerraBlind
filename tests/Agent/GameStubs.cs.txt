@@ -651,8 +651,15 @@ namespace TerraBlind
     public static class StateSnapshotPlayer
     {
         public static Func<bool> HellStart;
+        public static Action ResumeConstruction;
+        public static object ActiveConstruction, HeldConstruction;
+        public static string HellRecoveryFailure { get; set; }
+        public static bool HellConstructionResumed { get; set; }
         public static bool StartHellRun(out string why) { why = "fixture_start"; return HellStart?.Invoke() == true; }
-        public static void StopRemoteTask() { }
+        public static object CaptureHellConstruction() => HeldConstruction ?? ActiveConstruction;
+        public static void RetainHellConstruction(object plan) => HeldConstruction = plan;
+        public static void ResumeHellConstruction() { if (HeldConstruction != null && !AgentTools.ContactEscapeActive) ResumeConstruction?.Invoke(); }
+        public static void StopRemoteTask() { ActiveConstruction = HeldConstruction = null; HellRecoveryFailure = null; HellConstructionResumed = false; }
     }
     public static class BridgeStart
     {
