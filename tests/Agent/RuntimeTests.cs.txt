@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -270,6 +271,38 @@ static class RuntimeTests
                 Game.worldSurface = 200;
             }
             finally { desert.WallType = originalWall; Game.tile[30, 55] = desert; }
+
+            var crystals = new[] { (x: 30, y: 55), (x: 90, y: 55), (x: 91, y: 55), (x: 90, y: 67), (x: 117, y: 55) };
+            var previousCrystals = crystals.ToDictionary(cell => cell, cell => Game.tile[cell.x, cell.y]);
+            try
+            {
+                foreach (var (x, y) in crystals)
+                    Game.tile[x, y] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.Heart, TileFrameX = x == 91 ? 18 : 0 };
+                var result = await Call("early_descent", new JsonObject());
+                var route = result["route"];
+                var stops = route["stops"].AsArray();
+                Check(route["biome"].ToString() == "jungle" && stops.Count == 2
+                    && stops.Select(stop => stop["y"].GetValue<int>()).SequenceEqual(new[] { 55, 67 }),
+                    "early expedition chose the nearest crystal over the productive route or counted a duplicate/unreachable tile");
+
+                int gathered = 0, carried = 3;
+                var attempted = new List<int>();
+                var executed = await AgentScript.Run("const input=" + new JsonObject { ["route"] = route.DeepClone(), ["crystals"] = 1 }.ToJsonString()
+                    + ";\n" + ScriptLibrary.Example("early_exploration_route")["code"], 10, (_, _) => { }, (name, args, _) =>
+                {
+                    if (name == "get_state") return Task.FromResult("{\"inventory_counts\":{\"29\":" + carried + "}}");
+                    if (name == "nav_to") return Task.FromResult("{\"done\":true}");
+                    Check(name == "gather" && args["source_area"]["width"].GetValue<int>() == 2,
+                        "route attempted an unscoped collection");
+                    attempted.Add(args["source_area"]["y"].GetValue<int>());
+                    if (++gathered == 1) return Task.FromResult("{\"outcome\":\"source_unavailable\"}");
+                    carried++;
+                    return Task.FromResult("{\"outcome\":\"enough\"}");
+                }, _ => Task.CompletedTask, default);
+                Check(executed["value"]?["status"]?.ToString() == "collected" && attempted.SequenceEqual(new[] { 55, 67 }),
+                    "route did not move to the prepared next crystal after the first source was unavailable: " + executed);
+            }
+            finally { foreach (var (cell, tile) in previousCrystals) Game.tile[cell.x, cell.y] = tile; }
 
             var slopes = Enumerable.Range(50, 31).Select(y => (x: y, y)).ToArray();
             var shaft = Enumerable.Range(50, 31).Select(y => (x: 90, y)).ToArray();

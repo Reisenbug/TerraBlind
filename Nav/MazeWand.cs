@@ -13,7 +13,6 @@ namespace TerraBlind
         // cost ≈ 每格相对耗时。走 3px/帧,落到头 10px/帧,所以往下约是横走的 1/3;往上最慢。
         // 挖按真帧数:铜镐石头 45 帧/格,走一格 5.3 帧=3,故横挖 26。原来 120 等于"绕 40 格也比挖便宜",墙前必掉头。
         const int MoveDown = 1, MoveSide = 3, MoveUp = 9;
-        const int DigDown = 26, DigSide = 26, DigUp = 26;   // 【每格】挖价,要乘实际挖的格数
         const int DigUpLift = 19;   // 向上挖额外一次性的垫脚钱:凿开还得砌东西站上去,和挖几格无关
         const int PillarUp = 45;   // vertical ascent in ANCHORLESS open air beyond jump reach: only a pillar can do it, price the pillar, not a free climb
         const int JPlaceUp = 15;   // vertical ascent beyond jump reach WITH a platform anchor nearby: a jump-place ladder does it ~3× faster than pillaring
@@ -247,7 +246,7 @@ namespace TerraBlind
         public static bool FieldPickStale()
         {
             if (_cachedField == null) return false;
-            return BestPickPower() != _fieldPickPower;
+            return ReadMiningTool() != _fieldMiningTool;
         }
 
         // 无状态:每次调用从给定格现描,不缓存。所以摔一跤/被击退/传送之后,下次重规划的线
@@ -277,7 +276,8 @@ namespace TerraBlind
         {
             // 只按【当前这把镐】给挖掘定价:一律按能挖算,线会直接穿过神庙(Picksaw 之前挖不动),
             // 边全被拒,只剩回头路,循环。
-            _fieldPickPower = BestPickPower();
+            var miningTool = ReadMiningTool();
+            _fieldMiningTool = miningTool;
             // 边距按段长缩放:固定 120 时相隔 10 格的两个宝藏也要 flood 250x250,串起来就是好几秒。
             int span = System.Math.Abs(sx - gx) + System.Math.Abs(sy - gy);
             int m = bigMargin ? FieldMargin : System.Math.Min(120, 24 + span / 4);
@@ -308,7 +308,7 @@ namespace TerraBlind
                 if (!closed.Add((cx, cy))) continue;
                 if (stopAtStart && cx == sx && cy == sy) break;
 
-                (int fixedCost, int digCells, bool wall) cellCost = default;
+                (int fixedCost, int digFrames, int extraDigFrames) cellCost = default;
                 bool cellPrepared = false;
 
                 for (int i = 0; i < 4; i++)
@@ -319,7 +319,7 @@ namespace TerraBlind
                     long stepStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                     if (!cellPrepared)
                     {
-                        cellCost = PrepareStepCost(cx, cy, _fieldPickPower);
+                        cellCost = PrepareStepCost(cx, cy, miningTool);
                         cellPrepared = true;
                     }
                     int sc = StepCost(cx, cy, nx, ny, cellCost);
@@ -379,7 +379,7 @@ namespace TerraBlind
         // 比任何一处直挖都便宜。
         public static Dictionary<(int, int), int> BuildFieldMulti(System.Collections.Generic.List<(int x, int y)> sources, int minX, int maxX, int minY, int maxY)
         {
-            int pickPower = BestPickPower();
+            var miningTool = ReadMiningTool();
 
             var dist = new Dictionary<(int, int), int>();
             var closed = new HashSet<(int, int)>();
@@ -396,12 +396,13 @@ namespace TerraBlind
                 int cost = priority.cost;
                 if (!closed.Add((cx, cy))) continue;
 
+                var cellCost = PrepareStepCost(cx, cy, miningTool);
                 for (int i = 0; i < 4; i++)
                 {
                     int nx = cx + dxs[i], ny = cy + dys[i];
                     if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
                     if (closed.Contains((nx, ny))) continue;
-                    int sc = StepCost(cx, cy, nx, ny, PrepareStepCost(cx, cy, pickPower));
+                    int sc = StepCost(cx, cy, nx, ny, cellCost);
                     if (sc == Impassable) continue;   // 挖不动 → 这条边不存在,别入队(直接相加会溢出)
                     // 和 BuildField 同一条:站不住的格不该发 H
                     int stand = StandPenalty(nx, ny);
@@ -420,7 +421,72 @@ namespace TerraBlind
         // (going down a chasm is cheap, climbing back out is not, a one-way field hides that).
         public static int StepCostPublic(int cx, int cy, int nx, int ny) => StepCost(cx, cy, nx, ny);
         public static int StepCostPublic(int cx, int cy, int nx, int ny, int pickPower)
-            => StepCost(cx, cy, nx, ny, PrepareStepCost(cx, cy, pickPower));
+            => StepCost(cx, cy, nx, ny, PrepareStepCost(cx, cy, ReadMiningTool(pickPower)));
+
+        internal static List<(int x, int y)> TraceDescent(Dictionary<(int, int), int> field, int x, int y)
+        {
+            var miningTool = ReadMiningTool();
+            var line = new List<(int x, int y)>();
+            var cell = (x, y);
+            var neighbors = new[] { (1, 0), (-1, 0), (0, 1), (0, -1) };
+            while (line.Count < 20000 && field.TryGetValue(cell, out int cost))
+            {
+                line.Add(cell);
+                if (cost == 0) break;
+                int bestCost = Impassable;
+                var best = cell;
+                foreach (var (dx, dy) in neighbors)
+                {
+                    var next = (x: cell.x + dx, y: cell.y + dy);
+                    if (!field.TryGetValue(next, out int remaining) || remaining >= cost) continue;
+                    int edge = StepCost(next.x, next.y, cell.x, cell.y, PrepareStepCost(next.x, next.y, miningTool));
+                    if (edge == Impassable || remaining + edge >= bestCost) continue;
+                    bestCost = remaining + edge;
+                    best = next;
+                }
+                if (best == cell) break;
+                cell = best;
+            }
+            return line;
+        }
+
+        internal static Dictionary<(int x, int y), (int junction, int cost)> OpenResourceApproaches(
+            IReadOnlyList<(int x, int y)> spine, int budget)
+        {
+            var costs = new Dictionary<(int x, int y), (int junction, int cost)>();
+            var queue = new PriorityQueue<(int x, int y), int>();
+            var open = new Dictionary<(int, int), bool>();
+            bool Passable((int x, int y) cell)
+            {
+                if (open.TryGetValue(cell, out bool cached)) return cached;
+                var (x, y) = cell;
+                var terrain = WorldGen.InWorld(x, y, 4) ? PrepareStepCost(x, y, default) : (Impassable, 0, 0);
+                return open[cell] = terrain.Item1 < 0 && terrain.Item2 == 0
+                    && !TerrainInspection.UndergroundDesertWall(x, y);
+            }
+            for (int i = 0; i < spine.Count; i++)
+                if (Passable(spine[i]) && costs.TryAdd(spine[i], (i, 0))) queue.Enqueue(spine[i], 0);
+
+            var neighbors = new[] { (1, 0), (-1, 0), (0, 1), (0, -1) };
+            while (queue.TryDequeue(out var cell, out int cost))
+            {
+                var source = costs[cell];
+                if (source.cost != cost) continue;
+                foreach (var (dx, dy) in neighbors)
+                {
+                    var next = (x: cell.x + dx, y: cell.y + dy);
+                    if (!Passable(next)) continue;
+                    int nextCost = cost + (dx != 0 ? MoveSide + AirCost(next.x, next.y, dx) : MoveDown + MoveUp)
+                        + MediumExtra(next.x, next.y);
+                    if (nextCost > budget || costs.TryGetValue(next, out var previous) && previous.cost <= nextCost) continue;
+                    costs[next] = (source.junction, nextCost);
+                    queue.Enqueue(next, nextCost);
+                }
+            }
+            foreach (var cell in new List<(int x, int y)>(costs.Keys))
+                if (!CellKind.Stands(cell.x, cell.y)) costs.Remove(cell);
+            return costs;
+        }
 
         // 人要【站在】这一格得先付多少。站得住=0;站不住就得自己造落脚点,那是真代价。
         // 判据只此一份(CellKind),不在这儿另编。
@@ -436,41 +502,49 @@ namespace TerraBlind
             }
         }
 
-        static int _fieldPickPower;   // best pick power captured at BuildField time (field is per-goal, rebuilt on new nav)
+        static (int power, float swingFrames) _fieldMiningTool;
         // 建场那一刻身上有没有方块。DropLands 是【逐格】调的(110万格),
         // 在里面扫 58 格背包会把建场从 1.5s 拖成几十秒。所以和 pickPower 一样,建场前取一次
 
         // 全身上下最好的镐力。【背包也算】-- 只扫热键栏的话镐在背包里就等于 pickPower=0,
         // 所有要挖的格变 Impassable,Dijkstra 到不了地狱 = "没找到路线"
-        public static int BestPickPower()
+        public static int BestPickPower() => ReadMiningTool().power;
+
+        static (int power, float swingFrames) ReadMiningTool(int requiredPower = -1)
         {
             var pl = Main.LocalPlayer;
-            if (pl == null) return 0;
-            int best = 0;
+            if (pl == null) return default;
+            int power = 0;
+            float swingFrames = 0;
             for (int i = 0; i < 54 && i < pl.inventory.Length; i++)
             {
                 var it = pl.inventory[i];
-                if (it != null && !it.IsAir && it.pick > best) best = it.pick;
+                if (it == null || it.IsAir || it.pick <= 0 || requiredPower >= 0 && it.pick != requiredPower) continue;
+                float frames = it.useTime * pl.pickSpeed;
+                if (it.pick < power || it.pick == power && frames >= swingFrames) continue;
+                power = it.pick;
+                swingFrames = frames;
             }
-            return best;
+            return (power, swingFrames);
         }
 
         static int StepCost(int cx, int cy, int nx, int ny)
-            => StepCost(cx, cy, nx, ny, PrepareStepCost(cx, cy, _fieldPickPower));
+            => StepCost(cx, cy, nx, ny, PrepareStepCost(cx, cy, _fieldMiningTool));
 
-        static (int fixedCost, int digCells, bool wall) PrepareStepCost(int cx, int cy, int pickPower)
+        static (int fixedCost, int digFrames, int extraDigFrames) PrepareStepCost(
+            int cx, int cy, (int power, float swingFrames) miningTool)
         {
             for (int row = 0; row < 3; row++)
             {
-                if (AgentTools.Control.ForbiddenAt(ControlBehavior.Navigation, cx, cy - row)) return (Impassable, 0, false);
+                if (AgentTools.Control.ForbiddenAt(ControlBehavior.Navigation, cx, cy - row)) return (Impassable, 0, 0);
                 if (AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, cx, cy - row)
-                    && SolidAnyShape(cx, cy - row)) return (Impassable, 0, false);
+                    && SolidAnyShape(cx, cy - row)) return (Impassable, 0, 0);
             }
             // 岩浆=重开,所以是【真禁行】不是"贵"。以前记的是有限高价,绕路一贵线就直接从岩浆里穿过去。
             // 而且人有 3 格高:只看脚下那格,贴着岩浆面走(头胸泡在里面)照样算干燥。
             for (int r = 0; r < 3; r++)
             for (int dx = -1; dx <= 1; dx++)
-                if (IsLava(cx + dx, cy - r)) return (Impassable, 0, false);
+                if (IsLava(cx + dx, cy - r)) return (Impassable, 0, 0);
             // 压力板踩下去就触发,有的连着岩浆陷阱。能绕就绕,绕不开也别当免费。
             for (int r = 0; r < 3; r++)
             {
@@ -478,7 +552,7 @@ namespace TerraBlind
                 if (py2 < 0 || py2 >= Main.maxTilesY || cx < 0 || cx >= Main.maxTilesX) continue;
                 var pt = Main.tile[cx, py2];
                 if (pt.HasTile && (pt.TileType == TileID.PressurePlates || pt.TileType == TileID.WeightedPressurePlate))
-                    return (PlateCost, 0, false);
+                    return (PlateCost, 0, 0);
             }
             // 人 3 行高,只看脚下会把烟囱当免费爬。斜砖只在脚那行豁免(胸口一块斜砖就卡住);
             // 上锁的门另判:MineableWith 说能挖,可神庙门没钥匙砸不开
@@ -486,75 +560,58 @@ namespace TerraBlind
             {
                 int dy2 = cy - r;
                 if (dy2 < 0 || dy2 >= Main.maxTilesY || cx < 0 || cx >= Main.maxTilesX) continue;
-                if (WorldGen.IsLockedDoor(cx, dy2)) return (Impassable, 0, false);
+                if (WorldGen.IsLockedDoor(cx, dy2)) return (Impassable, 0, 0);
             }
 
             // 数出到底要挖几格,不只是"要不要挖":身体 3 行高,横着进一格得挖 1~3 格,价钱差 3 倍。
             // 一律按一格收费的话,一层薄壳和三层实心同价,场就分不出该从哪儿破。
-            int digCells = 0;
-            for (int r = 0; r < 3; r++)
+            int digFrames = 0;
+            int height = PartialFooting(cx, cy) ? 4 : 3;
+            for (int r = 0; r < height; r++)
             {
                 bool solid = r == 0 ? PathPlanner.IsBlockPublic(cx, cy) : SolidAnyShape(cx, cy - r);
                 if (!solid) continue;
-                digCells++;
-                if (!LavaSafety.CanMine(cx, cy - r)) return (Impassable, 0, false);
-                if (!DigTable.MineableWith(cx, cy - r, pickPower)) return (Impassable, 0, false);   // 镐挖不动 → 真不可达,不是"贵"
+                int frames = DigTable.NominalMineFrames(cx, cy - r, miningTool.power, miningTool.swingFrames);
+                if (frames >= DigTable.Unmineable) return (Impassable, 0, 0);
+                digFrames += frames;
             }
-            if (PartialFooting(cx, cy) && SolidAnyShape(cx, cy - 3))
+            if (digFrames > 0 || !ColumnOpen(cx - 1, cy) && !ColumnOpen(cx + 1, cy))
             {
-                digCells++;
-                if (!LavaSafety.CanMine(cx, cy - 3)) return (Impassable, 0, false);
-                if (!DigTable.MineableWith(cx, cy - 3, pickPower)) return (Impassable, 0, false);
+                int sideFrames = System.Math.Min(ColumnMiningFrames(cx - 1, cy, miningTool), ColumnMiningFrames(cx + 1, cy, miningTool));
+                if (digFrames > 0) return (-1, digFrames, sideFrames);
+                if (sideFrames < DigTable.Unmineable) return (-1, sideFrames, 0);
+                if (!CellKind.Stands(cx, cy)) return (Impassable, 0, 0);
             }
-            bool wall = digCells > 0;
-            // 20px 的身子跨两列:左右邻列都堵的 1 格宽缝身体进不去,按免费算 H 会顺着神庙墙缝往上流
-            // ((3393,700) 那次)。邻列全能挖就按挖收费,两边都不能挖才是禁行
-            if (!wall && !ColumnOpen(cx - 1, cy) && !ColumnOpen(cx + 1, cy))
-            {
-                wall = true;
-                digCells = 1;   // 拓宽一格宽的缝:至少凿掉一侧的一格
-                // 挖不开【不等于】进不去:人 20px 站在 16px 格心时左右各只探出 2px,
-                // 一格宽的缝站得住,只是横着走不动,得靠竖直动作进出。
-                // 一律 Impassable 会把这种格从场里整个抹掉 --- 腐化区被困死就是这样:
-                // 唯一的出口 (1343,232) 探针说 can_stand=True,场却说不可达。
-                if (!ColumnWidenable(cx - 1, cy, pickPower) && !ColumnWidenable(cx + 1, cy, pickPower))
-                {
-                    if (!CellKind.Stands(cx, cy)) return (Impassable, 0, false);
-                    // 【按普通格收费】。挤进去本身不慢,慢的是出来 --- 而出来是下一格的事,
-                    // StepCost 到那一格自然会按 pillar/跳放定价。在这儿再加价等于同一件事收两次钱。
-                    wall = false; digCells = 0;
-                }
-            }
-            return (-1, digCells, wall);
+            return (-1, 0, 0);
         }
 
-        static int StepCost(int cx, int cy, int nx, int ny, (int fixedCost, int digCells, bool wall) cellCost)
+        static int StepCost(int cx, int cy, int nx, int ny, (int fixedCost, int digFrames, int extraDigFrames) cellCost)
         {
             if (cellCost.fixedCost >= 0) return cellCost.fixedCost;
-            int digCells = cellCost.digCells;
-            bool wall = cellCost.wall;
-            // 上下走还要算【另外那半个身子】:人宽 20px 跨两列,竖直穿过去得挖两列。
-            // 取左右里实心行少的那侧。人可以站偏,挑便宜的那半边走。
-            if (wall && cx == nx) digCells += System.Math.Min(SolidRows(cx - 1, cy), SolidRows(cx + 1, cy));
             bool horizontal = cx != nx;
-            if (!wall && VanillaNavBridge.Enabled)
+            bool wall = cellCost.digFrames > 0;
+            if (wall)
+            {
+                if (!horizontal && cellCost.extraDigFrames >= DigTable.Unmineable) return Impassable;
+                return cellCost.digFrames + (horizontal ? 0 : cellCost.extraDigFrames + (cy < ny ? DigUpLift : 0))
+                    + MediumExtra(cx, cy);
+            }
+            if (VanillaNavBridge.Enabled)
                 return (horizontal ? MoveSide : cy > ny ? MoveDown : MoveUp) + MediumExtra(cx, cy);
             // 进这一格要不要自己造落脚点,由 CellKind 一处说了算。原来三个方向各判各的
             // (往下 DropLands、往上 nearSupport、横向不判),同一格在不同方向价钱不一样。
-            var kind = wall ? Cell.Solid : CellKind.Of(cx, cy);
+            var kind = CellKind.Of(cx, cy);
             // 造落脚点的价和方向无关:铺一块平台就是一块平台的钱
             int buildCost = kind == Cell.Build ? JPlaceUp : kind == Cell.Pillar ? PillarUp : 0;
 
             int baseCost;
-            if (horizontal) baseCost = wall ? DigSide * digCells : MoveSide + buildCost;
+            if (horizontal) baseCost = MoveSide + buildCost;
             else if (cy > ny)
             {
                 // y+ is down。掉下去便宜的【前提是掉得到底】:落得住才是 MoveDown,
                 // 落不住就得自己铺一路下去,那是平台梯/柱子的价。
-                if (wall) baseCost = DigDown * digCells;
-                else baseCost = DropLands(cx, cy) ? MoveDown : MoveDown + buildCost;
+                baseCost = DropLands(cx, cy) ? MoveDown : MoveDown + buildCost;
             }
-            else if (wall) baseCost = DigUp * digCells + DigUpLift;
             else
             {
                 // 往上:一跳只能上 JumpReach 格,且要有东西垫脚。超出跳跃范围就只能自己搭,
@@ -569,7 +626,7 @@ namespace TerraBlind
             // VERTICAL moves are exempt: falling is the cheap intended descent, and climbing/jumping straight up a
             // wall face has the feet briefly unsupported too, penalizing it made an 18-cell climb-around (1458)
             // cost more than digging through the wall (1440), which is backwards.
-            if (!wall && horizontal) baseCost += AirCost(cx, cy, nx - cx);
+            if (horizontal) baseCost += AirCost(cx, cy, nx - cx);
             return baseCost + MediumExtra(cx, cy);
         }
 
@@ -624,21 +681,19 @@ namespace TerraBlind
         static bool ColumnOpen(int c, int cy)
             => !PathPlanner.IsBlockPublic(c, cy) && !SolidAnyShape(c, cy - 1) && !SolidAnyShape(c, cy - 2);
 
-        // c 列在站立高度 cy 上有几行实心 = 竖直穿过去要在这一列挖几格
-        static int SolidRows(int c, int cy)
+        static int ColumnMiningFrames(int c, int cy, (int power, float swingFrames) miningTool)
         {
-            int n = 0;
-            for (int r = 0; r < 3; r++) if (SolidAnyShape(c, cy - r)) n++;
-            return n;
-        }
-
-        // column c can be MINED open at stand height cy: every solid body row is mineable with the field's pick
-        static bool ColumnWidenable(int c, int cy, int pickPower)
-        {
+            int total = 0;
             for (int r = 0; r < 3; r++)
-                if (SolidAnyShape(c, cy - r)
-                    && (!LavaSafety.CanMine(c, cy - r) || !DigTable.MineableWith(c, cy - r, pickPower))) return false;
-            return true;
+            {
+                int y = cy - r;
+                if (!SolidAnyShape(c, y)) continue;
+                if (AgentTools.Control.ForbiddenAt(ControlBehavior.Mining, c, y)) return DigTable.Unmineable;
+                int frames = DigTable.NominalMineFrames(c, y, miningTool.power, miningTool.swingFrames);
+                if (frames >= DigTable.Unmineable) return DigTable.Unmineable;
+                total += frames;
+            }
+            return total;
         }
 
         // solid of ANY shape (full, slope, half-brick), what the body envelope collides with above the feet row

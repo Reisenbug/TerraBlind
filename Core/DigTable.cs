@@ -159,17 +159,21 @@ namespace TerraBlind
         }
 
         public static int CostFrames(int x, int y, Player p, Item pick)
+            => p == null || pick == null || pick.IsAir ? Unmineable
+                : NominalMineFrames(x, y, pick.pick, pick.useTime * p.pickSpeed);
+
+        internal static int NominalMineFrames(int x, int y, int pickPower, float swingFrames)
         {
             if (x < 0 || y < 0 || x >= Main.maxTilesX || y >= Main.maxTilesY) return Unmineable;
-            if (!LavaSafety.CanMine(x, y) || p == null || pick == null || pick.IsAir || pick.pick <= 0) return Unmineable;
+            if (!LavaSafety.CanMine(x, y) || pickPower <= 0) return Unmineable;
             var tile = Main.tile[x, y];
             if (!tile.HasTile) return 0;
             if (IsForbidden(tile.TileType)) return Unmineable;
-            int dmg = GetPickaxeDamage(x, y, pick.pick, tile);
+            int dmg = GetPickaxeDamage(x, y, pickPower, tile);
             if (Main.getGoodWorld) dmg *= 2;
             if (dmg <= 0 || !Terraria.WorldGen.CanKillTile(x, y)) return Unmineable;
             int swings = (100 + dmg - 1) / dmg;
-            return (int)(swings * pick.useTime * p.pickSpeed) + Trouble(tile.TileType);
+            return System.Math.Max(1, (int)(swings * swingFrames)) + Trouble(tile.TileType);
         }
 
         public static void Dump()

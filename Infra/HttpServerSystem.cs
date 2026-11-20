@@ -3360,27 +3360,7 @@ namespace TerraBlind
 		}
 
 		static System.Collections.Generic.List<(int x, int y)> MainDescentLine(DescentData data)
-		{
-			var line = new System.Collections.Generic.List<(int x, int y)>();
-			var seen = new System.Collections.Generic.HashSet<(int, int)>();
-			var cell = (x: data.EntX, y: data.EntY);
-			for (int step = 0; step < 20000 && seen.Add(cell); step++)
-			{
-				line.Add(cell);
-				if (data.Field.TryGetValue(cell, out int cost) && cost == 0) break;
-				int bestCost = int.MaxValue;
-				var best = cell;
-				foreach (var (dx, dy) in new[] { (1, 0), (-1, 0), (0, 1), (0, -1) })
-				{
-					var next = (x: cell.x + dx, y: cell.y + dy);
-					if (data.Field.TryGetValue(next, out int value) && value < bestCost)
-					{ bestCost = value; best = next; }
-				}
-				if (best == cell) break;
-				cell = best;
-			}
-			return line;
-		}
+			=> MazeWand.TraceDescent(data.Field, data.EntX, data.EntY);
 
 		static System.Text.Json.Nodes.JsonObject MainDescentRoute(System.Text.Json.Nodes.JsonObject request)
 		{
@@ -3402,6 +3382,7 @@ namespace TerraBlind
 				var data = ComputeDescent(sig, out string why);
 				if (data == null) return new() { ["found"] = false, ["reason"] = why };
 				var traced = (data.Cost, MainDescentLine(data));
+				if (traced.Item2.Count == 0) return new() { ["found"] = false, ["reason"] = "no_route" };
 				lock (_ddLock)
 				{
 					if (worldVersion != _ddWorldVersion) return new() { ["found"] = false, ["reason"] = "world_changed" };
@@ -3851,7 +3832,11 @@ namespace TerraBlind
 				if (!st.HasTile || !want.Contains(st.TileType)) continue;
 				cands++;
 				// the stand cell over a pit mouth is air, the field prices it; try one higher as fallback
-				if (!field.TryGetValue((ex, ey), out int h) && !field.TryGetValue((ex, ey - 1), out h)) continue;
+				if (!field.TryGetValue((ex, ey), out int h))
+				{
+					ey--;
+					if (!field.TryGetValue((ex, ey), out h)) continue;
+				}
 				if (h < bestH) { bestH = h; bestX = ex; bestY = ey; }
 			}
 			if (bestX < 0) { failReason = "no_route"; return null; }

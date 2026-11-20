@@ -65,9 +65,37 @@ public sealed class ScriptLibrary
               banked_copper:banked,carried_copper:remaining});
             """);
         if (name == "early_exploration_route") return Template(name,
-            "开荒通用采集与下洞先比较森林、雪地、丛林的天然下行路线，返回路点和浅层预计开挖量。input.biome可指定已确定的群系。Early exploration prefers natural caves over surface excavation.",
+            "从当前位置比较森林、雪地、丛林天然洞路线。返回主线路点、低代价的水晶和箱子stops、原版开挖预计耗时。input.biome可指定群系。传回已选{route,crystals,loot_chests}沿路连续采集，crystals为本段新增颗数。Plan and follow a low-digging early resource route.",
             """
-            return tool('early_descent',input?.biome?{biome:input.biome}:{});
+            if(!input?.route)return tool('early_descent',input?.biome?{biome:input.biome}:{});
+            const route=input.route, wanted=input.crystals??0;
+            const lifeCrystal=29;
+            const count=()=>tool('get_state',{fields:['inventory_counts']}).inventory_counts[lifeCrystal]??0;
+            const before=count(), visited=[];
+            const points=[...route.waypoints.map(p=>({...p,line_x:p.x,line_y:p.y})),
+              ...route.stops.filter(p=>p.kind==='heart'&&wanted>0||p.kind==='chest'&&input.loot_chests===true)]
+              .sort((a,b)=>a.junction-b.junction);
+            let last, actual=before;
+            for(const point of points){
+              if(wanted>0&&actual-before>=wanted)break;
+              const key=point.line_x+':'+point.line_y;
+              if(last!==key){
+                const travel=tool('nav_to',{x:point.line_x,y:point.line_y,mode:'travel'});
+                if(travel.done!==true)return {status:'blocked',reason:'resource_route_blocked',point,travel,visited,crystals:actual-before};
+                last=key;
+              }
+              if(point.kind==='heart'){
+                const result=tool('gather',{targets:[{item_type:lifeCrystal,count:actual+1,tile_names:['Heart']}],
+                  source_area:{x:point.x,y:point.y,width:2,height:2}});
+                const next=count();
+                visited.push({x:point.x,y:point.y,kind:point.kind,gained:next-actual,outcome:result.outcome});
+                actual=next;
+              }else if(point.kind==='chest'){
+                const result=tool('collect_treasure',{x:point.x,y:point.y});
+                visited.push({x:point.x,y:point.y,kind:point.kind,looted:result.new_chest_loot_verified===true,outcome:result.outcome});
+              }
+            }
+            return {status:wanted>0&&actual-before>=wanted?'collected':'route_finished',crystals:actual-before,visited};
             """);
         if (name == "minecart_travel") return Template(name,
             "沿途上车或利用原版上轨钩子提速。输入x/y为铁轨格，mode为ride或boost；boost可传place_item在此格就地放一格铁轨后再右键、拉动、跳脱。ride可传direction和ride_tiles沿已确认的轨道短程行驶。Ride existing track or cancel the native track hook before mounting to gain speed.",

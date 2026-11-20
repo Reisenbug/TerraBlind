@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Terraria;
 using Terraria.GameContent;
+using Terraria.ID;
 
 namespace TerraBlind;
 
@@ -3834,9 +3835,11 @@ public static partial class AgentTools
         string[] candidates = biome == "" ? new[] { "forest", "snow", "jungle" } : new[] { biome };
         if (candidates.Any(name => name is not ("forest" or "snow" or "jungle")))
             return new JsonObject { ["error"] = "invalid_early_descent_biome" };
+        var origin = await NativeAgent.OnMain(() => (x: ActExecutor.OriginCx(Main.LocalPlayer),
+            y: ActExecutor.OriginCy(Main.LocalPlayer)), token);
         var routes = await Task.WhenAll(candidates.Select(async name => (name, route: await QueryDescent("/descent_main_route",
             new JsonObject { ["name"] = name, ["limit"] = 512 }, token))));
-        return await NativeAgent.OnMain(() =>
+        return await Task.Run(() =>
         {
             static bool BlocksBody(int x, int y)
             {
@@ -3846,6 +3849,7 @@ public static partial class AgentTools
             var findings = new List<JsonObject>();
             foreach (var (name, route) in routes)
             {
+                token.ThrowIfCancellationRequested();
                 if (route["line"] is not JsonArray { Count: > 0 } line)
                 {
                     findings.Add(new JsonObject { ["biome"] = name, ["reason"] = route["reason"]?.DeepClone() ?? route["error"]?.DeepClone() });
@@ -3857,6 +3861,7 @@ public static partial class AgentTools
                 var dig = new HashSet<(int, int)>();
                 string reason = null;
                 var waypoints = new JsonArray();
+                var spine = new List<(int x, int y)>();
                 int index = 0;
                 for (; index < line.Count; index++)
                 {
@@ -3872,20 +3877,71 @@ public static partial class AgentTools
                         if (dx == 0 && BlocksBody(x, bodyY)) dig.Add((x, bodyY));
                     }
                     if (reason != null || dig.Count > 8) { reason ??= "surface_excavation"; break; }
+                    spine.Add((x, arrivalY));
                     if (index % 20 == 0 || y >= targetDepth)
-                        waypoints.Add(new JsonObject { ["x"] = x, ["y"] = arrivalY });
+                        waypoints.Add(new JsonObject { ["x"] = x, ["y"] = arrivalY, ["junction"] = index });
                     if (y >= targetDepth) break;
                 }
                 reason ??= index == line.Count ? "short_descent" : null;
-                int approach = Math.Abs(ex - ActExecutor.OriginCx(Main.LocalPlayer)) + Math.Abs(ey - ActExecutor.OriginCy(Main.LocalPlayer));
-                findings.Add(new JsonObject { ["biome"] = name, ["reason"] = reason, ["estimated_dig_tiles"] = dig.Count,
+                int approach = Math.Abs(ex - origin.x) + Math.Abs(ey - origin.y);
+                int digFrames = dig.Sum(tile => DigTable.CostFrames(tile.Item1, tile.Item2));
+                var findingsForRoute = new JsonObject { ["biome"] = name, ["reason"] = reason, ["estimated_dig_tiles"] = dig.Count,
                     ["approach_tiles"] = approach, ["depth_target"] = targetDepth,
-                    ["score"] = approach + index + dig.Count * 20, ["waypoints"] = waypoints });
+                    ["score"] = approach * 3 + index * 3 + digFrames, ["nominal_dig_frames"] = digFrames,
+                    ["waypoints"] = waypoints };
+                if (reason == null) AddEarlyResourceStops(findingsForRoute, spine);
+                findings.Add(findingsForRoute);
             }
-            var best = findings.Where(candidate => candidate["reason"] == null).OrderBy(candidate => Int(candidate, "score")).FirstOrDefault();
+            var best = findings.Where(candidate => candidate["reason"] == null)
+                .OrderByDescending(candidate => candidate["resource_yield"].GetValue<double>())
+                .ThenBy(candidate => Int(candidate, "score")).FirstOrDefault();
             return new JsonObject { ["found"] = best != null, ["route"] = best?.DeepClone(),
+                ["origin"] = new JsonObject { ["x"] = origin.x, ["y"] = origin.y },
                 ["candidates"] = new JsonArray(findings.Select(candidate => (JsonNode)candidate).ToArray()) };
         }, token);
+    }
+
+    static void AddEarlyResourceStops(JsonObject route, IReadOnlyList<(int x, int y)> spine)
+    {
+        const int detourBudget = 72;
+        var watch = Stopwatch.StartNew();
+        var approaches = MazeWand.OpenResourceApproaches(spine, detourBudget);
+        var nonemptyChests = Main.chest.Where(chest => chest != null && chest.item.Any(item => !item.IsAir))
+            .Select(chest => (chest.x, chest.y)).ToHashSet();
+        var stops = new Dictionary<(int x, int y), (string kind, int junction, int cost, int approachX, int approachY)>();
+        foreach (var (spot, path) in approaches)
+        for (int dy = -3; dy <= 0; dy++)
+        for (int dx = -2; dx <= 2; dx++)
+        {
+            int x = spot.x + dx, y = spot.y + dy;
+            var tile = Main.tile[x, y];
+            if (!tile.HasUnactuatedTile || tile.TileFrameX % 36 != 0 || tile.TileFrameY % 36 != 0) continue;
+            string kind = tile.TileType switch
+            {
+                TileID.Heart => "heart",
+                TileID.Containers or TileID.Containers2 => "chest",
+                _ => null
+            };
+            if (kind == null || Control.ForbiddenAt(kind == "heart" ? ControlBehavior.Mining : ControlBehavior.Direct, x, y)) continue;
+            if (stops.TryGetValue((x, y), out var previous) && previous.cost <= path.cost) continue;
+            if (kind == "chest" && (!nonemptyChests.Contains((x, y)) || Chest.IsLocked(x, y))) continue;
+            stops[(x, y)] = (kind, path.junction, path.cost, spot.x, spot.y);
+        }
+        var ordered = stops.OrderBy(pair => pair.Value.cost).ThenBy(pair => pair.Value.junction)
+            .ThenBy(pair => pair.Key.x).ThenBy(pair => pair.Key.y).Take(8).OrderBy(pair => pair.Value.junction).ToArray();
+        int cost = Int(route, "score") + ordered.Sum(pair => pair.Value.cost * 2);
+        int units = ordered.Sum(pair => pair.Value.kind == "heart" ? 2 : 1);
+        route["resource_yield"] = units * 1000.0 / Math.Max(1, cost);
+        route["estimated_cost"] = cost;
+        route["stops"] = new JsonArray(ordered.Select(pair =>
+        {
+            var junction = spine[pair.Value.junction];
+            return (JsonNode)new JsonObject { ["x"] = pair.Key.x, ["y"] = pair.Key.y, ["kind"] = pair.Value.kind,
+                ["line_x"] = junction.x, ["line_y"] = junction.y, ["junction"] = pair.Value.junction,
+                ["approach_x"] = pair.Value.approachX, ["approach_y"] = pair.Value.approachY,
+                ["detour_cost"] = pair.Value.cost };
+        }).ToArray());
+        DiagLog.Write($"[early-resource-route] biome={route["biome"]} cells={approaches.Count} stops={ordered.Length} cost={cost} elapsed_ms={watch.ElapsedMilliseconds}");
     }
 
     static async Task<JsonObject> DescentRoute(JsonObject args, CancellationToken token)

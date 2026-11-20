@@ -458,7 +458,7 @@ namespace Terraria.ID
     {
         public const int StinkbugHousingBlocker = 630, StinkbugHousingBlockerEcho = 631;
         public const int FixtureSource = 1, FixtureOther = 2;
-        public const int Containers = 21, Dressers = 88, Containers2 = 467, FakeContainers = 441, FakeContainers2 = 468;
+        public const int Containers = 21, Heart = 12, Dressers = 88, Containers2 = 467, FakeContainers = 441, FakeContainers2 = 468;
         public const int PressurePlates = 135, Traps = 137, Boulder = 138, Explosives = 141, MinecartTrack = 314;
         public const int Painting3X3 = 240, Painting4X3 = 241, Painting6X4 = 242, Painting2X3 = 245, Painting3X2 = 246;
         public const int SandstoneBrick = 151, RollingCactus = 484, BouncyBoulder = 664, LifeCrystalBoulder = 665;
@@ -766,6 +766,10 @@ namespace TerraBlind
     {
         public static Dictionary<(int, int), int> Field;
         public static Dictionary<(int, int), int> PeekFieldOrNull(int x, int y) => Field;
+        internal static Dictionary<(int x, int y), (int junction, int cost)> OpenResourceApproaches(
+            IReadOnlyList<(int x, int y)> spine, int budget)
+            => spine.Select((cell, index) => (cell, index)).DistinctBy(entry => entry.cell)
+                .ToDictionary(entry => entry.cell, entry => (entry.index, 0));
     }
     public static class StateSerializer { public static string ToJson(object snapshot) => snapshot is JsonObject json ? json.ToJsonString() : "{}"; }
     public static class ActExecutor
