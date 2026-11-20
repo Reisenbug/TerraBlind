@@ -798,14 +798,15 @@ public static partial class AgentTools
             StartUntriedReadyNode(token);
             return;
         }
+        var pending = idleDecision;
+        double age = pending == null ? 0 : Stopwatch.GetElapsedTime(pending.Requested).TotalMilliseconds;
+        if (pending == null ? idleDecisionGap == gapTimestamp || Main.GameUpdateCount < nextIdleNodeScan
+            : !pending.Answer.IsCompleted && age < IdleDecisionBudgetMs) return;
         var plan = Plan.Snapshot();
         int revision = Int(plan, "revision"), progress = Int(plan, "progress_revision");
         string predecessor = ActionAttempt(Actions.LatestPrimary());
-        if (idleDecision != null)
+        if (pending != null)
         {
-            var pending = idleDecision;
-            double age = Stopwatch.GetElapsedTime(pending.Requested).TotalMilliseconds;
-            if (!pending.Answer.IsCompleted && age < IdleDecisionBudgetMs) return;
             idleDecision = null;
             if (pending.Gap != gapTimestamp || age > ExecutionGapLimitMs) return;
             if (pending.Predecessor != predecessor || pending.Revision != revision || pending.Progress != progress)
@@ -836,7 +837,6 @@ public static partial class AgentTools
             option.Start(token);
             return;
         }
-        if (idleDecisionGap == gapTimestamp || Main.GameUpdateCount < nextIdleNodeScan) return;
         nextIdleNodeScan = Main.GameUpdateCount + 15;
         var options = UntriedReadySteps(plan).Take(4).Select(step =>
         {
