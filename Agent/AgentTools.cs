@@ -1338,6 +1338,7 @@ public static partial class AgentTools
             observedPlayer["tick"] = Main.GameUpdateCount;
             observedPlayer["hp"] = healthPlayer.statLife;
             observedPlayer["max_hp"] = healthPlayer.statLifeMax2;
+            observedPlayer["coins"] = Math.Min(int.MaxValue, Terraria.Utils.CoinsCount(out _, healthPlayer.inventory));
             observedPlayer["pos"] = new JsonObject { ["x"] = healthPlayer.position.X, ["y"] = healthPlayer.position.Y };
             observedPlayer["vel"] = new JsonObject { ["x"] = healthPlayer.velocity.X, ["y"] = healthPlayer.velocity.Y };
             observedPlayer["dead"] = Main.LocalPlayer.dead;

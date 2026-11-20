@@ -11,8 +11,8 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel" };
-    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel", "bank_coins" };
+    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel", "bank_coins" };
     internal static string BuiltinIndex => string.Join("\n", BuiltIns.Select(name =>
         name + "@0: " + Example(name)["detail"].ToString().Split('。')[0]));
 
@@ -25,6 +25,45 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "bank_coins") return Template(name,
+            "就地用小猪存钱罐快速堆叠钱币与可合堆物品。传x/y交互已放好的存钱罐，带place:true可在指定的可达家具或平台上临时放好，存钱后收回。Quick-stack into a Piggy Bank, verify the coins and reclaim a temporarily placed bank.",
+            """
+            const coins=()=>tool('get_state',{fields:['player']}).player.coins;
+            const readBank=()=>tool('slot_state',{section:'container',slot:0});
+            const before=coins();
+            if(before===0)return {ok:true,outcome:'no_carried_coins',banked_copper:0};
+            const {x,y}=input??{};
+            let reclaim=0;
+            const finish=result=>{
+              if(!reclaim)return result;
+              if(readBank().container===-2)tool('interact',{x,y});
+              const picked=tool('gather',{targets:[{item_type:87,count:reclaim,tile_names:['PiggyBank']}],
+                source_area:{x:x-1,y,width:3,height:1}});
+              return {...result,ok:result.ok===true&&picked.outcome==='enough',
+                portable_bank_recovered:picked.outcome==='enough',recovery_error:picked.error??picked.reason??null};
+            };
+            let bank=readBank();
+            if(bank.cursor?.type>0)return {error:'bank_cursor_busy'};
+            if(bank.container!==-2&&Number.isInteger(x)&&Number.isInteger(y)){
+              if(input.place===true){
+                const carried=tool('get_state',{fields:['inventory_counts']}).inventory_counts[87]??0;
+                if(carried===0)return {error:'no_carried_piggy_bank'};
+                const placed=tool('place_at',{x,y,item:'87',local:true});
+                if(!placed.cells?.[0]?.verified)return {error:'bank_placement_unverified',placed};
+                reclaim=carried;
+              }
+              const opened=tool('interact',{x,y});
+              bank=readBank();
+              if(bank.container!==-2)return finish({error:'piggy_bank_not_open',opened});
+            }
+            if(bank.container!==-2)return {error:'piggy_bank_not_open'};
+            if(bank.cursor.type!==0)return finish({error:'bank_cursor_busy'});
+            const stored=tool('container_action',{action:'quick_stack',expected_container:-2});
+            if(stored.error)return finish(stored);
+            const remaining=coins(), banked=before-remaining;
+            return finish({ok:banked>0,outcome:remaining===0?'banked':banked>0?'partial':'coins_unchanged',
+              banked_copper:banked,carried_copper:remaining});
+            """);
         if (name == "early_exploration_route") return Template(name,
             "开荒通用采集与下洞先比较森林、雪地、丛林的天然下行路线，返回路点和浅层预计开挖量。input.biome可指定已确定的群系。Early exploration prefers natural caves over surface excavation.",
             """

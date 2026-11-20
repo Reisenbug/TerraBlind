@@ -173,6 +173,36 @@ static class RuntimeTests
                     "owned script could not verify its own node using the actual game state");
             }
             finally { AgentTools.Plan.Reset(); }
+
+            int container = 4, coins = 1570;
+            var bankCalls = new System.Collections.Generic.List<string>();
+            async Task<JsonObject> Bank(string input) => await AgentScript.Run("const input=" + input + ";\n" + ScriptLibrary.Example("bank_coins")["code"],
+                5, (_, _) => { }, (name, args, _) =>
+                {
+                    bankCalls.Add(name);
+                    string reply = name switch
+                    {
+                        "get_state" => new JsonObject { ["player"] = new JsonObject { ["coins"] = coins },
+                            ["inventory_counts"] = new JsonObject { ["87"] = 1 } }.ToJsonString(),
+                        "slot_state" => new JsonObject { ["container"] = container, ["cursor"] = new JsonObject { ["type"] = 0 } }.ToJsonString(),
+                        "place_at" => "{\"cells\":[{\"verified\":true}]}",
+                        "interact" => (container = container == -2 ? -1 : -2).ToString(),
+                        "gather" => "{\"outcome\":\"enough\"}",
+                        "container_action" when container == -2 && args["expected_container"]?.GetValue<int>() == -2
+                            && args["action"]?.ToString() == "quick_stack" => (coins = 0).ToString(),
+                        _ => throw new Exception("unexpected Piggy Bank tool " + name)
+                    };
+                    return Task.FromResult(name is "interact" or "container_action" ? "{\"ok\":true}" : reply);
+                }, _ => Task.CompletedTask, default);
+            var wrongContainer = await Bank("{}");
+            Check(wrongContainer["value"]?["error"]?.ToString() == "piggy_bank_not_open" && coins == 1570
+                && !bankCalls.Contains("container_action"), "coins were sent to a different container");
+            bankCalls.Clear();
+            var banked = await Bank("{x:100,y:120,place:true}");
+            Check(banked["value"]?["banked_copper"]?.GetValue<int>() == 1570
+                && banked["value"]?["portable_bank_recovered"]?.GetValue<bool>() == true
+                && bankCalls.Count(name => name == "interact") == 2 && container == -1 && coins == 0,
+                "portable banking did not verify the coins and pick the bank back up");
             await RailHookBoost();
             Console.WriteLine("PASS: housing is reused and protected from navigation, surface desert routes are rejected, and default loot can be disabled");
         }

@@ -114,6 +114,15 @@ namespace Terraria.Audio
 
 namespace Terraria
 {
+    public static class Utils
+    {
+        public static long CoinsCount(out bool overflowing, Item[] inventory)
+        {
+            overflowing = false;
+            return inventory.Sum(item => item.stack * (item.type switch { 71 => 1L, 72 => 100L, 73 => 10000L, 74 => 1000000L, _ => 0L }));
+        }
+    }
+
     public enum PopupTextContext { ItemReforge }
     public static class PopupText { public static void NewText(PopupTextContext context, Item item, int stack, bool noStack) { } }
     public class Main
