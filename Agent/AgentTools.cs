@@ -2076,7 +2076,7 @@ public static partial class AgentTools
             case "game_api":
                 return NativeAgent.DescribeApi(args).ToJsonString(ModelJson);
             case "task_policy":
-                return (await ManageTaskPolicy(args, token)).ToJsonString();
+                return await ToolFinished(name, (await ManageTaskPolicy(args, token)).ToJsonString(), token);
             case "nearby_drops":
                 return new JsonObject { ["drops"] = await NativeAgent.OnMain(() => NearbyDrops.Read(Int(args, "radius", 25)), token) }.ToJsonString();
             case "combat_assess":
