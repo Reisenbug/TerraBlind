@@ -817,7 +817,9 @@ public static partial class AgentTools
     internal static int DiscoveryRevision => Discoveries.Count;
     static readonly HttpClient Wiki = new() { Timeout = TimeSpan.FromSeconds(20) };
     static readonly HttpClient HarvestHttp = new() { Timeout = TimeSpan.FromSeconds(8) };
-    public static void NewTask(string instruction = null, bool allowPassingChestLoot = false)
+    public static void NewTask(string instruction = null) => NewTask(instruction, allowPassingChestLoot: false);
+
+    public static void NewTask(string instruction, bool allowPassingChestLoot)
     {
         AllowTaskRecall = instruction == null || !System.Text.RegularExpressions.Regex.IsMatch(instruction,
             @"(?:不要|不能|禁止|不许|不得)\s*回城|\b(?:no|never|don't|do not|must not)\s+recall\b",
