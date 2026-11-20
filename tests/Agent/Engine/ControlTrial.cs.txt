@@ -55,12 +55,22 @@ public sealed class ControlTrial : ModSystem
         if (explorationPauseTrial && explorationObjective == null) On_PlayerInput.UpdateInput += CheckExplorationPauseInput;
         if (enabled && Environment.GetEnvironmentVariable("TB_NATIVE_PRIMITIVES") == "1")
             PrimitiveBindingProbe.Binding = KeybindLoader.RegisterKeybind(Mod, "PrimitiveInputProbe", "F10");
-        if (enabled) { IL_Main.DoUpdate += Focus; On_Main.Update += OpenWorld; On_Player.PickTile += ObservePick; }
+        if (enabled)
+        {
+            if (explorationObjective == null) IL_Main.DoUpdate += Focus;
+            On_Main.Update += OpenWorld;
+            On_Player.PickTile += ObservePick;
+        }
     }
     public override void Unload()
     {
         if (explorationPauseTrial && explorationObjective == null) On_PlayerInput.UpdateInput -= CheckExplorationPauseInput;
-        if (enabled) { IL_Main.DoUpdate -= Focus; On_Main.Update -= OpenWorld; On_Player.PickTile -= ObservePick; }
+        if (enabled)
+        {
+            if (explorationObjective == null) IL_Main.DoUpdate -= Focus;
+            On_Main.Update -= OpenWorld;
+            On_Player.PickTile -= ObservePick;
+        }
     }
 
     void CheckExplorationPauseInput(On_PlayerInput.orig_UpdateInput original)
