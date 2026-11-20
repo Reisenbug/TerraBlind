@@ -1798,7 +1798,7 @@ public static partial class AgentTools
                 ["state_after_respawn"] = JsonNode.Parse(await State(token)) }.ToJsonString();
         }
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
-            or "place_at" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap" or "combat_reposition"
+            or "place_at" or "build_bridge" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap" or "combat_reposition"
             or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat"
             or "slot_click" or "container_action" or "game_input" or "craft_recipe" or "mod_input"
             or "pylon_use" or "reforge" or "fish" or "container_transfer" or "craft_to_slot" or "shop_buy" or "shop_sell" || name == "housing" && !readsHousing;
@@ -2130,7 +2130,7 @@ public static partial class AgentTools
         {
             if (name == "fight") return;
             bool changesRoute = name is "nav_to" or "gather" or "mine" or "mine_vein" or "chop_wood" or "use_item"
-                or "place_at" or "act" or "collect_treasure" or "build_house" or "hell_run" or "combat_reposition";
+                or "place_at" or "build_bridge" or "act" or "collect_treasure" or "build_house" or "hell_run" or "combat_reposition";
             changesRoute |= name == "interact" && Text(args, "track_mode") is "ride" or "boost";
             if (changesRoute && !paused && pause != null) { await pause(ct); paused = true; }
             if ((AgentControlSession.RequiredChannels(name, args) & ControlChannels.ItemUse) != 0 || construction && paused)
@@ -3195,6 +3195,10 @@ public static partial class AgentTools
                 break;
             case "place_at":
                 result = await Place(args, token);
+                break;
+            case "build_bridge":
+                result = await NativeAgent.OnMain(() => StartBridgeSegment(args), token);
+                if (Bool(result, "accepted")) result = await Wait("/bridge_status", "running", "/bridge_stop", 0, token);
                 break;
             case "house_site":
                 int rooms = Int(args, "rooms", 1), direction = Int(args, "dir", 1);
@@ -4336,6 +4340,24 @@ public static partial class AgentTools
         }
         finally { player.selectedItem = previous; }
         return result;
+    }
+
+    static JsonObject StartBridgeSegment(JsonObject args)
+    {
+        int from = Int(args, "from_x"), to = Int(args, "to_x"), row = Int(args, "y"), itemType = Int(args, "item_type");
+        if (!WorldGen.InWorld(from, row, 1) || !WorldGen.InWorld(to, row, 1) || Math.Abs(to - from) >= 512)
+            return new JsonObject { ["error"] = "invalid_bridge_segment" };
+        if (BridgeBuilder.IsRunning) return new JsonObject { ["error"] = "bridge_busy" };
+        int slot = PlaceAction.FindSlotById(itemType);
+        if (slot < 0) return new JsonObject { ["error"] = "bridge_material_unavailable" };
+        int tile = Main.LocalPlayer.inventory[slot].createTile;
+        if (tile < 0 || !Main.tileSolid[tile] || Terraria.ID.TileID.Sets.TouchDamageHot[tile]
+            || Terraria.ID.TileID.Sets.Falling[tile] || Main.tileFrameImportant[tile] && !Main.tileSolidTop[tile])
+            return new JsonObject { ["error"] = "bridge_material_not_safe_support", ["item_type"] = itemType };
+        bool started = BridgeBuilder.Start(itemType.ToString(), to < from ? "left" : "right", Math.Abs(to - from) + 1,
+            from, row, out string reason, exactSegment: true);
+        return started ? new JsonObject { ["accepted"] = true }
+            : new JsonObject { ["error"] = "bridge_start_rejected", ["reason"] = reason };
     }
 
     static async Task<JsonObject> Place(JsonObject args, CancellationToken token)

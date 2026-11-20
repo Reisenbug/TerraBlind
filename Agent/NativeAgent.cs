@@ -478,7 +478,7 @@ public class NativeAgent : ModSystem
         return p.itemAnimation != 0 || p.itemTime != 0 || p.chest != -1 || !Main.mouseItem.IsAir
             || AgentTools.ContactEscapeActive || ItemUseCoordinator.IsActive || PlaceAnywhere.IsRunning
             || StateSpacePlanner.ReservesItemUse || !AgentTools.ControlAllows(ControlBehavior.Workflow, ControlChannels.ItemUse, delegated: true)
-            || AgentTools.ControlSession.Tool is "act" or "mine" or "mine_vein" or "use_item" or "build_house" or "place_at" or "craft_recipe" or "slot_click" or "npc_chat";
+            || AgentTools.ControlSession.Tool is "act" or "mine" or "mine_vein" or "use_item" or "build_house" or "build_bridge" or "place_at" or "craft_recipe" or "slot_click" or "npc_chat";
     }
 
     internal static JsonObject ApplyEquipment(JsonObject bag, JsonObject answer)

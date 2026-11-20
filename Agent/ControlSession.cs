@@ -43,7 +43,7 @@ public sealed class AgentControlSession
     public bool Active => current != 0 || attackTicket != 0;
     public string Tool => tool ?? (attackTicket != 0 ? "fight" : null);
     public static bool ActionTool(string name) => name is "nav_to" or "mine" or "mine_vein" or "chop_wood"
-        or "use_item" or "place_at" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap"
+        or "use_item" or "place_at" or "build_bridge" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap"
         or "combat_reposition" or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat" or "fight" or "fight_player"
         or "slot_click" or "container_action" or "game_input" or "craft_recipe" or "housing" or "mod_input"
         or "pylon_use" or "reforge" or "fish" or "container_transfer" or "craft_to_slot" or "shop_buy" or "shop_sell";
@@ -67,7 +67,7 @@ public sealed class AgentControlSession
     {
         "nav_to" => ControlBehavior.Navigation,
         "mine" or "mine_vein" or "chop_wood" => ControlBehavior.Mining,
-        "place_at" => ControlBehavior.Placement,
+        "place_at" or "build_bridge" => ControlBehavior.Placement,
         "fight" or "fight_player" or "combat_start" => ControlBehavior.Attack,
         "gather" or "collect_treasure" or "build_house" or "hell_run" => ControlBehavior.Workflow,
         _ => ControlBehavior.Direct

@@ -594,7 +594,22 @@ namespace TerraBlind
     public static class DiagLog { public static void Write(string text) { } }
     public static class ItemUseCoordinator { public static bool IsActive; public static void Stop() => IsActive = false; }
     public static class PlaceAnywhere { public static bool IsRunning; }
-    public static class PlaceAction { public static bool IsRunning; }
+    public static class PlaceAction
+    {
+        public static bool IsRunning;
+        public static int FindSlotById(int type) => Array.FindIndex(Terraria.Main.LocalPlayer.inventory, item => !item.IsAir && item.type == type);
+    }
+    public static class BridgeBuilder
+    {
+        public static bool IsRunning;
+        public static Action<(string Item, string Direction, int Count, int X, int Y, bool Exact)> StartObserved;
+        public static bool Start(string item, string direction, int count, int x, int y, out string reason, bool exactSegment = false)
+        {
+            reason = "";
+            StartObserved?.Invoke((item, direction, count, x, y, exactSegment));
+            return true;
+        }
+    }
     public static class PlaceCoordinator { public static bool IsActive; }
     public static class PlaceWalls { public static bool IsRunning; }
     public enum VanillaKeys { None = 0, Left = 1, Right = 2, Jump = 4, Up = 8, Down = 16 }

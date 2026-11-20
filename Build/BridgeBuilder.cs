@@ -29,6 +29,8 @@ namespace TerraBlind
 
 		private static string _item = "";
 		private static int _slot = -1;
+		private static int _tileType;
+		private static bool _exactSegment;
 		private static int _dir = 1;           // +1 right, -1 left
 		private static int _want, _placed, _already;
 		private static int _targetWx, _rowWy;  // cell being placed into; the row the bridge runs along
@@ -70,7 +72,7 @@ namespace TerraBlind
 
 		// startWx/startWy: 从哪一格开始铺。传了就照着铺,人自己走过去够。铺哪儿是调用方定的,
 		// 不该跟着身体停在哪儿走。不传(int.MinValue)才退回"从我站的地方往外铺"。
-		public static bool Start(string itemName, string dir, int n, int startWx, int startWy, out string why)
+		public static bool Start(string itemName, string dir, int n, int startWx, int startWy, out string why, bool exactSegment = false)
 		{
 			why = "";
 			var p = Main.LocalPlayer;
@@ -98,6 +100,8 @@ namespace TerraBlind
 			}
 
 			_want = n < 1 ? 1 : n; _placed = 0; _already = 0;
+			_tileType = p.inventory[_slot].createTile;
+			_exactSegment = exactSegment;
 			_swingIssued = false;
 			Outcome = "running"; Reason = "";
 			_ph = Ph.Lay;
@@ -146,7 +150,10 @@ namespace TerraBlind
 			int col = _dir > 0 ? br + 1 : bl - 1;
 			int fy = ActExecutor.OriginCy(p);
 			// 脚下这一行、或再下一行有地都算(桥面会抬升/下沉一格)
-			return Predicates.IsGround(col, fy + 1) || Predicates.IsGround(col, fy + 2);
+			int support = Predicates.IsGround(col, fy + 1) ? fy + 1 : fy + 2;
+			if (!Predicates.IsGround(col, support)) return false;
+			return !_exactSegment || support == _rowWy && !TerrainInspection.BurnsOnContact(p, col, support)
+				&& !Predicates.IsLava(col, fy);
 		}
 
 		private static bool ShouldAdvance(Player p)
@@ -192,11 +199,20 @@ namespace TerraBlind
 				_already++; _targetWx += _dir;
 			}
 			if (_placed + _already >= _want) { Finish("done"); return; }
+			if (_exactSegment && (AgentTools.Control.ForbiddenAt(ControlBehavior.Placement, _targetWx, _rowWy)
+				|| Predicates.IsLava(_targetWx, _rowWy) || Predicates.IsGround(_targetWx, _rowWy)))
+			{
+				Reason = "bridge_cell_unavailable";
+				Finish("blocked");
+				return;
+			}
 
 			// 3) 手空着且够得着 → 这一帧就挥
 			bool inReach = Reach.CanPlace(p, _targetWx, _rowWy);
 			if (!ItemUseCoordinator.IsActive && !_swingIssued && inReach)
 			{
+				if (_exactSegment && (p.inventory[_slot].IsAir || p.inventory[_slot].createTile != _tileType))
+				{ Reason = "bridge_material_unavailable"; Finish("no_item"); return; }
 				ItemUseCoordinator.Start(new ItemUseRequest
 				{ TargetWx = _targetWx, TargetWy = _rowWy, Slot = _slot, DurationTicks = 0, Strict = false });
 				_swingIssued = true;
@@ -237,7 +253,7 @@ namespace TerraBlind
 					return;
 				}
 				// 挖归挖,但不能靠它无限续命:挖了也清零 _walkStall 的话,挖不穿就永远不超时
-				if (++_digStall < DigStallLimit && ClearWay.Forward(p, _dir)) return;
+				if (!_exactSegment && ++_digStall < DigStallLimit && ClearWay.Forward(p, _dir)) return;
 				if (advance && ++_walkStall >= WalkStallLimit)
 				{ Reason = "walk_blocked"; Stuck(new Blocker(BlockKind.Terrain, fcol, fy2, "走不过去")); return; }
 				if (!inReach && ++_reachStall >= ReachStallLimit)
@@ -273,7 +289,7 @@ namespace TerraBlind
 		// 以前 5 处 stuck 各自 return,现场只剩一句给人看的话,代码没法据此补救
 		private static void Stuck(Blocker b)
 		{
-			if (RecedingNav.Active)
+			if (_exactSegment || RecedingNav.Active)
 			{
 				ItemUseCoordinator.Stop();
 				Finish("stuck");
@@ -308,11 +324,7 @@ namespace TerraBlind
 		{
 			if (!InBounds(x, y)) return false;
 			var t = Main.tile[x, y];
-			if (!t.HasTile) return false;
-			var p = Main.LocalPlayer;
-			if (p == null || _slot < 0 || _slot >= p.inventory.Length) return false;
-			var it = p.inventory[_slot];
-			return it != null && !it.IsAir && it.createTile >= 0 && t.TileType == it.createTile;
+			return t.HasUnactuatedTile && t.TileType == _tileType;
 		}
 
 		private static bool InBounds(int x, int y) => x >= 0 && y >= 0 && x < Main.maxTilesX && y < Main.maxTilesY;
