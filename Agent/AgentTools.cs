@@ -3864,11 +3864,12 @@ public static partial class AgentTools
                     && Math.Pow(player.position.X - origin["x"].Deserialize<double>(), 2)
                         + Math.Pow(player.position.Y - origin["y"].Deserialize<double>(), 2) >= Math.Pow(Math.Max(player.width, player.height), 2);
                 if (!removed && !relocated) return null;
-                string site = string.Join(";", hazards.Select(tile => tile["x"] + "," + tile["y"] + ":" + tile["type"]));
+                string reason = removed ? "hazard_removed" : "relocated_clear";
+                string site = reason + ":" + string.Join(";", hazards.Select(tile => tile["x"] + "," + tile["y"] + ":" + tile["type"]));
                 if (!clearedSites.Add(site)) return null;
                 escapeBefore = escape;
                 var verified = (JsonObject)escape.DeepClone();
-                verified["resume_reason"] = removed ? "hazard_removed" : "relocated_clear";
+                verified["resume_reason"] = reason;
                 return verified;
             }, token);
             if (clearance == null || seconds > 0 && clock.Elapsed.TotalSeconds >= seconds)

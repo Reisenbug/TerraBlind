@@ -2459,6 +2459,39 @@ static class RuntimeTests
             finally { AgentTools.LastContactEscape = previousEscape; }
             Console.WriteLine("PASS: navigation reports measured contact escape as an unsafe handoff instead of generic stopped");
 
+            var beforeThorn = Game.LocalPlayer.position;
+            var oldThorn = Game.tile[11, 10];
+            try
+            {
+                Game.LocalPlayer.position = new(160, 160);
+                foreach (bool removesThorn in new[] { false, true })
+                {
+                    int starts = 0;
+                    Game.tile[11, 10] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 352 };
+                    HttpServerSystem.Handler = (path, _) =>
+                    {
+                        if (path == "/nav_recede")
+                        {
+                            if (++starts <= 2)
+                            {
+                                if (starts == 2 && removesThorn) Game.tile[11, 10] = default;
+                                AgentTools.LastContactEscape = new JsonObject { ["status"] = "controls_released", ["contact_clear"] = true,
+                                    ["start_pos"] = new JsonObject { ["x"] = 96, ["y"] = 160 },
+                                    ["predicted_tile"] = new JsonObject { ["x"] = 11, ["y"] = 10, ["type"] = 352 } };
+                            }
+                            return (200, "{\"ok\":true}");
+                        }
+                        return (200, starts <= 2 ? "{\"done\":false,\"status\":\"failed\",\"reason\":\"stopped\"}" : "{\"done\":true}");
+                    };
+                    var route = await Execute(AgentTools.Navigate(new JsonObject { ["x"] = 10, ["y"] = 10 }, default));
+                    Check(route["verified_clearances"]?[0]?["resume_reason"]?.ToString() == "relocated_clear"
+                        && (removesThorn ? starts == 3 && route["verified_clearances"]?[1]?["resume_reason"]?.ToString() == "hazard_removed"
+                            : starts == 2 && route["error"]?.ToString() == "navigation_contact_escape"),
+                        "navigation confused removal of a previously avoided thorn with a duplicate escape");
+                }
+            }
+            finally { Game.LocalPlayer.position = beforeThorn; Game.tile[11, 10] = oldThorn; AgentTools.LastContactEscape = previousEscape; }
+
             bool savedGills = Game.LocalPlayer.gills;
             try
             {
