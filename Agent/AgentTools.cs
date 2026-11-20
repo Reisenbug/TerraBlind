@@ -451,7 +451,7 @@ public static partial class AgentTools
         if (action == null)
         {
             if (Watches.LocalDelivery || !gapReported
-                || ExecutionContinuity?["reason"]?.ToString() is not ("no_executable_action" or "event_review_without_action"))
+                || ExecutionContinuity?["reason"]?.ToString() is not ("no_executable_action" or "event_review_without_action" or "awaiting_preparation"))
                 return Task.CompletedTask;
             action = Actions.LatestFinishedPrimary();
         }
@@ -536,9 +536,11 @@ public static partial class AgentTools
             return;
         }
         gapStarted ??= Main.GameUpdateCount;
-        bool dispatching = !continuation.IsCompleted || pendingNode != null;
+        bool awaitingPreparation = pendingNode != null && Plan.NeedsPreparation(pendingNode, AgentTaskEvidence.Measure);
+        bool dispatching = !continuation.IsCompleted || pendingNode != null && !awaitingPreparation;
         bool scriptRunning = Volatile.Read(ref executingScripts) > 0 || Workflows.Values.Any(w => w.Running);
-        string reason = dispatching ? "dispatching_prepared_script" : scriptRunning ? "script_running_without_background_action"
+        string reason = awaitingPreparation ? "awaiting_preparation"
+            : dispatching ? "dispatching_prepared_script" : scriptRunning ? "script_running_without_background_action"
             : Watches.HasInterrupting ? "event_review_without_action" : "no_executable_action";
         ExecutionContinuity = new JsonObject { ["status"] = "execution_gap", ["reason"] = reason,
             ["started_tick"] = gapStarted.Value, ["gap_frames"] = Main.GameUpdateCount - gapStarted.Value,
@@ -559,7 +561,7 @@ public static partial class AgentTools
             || !Plan.RequiresNodeExecution || Main.LocalPlayer.dead || ContactEscapeActive) return;
         if (pendingNode != null)
         {
-            if (Watches.HasRecoveryBlocker) return;
+            if (Watches.HasRecoveryBlocker || Plan.NeedsPreparation(pendingNode, AgentTaskEvidence.Measure)) return;
             string ready = pendingNode;
             pendingNode = null;
             if (Plan.Snapshot()["ready_steps"].AsArray().Any(n => n?.ToString() == ready))
@@ -605,28 +607,32 @@ public static partial class AgentTools
         plan = Plan.Snapshot();
         string next = verified ? NextPreparedNode(plan) : owner;
         if (next == null || !plan["ready_steps"].AsArray().Any(n => n?.ToString() == next)) return;
-        if (Watches.HasRecoveryBlocker)
+        bool needsPreparation = Plan.NeedsPreparation(next, AgentTaskEvidence.Measure);
+        if (Watches.HasRecoveryBlocker || needsPreparation)
         {
             pendingNode = next;
             LastContinuation = new JsonObject { ["after_handle"] = handle, ["task_node"] = next,
-                ["status"] = "waiting_event_review", ["tick"] = Main.GameUpdateCount };
+                ["status"] = needsPreparation ? "awaiting_preparation" : "waiting_event_review", ["tick"] = Main.GameUpdateCount };
             return;
         }
         StartPreparedNode(next, handle, token);
     }
 
-    static string NextPreparedNode(JsonObject plan)
+    static string NextPreparedNode(JsonObject plan, bool allowPreparation = true)
     {
         bool Deferred(JsonNode node) => deferredNodes.Contains((node["workflow"].ToString(),
             Plan.ExecutionRevision(node["id"].ToString())));
         string current = plan["current_step"]?.ToString();
         var steps = plan["steps"].AsArray();
-        if (current == null || !Deferred(steps.First(node => node["id"]?.ToString() == current))) return current;
+        if (current == null) return null;
+        bool deferred = Deferred(steps.First(node => node["id"]?.ToString() == current));
+        if (!deferred && !Plan.NeedsPreparation(current, AgentTaskEvidence.Measure)) return current;
         var ready = plan["ready_steps"].AsArray().Select(node => node.ToString()).ToHashSet();
-        return steps.FirstOrDefault(node => ready.Contains(node["id"].ToString())
-            && node["preparation_only"]?.GetValue<bool>() != true && !Deferred(node)
+        string executable = steps.FirstOrDefault(node => ready.Contains(node["id"].ToString())
+            && !Plan.NeedsPreparation(node["id"].ToString(), AgentTaskEvidence.Measure) && !Deferred(node)
             && (!Workflows.TryGetValue(node["workflow"].ToString(), out var workflow)
                 || workflow.HasPreparedContinuation(node["script"].ToString())))?["id"]?.ToString();
+        return executable ?? (allowPreparation && !deferred ? current : null);
     }
 
     static string TryDeferNode(string node, JsonNode result)
@@ -641,7 +647,7 @@ public static partial class AgentTools
         var blocked = plan["steps"].AsArray().FirstOrDefault(step => step["id"]?.ToString() == node);
         if (blocked == null) return null;
         deferredNodes.Add((blocked["workflow"].ToString(), Plan.ExecutionRevision(node)));
-        string next = NextPreparedNode(plan);
+        string next = NextPreparedNode(plan, allowPreparation: false);
         if (next != null && next != node)
             DiagLog.Write($"[dag-node-deferred] node={node} next={next} outcome={outcome}");
         return next == node ? null : next;

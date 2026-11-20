@@ -3633,7 +3633,7 @@ static class RuntimeTests
         int oldMax = Game.LocalPlayer.statLifeMax;
         try
         {
-            foreach (string mode in new[] { "ready", "unmet", "danger", "cancelled", "within_node", "instant", "background" })
+            foreach (string mode in new[] { "ready", "unmet", "danger", "cancelled", "within_node", "instant", "background", "late", "sibling" })
             {
                 AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask();
                 Game.LocalPlayer.statLifeMax = mode == "unmet" ? 80 : 100;
@@ -3655,6 +3655,18 @@ static class RuntimeTests
                        "script":"return tool('action_start',{tool:'nav_to',args:{x:16,y:34}});",
                        "conditions":[{"kind":"item","type":191,"count":1}]}]}
                     """).AsObject(), _ => 0);
+                if (mode is "late" or "sibling")
+                {
+                    var patch = new JsonObject { ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
+                        ["reason"] = "Leave the first successor in preparation", ["nodes"] = new JsonArray(new JsonObject
+                        { ["id"] = "collect", ["script"] = "return {status:'yield',next:'prepare_node_script'};" }) };
+                    if (mode == "sibling") patch["add_nodes"] = JsonNode.Parse("""
+                        [{"id":"scout","description":"Scout","depends_on":["travel"],
+                          "script":"return tool('action_start',{tool:'nav_to',args:{x:18,y:34}});",
+                          "conditions":[{"kind":"item","type":192,"count":1}]}]
+                        """);
+                    AgentTools.Plan.Revise(patch, _ => 0);
+                }
                 if (mode == "instant")
                 {
                     AgentTools.Plan.Revise(new JsonObject
@@ -3756,16 +3768,30 @@ static class RuntimeTests
                 if (mode == "cancelled") cancel.Cancel();
                 var elapsed = System.Diagnostics.Stopwatch.StartNew();
                 AgentTools.ContinuePreparedNode(cancel.Token);
-                if (mode is "ready" or "instant")
+                if (mode == "late")
+                {
+                    Check(starts == 1 && AgentTools.LastContinuation?["status"]?.ToString() == "awaiting_preparation",
+                        "handoff ran a placeholder before the worker supplied an action");
+                    var step = AgentTools.Plan.Snapshot()["steps"][1];
+                    string stamp = step["workflow"] + ":" + AgentTools.Plan.ExecutionRevision("collect");
+                    Check(NativeAgent.ApplySuccessor("collect", stamp, new JsonObject
+                        { ["script"] = "return tool('action_start',{tool:'nav_to',args:{x:16,y:34}});" })["prepared_node"] != null,
+                        "late worker's actionable plan was rejected");
+                    elapsed.Restart();
+                    AgentTools.ContinuePreparedNode(cancel.Token);
+                }
+                if (mode is "ready" or "instant" or "late" or "sibling")
                 {
                     if (mode == "instant")
                         await PumpUntil(() => { AgentTools.ContinuePreparedNode(cancel.Token); return starts == 2; });
                     await PumpUntil(() => starts == 2 && AgentTools.LastContinuation?["status"]?.ToString() == "returned");
                     Check(elapsed.ElapsedMilliseconds < 1000 && AgentTools.Plan.Snapshot()["steps"][0]["status"].ToString() == "completed",
                         $"prepared DAG handoff mode={mode} elapsed_ms={elapsed.ElapsedMilliseconds} status={AgentTools.Plan.Snapshot()["steps"][0]["status"]} threads={System.Threading.ThreadPool.ThreadCount} pending={System.Threading.ThreadPool.PendingWorkItemCount}");
+                    if (mode == "sibling") Check(AgentTools.LastContinuation["task_node"].ToString() == "scout",
+                        "a placeholder blocked a ready independent action");
                     AgentTools.ContinuePreparedNode(cancel.Token);
                     Check(starts == 2, "automatic continuation replayed the same predecessor");
-                    Console.WriteLine("DAG_AUTOMATIC start_ms=" + elapsed.ElapsedMilliseconds + " model_calls=0");
+                    Console.WriteLine($"DAG_AUTOMATIC mode={mode} start_ms={elapsed.ElapsedMilliseconds} model_calls=0");
                 }
                 else Check(starts == 1 && (mode == "danger"
                     ? AgentTools.LastContinuation?["status"]?.ToString() == "waiting_event_review"

@@ -19,19 +19,24 @@ public sealed class AgentTaskPlan
     internal int ExecutionRevision(string id) => (_steps.FirstOrDefault(step => step["id"]?.ToString() == id)?["revisions"] as JsonArray)?.Count ?? 0;
     public bool RequiresNodeExecution => _dag && Incomplete;
     public bool Incomplete => _steps.Any(s => s["status"]?.ToString() != "completed");
-    internal JsonArray PreparationNodes(string owner, Func<JsonObject, int> measure)
-    {
-        bool Unmet(JsonNode node)
+    static bool NeedsPreparation(JsonObject step, Func<JsonObject, int> measure) => step?["preparation_only"]?.GetValue<bool>() == true
+        && step["conditions"].AsArray().Any(node =>
         {
             var condition = node.AsObject();
             int baseline = condition["kind"]?.ToString() is "npc_kills" or "chests_looted" ? condition["baseline"].GetValue<int>() : 0;
             return measure(condition) - baseline < condition["count"].GetValue<int>();
-        }
+        });
+
+    internal bool NeedsPreparation(string id, Func<JsonObject, int> measure)
+        => NeedsPreparation(_steps.FirstOrDefault(step => step["id"]?.ToString() == id), measure);
+
+    internal JsonArray PreparationNodes(string owner, Func<JsonObject, int> measure)
+    {
         var completed = _steps.Where(s => s["status"]?.ToString() == "completed").Select(s => s["id"].ToString()).ToHashSet();
-        return new JsonArray(_steps.Where(s => s["status"]?.ToString() != "completed" && s["preparation_only"]?.GetValue<bool>() == true
-            && s["conditions"].AsArray().Any(Unmet)
-            && (s["id"]?.ToString() == owner || s["depends_on"].AsArray().Any(d => d?.ToString() == owner)
-                && s["depends_on"].AsArray().All(d => d?.ToString() == owner || completed.Contains(d.ToString()))))
+        return new JsonArray(_steps.Where(s => s["status"]?.ToString() != "completed"
+            && (s["id"]?.ToString() == owner || (owner == null || s["depends_on"].AsArray().Any(d => d?.ToString() == owner))
+                && s["depends_on"].AsArray().All(d => d?.ToString() == owner || completed.Contains(d.ToString())))
+            && NeedsPreparation(s, measure))
             .Select(s => s["id"].DeepClone()).ToArray());
     }
 

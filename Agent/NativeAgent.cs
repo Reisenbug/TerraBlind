@@ -384,25 +384,28 @@ public class NativeAgent : ModSystem
                 }
             }
         }
-        if (now < _preparationTick || !AgentTools.Actions.HasPrimaryControl || !AgentTools.Plan.RequiresNodeExecution) return;
+        if (now < _preparationTick || !AgentTools.Plan.RequiresNodeExecution) return;
         _preparationTick = now + 15;
         string owner = AgentTools.Actions.ActiveNode;
-        if (owner == null) return;
         var opportunities = AgentTools.Plan.PreparationNodes(owner, AgentTaskEvidence.Measure);
         if (opportunities.Count == 0) return;
         var graph = AgentTools.Plan.Snapshot();
+        var ready = graph["ready_steps"].AsArray().Select(step => step.ToString()).ToHashSet();
         foreach (var node in opportunities)
         {
             string id = node.GetValue<string>();
             if (id == owner) continue;
             var step = graph["steps"].AsArray().OfType<JsonObject>().First(s => s["id"].ToString() == id);
             string stamp = step["workflow"] + ":" + AgentTools.Plan.ExecutionRevision(id);
-            if (!_parallel.CanOffer("dag:" + id, stamp)) continue;
+            bool dependenciesVerified = ready.Contains(id);
+            string offer = stamp + (dependenciesVerified ? ":ready" : ":waiting_dependencies");
+            if (!_parallel.CanOffer("dag:" + id, offer)) continue;
             var facts = new JsonObject { ["goal"] = graph["goal"]?.DeepClone(), ["active_node"] = owner,
                 ["node"] = step.DeepClone(), ["inventory"] = PvpInventory.Snapshot(),
+                ["dependencies_verified"] = dependenciesVerified,
                 ["position_tiles"] = new JsonArray(Main.LocalPlayer.Center.X / 16, Main.LocalPlayer.Center.Y / 16),
                 ["tools"] = "Use find_tiles and other read-only tools now. Scripts can use nav_to, gather, collect_treasure, build_house, craft_to_slot, equip_item, task_step and existing skills with verified arguments." };
-            _parallel.Offer("dag:" + id, stamp, ct => propose("successor", facts, ct),
+            _parallel.Offer("dag:" + id, offer, ct => propose("successor", facts, ct),
                 answer => ApplySuccessor(id, stamp, answer), token);
         }
     }
