@@ -193,6 +193,13 @@ public sealed class ControlTrial : ModSystem
                     Console.WriteLine("EXPLORATION_STARTING_GEAR copper_sword_pick_axe=true starfury=false");
                 }
                 else Console.WriteLine($"EXPLORATION_PLAYER_RESTORED hp={Main.LocalPlayer.statLife} max_hp={Main.LocalPlayer.statLifeMax}");
+                if (int.TryParse(Environment.GetEnvironmentVariable("TB_EXPLORATION_START_WOOD"), out int wood) && wood > 0)
+                {
+                    var player = Main.LocalPlayer;
+                    int missing = wood - player.CountItem(ItemID.Wood);
+                    if (missing > 0) player.QuickSpawnItem(new EntitySource_Misc("TerraBlindExplorationSupplies"), ItemID.Wood, missing);
+                    Console.WriteLine($"EXPLORATION_WOOD_SUPPLIED added={Math.Max(0, missing)} inventory={player.CountItem(ItemID.Wood)}");
+                }
                 Config.I.AgentEnabled = true;
                 Config.I.AiClient = false;
                 Config.I.AgentUseCodex = true;
