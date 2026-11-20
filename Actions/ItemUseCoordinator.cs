@@ -28,6 +28,8 @@ namespace TerraBlind
 		private static int _swings;          // COMPLETED swings (itemAnimation falling edge), not frames pressed
 		private static int _prevAnim;        // last frame's itemAnimation, for that falling edge
 		private static bool _preHadTile;     // something (not ours) occupied the target before we swung
+		private static int _recallType, _recallStack;
+		private static bool _recallPressed, _recallAnimating;
 		// How many full swings a placement gets before we call it refused. One is enough when it works, the extra
 		// two absorb a swing eaten by a stance change or an item swap.
 		private const int PlaceSwingGrace = 3;
@@ -63,6 +65,8 @@ namespace TerraBlind
 			_swings = 0;
 			_prevAnim = 0;
 			_preHadTile = false;
+			_recallType = _recallStack = 0;
+			_recallPressed = _recallAnimating = false;
 			_elapsed = 0;
 			_outOfReachFrames = 0;
 			SnappedWx = -1; SnappedWy = -1;
@@ -89,6 +93,17 @@ namespace TerraBlind
 			if (FightCoordinator.AttackAnimationActive) { _prevAnim = 0; return; }
 
 			_elapsed++;
+
+			if (_recallType != 0 && _recallPressed)
+			{
+				var item = p.inventory[req.Slot];
+				if (item.IsAir || item.type != _recallType || item.stack < _recallStack
+					|| _recallAnimating && p.itemAnimation == 0)
+				{
+					Outcome = "n/a"; _active = null; p.controlUseItem = false; return;
+				}
+				_recallAnimating |= p.selectedItem == req.Slot && p.itemAnimation > 0;
+			}
 
 			// 采集三分:removed(目标没了=成)/no_progress(零伤害=工具不行,早停)/timeout(还在啃但超预算)
 			if (_watchType >= 0)
@@ -185,6 +200,12 @@ namespace TerraBlind
 				var it = p.inventory[slot];
 				if (it != null && !it.IsAir)
 				{
+					if (AgentTools.IsRecallItem(it.type))
+					{
+						req.Slot = slot;
+						_recallType = it.type;
+						_recallStack = it.stack;
+					}
 					if (req.Strict)
 					{
 						// exact-coord caller (batch mine): never re-aim to a different tile. Target gone = report it,
@@ -268,12 +289,13 @@ namespace TerraBlind
 			if (_prevAnim > 0 && p.itemAnimation == 0) _swings++;
 			_prevAnim = p.itemAnimation;
 
-			if (p.itemTime == 0)
+			if (p.itemTime == 0 && (_recallType == 0 || !_recallAnimating && p.itemAnimation == 0))
 			{
 				// 目标格和人自己重叠时 vanilla 会拒(Collision.EmptyTile),这是【原版规则,不绕】:
 				// 试过把碰撞箱临时缩成 0 骗过那道门,结果是人被封在方块里时 vanilla 的挤出
 				// 算炸,一帧飞几千格到地图边缘。人要放东西就自己让开。
 				p.controlUseItem = true;
+				if (_recallType != 0) _recallPressed = true;
 			}
 		}
 

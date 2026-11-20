@@ -754,6 +754,13 @@ public static partial class AgentTools
     internal static bool IsRecallItem(int type) => type is Terraria.ID.ItemID.RecallPotion or Terraria.ID.ItemID.MagicMirror
         or Terraria.ID.ItemID.IceMirror or Terraria.ID.ItemID.CellPhone or Terraria.ID.ItemID.Shellphone
         or Terraria.ID.ItemID.ShellphoneSpawn or Terraria.ID.ItemID.PotionOfReturn;
+    static bool NearRecallDestination(Player player)
+    {
+        bool hasBed = player.SpawnX >= 0 && player.SpawnY >= 0;
+        var destination = new Microsoft.Xna.Framework.Vector2(
+            (hasBed ? player.SpawnX : Main.spawnTileX) * 16f, (hasBed ? player.SpawnY : Main.spawnTileY) * 16f);
+        return Microsoft.Xna.Framework.Vector2.DistanceSquared(player.Center, destination) <= 256f * 256f;
+    }
     internal static JsonObject RecentContactDamage(long tick)
     {
         var damage = LastDamage;
@@ -3797,6 +3804,7 @@ public static partial class AgentTools
                 && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) < 3200),
             ["player"] = new JsonObject { ["hp"] = p.statLife,
                 ["max_hp"] = p.statLifeMax2,
+                ["near_recall_destination"] = NearRecallDestination(p),
                 ["life_regen_raw"] = p.lifeRegen, ["suffocating"] = p.suffocating,
                 ["pos"] = new JsonObject { ["x"] = p.position.X, ["y"] = p.position.Y },
                 ["velocity"] = new JsonObject { ["x"] = p.velocity.X, ["y"] = p.velocity.Y },

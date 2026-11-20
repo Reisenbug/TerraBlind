@@ -677,15 +677,16 @@ static class ScriptTests
     static async Task SurvivalDecisionPolicy()
     {
         foreach (bool taskPolicy in new[] { false, true })
-        foreach (string scenario in new[] { "recall", "continue", "pending", "healthy", "healed", "no_item", "boss", "recall_forbidden" })
+        foreach (string scenario in new[] { "recall", "continue", "pending", "healthy", "healed", "near_spawn", "no_item", "boss", "recall_forbidden" })
         {
             if (taskPolicy && scenario == "recall_forbidden") continue;
             int uses = 0, judgments = 0;
-            var player = JsonNode.Parse("{\"hp\":40,\"max_hp\":100,\"pos\":{\"x\":160,\"y\":320},\"potion_delay_ticks\":3500}").AsObject();
+            var player = JsonNode.Parse("{\"hp\":25,\"max_hp\":100,\"pos\":{\"x\":160,\"y\":320},\"potion_delay_ticks\":3500}").AsObject();
             var combat = new JsonObject { ["tick"] = 100, ["boss_present"] = scenario == "boss",
                 ["targets"] = new JsonArray(), ["player"] = player.DeepClone(), ["recent_damage"] = new JsonObject { ["tick"] = 80 } };
             if (scenario == "healthy") combat["player"]["hp"] = 100;
             if (scenario == "healed") player["hp"] = 100;
+            if (scenario == "near_spawn") combat["player"]["near_recall_destination"] = true;
             var state = new JsonObject { ["player"] = player, ["codex_goal"] = null, ["healing_items"] = new JsonArray(),
                 ["agent"] = new JsonObject { ["auto_attack"] = true, ["combat_weapon_type"] = 24 },
                 ["inventory_slots"] = scenario == "no_item" ? new JsonArray()
@@ -720,7 +721,7 @@ static class ScriptTests
                 }, _ => Task.CompletedTask, default,
                 programs: new ScriptLibrary(Path.Combine(Path.GetTempPath(), "terrablind-direct-task-skills-" + Guid.NewGuid())).Callable());
             Check(result["ok"].GetValue<bool>() && uses == (scenario == "recall" ? 1 : 0)
-                && judgments == (scenario is "recall" or "continue" or "pending" ? 2 : 0),
+                && judgments == (scenario == "recall" ? 1 : scenario is "continue" or "pending" ? 2 : 0),
                 "survival decision blocked, repeated a recall, or called the model without need: " + scenario
                     + " task_policy=" + taskPolicy + " " + result);
         }

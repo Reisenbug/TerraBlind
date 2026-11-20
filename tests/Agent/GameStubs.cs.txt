@@ -127,6 +127,7 @@ namespace Terraria
         public static int invasionType, invasionSize, invasionSizeStart, invasionDelay;
         public static double invasionX;
         public static int netMode, myPlayer, maxPlayers = 8, maxTilesX = 1000, maxTilesY = 1000;
+        public static int spawnTileX, spawnTileY;
         public static uint GameUpdateCount;
         public static int mouseX, mouseY;
         public static Microsoft.Xna.Framework.Vector2 screenPosition;
@@ -218,6 +219,7 @@ namespace Terraria
         { shot = item.shoot; speed = item.shootSpeed; damage = item.damage; knockback = 0; ammo = 1; return HasAmmunition; }
         public int itemAnimation, potionDelay, chest = -1;
         public int statLife = 100, whoAmI, team, selectedItem, direction, width = 20, height = 40;
+        public int SpawnX = -1, SpawnY = -1;
         public int lifeRegen, lifeRegenCount;
         public System.Numerics.Vector2 position;
         public string name = "test";

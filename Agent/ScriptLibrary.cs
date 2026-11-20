@@ -370,6 +370,7 @@ public sealed class ScriptLibrary
             "默认任务反应：近敌时用原生推演候选联合选择短程走位与武器，覆盖导航和等待模型期间。复核并拆除可达压力板与近身接触伤害物，验证后续接。近期受击且血量下降时，Jev结合当前任务、冷却、敌人与地形判断是否用已有回城道具脱险。遵守权限；可修改此JS并用task_policy替换。",
             """
             let survivalRequest=null,movementRequest=null,movementIntent=null,movementProgram=null,idleDestination=null,loadoutRequest=null,loadoutProgram=null;
+            let recalledAfterDamage=null;
             const allowRecall=typeof input==='undefined'||input?.allow_recall!==false;
             const feedbackIdle=typeof input!=='undefined'&&input?.feedback_idle===true;
             const feedbackNavigation=typeof input!=='undefined'&&input?.feedback_navigation===true;
@@ -440,10 +441,11 @@ public sealed class ScriptLibrary
                   }
                 }
               }
-              if(!allowRecall||c.boss_present||p.hp>p.max_hp*.75||!c.recent_damage||c.tick-c.recent_damage.tick>120) return handled();
+              if(!allowRecall||c.boss_present||p.near_recall_destination||p.hp>p.max_hp*.30
+                  ||!c.recent_damage||c.tick-c.recent_damage.tick>120||recalledAfterDamage===c.recent_damage.tick) return handled();
               const s=tool('get_state',{fields:['player','inventory_slots','healing_items','codex_goal']});
               const recall=s.inventory_slots.find(i=>[50,2350,3199].includes(i.type)&&i.stack>0);
-              if(!recall||s.player.hp>s.player.max_hp*.75) return handled();
+              if(!recall||s.player.hp>s.player.max_hp*.30) return handled();
               const r=tool('jev_judge',{channel:'survival',context:'task-survival',interval_ms:500,max_age_ms:1000,
                 state:{objective:s.codex_goal?.native?.objective,elapsed_seconds:s.codex_goal?.host_wall_elapsed_seconds,
                   combat:c,player:s.player,healing_items:s.healing_items,terrain:tool('inspect_terrain',{radius:8}),recall,
@@ -453,8 +455,10 @@ public sealed class ScriptLibrary
               if(r.status!=='ready'||r.request_id===survivalRequest) return handled();
               survivalRequest=r.request_id;
               print({decision:'survival',request:r.request_id,choice:r.result.answers.response.choice,model_ms:r.result.elapsed_ms});
-              if(r.result.answers.response.choice==='recall') tool('use_item',{slot:recall.slot,
-                x:Math.floor(s.player.pos.x/16),y:Math.floor(s.player.pos.y/16),duration_ticks:120});
+              if(r.result.answers.response.choice==='recall'){
+                recalledAfterDamage=c.recent_damage.tick;
+                tool('use_item',{slot:recall.slot,x:Math.floor(s.player.pos.x/16),y:Math.floor(s.player.pos.y/16),duration_ticks:120});
+              }
               return handled();
             });
             on('action_failed',event=>{
