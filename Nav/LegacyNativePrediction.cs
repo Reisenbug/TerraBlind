@@ -186,7 +186,11 @@ internal static class LegacyNativePrediction
         if (controls.Count != samples.Count) return null;
         var frames = new System.Collections.Generic.List<PhysicsSimulator.ControlInput>();
         int frameCount = SettledPlacementLength(samples, controls, placements?[^1]["frame"].GetValue<int>() ?? placeAt);
-        if (!plan.Steps[0].Pillar && field.TryGetValue((plan.GoalWx, plan.GoalWy), out int previousCost)
+        bool ordinaryPillar = plan.Steps[0].Pillar && placement && cell.Item1 == plan.GoalWx
+            && Main.LocalPlayer is { gravDir: 1f, wet: false, honeyWet: false }
+            && !Main.LocalPlayer.AnyExtraJumpUsable();
+        if ((!plan.Steps[0].Pillar || ordinaryPillar)
+            && field.TryGetValue((plan.GoalWx, plan.GoalWy), out int previousCost)
             && (plan.CurH - cost) / (float)frameCount
                 <= (plan.CurH - previousCost) / Math.Max(1f, plan.CostFrames)) return null;
         for (int i = 0; i < frameCount; i++)
