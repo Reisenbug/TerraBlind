@@ -27,6 +27,55 @@ static class RuntimeTests
             Game.SavePath = directory.FullName; Game.worldID = 17; Game.worldSurface = 200; Game.rockLayer = 80;
             async Task<JsonNode> Call(string name, JsonObject args) =>
                 JsonNode.Parse(await Execute(AgentTools.Execute(name, args, default)));
+            var p = Game.LocalPlayer;
+            var savedPosition = p.position;
+            var savedVelocity = p.velocity;
+            try
+            {
+                var calls = new System.Collections.Generic.List<string>();
+                var args = new JsonObject { ["x"] = 100, ["y"] = 120, ["dir"] = 1, ["rooms"] = 4 };
+                bool arrived = false;
+                HttpServerSystem.Handler = (path, payload) =>
+                {
+                    if (path == "/nav_recede")
+                    {
+                        calls.Add("approach");
+                        var requested = JsonNode.Parse(payload);
+                        Check(requested["gx"].GetValue<int>() == 99 && requested["gy"].GetValue<int>() == 124,
+                            "house approach aimed at the future floor rather than observed footing");
+                        if (arrived) p.position = new(99 * 16, 125 * 16 - p.height);
+                    }
+                    if (path == "/build_house") calls.Add("build");
+                    return (200, path switch
+                    {
+                        "/nav_recede_done" => """{"done":true,"status":"done"}""",
+                        "/build_house" => """{"accepted":true}""",
+                        "/build_house_status" => """{"outcome":"done","running":false,"rooms":0}""",
+                        _ => """{"ok":true}"""
+                    });
+                };
+                p.position = new(40 * 16, 210 * 16); p.velocity = new(0, 0);
+                HouseBuilder.TestHasTorches = false;
+                var shortage = await Call("build_house", args);
+                Check(calls.Count == 0 && shortage["reason"]?.ToString() == "missing_torches: have 0, need 4",
+                    "missing torches let a remote house approach start");
+                HouseBuilder.TestHasTorches = true;
+                var missed = await Call("build_house", args);
+                Check(calls.SequenceEqual(new[] { "approach" }) && missed["error"]?.ToString() == "house_site_approach_failed",
+                    "builder started underground after an unverified approach");
+                calls.Clear(); arrived = true;
+                var built = await Call("build_house", args);
+                Check(calls.SequenceEqual(new[] { "approach", "build" }) && built["outcome"]?.ToString() == "done",
+                    "builder did not start after reaching the footing");
+                calls.Clear();
+                await Call("build_house", args);
+                Check(calls.SequenceEqual(new[] { "build" }), "a player already at the site navigated again");
+            }
+            finally
+            {
+                p.position = savedPosition; p.velocity = savedVelocity;
+                HouseBuilder.TestHasTorches = true; HttpServerSystem.Handler = handler;
+            }
             for (int i = 0; i < 4; i++)
                 await Call("housing", new JsonObject { ["action"] = "remember", ["x"] = 100 + i * 5, ["y"] = 120 });
             var list = await Call("housing", new JsonObject { ["action"] = "list" });

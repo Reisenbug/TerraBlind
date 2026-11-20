@@ -3304,7 +3304,7 @@ public static partial class AgentTools
                         ["y"] = result["at"][1].GetValue<int>() };
                 break;
             case "build_house":
-                result = await Call("/build_house", args, token);
+                result = await BuildHouse(args, token);
                 if (!Rejected(result) && result["accepted"]?.GetValue<bool>() == true)
                 {
                     result = await Wait("/build_house_status", "running", "/build_house_stop", 0, token);
@@ -4137,6 +4137,41 @@ public static partial class AgentTools
     internal static double NavigationDistance(Player player, int gx, int gy, bool stand) =>
         Math.Abs(player.Center.X - (gx * 16 + 8))
         + Math.Abs((stand ? player.position.Y + player.height : player.Center.Y) - (gy * 16 + (stand ? 16 : 8)));
+
+    static async Task<JsonObject> BuildHouse(JsonObject args, CancellationToken token)
+    {
+        int x = Int(args, "x"), y = Int(args, "y");
+        int outside = x + (Int(args, "dir", 1) < 0 ? 1 : -1);
+        bool AtSite(int footingRow)
+        {
+            var p = Main.LocalPlayer;
+            return !p.dead && !p.suffocating && !p.lavaWet && p.velocity.Y == 0
+                && Math.Abs((int)(p.Center.X / 16) - x) <= 5
+                && Math.Abs((int)((p.Bottom.Y - 1) / 16) - footingRow) <= 3;
+        }
+        var approach = await NativeAgent.OnMain(() =>
+        {
+            if (!WorldGen.InWorld(outside, y, 1) || !WorldGen.InWorld(x, y, 1))
+                return new JsonObject { ["error"] = "invalid_house_site" };
+            int ladder = Predicates.LadderLen(x, y);
+            if (ladder < 0)
+                return new JsonObject { ["error"] = "house_site_has_no_construction_footing", ["x"] = x, ["y"] = y };
+            int footing = y + ladder;
+            if (AtSite(footing)) return null;
+            if (!HouseBuilder.PrepareTorches(Int(args, "rooms", 4), out string why))
+                return new JsonObject { ["accepted"] = false, ["reason"] = why };
+            return new JsonObject { ["x"] = outside, ["y"] = footing, ["mode"] = "travel" };
+        }, token);
+        if (approach != null)
+        {
+            if (Rejected(approach) || approach["accepted"] != null) return approach;
+            var route = await Navigate(approach, token);
+            if (!Bool(route, "done") || !await NativeAgent.OnMain(() => AtSite(Int(approach, "y")), token))
+                return new JsonObject { ["error"] = "house_site_approach_failed", ["navigation"] = route,
+                    ["corner"] = new JsonArray(x, y), ["approach"] = approach };
+        }
+        return await Call("/build_house", args, token);
+    }
 
     static JsonObject PylonList()
     {

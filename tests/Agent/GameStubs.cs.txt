@@ -773,6 +773,20 @@ namespace TerraBlind
         public static int OriginCx(Terraria.Player player) => 12;
         public static int OriginCy(Terraria.Player player) => 34;
     }
+    public static class Predicates
+    {
+        public static int TestLadderLength = 4;
+        public static int LadderLen(int x, int y) => TestLadderLength;
+    }
+    public static class HouseBuilder
+    {
+        public static bool TestHasTorches = true;
+        public static bool PrepareTorches(int rooms, out string why)
+        {
+            why = TestHasTorches ? "" : $"missing_torches: have 0, need {rooms}";
+            return TestHasTorches;
+        }
+    }
     public static class Reach
     {
         public static bool CanPlace(Terraria.Player player, int x, int y) => true;

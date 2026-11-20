@@ -109,6 +109,7 @@ namespace TerraBlind
 			return true;
 		}
 		private const int MaxLift = 40;
+	private static bool _liftColumnApproach;
 		private const int StepTimeout = 60 * 120;
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
@@ -155,12 +156,9 @@ namespace TerraBlind
 			return best < 0 ? H_TORCH : best;
 		}
 
-		// (ax,ay)=左下角=地板第一格,是放出来的不是走上去的:站旁边放出它 → 跳上去踩着 → 往外铺
-		public static bool Start(int rooms, int dir, int ax, int ay, out string why)
+		internal static bool PrepareTorches(int rooms, out string why)
 		{
 			why = "";
-			var p = Main.LocalPlayer;
-			if (p == null) { why = "no_player"; return false; }
 			int roomCount = System.Math.Max(1, rooms);
 			int torches = HaveTorch();
 			if (torches < roomCount && Terraria.Program.IsMainThread)
@@ -173,12 +171,22 @@ namespace TerraBlind
 				why = $"missing_torches: have {torches}, need {roomCount}; collect torches or craft with Gel and Wood";
 				return false;
 			}
-			_rooms = roomCount;
+			return true;
+		}
+
+		// (ax,ay)=左下角=地板第一格,是放出来的不是走上去的:站旁边放出它 → 跳上去踩着 → 往外铺
+		public static bool Start(int rooms, int dir, int ax, int ay, out string why)
+		{
+			var p = Main.LocalPlayer;
+			if (p == null) { why = "no_player"; return false; }
+			if (!PrepareTorches(rooms, out why)) return false;
+			_rooms = System.Math.Max(1, rooms);
 			_dir = dir >= 0 ? 1 : -1;
 			_x0 = ax; _ay = ay;
 			AgentTools.ReserveHousingConstruction(ax, ay, ax + _dir * Width, ay - PillarH - 1);
 			_floorRow = ay;
 			_waited = 0; _hopTries = 0; _liftTries = 0; _roomIdx = 0; _roofRow = 0; _fixTried = false;
+			_liftColumnApproach = false;
 			_retryPh = Ph.Idle; _retryN = 0;
 			_fixRounds = 0; _fixStall = 0; _lastLack = int.MaxValue;
 			_reclaimTries = 0; ThrowItems.Forget();
@@ -357,6 +365,9 @@ namespace TerraBlind
 				{
 					if (SettleAt.IsRunning || HopUp.IsRunning || DropDown.IsRunning) return;
 					int lcx = Predicates.PillarCol(p), lcy = ActExecutor.OriginCy(p);
+					if (_liftColumnApproach && lcx != _x0 && SettleAt.Outcome == "timeout")
+					{ Fail($"house_site_lateral_approach_timeout: ({lcx},{lcy}) → ({_x0},{_ay})"); return; }
+					_liftColumnApproach = false;
 					// 踩在左下角上了 → 开工。梯子最上面那格就是左下角,不用再单独放
 					if (lcx == _x0 && lcy == _ay - 1)
 					{
@@ -368,7 +379,7 @@ namespace TerraBlind
 					if (++_liftTries > MaxLift)
 					{ Fail($"上不到左下角 ({_x0},{_ay}),现在({lcx},{lcy})"); return; }
 					// 先对 x 再对高度:地面上横向走安全,爬到柱顶再横向走是悬空,走不过去还会掉下来
-					if (lcx != _x0) { SettleAt.Start(_x0, out _); _waited = 0; return; }
+					if (lcx != _x0) { _liftColumnApproach = SettleAt.Start(_x0, out _); _waited = 0; return; }
 					// 爬过头:只挪到位,别一路掉到地面再重爬一遍
 					if (lcy < _ay - 1) { DropDown.Start(_ay - 1, out _); _waited = 0; return; }
 					// 只扫落脚后身子占的 3 行:扫到 lcy-3 会把脚下的梯子和左下角自己算成障碍
