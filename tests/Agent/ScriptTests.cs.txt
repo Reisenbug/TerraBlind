@@ -382,7 +382,7 @@ static class ScriptTests
         {
             player.dead = ItemUseCoordinator.IsActive = PlaceAnywhere.IsRunning = false;
             player.itemAnimation = player.itemTime = 0;
-            foreach (string scenario in new[] { "swap", "observe", "empty_slot", "keep", "ammo_lost", "source_changed", "destination_changed", "no_slot" })
+            foreach (string scenario in new[] { "swap", "observe", "empty_slot", "keep", "current_slot", "ammo_lost", "source_changed", "destination_changed", "no_slot" })
             {
                 player.inventory = Enumerable.Range(0, 58).Select(_ => new Terraria.Item()).ToArray();
                 if (scenario != "empty_slot")
@@ -403,7 +403,8 @@ static class ScriptTests
                     JsonObject response;
                     if (name == "jev_judge") response = new JsonObject { ["status"] = "ready", ["request_id"] = 7,
                         ["input_state"] = args["state"].DeepClone(), ["result"] = new JsonObject { ["elapsed_ms"] = 200,
-                            ["answers"] = new JsonObject { ["response"] = new JsonObject { ["choice"] = scenario == "keep" ? "keep" : "slot_29" } } } };
+                            ["answers"] = new JsonObject { ["response"] = new JsonObject { ["choice"] = scenario switch
+                                { "keep" => "keep", "current_slot" => "slot_7", _ => "slot_29" } } } } };
                     else if (name == "combat_assess")
                     {
                         response = combat.DeepClone().AsObject();
@@ -436,6 +437,8 @@ static class ScriptTests
                     "loadout discarded the displaced weapon");
                 if (scenario == "empty_slot") Check(player.inventory[29].type == 0 && player.inventory[7].type == 24,
                     "loadout removed an existing hotbar weapon despite available space");
+                if (scenario == "current_slot") Check(result["value"]?["status"]?.ToString() == "kept",
+                    "loadout rewrote the weapon that was already selected");
             }
         }
         finally

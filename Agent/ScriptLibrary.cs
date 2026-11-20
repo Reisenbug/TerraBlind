@@ -380,6 +380,8 @@ public sealed class ScriptLibrary
             const current=now.targets.flatMap(n=>n.weapons).find(w=>w.slot===selected.slot&&w.type===selected.type
               &&w.prefix===selected.prefix&&w.stack===selected.stack&&w.has_ammo&&w.mana_available);
             if(!current) return {request_id:r.request_id,status:'weapon_changed'};
+            if(current.slot<10&&current.type===now.preferred_weapon_type)
+              return {request_id:r.request_id,status:'kept',weapon_type:current.type};
             if(current.slot>=10){
               const inventory=tool('get_state',{fields:['inventory_slots']}).inventory_slots;
               const hotbar=now.targets.flatMap(n=>n.weapons).filter(w=>w.slot<10);
@@ -445,7 +447,7 @@ public sealed class ScriptLibrary
                   &&n.weapons?.some(w=>w.slot>=10&&w.has_ammo&&w.mana_available))){
                 loadoutProgram??=tool('script_program',{operation:'get',name:'combat_loadout'});
                 const objective=tool('get_state',{fields:['codex_goal']}).codex_goal?.native?.objective;
-                const loadout=skill('combat_loadout',loadoutProgram.revision,{instruction:objective,last_request:loadoutRequest});
+                const loadout=skill('combat_loadout',loadoutProgram.revision,{combat:c,instruction:objective,last_request:loadoutRequest});
                 loadoutRequest=loadout.request_id??loadoutRequest;
               }
               let destination=event.execution?.tool==='nav_to'?event.execution.args:null;
