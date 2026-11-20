@@ -23,6 +23,77 @@ public static partial class AgentTools
     { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     internal const int ApiRevision = 2;
     internal static Func<JsonObject> BeginActObservation, EndActObservation;
+    sealed class RailBoost(int world, int direction, float beforeSpeed, ulong started)
+    {
+        internal readonly TaskCompletionSource<JsonObject> Result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal ulong? JumpTick;
+        internal int World { get; } = world;
+        internal int Direction { get; } = direction;
+        internal float BeforeSpeed { get; } = beforeSpeed;
+        internal ulong Started { get; } = started;
+    }
+    static RailBoost railBoost;
+
+    internal static void ApplyRailBoost(Player player)
+    {
+        var attempt = railBoost;
+        if (attempt == null || attempt.Result.Task.IsCompleted) return;
+        ulong now = Main.GameUpdateCount;
+        int index = player.grappling[0];
+        var hook = index >= 0 && index < Main.projectile.Length ? Main.projectile[index] : null;
+        bool attached = hook is { active: true, type: Terraria.ID.ProjectileID.TrackHook } && hook.owner == player.whoAmI;
+        string outcome = null;
+        if (player.dead || Main.worldID != attempt.World || !ControlAllows(ControlBehavior.Direct, ControlChannels.Movement, delegated: true))
+            outcome = "rail_boost_interrupted";
+        else if (player.mount.Active && player.mount.Cart) outcome = "rail_boost_already_boarded";
+        else if (attempt.JumpTick is ulong jumped && now > jumped)
+        {
+            float gained = (player.velocity.X - attempt.BeforeSpeed) * attempt.Direction;
+            outcome = !attached && gained > .25f ? "rail_boost_observed" : "rail_boost_not_observed";
+        }
+        else if (now - attempt.Started >= 60) outcome = "rail_boost_hook_not_observed";
+        else if (attempt.JumpTick == null && attached && player.releaseJump && !player.Hitbox.Intersects(hook.Hitbox))
+        {
+            player.controlJump = true;
+            attempt.JumpTick = now;
+        }
+        if (outcome == null) return;
+        bool ok = outcome == "rail_boost_observed";
+        var result = new JsonObject { ["outcome"] = outcome, ["verified"] = ok,
+            ["error"] = ok ? null : outcome, ["interact_tick"] = attempt.Started, ["jump_tick"] = attempt.JumpTick,
+            ["vx_before"] = attempt.BeforeSpeed, ["vx_after"] = player.velocity.X };
+        DiagLog.Write("[agent_rail_boost] " + result);
+        attempt.Result.TrySetResult(result);
+    }
+
+    static async Task<JsonObject> InteractRailBoost(int x, int y, CancellationToken token)
+    {
+        var setup = await NativeAgent.OnMain<(JsonObject Receipt, RailBoost Attempt)>(() =>
+        {
+            var p = Main.LocalPlayer;
+            if (!WorldGen.InWorld(x, y) || Main.tile[x, y].TileType != Terraria.ID.TileID.MinecartTrack
+                || !Main.tile[x, y].HasUnactuatedTile || p.dead || p.mount.Active
+                || !ControlAllows(ControlBehavior.Direct, ControlChannels.Movement, delegated: true))
+                return (Receipt: new JsonObject { ["error"] = "rail_boost_unavailable" }, Attempt: (RailBoost)null);
+            int direction = Math.Sign(x * 16f + 8f - p.Center.X);
+            if (direction == 0 || railBoost is { Result.Task.IsCompleted: false })
+                return (new JsonObject { ["error"] = "rail_boost_unavailable" }, (RailBoost)null);
+            float vx = p.velocity.X;
+            var receipt = HttpServerSystem.InteractAt(x, y);
+            if (Text(receipt, "outcome") != "pending_minecart") return (receipt, (RailBoost)null);
+            WorldFramesRequired = Math.Max(WorldFramesRequired, 2);
+            return (receipt, railBoost = new RailBoost(Main.worldID, direction, vx, Main.GameUpdateCount));
+        }, token);
+        if (setup.Attempt == null) return setup.Receipt;
+        using var registration = token.Register(() => setup.Attempt.Result.TrySetCanceled(token));
+        try { return await setup.Attempt.Result.Task.WaitAsync(TimeSpan.FromSeconds(3), token); }
+        catch (TimeoutException)
+        {
+            var timeout = new JsonObject { ["error"] = "rail_boost_input_timeout" };
+            setup.Attempt.Result.TrySetResult(timeout);
+            return timeout;
+        }
+    }
     sealed class TaskPolicyInstance
     {
         public readonly Guid Id = Guid.NewGuid();
@@ -1226,6 +1297,7 @@ public static partial class AgentTools
             observedPlayer["vel"] = new JsonObject { ["x"] = healthPlayer.velocity.X, ["y"] = healthPlayer.velocity.Y };
             observedPlayer["dead"] = Main.LocalPlayer.dead;
             observedPlayer["suffocating"] = Main.LocalPlayer.suffocating;
+            observedPlayer["minecart"] = healthPlayer.mount.Active && healthPlayer.mount.Cart;
             observedPlayer["honey_slowed"] = healthPlayer.honeyWet && !healthPlayer.ignoreWater;
             observedPlayer["potion_delay_ticks"] = Main.LocalPlayer.potionDelay;
             observedPlayer["biome_flags"] = new JsonObject { ["jungle"] = healthPlayer.ZoneJungle,
@@ -1875,6 +1947,7 @@ public static partial class AgentTools
             if (name == "fight") return;
             bool changesRoute = name is "nav_to" or "gather" or "mine" or "mine_vein" or "chop_wood" or "use_item"
                 or "place_at" or "act" or "collect_treasure" or "build_house" or "hell_run" or "combat_reposition";
+            changesRoute |= name == "interact" && Text(args, "track_mode") is "ride" or "boost";
             if (changesRoute && !paused && pause != null) { await pause(ct); paused = true; }
             if ((AgentControlSession.RequiredChannels(name, args) & ControlChannels.ItemUse) != 0 || construction && paused)
                 while (await NativeAgent.OnMain(() => !Main.LocalPlayer.dead
@@ -2949,6 +3022,11 @@ public static partial class AgentTools
                 if (!Rejected(result)) result = await Wait("/hell_run_status", "running", "/hell_run_stop", 0, token);
                 break;
             case "interact":
+                if (Text(args, "track_mode") == "boost")
+                {
+                    result = await InteractRailBoost(Int(args, "x"), Int(args, "y"), token);
+                    break;
+                }
                 result = await NativeAgent.OnMain(() => HttpServerSystem.InteractAt(Int(args, "x"), Int(args, "y")), token);
                 if (Text(result, "outcome") == "pending")
                 {
@@ -3797,6 +3875,7 @@ public static partial class AgentTools
             && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) <= radius * 16)
             .OrderBy(n => Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center)).Take(8);
         return new JsonObject { ["tick"] = Main.GameUpdateCount, ["recent_damage"] = LastDamage?.DeepClone(),
+            ["rail_routes"] = ReachableRailRoutes(p),
             ["movement_intent"] = FeedbackControl.Snapshot(),
             ["navigation_controls"] = new JsonObject {
                 ["next_frames"] = new JsonArray(StateSpacePlanner.PeekMovementControls(12, traceUnavailable: false)
@@ -3851,6 +3930,53 @@ public static partial class AgentTools
                         ["line_or_reach_passed"] = FightCoordinator.CanHitTarget(p, entry.item, n.Center, n.width / 2f)
                     }).ToArray())
             }).ToArray()) };
+    }
+
+    internal static JsonArray ReachableRailRoutes(Player player)
+    {
+        var routes = new JsonArray();
+        int feetX = ActExecutor.OriginCx(player), feetY = ActExecutor.OriginCy(player);
+        if (feetY <= Main.worldSurface || player.dead || player.mount.Active || player.wet
+            || player.gravDir != 1f || player.velocity.Y != 0 || !player.releaseJump) return routes;
+        bool FlatTrack(int x, int y)
+        {
+            var tile = Main.tile[x, y];
+            return tile.HasUnactuatedTile && tile.TileType == Terraria.ID.TileID.MinecartTrack
+                && tile.TileFrameX == 1 && tile.TileFrameY == -1;
+        }
+        bool Clear(int x, int y)
+        {
+            if (!WorldGen.InWorld(x, y, 5) || !FlatTrack(x, y)
+                || Control.ForbiddenAt(ControlBehavior.Navigation, x, y)) return false;
+            for (int row = y - 3; row <= y + 1; row++)
+            {
+                var tile = Main.tile[x, row];
+                if (tile.LiquidAmount > 0 || TerrainInspection.ContactDamage(player, x, row) > 0
+                    || tile.HasUnactuatedTile && (tile.TileType is Terraria.ID.TileID.PressurePlates or Terraria.ID.TileID.Explosives
+                        or Terraria.ID.TileID.Boulder or Terraria.ID.TileID.RollingCactus
+                        || row < y && Main.tileSolid[tile.TileType])) return false;
+            }
+            return true;
+        }
+        foreach (int direction in new[] { -1, 1 })
+        {
+            for (int dx = 0; dx <= 3; dx++)
+            {
+                int x = feetX + dx * direction;
+                for (int y = feetY - 1; y <= feetY + 1; y++)
+                {
+                    if (!Clear(x, y) || !Reach.CanInteract(player, x, y)) continue;
+                    int span = 1;
+                    while (span < 24 && Clear(x + span * direction, y)) span++;
+                    if (span < 16) continue;
+                    routes.Add(new JsonObject { ["x"] = x, ["y"] = y, ["direction"] = direction,
+                        ["ride_tiles"] = Math.Min(span - 8, 12) });
+                    break;
+                }
+                if (routes.Count > 0 && Int(routes[^1].AsObject(), "direction") == direction) break;
+            }
+        }
+        return routes;
     }
 
     static JsonArray CoverCandidates(Player player, int radius)

@@ -468,6 +468,10 @@
       "parameters": {
         "type": "object",
         "properties": {
+          "track_mode": {
+            "type": "string", "enum": ["ride", "boost"],
+            "description": "仅用于铁轨。ride为原版右键上车；boost右键发出上轨钩子，在被拉上车前用跳跃脱钩，返回前后速度。Ride normally or jump-cancel the native track hook before mounting."
+          },
           "x": {
             "type": "integer",
             "description": "方块格x"

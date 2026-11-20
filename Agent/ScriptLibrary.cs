@@ -11,8 +11,8 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response" };
-    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel" };
+    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel" };
     internal static string BuiltinIndex => string.Join("\n", BuiltIns.Select(name =>
         name + "@0: " + Example(name)["detail"].ToString().Split('。')[0]));
 
@@ -29,6 +29,24 @@ public sealed class ScriptLibrary
             "开荒通用采集与下洞先比较森林、雪地、丛林的天然下行路线，返回路点和浅层预计开挖量。input.biome可指定已确定的群系。Early exploration prefers natural caves over surface excavation.",
             """
             return tool('early_descent',input?.biome?{biome:input.biome}:{});
+            """);
+        if (name == "minecart_travel") return Template(name,
+            "沿途上车或利用原版上轨钩子提速。输入x/y为铁轨格，mode为ride或boost；boost可传place_item在此格就地放一格铁轨后再右键、拉动、跳脱。ride可传direction和ride_tiles沿已确认的轨道短程行驶。Ride existing track or cancel the native track hook before mounting to gain speed.",
+            """
+            const {x,y,mode='ride',place_item,direction,ride_tiles}=input;
+            if(mode==='boost'&&place_item!=null){
+              const result=tool('place_at',{x,y,item:String(place_item),local:true});
+              if(!result.cells?.[0]?.verified)return {error:'track_placement_unverified',placement:result};
+            }
+            const entry=tool('interact',{x,y,track_mode:mode});
+            if(mode==='boost'||!['minecart_mounted','already_mounted'].includes(entry.outcome)||ride_tiles==null)return entry;
+            const start=tool('get_state',{fields:['player']}).player;
+            const ride=tool('act',{steps:[{keys:[direction>0?'right':'left'],until:{moved:{dx:ride_tiles,dy:0}}}],timeout_frames:150});
+            const finish=tool('get_state',{fields:['player']}).player;
+            const exit=finish.minecart?tool('game_input',{action:'quick_mount',enabled:false}):{mounted:false};
+            const moved=(finish.pos.x-start.pos.x)*direction/16;
+            return {verified:ride.outcome==='done'&&exit.mounted===false&&moved>=ride_tiles-1,
+              outcome:ride.outcome,travelled_tiles:moved,vx:finish.vel.x,exit};
             """);
         if (name == "ensure_town_housing") return Template(name,
             "按世界重验记过的地表房间，优先指派空房；只补目标总数或满足等待入住的NPC。input.rooms为所需总数，x/y可指定基地锚点。Reuse verified housing before extending a settlement.",
@@ -372,6 +390,8 @@ public sealed class ScriptLibrary
             """
             let survivalRequest=null,movementRequest=null,movementIntent=null,movementProgram=null,idleDestination=null,loadoutRequest=null,loadoutProgram=null;
             let recalledAfterDamage=null;
+            let lastRailAttempt=0;
+            const useMinecart=typeof input==='undefined'||input?.use_minecart!==false;
             const allowRecall=typeof input==='undefined'||input?.allow_recall!==false;
             const feedbackIdle=typeof input!=='undefined'&&input?.feedback_idle===true;
             const feedbackNavigation=typeof input!=='undefined'&&input?.feedback_navigation===true;
@@ -390,6 +410,17 @@ public sealed class ScriptLibrary
                 loadoutRequest=loadout.request_id??loadoutRequest;
               }
               let destination=event.execution?.tool==='nav_to'?event.execution.args:null;
+              if(useMinecart&&destination&&(destination.mode==null||destination.mode==='travel')
+                  &&c.rail_routes?.length&&!c.boss_present&&!c.targets?.some(n=>n.attackable&&n.contact_damage>0&&n.distance_tiles<5)
+                  &&!c.projectiles?.length&&Date.now()-lastRailAttempt>=5000){
+                const rail=c.rail_routes.find(r=>Math.abs(r.y-destination.y)<=8&&(destination.x-r.x)*r.direction>=r.ride_tiles+4);
+                if(rail){
+                  lastRailAttempt=Date.now();
+                  const rode=skill('minecart_travel',0,rail);
+                  print({decision:'minecart',route:rail,receipt:rode});
+                  return handled();
+                }
+              }
               const construction=event.execution?.tool==='place_at'&&!event.execution.args?.local;
               if(construction)destination=event.execution.args?.x!=null&&event.execution.args?.y!=null
                 ?{x:event.execution.args.x,y:event.execution.args.y}:{x:Math.floor(p.pos.x/16),y:Math.floor(p.pos.y/16)};

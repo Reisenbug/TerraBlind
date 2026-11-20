@@ -199,7 +199,8 @@ namespace Terraria
         public bool noFallDmg;
         public bool waterWalk, waterWalk2, slowFall, gravControl, gravControl2;
         public int breath = 200, breathMax = 200;
-        public bool honeyWet, ignoreWater;
+        public bool wet, honeyWet, ignoreWater;
+        public int[] grappling = { -1 };
         public float gravDir = 1, maxFallSpeed = 10;
         public int fallStart, extraFall;
         public bool delayUseItem, mouseInterface;
@@ -315,6 +316,7 @@ namespace Terraria
         public int owner, damage, identity, whoAmI, type, extraUpdates, aiStyle;
         public int width = 8, height = 8;
         public Microsoft.Xna.Framework.Vector2 velocity, Center;
+        public Microsoft.Xna.Framework.Rectangle Hitbox => new((int)Center.X - width / 2, (int)Center.Y - height / 2, width, height);
     }
     public static class WorldGen
     {
@@ -389,7 +391,7 @@ namespace Terraria.ID
     public static class SoundID { public static readonly int Item37 = 37; }
     public static class ProjectileID
     {
-        public const int Boulder = 99;
+        public const int Boulder = 99, TrackHook = 403;
         public static class Sets
         {
             public static bool[] NoMeleeSpeedVelocityScaling = new bool[1200];

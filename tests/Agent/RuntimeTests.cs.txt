@@ -111,6 +111,7 @@ static class RuntimeTests
             watch.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest"), ["loot_chests_in_reach"] = false });
             watch.EnsureDefaults();
             Check(!watch.LootChestsInReach, "an explicit skip-chest policy was ignored");
+            await RailHookBoost();
             Console.WriteLine("PASS: housing is reused and protected from navigation, surface desert routes are rejected, and default loot can be disabled");
         }
         finally
@@ -121,6 +122,55 @@ static class RuntimeTests
             RecedingNav.Active = false;
             AgentTools.Control.ReplaceHousing(Array.Empty<(int, int, int, int)>());
             directory.Delete(recursive: true);
+        }
+    }
+
+    static async Task RailHookBoost()
+    {
+        var player = Game.LocalPlayer;
+        var before = (player.position, player.velocity, player.controlJump, player.releaseJump,
+            player.grappling[0], Game.GameUpdateCount, Game.projectile[0], Game.tile[20, 34], HttpServerSystem.Handler);
+        try
+        {
+            player.position = new(160, 16 * 34 - player.height);
+            player.velocity = default;
+            player.controlJump = false;
+            player.releaseJump = true;
+            player.grappling[0] = -1;
+            Game.tile[20, 34] = new Terraria.Tile { HasUnactuatedTile = true, TileType = TileID.MinecartTrack };
+            int interactions = 0;
+            HttpServerSystem.Handler = (path, _) =>
+            {
+                Check(path == "/interact" && !player.controlJump, "rail jump preceded native right-click");
+                interactions++;
+                return (200, "{\"outcome\":\"pending_minecart\"}");
+            };
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            var run = AgentTools.Execute("interact", new JsonObject { ["x"] = 20, ["y"] = 34, ["track_mode"] = "boost" }, timeout.Token);
+            await PumpUntil(() => interactions == 1);
+            Game.GameUpdateCount++;
+            AgentTools.ApplyRailBoost(player);
+            Check(!player.controlJump, "the boost jumped while waiting for the hook to attach");
+            Game.projectile[0] = new Terraria.Projectile { active = true, owner = player.whoAmI, type = ProjectileID.TrackHook,
+                Center = player.Center + new Microsoft.Xna.Framework.Vector2(80, 10) };
+            player.grappling[0] = 0;
+            Game.GameUpdateCount++;
+            AgentTools.ApplyRailBoost(player);
+            Check(player.controlJump && !player.mount.Active, "attached track hook did not receive a pre-boarding jump");
+            player.grappling[0] = -1;
+            player.controlJump = false;
+            player.velocity.X = 9;
+            Game.GameUpdateCount++;
+            AgentTools.ApplyRailBoost(player);
+            var result = JsonNode.Parse(await Execute(run));
+            Check(result["verified"].GetValue<bool>() && result["vx_after"].GetValue<float>() == 9,
+                "boost did not verify hook release and observed horizontal speed");
+            Console.WriteLine("PASS: rail boost sends a pre-boarding jump after the native click and verifies momentum");
+        }
+        finally
+        {
+            (player.position, player.velocity, player.controlJump, player.releaseJump, player.grappling[0],
+                Game.GameUpdateCount, Game.projectile[0], Game.tile[20, 34], HttpServerSystem.Handler) = before;
         }
     }
     public static async Task ChestReceipts()
