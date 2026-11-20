@@ -1681,7 +1681,7 @@ public static partial class AgentTools
             or "place_at" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap" or "combat_reposition"
             or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat"
             or "slot_click" or "container_action" or "game_input" or "craft_recipe" or "mod_input"
-            or "pylon_use" or "reforge" or "fish" or "container_transfer" or "craft_to_slot" or "shop_buy" || name == "housing" && !readsHousing;
+            or "pylon_use" or "reforge" or "fish" or "container_transfer" or "craft_to_slot" or "shop_buy" or "shop_sell" || name == "housing" && !readsHousing;
         bool action = external || name is "fight" or "fight_player";
         bool startsPrimary = name == "action_start" && Text(args, "tool") != "fight";
         if ((external || startsPrimary) && string.IsNullOrEmpty(taskNode)
@@ -2764,6 +2764,9 @@ public static partial class AgentTools
                 return (await NativeAgent.OnMain(() => PvpInventory.OpenShop(args, buy: false), token)).ToJsonString();
             case "shop_buy":
                 result = await NativeAgent.OnMain(() => PvpInventory.OpenShop(args, buy: true), token);
+                break;
+            case "shop_sell":
+                result = await NativeAgent.OnMain(() => PvpInventory.SellFromShop(args), token);
                 break;
             case "npc_chat":
                 string chatAction = Text(args, "action");

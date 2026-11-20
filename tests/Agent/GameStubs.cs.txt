@@ -62,6 +62,8 @@ namespace Terraria.UI
         }
         public static bool ShiftInUse;
         public static Action<Terraria.Item[], int, int> LeftClickHandler;
+        public static Action<Terraria.Item[], int, int> SellHandler;
+        public static void SellOrTrash(Terraria.Item[] items, int context, int slot) => SellHandler?.Invoke(items, context, slot);
         public static void LeftClick(Terraria.Item[] items, int context, int slot) => LeftClickHandler?.Invoke(items, context, slot);
         public static Action<Terraria.Item[], int, int> RightClickHandler;
         public static void RightClick(Terraria.Item[] items, int context = 0, int slot = 0) => RightClickHandler?.Invoke(items, context, slot);
@@ -420,6 +422,7 @@ namespace Terraria.ID
     public static class ProjAIStyleID { public const int ShortSword = 161, Spear = 19, Explosive = 16; }
     public static class ItemID
     {
+        public const int CopperCoin = 71, PlatinumCoin = 74;
         public const int ObsidianSkinPotion = 288;
         public const int FixtureGoal = 191, Umbrella = 946, DeadMansChest = 3988, TragicUmbrella = 4707;
         public const int MagicMirror = 50, RecallPotion = 2350, CellPhone = 3124, IceMirror = 3199,
@@ -631,6 +634,11 @@ namespace TerraBlind
         public static void AimTile(int x, int y) => AimPx(x * 16 + 8, y * 16 + 8);
     }
     public static class DigTable { public const int Unmineable = 100000; public static int CostFrames(int x, int y) => 1; }
+    public static class Shop
+    {
+        public static long Money(Terraria.Player player) => player.coins;
+        public static long SellUnit(Terraria.Player player, Terraria.Item item) => item.value > 0 ? Math.Max(1, item.value / 5) : 0;
+    }
     public static class Halt
     {
         public static int Stops;

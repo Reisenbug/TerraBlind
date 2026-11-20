@@ -215,7 +215,11 @@ public static class PvpInventory
         finally { (Main.npcChatText, Main.defaultChestName) = saved; }
     }
 
-    public static JsonObject OpenShop(JsonObject args, bool buy)
+    public static JsonObject OpenShop(JsonObject args, bool buy) => Trade(args, buy ? "buy" : "list");
+
+    internal static JsonObject SellFromShop(JsonObject args) => Trade(args, "sell");
+
+    static JsonObject Trade(JsonObject args, string operation)
     {
         var player = Main.LocalPlayer;
         int npc = player.talkNPC;
@@ -231,19 +235,29 @@ public static class PvpInventory
             player.GetItemExpectedPrice(item, out _, out long price);
             return price;
         }
-        if (!buy)
+        if (operation == "list")
         {
             var items = new JsonArray();
             for (int i = 0; i < stock.Length; i++)
                 if (stock[i] is { IsAir: false } item)
                     items.Add(new JsonObject { ["slot"] = i, ["item"] = ItemState(item),
                         ["unit_price"] = Price(item), ["currency"] = item.shopSpecialCurrency, ["finite_stock"] = item.buyOnce });
-            return new JsonObject { ["npc"] = npc, ["npc_type"] = vendor.type, ["shop"] = Main.npcShop, ["items"] = items };
+            var sellable = new JsonArray();
+            for (int i = 0; i < 50; i++)
+            {
+                var item = player.inventory[i];
+                if (!CanSell(item)) continue;
+                long price = Shop.SellUnit(player, item);
+                if (price > 0) sellable.Add(new JsonObject { ["slot"] = i, ["item"] = ItemState(item), ["unit_price"] = price });
+            }
+            return new JsonObject { ["npc"] = npc, ["npc_type"] = vendor.type, ["shop"] = Main.npcShop,
+                ["items"] = items, ["sell_items"] = sellable, ["money"] = Shop.Money(player) };
         }
         if (args["npc"]?.GetValue<int>() != npc || args["npc_type"]?.GetValue<int>() != vendor.type
             || args["shop"]?.GetValue<int>() != Main.npcShop)
             return new JsonObject { ["error"] = "shop_changed" };
         if (player.itemAnimation > 0 || player.itemTime > 0) return new JsonObject { ["error"] = "inventory_busy" };
+        if (operation == "sell") return SellAtShop(player, args);
         int slot = args["slot"]?.GetValue<int>() ?? -1, type = args["expected_type"]?.GetValue<int>() ?? 0;
         int count = args["count"]?.GetValue<int>() ?? 1;
         long offered = args["unit_price"]?.GetValue<long>() ?? -1;
@@ -271,6 +285,27 @@ public static class PvpInventory
         finally { (Main.mouseRight, Main.mouseRightRelease, Main.stackSplit, Main.superFastStack) = input; }
         return new JsonObject { ["ok"] = bought > 0, ["outcome"] = bought == count ? "bought" : bought > 0 ? "partial" : "not_bought",
             ["bought"] = bought, ["wanted"] = count, ["reason"] = reason, ["cursor"] = ItemState(Main.mouseItem) };
+    }
+
+    static bool CanSell(Item item) => !item.IsAir && !item.favorited && item.type is not (>= ItemID.CopperCoin and <= ItemID.PlatinumCoin);
+
+    static JsonObject SellAtShop(Player player, JsonObject args)
+    {
+        int slot = args["slot"]?.GetValue<int>() ?? -1;
+        if (slot is < 0 or >= 50) return new JsonObject { ["error"] = "invalid_slot_address" };
+        var item = player.inventory[slot];
+        if (!CanSell(item) || !Matches(item, args["expected_item"]))
+            return new JsonObject { ["error"] = "sale_item_changed", ["actual"] = ItemState(item) };
+        long price = Shop.SellUnit(player, item);
+        if (price <= 0 || args["unit_price"]?.GetValue<long>() != price)
+            return new JsonObject { ["error"] = "sale_quote_changed", ["unit_price"] = price };
+        var soldItem = ItemState(item);
+        long before = Shop.Money(player);
+        ItemSlot.SellOrTrash(player.inventory, ItemSlot.Context.InventoryItem, slot);
+        long after = Shop.Money(player);
+        if (!player.inventory[slot].IsAir) return new JsonObject { ["error"] = "sale_not_observed" };
+        PvpDuel.InventoryChanged();
+        return new JsonObject { ["ok"] = true, ["outcome"] = "sold", ["item"] = soldItem, ["gained"] = after - before, ["money"] = after };
     }
 
     public static JsonObject Slot(JsonObject args, bool click)

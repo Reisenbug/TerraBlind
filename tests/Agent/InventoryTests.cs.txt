@@ -85,7 +85,8 @@ static class InventoryTests
     {
         var p = Game.LocalPlayer;
         var before = (p.talkNPC, p.coins, Game.npcShop, Game.playerInventory, Game.mouseItem, Game.npc[0],
-            Game.instance.shop[1], Terraria.UI.ItemSlot.RightClickHandler);
+            Game.instance.shop[1], Terraria.UI.ItemSlot.RightClickHandler, Terraria.UI.ItemSlot.SellHandler,
+            p.inventory[20], p.inventory[21]);
         try
         {
             p.talkNPC = 0; p.coins = 40; Game.npcShop = 1; Game.playerInventory = true;
@@ -113,12 +114,40 @@ static class InventoryTests
             if (bought["outcome"].ToString() != "partial" || bought["reason"].ToString() != "insufficient_funds"
                 || bought["bought"].GetValue<int>() != 2 || Game.mouseItem.stack != 2 || p.coins != 0)
                 throw new Exception("shop purchase did not verify the actual paid quantity");
+            p.inventory[20] = new Terraria.Item { type = 131, prefix = 2, stack = 4, value = 25 };
+            p.inventory[21] = new Terraria.Item { type = 132, stack = 1, value = 100, favorited = true };
+            int sales = 0;
+            Terraria.UI.ItemSlot.SellHandler = (items, context, slot) =>
+            {
+                if (items != p.inventory || context != Terraria.UI.ItemSlot.Context.InventoryItem || slot != 20)
+                    throw new Exception("sale bypassed the native inventory sale");
+                sales++;
+                p.coins += 20;
+                items[slot].TurnToAir();
+            };
+            var quotes = PvpInventory.OpenShop(new JsonObject(), buy: false)["sell_items"].AsArray();
+            var quote = quotes.Single(item => item["slot"].GetValue<int>() == 20);
+            if (quotes.Any(item => item["slot"].GetValue<int>() == 21) || quote["unit_price"].GetValue<long>() != 5)
+                throw new Exception("invalid sale quotes or a favorited item was offered");
+            var sale = new JsonObject { ["npc"] = 0, ["npc_type"] = 38, ["shop"] = 1, ["slot"] = 20,
+                ["expected_item"] = quote["item"].DeepClone(), ["unit_price"] = 4L };
+            if (PvpInventory.SellFromShop(sale)["error"].ToString() != "sale_quote_changed" || sales != 0)
+                throw new Exception("a stale sale quote sold the stack");
+            sale["unit_price"] = 5L;
+            p.inventory[20].stack++;
+            if (PvpInventory.SellFromShop(sale)["error"].ToString() != "sale_item_changed" || sales != 0)
+                throw new Exception("a stale sale item sold the changed stack");
+            p.inventory[20].stack--;
+            var receipt = PvpInventory.SellFromShop(sale);
+            if (receipt["gained"].GetValue<long>() != 20 || sales != 1 || !p.inventory[20].IsAir)
+                throw new Exception("sale did not report the actual removal and coin increase");
             Console.WriteLine("PASS: NPC shop purchase uses the native slot, exact quote and observed cursor quantity");
         }
         finally
         {
             (p.talkNPC, p.coins, Game.npcShop, Game.playerInventory, Game.mouseItem, Game.npc[0],
-                Game.instance.shop[1], Terraria.UI.ItemSlot.RightClickHandler) = before;
+                Game.instance.shop[1], Terraria.UI.ItemSlot.RightClickHandler, Terraria.UI.ItemSlot.SellHandler,
+                p.inventory[20], p.inventory[21]) = before;
         }
     }
 
