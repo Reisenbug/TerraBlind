@@ -2299,16 +2299,24 @@ public static partial class AgentTools
                 Interlocked.Increment(ref executingScripts);
                 if (mayAct) Interlocked.Increment(ref actionScripts);
                 long currentInvocation = Interlocked.Increment(ref invocationSequence);
+                string scriptOwner = Text(args, "task_node");
+                if (scriptOwner.Length == 0) scriptOwner = ActionTasks.NodeContext.Value;
                 AgentScript.Reactions scriptReactions = null;
                 try
                 {
-                    result = await AgentScript.Run(source, Int(args, "seconds", 120), NativeAgent.ValidateTool,
+                    result = await AgentScript.Run(source, Int(args, "seconds", 120), (child, childArgs) =>
+                        {
+                            if (!string.IsNullOrEmpty(scriptOwner) && child == "task_step" && childArgs["id"] == null
+                                && Text(childArgs, "action") == "verify")
+                                childArgs["id"] = scriptOwner;
+                            NativeAgent.ValidateTool(child, childArgs);
+                        },
                         async (child, childArgs, childToken) =>
                         {
                             string previousNode = ActionTasks.NodeContext.Value;
                             long previousInvocation = scriptInvocation.Value;
                             scriptInvocation.Value = currentInvocation;
-                            ActionTasks.NodeContext.Value = Text(args, "task_node") is string owner && owner.Length > 0 ? owner : previousNode;
+                            ActionTasks.NodeContext.Value = scriptOwner;
                             try { return await ExecuteScriptTool(child, childArgs, token, childToken, localEvents); }
                             finally { ActionTasks.NodeContext.Value = previousNode; scriptInvocation.Value = previousInvocation; }
                         },

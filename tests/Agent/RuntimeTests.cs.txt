@@ -154,6 +154,25 @@ static class RuntimeTests
             watch.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest"), ["loot_chests_in_reach"] = false });
             watch.EnsureDefaults();
             Check(!watch.LootChestsInReach, "an explicit skip-chest policy was ignored");
+
+            const string verify = "return tool('task_step',{action:'verify'});";
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"Check scoped verification","mode":"dag","steps":[{"id":"health","description":"Confirm actual health",
+                "depends_on":[],"script":"return tool('task_step',{action:'verify'});",
+                "conditions":[{"kind":"permanent_health","count":1}]}]}
+                """).AsObject(), AgentTaskEvidence.Measure);
+            try
+            {
+                var unscoped = await Call("run_script", new JsonObject { ["code"] = verify });
+                Check(unscoped["error"]?.ToString() == "script_failed"
+                    && AgentTools.Plan.Snapshot()["steps"][0]["status"].ToString() != "completed",
+                    "an unscoped script guessed a verification node");
+                var scoped = await Call("run_script", new JsonObject { ["task_node"] = "health" });
+                Check(scoped["value"]?["verified"]?.GetValue<bool>() == true
+                    && AgentTools.Plan.Snapshot()["steps"][0]["status"].ToString() == "completed",
+                    "owned script could not verify its own node using the actual game state");
+            }
+            finally { AgentTools.Plan.Reset(); }
             await RailHookBoost();
             Console.WriteLine("PASS: housing is reused and protected from navigation, surface desert routes are rejected, and default loot can be disabled");
         }
