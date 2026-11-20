@@ -115,6 +115,7 @@ public sealed class CodexAgent : IDisposable
     readonly Func<string, string, CodexConnection> _connect;
     CodexConnection _rpc;
     string _thread, _signature;
+    internal string SessionDirectory { get; set; }
     volatile string _activeTurn;
     internal bool HasActiveTurn => _activeTurn != null;
     JsonObject _usage;
@@ -394,9 +395,11 @@ public sealed class CodexAgent : IDisposable
                     ["description"] = description,
                     ["inputSchema"] = function["parameters"].DeepClone() });
             }
+            string checkpoint = SessionDirectory == null ? null : Path.Combine(SessionDirectory, managedGoal ? "goal-thread" : "chat-thread");
+            string saved = checkpoint != null && File.Exists(checkpoint) ? File.ReadAllText(checkpoint).Trim() : null;
             var args = new JsonObject
             {
-                ["cwd"] = cwd, ["ephemeral"] = !managedGoal, ["environments"] = new JsonArray(),
+                ["cwd"] = cwd, ["ephemeral"] = !managedGoal && checkpoint == null, ["environments"] = new JsonArray(),
                 ["approvalPolicy"] = "never", ["sandbox"] = "read-only", ["serviceTier"] = "fast", ["baseInstructions"] = system,
                 ["developerInstructions"] = "这是 Terraria 游戏会话。只用宿主提供的游戏工具完成任务，通过 ask 向玩家提问。允许通过 script_program 编写和修改游戏行为 JavaScript，通过 run_script 执行；遵守宿主提供的脚本接口和当前任务授权。不要修改模组源码、直接读写文件或使用终端。"
                     + "外层Codex exec与游戏run_script是两个执行环境：外层只有注册的tools函数，get_state/game_api/run_script返回JSON字符串。例：const s=JSON.parse(await tools.get_state({})); text(s.player.hp); 不要把字符串当对象。"
@@ -404,13 +407,31 @@ public sealed class CodexAgent : IDisposable
                 ["dynamicTools"] = dynamicTools, ["config"] = overrides
             };
             if (!string.IsNullOrWhiteSpace(model)) args["model"] = model;
-            var thread = await _rpc.Request("thread/start", args, deadline.Token);
+            JsonObject thread;
+            if (!string.IsNullOrEmpty(saved))
+            {
+                var resume = (JsonObject)args.DeepClone();
+                foreach (string key in new[] { "ephemeral", "environments", "dynamicTools" }) resume.Remove(key);
+                resume["threadId"] = saved;
+                resume["excludeTurns"] = true;
+                thread = await _rpc.Request("thread/resume", resume, deadline.Token);
+            }
+            else thread = await _rpc.Request("thread/start", args, deadline.Token);
             _thread = thread["thread"]?["id"]?.GetValue<string>() ?? throw new IOException("Codex 没有返回会话编号。");
-            DiagLog.Write($"[agent-thread] id={_thread} model={thread["model"]} service_tier={thread["serviceTier"]} instruction_sources={thread["instructionSources"]?.AsArray().Count ?? 0}");
+            if (checkpoint != null && _thread != saved) WriteSessionFile(checkpoint, _thread);
+            DiagLog.Write($"[agent-thread] id={_thread} resumed={!string.IsNullOrEmpty(saved)} model={thread["model"]} service_tier={thread["serviceTier"]} instruction_sources={thread["instructionSources"]?.AsArray().Count ?? 0}");
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         { Dispose(); throw new TimeoutException("Codex 初始化超时。"); }
         catch { Dispose(); throw; }
+    }
+
+    internal static void WriteSessionFile(string path, string contents)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path));
+        string temp = path + ".tmp";
+        File.WriteAllText(temp, contents);
+        File.Move(temp, path, overwrite: true);
     }
 
     public async Task RunAsync(string input, string executable, string cwd, string model, string system, JsonArray tools,
@@ -428,8 +449,17 @@ public sealed class CodexAgent : IDisposable
             {
                 if (_goalRequest != goalOptions["request"]?.ToString())
                 {
+                    bool rejoin = goalOptions["resume_previous"]?.GetValue<bool>() == true;
+                    if (rejoin)
+                    {
+                        await ReadGoal(token);
+                        if (_goal?["status"]?.ToString() is "complete" or "budgetLimited" or "usageLimited")
+                            throw new InvalidOperationException("The previous goal is " + _goal["status"] + ".");
+                    }
                     var args = new JsonObject { ["objective"] = goalOptions["objective"]?.DeepClone(), ["status"] = "active", ["origin"] = "user" };
                     if (goalOptions["tokenBudget"] != null) args["tokenBudget"] = goalOptions["tokenBudget"].DeepClone();
+                    if (rejoin && _goal?["objective"]?.ToString() == goalOptions["objective"]?.ToString())
+                    { args.Remove("objective"); args.Remove("tokenBudget"); }
                     if (_goal == null || _goal["objective"]?.ToString() != goalOptions["objective"]?.ToString()
                         || _goal["status"]?.ToString() == "complete")
                         _goalTokenBaseline = _usage?["total"]?["totalTokens"]?.GetValue<long>() ?? 0;

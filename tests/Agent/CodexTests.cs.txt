@@ -27,6 +27,7 @@ static class CodexTests
         await InTurnCompaction();
         PreparationContexts();
         await GoalProtocol();
+        await ResumeSavedConversation();
         await NativeGoalProtocol();
         await NativeExecutionSteering();
         await NativeExecutionSteering(script: true);
@@ -1019,6 +1020,34 @@ static class CodexTests
         Console.WriteLine("PASS: unverified game goal continues beyond no-progress turns on the same thread until explicit stop");
     }
 
+    static async Task ResumeSavedConversation()
+    {
+        var directory = Directory.CreateTempSubdirectory("tb-codex-resume-");
+        try
+        {
+            var firstServer = new Server();
+            var options = new JsonObject { ["objective"] = "Preserve the existing base", ["request"] = "first", ["tokenBudget"] = 1000 };
+            Task<string> Execute(string _, JsonObject __, CancellationToken token) => Task.FromResult("{}");
+            using (var first = new CodexAgent((_, _) => firstServer.Connect()) { SessionDirectory = directory.FullName })
+            {
+                await first.RunAsync("Start", "mock", "/tmp", "", "rules", Tools, Execute, _ => { }, default, options);
+                await first.SuspendGoal("paused", default);
+            }
+
+            var resumedServer = new Server { Goal = (JsonObject)firstServer.Goal.DeepClone() };
+            using var resumed = new CodexAgent((_, _) => resumedServer.Connect()) { SessionDirectory = directory.FullName };
+            options["request"] = "resume";
+            options["resume_previous"] = true;
+            await resumed.RunAsync("Current game state", "mock", "/tmp", "", "rules", Tools, Execute, _ => { }, default, options);
+            Check(resumedServer.Threads == 0 && resumedServer.ResumeArgs?["threadId"]?.ToString() == "thread"
+                && resumedServer.GoalSets == 1 && resumedServer.LastGoalArgs["objective"] == null
+                && resumedServer.LastGoalArgs["tokenBudget"] == null && resumedServer.Goal["status"].ToString() == "active",
+                "reopening did not reuse the saved thread and paused goal");
+            Console.WriteLine("PASS: re-entering a world resumes the saved Codex thread and keeps the prior native goal");
+        }
+        finally { directory.Delete(recursive: true); }
+    }
+
     static async Task GoalProtocol()
     {
         var server = new Server { Goal = new JsonObject {
@@ -1367,6 +1396,7 @@ static class CodexTests
         public JsonObject ThreadArgs;
         public JsonObject Goal;
         public int GoalSets;
+        public JsonObject ResumeArgs, LastGoalArgs;
         public int RepeatedToolCalls = 1;
         public readonly List<JsonObject> ToolResponses = new();
         public readonly List<string> Inputs = new();
@@ -1412,6 +1442,8 @@ static class CodexTests
             else if (method == "config/read") Reply(message["id"], JsonNode.Parse("{\"config\":{\"mcp_servers\":{\"unrelated\":{}}}}").AsObject());
             else if (method == "thread/start")
             { Threads++; ThreadArgs = message["params"].AsObject(); Reply(message["id"], JsonNode.Parse("{\"thread\":{\"id\":\"thread\"}}").AsObject()); }
+            else if (method == "thread/resume")
+            { ResumeArgs = message["params"].AsObject(); Reply(message["id"], JsonNode.Parse("{\"thread\":{\"id\":\"thread\"}}").AsObject()); }
             else if (method == "thread/compact/start")
             {
                 Compactions++;
@@ -1425,6 +1457,7 @@ static class CodexTests
             }
             else if (method == "thread/goal/set")
             {
+                LastGoalArgs = message["params"].AsObject();
                 GoalSets++; Goal ??= new JsonObject();
                 foreach (var pair in message["params"].AsObject())
                     if (pair.Key is "objective" or "status" or "tokenBudget") Goal[pair.Key] = pair.Value?.DeepClone();

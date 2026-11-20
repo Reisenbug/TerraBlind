@@ -128,6 +128,8 @@ namespace Terraria
         public static string npcChatText = "", defaultChestName = "";
         public static string SavePath = "/tmp/terrablind-agent-test-world";
         public static string worldName = "test";
+        public static Terraria.IO.PlayerFileData ActivePlayerFileData = new();
+        public static Terraria.IO.WorldFileData ActiveWorldFileData = new();
         public static int worldID;
         public static int invasionType, invasionSize, invasionSizeStart, invasionDelay;
         public static double invasionX;
@@ -383,6 +385,12 @@ namespace Terraria
         public static void SendData(int msgType, int remoteClient = -1, int ignoreClient = -1, object text = null, int number = 0, float number2 = 0)
         { Sent.Add((msgType, number)); Details.Add((msgType, number, number2)); }
     }
+}
+
+namespace Terraria.IO
+{
+    public class PlayerFileData { public string Path; }
+    public class WorldFileData { public Guid UniqueId; }
 }
 namespace Terraria.ID
 {

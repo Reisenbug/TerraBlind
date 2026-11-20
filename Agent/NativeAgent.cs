@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
@@ -103,11 +104,13 @@ public class NativeAgent : ModSystem
             if (!Config.I.AgentUseCodex) { AgentChat.Say("/goal requires the Codex backend."); return; }
             if (objective == "resume")
             {
+                self._goalOptions ??= ReadSavedGoal();
                 if (self._goalOptions == null) { AgentChat.Say("There is no goal to resume."); return; }
                 if (GoalState?["native"]?["status"]?.ToString() is "budgetLimited" or "usageLimited" or "complete")
                 { AgentChat.Say("The goal is complete or has reached its limit. Start a new goal with a new budget."); return; }
                 self.Cancel();
                 self._goalOptions["request"] = Guid.NewGuid().ToString("N");
+                self._goalOptions["resume_previous"] = true;
                 self._pending = self._goalOptions["objective"].ToString(); Status = "queued"; return;
             }
             long? budget = null;
@@ -141,6 +144,25 @@ public class NativeAgent : ModSystem
         self._pending = text;
         Status = "queued";
         Progress("Instruction accepted.", "queued");
+    }
+
+    static string SessionDirectory()
+    {
+        if (Main.netMode != Terraria.ID.NetmodeID.SinglePlayer || string.IsNullOrEmpty(Main.ActivePlayerFileData?.Path)) return null;
+        string world = Main.ActiveWorldFileData is { UniqueId: var id } && id != Guid.Empty ? id.ToString("N") : Main.worldID.ToString();
+        string player = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            Encoding.UTF8.GetBytes(Main.ActivePlayerFileData.Path)));
+        return Path.Combine(Main.SavePath, "TerraBlindAgent", "conversations", world, player);
+    }
+
+    static JsonObject ReadSavedGoal()
+    {
+        string directory = SessionDirectory();
+        if (directory == null) return null;
+        string path = Path.Combine(directory, "goal.json");
+        try { return File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject : null; }
+        catch (Exception error) when (error is IOException or System.Text.Json.JsonException)
+        { DiagLog.Write("[agent] saved goal unreadable: " + error.Message); return null; }
     }
 
     internal static void Progress(string text, string status, bool visible = true)
@@ -301,6 +323,15 @@ public class NativeAgent : ModSystem
         { Progress("Set the Agent API key, base URL, and model in mod settings.", "failed"); return; }
         if (!useCodex) CloseCodex();
         var codex = useCodex ? _codex ??= new CodexAgent() : null;
+        if (codex != null)
+        {
+            codex.SessionDirectory = SessionDirectory();
+            if (goalOptions != null && codex.SessionDirectory != null)
+            {
+                try { CodexAgent.WriteSessionFile(Path.Combine(codex.SessionDirectory, "goal.json"), goalOptions.ToJsonString()); }
+                catch (IOException error) { DiagLog.Write("[agent] could not save goal: " + error.Message); }
+            }
+        }
         _cancel?.Dispose();
         _cancel = new CancellationTokenSource();
         var token = _cancel.Token;
@@ -340,7 +371,9 @@ public class NativeAgent : ModSystem
                 }
                 string state = await Context();
                 void Say(string text) => MainQueue.Enqueue(() => { if (!token.IsCancellationRequested) AgentChat.Say(text); });
-                string input = goal + "\n现状：" + state;
+                string input = goal + (goalOptions?["resume_previous"]?.GetValue<bool>() == true
+                    ? "\n已重新进入存档。先用当前游戏状态核对以前的进度，按实际缺口继续原目标。" : "")
+                    + "\n现状：" + state;
                 long recoverySession = -1;
                 int noProgressContinuations = 0;
                 int preparationContinuations = 0;
