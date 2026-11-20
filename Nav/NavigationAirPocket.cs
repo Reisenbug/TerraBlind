@@ -21,6 +21,9 @@ public static class NavigationAirPocket
     const int EscapeReserveFrames = 150;
     public static int Recoveries { get; private set; }
 
+    internal static bool NeedsEmergencyItem(Player player, bool submerged)
+        => submerged && !player.gills && !player.accMerman && !active && !surfacing && BreathBudget(player) <= 120;
+
     public static void Reset(Player player)
     {
         if (active) player.selectedItem = savedSlot;
@@ -34,7 +37,7 @@ public static class NavigationAirPocket
 
     public static bool Apply(Player player)
     {
-        if (player.gills || player.accMerman || player.gravDir != 1)
+        if (player.gills || player.accMerman || player.gravDir != 1 || AgentTools.ContactEscapeActive)
         { Reset(player); return false; }
         bool submerged = Collision.DrownCollision(player.position, player.width, player.height, player.gravDir);
         int budget = BreathBudget(player);

@@ -831,7 +831,7 @@ public static partial class AgentTools
     internal static bool IsRecallItem(int type) => type is Terraria.ID.ItemID.RecallPotion or Terraria.ID.ItemID.MagicMirror
         or Terraria.ID.ItemID.IceMirror or Terraria.ID.ItemID.CellPhone or Terraria.ID.ItemID.Shellphone
         or Terraria.ID.ItemID.ShellphoneSpawn or Terraria.ID.ItemID.PotionOfReturn;
-    static bool NearRecallDestination(Player player)
+    internal static bool NearRecallDestination(Player player)
     {
         bool hasBed = player.SpawnX >= 0 && player.SpawnY >= 0;
         var destination = new Microsoft.Xna.Framework.Vector2(
@@ -3775,6 +3775,15 @@ public static partial class AgentTools
             {
                 var escape = LastContactEscape;
                 var player = Main.LocalPlayer;
+                if (!player.dead && !player.suffocating && player.gills && Text(escape, "status") == "air_protected")
+                {
+                    remainingHazard = NearbyHazard();
+                    if (remainingHazard != null || !clearedSites.Add("gills")) return null;
+                    escapeBefore = escape;
+                    var air = (JsonObject)escape.DeepClone();
+                    air["resume_reason"] = "gills_active";
+                    return air;
+                }
                 if (player.dead || player.suffocating || Text(escape, "status") != "controls_released"
                     || !Bool(escape, "contact_clear") || Collision.HurtTiles(player.position, player.width, player.height, player).type >= 0) return null;
                 remainingHazard = NearbyHazard();

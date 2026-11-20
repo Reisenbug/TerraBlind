@@ -449,6 +449,12 @@ namespace TerraBlind
 				Player.controlUseItem = Player.controlUseTile = false;
 				return;
 			}
+			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On
+				&& AgentTools.ContactEscapeActive && ItemUseCoordinator.IsActive)
+			{
+				ItemUseCoordinator.ApplyControls();
+				return;
+			}
 			bool beforePrimary = Player.controlUseItem;
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On
 				&& (AgentTools.AutonomyActive || FightCoordinator.IsActive))

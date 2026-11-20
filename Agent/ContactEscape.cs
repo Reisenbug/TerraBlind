@@ -21,23 +21,27 @@ public class AgentContactEscape : ModSystem
     Vector2 lavaPosition;
     int lavaStillFrames;
     bool lavaItemStarted;
+    bool drowningEmergency, triedGills, triedWaterRecall;
 
     bool UseEmergencyItem(Player player)
     {
         if (lavaItem != null)
         {
             frames++;
-            bool protectedNow = !player.suffocating && (player.lavaImmune || player.lavaTime > 0);
+            bool protectedNow = drowningEmergency
+                ? player.gills || !Collision.DrownCollision(player.position, player.width, player.height, player.gravDir)
+                : !player.suffocating && (player.lavaImmune || player.lavaTime > 0);
             bool returned = Vector2.DistanceSquared(player.position, lavaPosition) > 256 * 256;
             if (protectedNow || returned || frames >= 180 || lavaItemStarted && !ItemUseCoordinator.IsActive)
             {
                 ItemUseCoordinator.Stop(); player.controlUseItem = false;
                 AgentTools.ContactEscapeActive = false;
-                AgentTools.LastContactEscape["status"] = protectedNow ? "lava_protected" : returned ? "recalled" : "item_use_failed";
+                AgentTools.LastContactEscape["status"] = returned ? "recalled" : protectedNow
+                    ? drowningEmergency ? "air_protected" : "lava_protected" : "item_use_failed";
                 AgentTools.LastContactEscape["frames"] = frames;
                 AgentTools.LastContactEscape["hp_end"] = player.statLife;
                 AgentTools.LastContactEscape["end_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y };
-                DiagLog.Write("[agent_lava_escape] " + AgentTools.LastContactEscape.ToJsonString());
+                DiagLog.Write((drowningEmergency ? "[agent_air_escape] " : "[agent_lava_escape] ") + AgentTools.LastContactEscape.ToJsonString());
                 lavaItem = null; lavaStillFrames = 0;
             }
             else if (!lavaItemStarted && player.itemAnimation == 0 && player.itemTime == 0)
@@ -48,26 +52,38 @@ public class AgentContactEscape : ModSystem
         var contact = player.suffocating ? Collision.HurtTiles(player.position, player.width, player.height, player)
             : new Collision.HurtTile { type = -1 };
         bool suffocating = contact.type >= 0 && TileID.Sets.Suffocate[contact.type];
-        if (AgentTools.ContactEscapeActive || !lava && !suffocating)
+        bool submerged = player.wet && Collision.DrownCollision(player.position, player.width, player.height, player.gravDir);
+        if (!submerged) triedGills = triedWaterRecall = false;
+        bool drowning = !lava && !suffocating && NavigationAirPocket.NeedsEmergencyItem(player, submerged);
+        if (AgentTools.ContactEscapeActive || !lava && !suffocating && !drowning)
         { lavaStillFrames = 0; lavaPosition = player.position; return false; }
         lavaStillFrames = Vector2.DistanceSquared(player.position, lavaPosition) < 4 ? lavaStillFrames + 1 : 0;
         lavaPosition = player.position;
         int slot = lava && !suffocating
             ? Array.FindIndex(player.inventory, 0, 50, item => !item.IsAir && item.buffType == BuffID.ObsidianSkin) : -1;
-        if (slot < 0 && AgentTools.AllowTaskRecall && (suffocating || lavaStillFrames >= 15))
+        if (drowning && !triedGills)
+            slot = Array.FindIndex(player.inventory, 0, 50, item => !item.IsAir && item.buffType == BuffID.Gills);
+        bool waterRecall = drowning && !triedWaterRecall && !AgentTools.NearRecallDestination(player);
+        if (slot < 0 && AgentTools.AllowTaskRecall && (suffocating || lava && lavaStillFrames >= 15 || waterRecall))
             foreach (int type in new[] { ItemID.RecallPotion, ItemID.MagicMirror, ItemID.IceMirror })
             { slot = Array.FindIndex(player.inventory, 0, 50, item => !item.IsAir && item.type == type); if (slot >= 0) break; }
         if (slot < 0) return false;
         int itemType = player.inventory[slot].type;
+        drowningEmergency = drowning;
+        if (drowning)
+        {
+            if (player.inventory[slot].buffType == BuffID.Gills) triedGills = true;
+            else triedWaterRecall = true;
+        }
         AgentTools.StopInputs();
         lavaItem = new ItemUseRequest { Slot = slot, TargetWx = (int)player.Center.X / 16,
             TargetWy = (int)player.Center.Y / 16, DurationTicks = 120 };
         frames = 0; lavaItemStarted = false;
         AgentTools.ContactEscapeActive = true;
         AgentTools.LastContactEscape = new JsonObject { ["tick"] = (long)Main.GameUpdateCount, ["status"] = "using_emergency_item",
-            ["reason"] = suffocating ? "suffocation" : "unprotected_lava", ["item_type"] = itemType, ["hp_start"] = player.statLife,
+            ["reason"] = drowning ? "drowning" : suffocating ? "suffocation" : "unprotected_lava", ["item_type"] = itemType, ["hp_start"] = player.statLife,
             ["start_pos"] = new JsonObject { ["x"] = player.position.X, ["y"] = player.position.Y } };
-        DiagLog.Write("[agent_lava_escape] " + AgentTools.LastContactEscape.ToJsonString());
+        DiagLog.Write((drowning ? "[agent_air_escape] " : "[agent_lava_escape] ") + AgentTools.LastContactEscape.ToJsonString());
         return true;
     }
 

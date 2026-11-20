@@ -207,7 +207,7 @@ namespace Terraria
         public Item trashItem = new();
         public Item[] armor = Enumerable.Range(0, 20).Select(_ => new Item()).ToArray();
         public bool IsItemSlotUnlockedAndUsable(int slot) => slot < 8 || slot >= 10 && slot < 18;
-        public bool active = true, dead, suffocating, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
+        public bool active = true, dead, suffocating, gills, hostile, controlUseItem, controlLeft, controlRight, controlJump, releaseUseItem;
         public bool HasAmmunition = true;
         public bool noFallDmg;
         public bool waterWalk, waterWalk2, slowFall, gravControl, gravControl2;

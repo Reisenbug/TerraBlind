@@ -2293,6 +2293,30 @@ static class RuntimeTests
             finally { AgentTools.LastContactEscape = previousEscape; }
             Console.WriteLine("PASS: navigation reports measured contact escape as an unsafe handoff instead of generic stopped");
 
+            bool savedGills = Game.LocalPlayer.gills;
+            try
+            {
+                foreach (bool gills in new[] { false, true })
+                {
+                    int starts = 0;
+                    Game.LocalPlayer.gills = gills;
+                    HttpServerSystem.Handler = (path, _) =>
+                    {
+                        if (path == "/nav_recede")
+                        {
+                            if (++starts == 1) AgentTools.LastContactEscape = new JsonObject { ["reason"] = "drowning", ["status"] = "air_protected" };
+                            return (200, "{\"ok\":true}");
+                        }
+                        return (200, starts == 1 ? "{\"done\":false,\"status\":\"failed\",\"reason\":\"stopped\"}" : "{\"done\":true}");
+                    };
+                    var route = await Execute(AgentTools.Navigate(new JsonObject { ["x"] = 99, ["y"] = 99 }, default));
+                    Check(gills ? starts == 2 && route["verified_clearances"]?[0]?["resume_reason"]?.ToString() == "gills_active"
+                        : starts == 1 && route["error"]?.ToString() == "navigation_contact_escape",
+                        "drowning recovery resumed without confirmed Gills or failed to resume once Gills was active");
+                }
+            }
+            finally { Game.LocalPlayer.gills = savedGills; AgentTools.LastContactEscape = previousEscape; }
+
             var savedPosition = Game.LocalPlayer.position;
             var oldSand = Game.tile[2, 2]; var oldLava = Game.tile[3, 3];
             try
