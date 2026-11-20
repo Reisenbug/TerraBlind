@@ -896,9 +896,10 @@ public static partial class AgentTools
         var navigation = Actions.LastFailedNavigation();
         if (navigation?["args"] is not JsonObject args || navigation["task_node"]?.ToString() is not string node
             || !plan["ready_steps"].AsArray().Any(step => step.ToString() == node)) yield break;
-        string reason = navigation["result"]?["reason"]?.ToString();
+        var result = navigation["result"];
+        string reason = result?["reason"]?.ToString();
         if (reason is not ("agent_region_forbidden" or "local_escape_search_budget" or "no_progress")
-            && !RecoverableFollowupFailure(navigation["result"])) yield break;
+            && result?["outcome"]?.ToString() is not ("no_route" or "no_progress" or "navigation_no_progress")) yield break;
         var target = (Node: node, X: Int(args, "x", -1), Y: Int(args, "y", -1));
         if (!WorldGen.InWorld(target.X, target.Y) || idleWalks.Contains(target)) yield break;
         var from = new Microsoft.Xna.Framework.Vector2(player.position.X, player.position.Y);

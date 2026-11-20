@@ -3962,7 +3962,7 @@ static class RuntimeTests
         var oldField = MazeWand.Field;
         try
         {
-            foreach (string scenario in new[] { "choice", "detour", "timeout", "takeover", "no_option", "prepared_node" })
+            foreach (string scenario in new[] { "choice", "detour", "timeout", "takeover", "no_option", "hazard", "prepared_node" })
             {
                 AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask(); AgentTools.Workflows.Clear();
                 p.position = new(12 * 16, 34 * 16);
@@ -3979,8 +3979,9 @@ static class RuntimeTests
                         destinations.Add(JsonNode.Parse(payload)["gx"].GetValue<int>());
                         RecedingNav.Active = true;
                     }
-                    if (path == "/nav_recede_done") return finish
-                        ? (200, "{\"done\":false,\"status\":\"failed\",\"reason\":\"agent_region_forbidden\"}") : (200, "{\"done\":false}");
+                    if (path == "/nav_recede_done") return !finish ? (200, "{\"done\":false}") : scenario == "hazard"
+                        ? (200, "{\"done\":false,\"status\":\"failed\",\"reason\":\"overhead_boulder\",\"outcome\":\"unsafe\"}")
+                        : (200, "{\"done\":false,\"status\":\"failed\",\"reason\":\"agent_region_forbidden\"}");
                     if (path == "/act") moved = JsonNode.Parse(payload)["steps"][0]["until"]["moved"]["dx"].GetValue<int>();
                     if (path == "/act_status") return (200, "{\"active\":false,\"outcome\":\"done\"}");
                     return (200, "{\"accepted\":true}");
@@ -4018,7 +4019,7 @@ static class RuntimeTests
                 }
                 void Update() { AgentTools.ObserveContinuity(); AgentTools.ContinueIdleDecision(default, Judge); }
                 Update();
-                if (scenario == "no_option")
+                if (scenario is "no_option" or "hazard")
                 {
                     Check(requests == 0 && destinations.Count == 1 && moved == 0, "the idle scheduler invented an action without supporting evidence");
                     continue;
@@ -4061,7 +4062,7 @@ static class RuntimeTests
             VanillaContactRegion.Walkable = null; MazeWand.Field = oldField;
             HttpServerSystem.Handler = oldHandler; p.position = oldPosition; p.velocity = oldVelocity;
         }
-        Console.WriteLine("IDLE_JEV_PASS choice detour timeout takeover no_option prepared_node model_calls=0");
+        Console.WriteLine("IDLE_JEV_PASS choice detour timeout takeover no_option hazard prepared_node model_calls=0");
     }
 
     static async Task TestAutomaticDagContinuation()
