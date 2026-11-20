@@ -99,7 +99,17 @@ public sealed class ActionTasks
             var entry = entries.Values.Where(e => e.TaskSerial == taskSerial && e.Tool != "fight")
                 .OrderByDescending(e => e.ExecutionStarted).FirstOrDefault();
             return entry == null ? null : new JsonObject { ["handle"] = entry.Id, ["tool"] = entry.Tool,
-                ["status"] = entry.Status, ["task_node"] = entry.Node };
+                ["status"] = entry.Status, ["task_node"] = entry.Node, ["attempt"] = entry.Attempt };
+        }
+    }
+
+    internal JsonObject LastFailedNavigation()
+    {
+        lock (gate)
+        {
+            var entry = entries.Values.Where(e => e.TaskSerial == taskSerial && e.Tool is not ("fight" or "run_script")
+                && e.ExecutionEnded > 0).OrderByDescending(e => e.ExecutionEnded).FirstOrDefault();
+            return entry is { Tool: "nav_to", Status: "failed" } ? Snapshot(entry) : null;
         }
     }
 

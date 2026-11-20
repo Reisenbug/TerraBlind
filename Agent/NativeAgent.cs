@@ -699,12 +699,13 @@ public class NativeAgent : ModSystem
             && Status is not ("needs_repair" or "budgetLimited" or "failed");
         if (!Main.gameMenu && runtimeActive)
         {
-            AgentTools.ContinuePreparedNode(_cancel.Token,
-                startReadyWhileIdle: GoalState?["native"]?["status"]?.ToString() == "active");
+            AgentTools.ContinuePreparedNode(_cancel.Token);
             AgentTools.ObserveContinuity();
             if (worldAdvanced)
             {
                 AgentTools.ObserveBossControl(Processing);
+                if (GoalState?["native"]?["status"]?.ToString() is string goalStatus ? goalStatus == "active" : Processing)
+                    AgentTools.ContinueIdleDecision(_cancel.Token);
                 AgentTools.LootPassingChest();
                 UpdateParallelWork();
             }

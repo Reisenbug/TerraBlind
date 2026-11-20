@@ -243,7 +243,7 @@ namespace Terraria
         public static int jumpHeight = 15;
         public bool releaseJump = true;
         public int jump;
-        public float jumpSpeedBoost, maxRunSpeed = 3, accRunSpeed = 3, runAcceleration = .08f, gravity = .4f;
+        public float jumpSpeedBoost, maxRunSpeed = 3, accRunSpeed = 3, runAcceleration = .08f, runSlowdown = .2f, gravity = .4f;
         public int statMana = 200, statManaMax2 = 200, statLifeMax = 100, statLifeMax2 = 100, itemTime;
         public Mount mount = new();
         public Item HeldItem => inventory[selectedItem];
@@ -459,7 +459,7 @@ namespace Terraria.ID
         public const int StinkbugHousingBlocker = 630, StinkbugHousingBlockerEcho = 631;
         public const int FixtureSource = 1, FixtureOther = 2;
         public const int Containers = 21, Heart = 12, Dressers = 88, Containers2 = 467, FakeContainers = 441, FakeContainers2 = 468;
-        public const int PressurePlates = 135, Traps = 137, Boulder = 138, Explosives = 141, MinecartTrack = 314;
+        public const int PressurePlates = 135, WeightedPressurePlate = 428, Traps = 137, Boulder = 138, Explosives = 141, MinecartTrack = 314;
         public const int Painting3X3 = 240, Painting4X3 = 241, Painting6X4 = 242, Painting2X3 = 245, Painting3X2 = 246;
         public const int SandstoneBrick = 151, RollingCactus = 484, BouncyBoulder = 664, LifeCrystalBoulder = 665;
         public static class Sets
@@ -774,8 +774,17 @@ namespace TerraBlind
     public static class StateSerializer { public static string ToJson(object snapshot) => snapshot is JsonObject json ? json.ToJsonString() : "{}"; }
     public static class ActExecutor
     {
+        public static bool IsActive => false;
         public static int OriginCx(Terraria.Player player) => 12;
         public static int OriginCy(Terraria.Player player) => 34;
+    }
+    public static class VanillaContactRegion
+    {
+        internal static Func<bool> Walkable;
+        public static bool TryWalk(Terraria.Player player, Microsoft.Xna.Framework.Vector2 goal, out VanillaKeys keys)
+        { keys = VanillaKeys.Right; return Walkable?.Invoke() == true; }
+        public static bool ConnectedSupport(Microsoft.Xna.Framework.Vector2 from, Microsoft.Xna.Framework.Vector2 to, int width, int height)
+            => Walkable?.Invoke() == true;
     }
     public static class Predicates
     {

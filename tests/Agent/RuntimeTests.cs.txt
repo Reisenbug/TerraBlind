@@ -328,6 +328,8 @@ static class RuntimeTests
             }
             finally { foreach (var (point, tile) in savedTiles) Game.tile[point.x, point.y] = tile; }
 
+            await TestIdleDecision();
+
             var previousEscape = AgentTools.LastContactEscape;
             bool previousHardmode = Game.hardMode;
             try
@@ -3949,6 +3951,117 @@ static class RuntimeTests
         }
         finally { HttpServerSystem.Handler = null; }
         Console.WriteLine("PASS: descent exposes the main route immediately and retrieves separate paged background treasures");
+    }
+
+    static async Task TestIdleDecision()
+    {
+        var oldHandler = HttpServerSystem.Handler;
+        var p = Game.LocalPlayer;
+        var oldPosition = p.position;
+        var oldVelocity = p.velocity;
+        var oldField = MazeWand.Field;
+        try
+        {
+            foreach (string scenario in new[] { "choice", "detour", "timeout", "takeover", "no_option", "prepared_node" })
+            {
+                AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask(); AgentTools.Workflows.Clear();
+                p.position = new(12 * 16, 34 * 16);
+                p.velocity = default;
+                MazeWand.Field = scenario == "detour" ? new() { [(12, 34)] = 80, [(10, 34)] = 70, [(14, 34)] = 81, [(16, 34)] = 82 } : null;
+                VanillaContactRegion.Walkable = () => scenario is not ("no_option" or "prepared_node");
+                var destinations = new List<int>();
+                int moved = 0, requests = 0;
+                bool finish = false;
+                HttpServerSystem.Handler = (path, payload) =>
+                {
+                    if (path == "/nav_recede")
+                    {
+                        destinations.Add(JsonNode.Parse(payload)["gx"].GetValue<int>());
+                        RecedingNav.Active = true;
+                    }
+                    if (path == "/nav_recede_done") return finish
+                        ? (200, "{\"done\":false,\"status\":\"failed\",\"reason\":\"agent_region_forbidden\"}") : (200, "{\"done\":false}");
+                    if (path == "/act") moved = JsonNode.Parse(payload)["steps"][0]["until"]["moved"]["dx"].GetValue<int>();
+                    if (path == "/act_status") return (200, "{\"active\":false,\"outcome\":\"done\"}");
+                    return (200, "{\"accepted\":true}");
+                };
+                var plan = JsonNode.Parse("""
+                    {"goal":"Explore the cave and open a chest","mode":"dag","steps":[
+                      {"id":"travel","description":"Reach the cave","depends_on":[],"script":"return tool('nav_to',{x:30,y:34});",
+                       "conditions":[{"kind":"item","type":191,"count":9999}]}]}
+                    """).AsObject();
+                if (scenario == "prepared_node") plan["steps"].AsArray().Add(JsonNode.Parse("""
+                    {"id":"scout","description":"Continue toward the cave's other entrance","depends_on":[],"script":"return tool('nav_to',{x:38,y:34});",
+                     "conditions":[{"kind":"item","type":191,"count":9999}]}
+                    """));
+                AgentTools.Plan.Create(plan, _ => 0);
+                JsonObject StartNav(int x)
+                {
+                    ActionTasks.NodeContext.Value = "travel";
+                    try { return AgentTools.Actions.Start("nav_to", new JsonObject { ["x"] = x, ["y"] = 34 }, default); }
+                    finally { ActionTasks.NodeContext.Value = null; }
+                }
+                var first = StartNav(30);
+                await PumpUntil(() => destinations.Count == 1);
+                AgentTools.ObserveContinuity();
+                finish = true;
+                await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
+                Check((await Execute(AgentTools.Actions.Query(first["handle"].ToString(), 0, default)))["status"].ToString() == "failed",
+                    "the idle fixture did not reproduce the protected route failure");
+                var sent = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var reply = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+                Task<JsonObject> Judge(JsonObject request, CancellationToken _)
+                {
+                    Interlocked.Increment(ref requests);
+                    sent.TrySetResult(request);
+                    return reply.Task;
+                }
+                void Update() { AgentTools.ObserveContinuity(); AgentTools.ContinueIdleDecision(default, Judge); }
+                Update();
+                if (scenario == "no_option")
+                {
+                    Check(requests == 0 && destinations.Count == 1 && moved == 0, "the idle scheduler invented an action without supporting evidence");
+                    continue;
+                }
+                var firstRequest = await Execute(sent.Task);
+                var choices = firstRequest["state"]["options"].AsArray();
+                Check((scenario switch
+                {
+                    "prepared_node" => choices.Count == 1 && choices[0].ToString().Contains("other entrance"),
+                    "detour" => choices.Count == 1 && choices[0].ToString().Contains("left") && choices[0].ToString().Contains("80 to 70"),
+                    _ => choices.Count == 2 && choices.All(option => option.ToString().Contains("right") && option.ToString().Contains("(30,34)"))
+                }),
+                    "Jev received an option without concrete task progress: " + firstRequest);
+                if (scenario == "takeover")
+                {
+                    finish = false; StartNav(42);
+                    await PumpUntil(() => destinations.Count == 2);
+                    Update();
+                    reply.SetResult(JsonNode.Parse("{\"answers\":{\"next\":{\"choice\":\"1\"}}}").AsObject());
+                    VanillaContactRegion.Walkable = () => false;
+                    finish = true;
+                    await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
+                    Update();
+                    Check(moved == 0, "the old Jev answer regained control after a new route started");
+                    continue;
+                }
+                if (scenario != "timeout") reply.SetResult(JsonNode.Parse(scenario is "prepared_node" or "detour"
+                    ? "{\"answers\":{\"next\":{\"noul\":0.9}}}" : "{\"answers\":{\"next\":{\"choice\":\"1\"}}}").AsObject());
+                await PumpUntil(() => { Update(); return moved != 0 || destinations.Count > 1; });
+                Check(requests == 1 && (scenario == "prepared_node" ? destinations.SequenceEqual(new[] { 30, 38 })
+                    : destinations.Count == 1 && moved == (scenario == "timeout" ? 4 : scenario == "detour" ? -2 : 2)),
+                    "the selected or deadline fallback action did not execute exactly once: " + scenario);
+                await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl && !AgentTools.ControlSession.PrimaryActive);
+                Check(AgentTools.Plan.Incomplete, "a short fallback action falsely verified the task");
+            }
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Workflows.Clear();
+            VanillaContactRegion.Walkable = null; MazeWand.Field = oldField;
+            HttpServerSystem.Handler = oldHandler; p.position = oldPosition; p.velocity = oldVelocity;
+        }
+        Console.WriteLine("IDLE_JEV_PASS choice detour timeout takeover no_option prepared_node model_calls=0");
     }
 
     static async Task TestAutomaticDagContinuation()
