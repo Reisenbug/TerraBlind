@@ -2636,7 +2636,7 @@ public static partial class AgentTools
                 {
                     Watches.Configure(args);
                     if (Actions.HasActive) Watches.EnsureDefaults();
-                    return Watches.Snapshot();
+                    return Watches.Summary(configurationOnly: true);
                 }, token)).ToJsonString();
             case "opportunity_reconsider":
                 return (await NativeAgent.OnMain(() => Watches.Reconsider(Text(args, "kind"), Text(args, "key"), Text(args, "reason")), token)).ToJsonString();

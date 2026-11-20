@@ -573,7 +573,7 @@ public sealed class AgentWatch
             }
     }
 
-    public JsonObject Summary() => new()
+    public JsonObject Summary(bool configurationOnly = false) => new()
     {
         ["loot_chests_in_reach"] = LootChestsInReach,
         ["passive_events"] = new JsonArray(passive.Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
@@ -581,14 +581,14 @@ public sealed class AgentWatch
         ["tile_types"] = new JsonArray(tileTypes.Union(policyTiles).Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["events"] = new JsonArray(events.Union(policyEvents).Select(x => (JsonNode)JsonValue.Create(x)).ToArray()),
         ["radius"] = Radius, ["health_below"] = HealthBelow, ["wake_count"] = wakeCount, ["wake_limit"] = 6, ["event_count"] = issued,
-        ["pending"] = new JsonArray(pending.Take(12).Select(value => value.DeepClone()).ToArray()),
-        ["pending_count"] = pending.Count, ["pending_truncated"] = pending.Count > 12,
+        ["pending"] = new JsonArray(pending.Take(configurationOnly ? 0 : 12).Select(value => value.DeepClone()).ToArray()),
+        ["pending_count"] = pending.Count, ["pending_truncated"] = pending.Count > (configurationOnly ? 0 : 12),
         ["pending_detail_request"] = new JsonObject { ["tool"] = "script_events",
             ["args"] = new JsonObject { ["wait_ms"] = 0, ["max_events"] = 16 } },
-        ["samples"] = samples, ["last_observation"] = LastObservation,
-        ["history_count"] = history.Count, ["history_truncated"] = history.Count > 12,
+        ["samples"] = samples, ["last_observation"] = configurationOnly ? null : LastObservation,
+        ["history_count"] = history.Count, ["history_truncated"] = history.Count > (configurationOnly ? 0 : 12),
         ["history_detail_request"] = new JsonObject { ["tool"] = "get_state", ["args"] = new JsonObject { ["include_watch_history"] = true } },
-        ["history"] = new JsonArray(history.TakeLast(12).Select(value => (JsonNode)new JsonObject
+        ["history"] = new JsonArray(history.TakeLast(configurationOnly ? 0 : 12).Select(value => (JsonNode)new JsonObject
             { ["id"] = value["id"]?.DeepClone(), ["kind"] = value["kind"]?.DeepClone(), ["key"] = value["key"]?.DeepClone() }).ToArray())
     };
 

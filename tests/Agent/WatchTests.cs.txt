@@ -171,6 +171,14 @@ static class WatchTests
             "task scope leaked events or state");
         Console.WriteLine("PASS: opportunity wakes stay bounded while required script decisions remain available");
 
+        var busyWatch = new AgentWatch();
+        for (int i = 0; i < 4; i++)
+            busyWatch.Request("route needs review", new JsonObject { ["terrain"] = new string('x', 12000) });
+        var configuration = busyWatch.Summary(configurationOnly: true);
+        Check(configuration.ToJsonString().Length < 2000 && configuration["pending_count"].GetValue<int>() == 4
+            && busyWatch.Take()[0]["reported_evidence"]["terrain"].GetValue<string>().Length == 12000,
+            "watch configuration replayed large event evidence or discarded it");
+
         watch.EnsureDefaults();
         state["hp"] = 100;
         for (int i = 0; i < 6; i++)
