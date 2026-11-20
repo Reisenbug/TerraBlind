@@ -780,7 +780,8 @@ public static partial class AgentTools
         if (receipt == null || !Bool(receipt, "ok") || !Bool(receipt, "input_effects") || receipt["failure"] != null) return false;
         if (PlainHandoff(receipt["value"] as JsonObject)) return true;
         var value = receipt["value"] as JsonObject;
-        return value?["wake"] == null && value?["blocked"] == null && value?["reason"] == null && value?["continue_after"] == null
+        return value?["wake"] == null && value?["blocked"] == null && value?["error"] == null
+            && (value?["reason"] == null || value["outcome"]?.ToString() == "done") && value?["continue_after"] == null
             && value?["handle"] == null && action["status"]?.ToString() == "completed";
     }
 

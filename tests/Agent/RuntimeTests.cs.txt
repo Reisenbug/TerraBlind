@@ -106,6 +106,29 @@ static class RuntimeTests
             Check(relit["value"]?["ok"]?.GetValue<bool>() == true && supplyCalls.SequenceEqual(new[]
                 { "housing", "house_site", "build_house", "recipe", "npc_drop_sources", "gather", "build_house", "housing" }),
                 "torch shortage interrupted the prepared build instead of gathering its verified ingredient: " + relit);
+            supplyCalls.Clear();
+            var nearbyLoot = await AgentScript.Run("const input={rooms:4};\n" + ScriptLibrary.Example("ensure_town_housing")["code"],
+                5, (_, _) => { }, (name, args, _) =>
+                {
+                    supplyCalls.Add(name);
+                    return Task.FromResult(name switch
+                    {
+                        "housing" => (supplyCalls.Count(n => n == "build_house") == 2 ? list : singleReport).ToJsonString(),
+                        "house_site" => """{"found":true,"build_args":{"rooms":4}}""",
+                        "build_house" when supplyCalls.Count(n => n == name) == 1 => """{"accepted":false,"reason":"missing_torches: have 0, need 4"}""",
+                        "build_house" => """{"outcome":"done"}""",
+                        "recipe" => """{"recipes":[{"amount":3,"ingredients":[{"type":23,"need":1},{"type":9,"need":1,"have":100}],"stations":[]}]}""",
+                        "npc_drop_sources" => """{"sources":[{"npc_type":1}]}""",
+                        "gather" => """{"outcome":"source_unavailable"}""",
+                        "find_tiles" => """{"tiles":[{"x":104,"y":146},{"x":105,"y":146},{"x":130,"y":154}]}""",
+                        "collect_treasure" when args["x"].GetValue<int>() != 105 => """{"outcome":"done","reason":"looted"}""",
+                        "get_state" when supplyCalls.Count(n => n == "collect_treasure") == 1 => """{"inventory_counts":{}}""",
+                        "get_state" => """{"inventory_counts":{"8":4}}""",
+                        _ => throw new Exception("unexpected supply fallback " + name + ": " + args)
+                    });
+                }, _ => Task.CompletedTask, default);
+            Check(nearbyLoot["value"]?["ok"]?.GetValue<bool>() == true && supplyCalls.Count(n => n == "collect_treasure") == 2,
+                "missing nearby gel ended the build instead of trying observed nearby loot: " + nearbyLoot);
             Terraria.WorldGen.RoomCheck = (x, _) => x != 100;
             list = await Call("housing", new JsonObject { ["action"] = "list" });
             Check(!list["rooms"][0]["suitable"].GetValue<bool>(), "a damaged room was still reported suitable");
@@ -5367,7 +5390,7 @@ static class RuntimeTests
         int oldHealth = Game.LocalPlayer.statLifeMax;
         try
         {
-            foreach (string scenario in new[] { "prepared", "late", "blocked", "stale", "verified", "inline", "inline_blocked", "chained", "failed", "inline_failed" })
+            foreach (string scenario in new[] { "prepared", "native_receipt", "late", "blocked", "stale", "verified", "inline", "inline_blocked", "chained", "failed", "inline_failed" })
             {
                 AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask(); AgentTools.Workflows.Clear();
                 Game.LocalPlayer.statLifeMax = 100;
@@ -5393,7 +5416,9 @@ static class RuntimeTests
                     {"id":"prepare","description":"prepare for exploration","depends_on":[],"script":"placeholder",
                      "conditions":[{"kind":"permanent_health","count":200}]}]}
                     """).AsObject();
-                plan["steps"][0]["script"] = "tool('nav_to',{x:12,y:34});"
+                plan["steps"][0]["script"] = scenario == "native_receipt"
+                    ? "tool('nav_to',{x:12,y:34});return {outcome:'done',reason:'looted'};"
+                    : "tool('nav_to',{x:12,y:34});"
                     + (scenario == "inline" ? "tool('nav_to',{x:14,y:34});" : "") + "return {status:'yield',"
                     + (scenario is "blocked" or "inline_blocked" ? "blocked:'unsafe_to_continue'};" : "next:'collect equipment'};");
                 if (scenario == "chained") plan["steps"].AsArray().Add(JsonNode.Parse("""
@@ -5469,7 +5494,7 @@ static class RuntimeTests
                     timer.Restart();
                     AgentTools.ContinuePreparedNode(default);
                 }
-                if (scenario is "prepared" or "late" or "inline" or "chained" or "failed" or "inline_failed")
+                if (scenario is "prepared" or "native_receipt" or "late" or "inline" or "chained" or "failed" or "inline_failed")
                 {
                     await PumpUntil(() => starts == predecessorActions + 1 && AgentTools.LastContinuation?["started_handle"] != null);
                     Check(AgentTools.LastContinuation?["mode"]?.ToString() == (failed ? "prepared_failure" : "prepared_followup")

@@ -140,7 +140,22 @@ public sealed class ScriptLibrary
                 const sources=tool('npc_drop_sources',{item_type:23,limit:100}).sources??[];
                 const targets=[{item_type:23,count,npc_types:[...new Set(sources.map(source=>source.npc_type))]}];
                 const supplies=tool('gather',{targets});
-                if(supplies.outcome==='enough')result=tool('build_house',site.build_args);
+                let stocked=supplies.outcome==='enough';
+                if(supplies.outcome==='source_unavailable'){
+                  const needed=Number(shortage[2]);
+                  const candidates=tool('find_tiles',{name:'Containers',n:12,max_dist:64}).tiles??[];
+                  const visited=[];
+                  for(const point of candidates){
+                    if(visited.length>=3)break;
+                    if(point.locked||visited.some(p=>Math.abs(p.x-point.x)<=1&&Math.abs(p.y-point.y)<=1))continue;
+                    visited.push(point);
+                    tool('collect_treasure',{x:point.x,y:point.y});
+                    const counts=tool('get_state',{fields:['inventory_counts']}).inventory_counts??{};
+                    stocked=(counts[8]??0)>=needed||(counts[23]??0)>=count;
+                    if(stocked)break;
+                  }
+                }
+                if(stocked)result=tool('build_house',site.build_args);
                 else return {ok:false,outcome:'construction_supply_unavailable',item_type:23,supplies};
               }
             }
