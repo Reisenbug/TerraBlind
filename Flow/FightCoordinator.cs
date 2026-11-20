@@ -446,10 +446,11 @@ namespace TerraBlind
                     float gapY = Math.Max(0, Math.Abs(dy) - (p.height + npc.height) / 2f);
                     if (npc.damage <= 0 || gapX * gapX + gapY * gapY > 48 * 48) continue;
                 }
-                int slot = CombatLoadout.Select(p, npc, allowPickaxeFallback: true);
-                if (slot < 0) continue;
                 bool recentAttacker = age >= 0 && age <= 300 && attacker?["npc_index"]?.GetValue<int>() == i
                     && attacker?["npc_type"]?.GetValue<int>() == npc.type;
+                int slot = CombatLoadout.Select(p, npc, allowPickaxeFallback: true,
+                    allowAlternative: idle && recentAttacker && age <= 60 && attacker?["via"]?.ToString() == "contact");
+                if (slot < 0) continue;
                 if (best == null || recentAttacker && !bestAttacker || recentAttacker == bestAttacker && dist < bestDist)
                 {
                     bestDist = dist;

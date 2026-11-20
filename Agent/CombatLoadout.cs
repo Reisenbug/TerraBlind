@@ -11,12 +11,15 @@ public static class CombatLoadout
         && (item.useAmmo == 0 || player.HasAmmo(item)) && item.mana * player.manaCost <= player.statMana;
 
     public static int Select(Player player, NPC target = null, bool allowPickaxeFallback = false)
+        => Select(player, target, allowPickaxeFallback, allowAlternative: false);
+
+    internal static int Select(Player player, NPC target, bool allowPickaxeFallback, bool allowAlternative)
     {
         int best = -1;
         bool hasWeapon = false;
         for (int slot = 0; slot < 50; slot++)
         {
-            if (slot == 10 && best >= 0) break;
+            if (slot == 10 && best >= 0 && (!allowAlternative || PreferredType == 0)) break;
             var item = player.inventory[slot];
             if (!CanUse(player, item)) continue;
             hasWeapon = true;
@@ -24,7 +27,8 @@ public static class CombatLoadout
             if (PreferredType > 0)
             {
                 if (item.type == PreferredType) return slot;
-                continue;
+                if (!allowAlternative) continue;
+                if (slot >= 10 && best is >= 0 and < 10) continue;
             }
             if (best < 0) best = slot;
             else
