@@ -206,7 +206,7 @@ static class CodexTests
             async Task WaitParked(int turns)
             {
                 var until = DateTime.UtcNow.AddSeconds(5);
-                while (hosted.ToolResponses.Count < turns || NativeAgent.Status != "等待战斗指令（不调用模型）")
+                while (hosted.ToolResponses.Count < turns || NativeAgent.Status != "waiting for combat instructions")
                 {
                     Check(DateTime.UtcNow < until, "combat Agent failed to park after turn " + turns);
                     native.PostUpdateEverything(); Terraria.Main.GameUpdateCount++;
