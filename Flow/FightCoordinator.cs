@@ -20,6 +20,7 @@ namespace TerraBlind
         internal static bool NavigationSnapshotPending;
         private static bool _usingItem;
         private static bool _evading;
+        private static bool _evadeJumpHeld;
         private static int _animationSlot = -1;
         private static Vector2 _animationAim;
         private static NPC _animationTarget;
@@ -133,9 +134,12 @@ namespace TerraBlind
                     }
                     if (imminent) enemies.Add(npc);
                 }
-            if (!blocked && shots.Count == 0 && enemies.Count == 0) return (0, false, false);
             int currentDirection = p.controlRight ? 1 : p.controlLeft ? -1 : 0;
-            bool currentJump = p.controlJump && p.velocity.Y == 0;
+            bool canStartJump = p.velocity.Y == 0 && p.releaseJump;
+            bool canHoldJump = p.jump > 0 && p.velocity.Y * p.gravDir < 0;
+            bool holdEvade = _evadeJumpHeld && canHoldJump;
+            bool currentJump = holdEvade || p.controlJump && (canStartJump || canHoldJump);
+            if (!blocked && shots.Count == 0 && enemies.Count == 0) return (currentDirection, holdEvade, holdEvade);
             bool checkFall = RecedingNav.Active && !FallSafety.Immune(p);
             float Risk(int direction, bool jump)
             {
@@ -143,8 +147,8 @@ namespace TerraBlind
                 var halfSize = new Vector2(p.width / 2f, p.height / 2f);
                 int fallStart = p.velocity.Y * p.gravDir > 0 ? p.fallStart : (int)(p.position.Y / 16);
                 bool clearingContact = Collision.HurtTiles(p.position, p.width, p.height, p).type >= 0;
-                if (jump) velocity.Y = (-Player.jumpSpeed - p.jumpSpeedBoost) * p.gravDir;
-                int hold = jump ? 12 : 0;
+                if (jump && canStartJump) velocity.Y = (-Player.jumpSpeed - p.jumpSpeedBoost) * p.gravDir;
+                int hold = !jump ? 0 : canStartJump ? Player.jumpHeight : p.jump;
                 bool landed = false;
                 float score = direction == currentDirection ? 0 : .01f;
                 if (jump != currentJump) score += .02f;
@@ -201,12 +205,12 @@ namespace TerraBlind
                     return float.PositiveInfinity;
                 return score;
             }
-            (int Direction, bool Jump, bool Apply) best = (0, false, false);
+            (int Direction, bool Jump, bool Apply) best = (currentDirection, currentJump, holdEvade);
             float bestRisk = Risk(currentDirection, currentJump);
             foreach (int direction in new[] { -1, 0, 1 })
             foreach (bool jump in new[] { false, true })
             {
-                if (jump && p.velocity.Y != 0) continue;
+                if (jump && !canStartJump && !canHoldJump) continue;
                 float risk = Risk(direction, jump);
                 if (risk < bestRisk) { bestRisk = risk; best = (direction, jump, true); }
             }
@@ -271,6 +275,7 @@ namespace TerraBlind
             _animationSlot = -1;
             _animationTarget = null;
             _attackNext = false;
+            _evadeJumpHeld = false;
             AimTarget = null;
         }
 
@@ -291,10 +296,12 @@ namespace TerraBlind
             if (HoldingFallProtection(p))
             {
                 _animationSlot = -1; _animationTarget = null;
+                _evadeJumpHeld = false;
                 _usingItem = _idleDefense = _evading = false;
                 return;
             }
             bool evading = false;
+            bool holdingJump = false;
             if ((processing || IsActive) && !p.dead && !Manual.On && AgentNetwork.CanAutomate
                 && !PvpDuel.Active && !PlayerCombat.Active && !AgentTools.ContactEscapeActive
                 && !AgentTools.ControlSession.OwnsDirectMovement
@@ -314,8 +321,10 @@ namespace TerraBlind
                     p.controlRight = evade.Direction > 0;
                     p.controlJump = evade.Jump;
                     evading = true;
+                    holdingJump = evade.Jump;
                 }
             }
+            _evadeJumpHeld = holdingJump;
             if (evading != _evading)
                 DiagLog.Write($"[agent_evade] active={evading} tick={Main.GameUpdateCount} x={p.position.X} y={p.position.Y} hp={p.statLife}");
             _evading = evading;

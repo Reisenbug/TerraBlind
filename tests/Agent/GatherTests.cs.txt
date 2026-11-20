@@ -853,6 +853,7 @@ static class GatherTests
         var p = Main.LocalPlayer;
         var oldShots = Main.projectile; var oldNpcs = Main.npc;
         var oldVelocity = p.velocity; var oldPosition = p.position; float oldGravity = p.gravity;
+        int oldJump = p.jump;
         bool oldManual = Manual.On, oldDodge = Dodge.Enabled, oldPrefix = CombatForecast.ReservesRoutePrefix;
         try
         {
@@ -910,6 +911,21 @@ static class GatherTests
             Check(!FightCoordinator.Evade(p).Apply, "friendly projectile triggered evasion");
             shot.hostile = true; shot.Center += new Microsoft.Xna.Framework.Vector2(500, 0);
             Check(!FightCoordinator.Evade(p).Apply, "non-intersecting projectile caused idle movement");
+            p.controlLeft = p.controlRight = p.controlJump = false;
+            p.gravity = .3f;
+            Collision.SolidTest = (position, _, _) => Math.Abs(position.X - p.position.X) > 1;
+            shot.Center = p.Center + new Microsoft.Xna.Framework.Vector2(0, 18);
+            shot.velocity = default;
+            FightCoordinator.Tick(p, true);
+            Check(p.controlJump, "a floor-level threat with both sides blocked did not start an evade jump");
+            Main.projectile = Array.Empty<Projectile>();
+            p.controlJump = false; p.velocity.Y = -4; p.jump = 10;
+            FightCoordinator.Tick(p, true);
+            Check(p.controlJump, "evasion released the jump while the native hold was still available");
+            p.controlJump = false; p.jump = 0; p.velocity = default; p.gravity = 0;
+            FightCoordinator.Tick(p, true);
+            Check(!p.controlJump, "evasion kept pressing jump after the native hold ended");
+            Collision.SolidTest = null;
             var falling = new Projectile { active = true, hostile = true, damage = 140, width = 31, height = 31,
                 Center = p.Center + new Microsoft.Xna.Framework.Vector2(-20, -105), velocity = new(0, 1.5f) };
             Main.projectile = new[] { falling };
@@ -947,7 +963,7 @@ static class GatherTests
         {
             FightCoordinator.Stop();
             Main.projectile = oldShots; Main.npc = oldNpcs;
-            p.position = oldPosition; p.velocity = oldVelocity; p.gravity = oldGravity; Manual.On = oldManual;
+            p.position = oldPosition; p.velocity = oldVelocity; p.gravity = oldGravity; p.jump = oldJump; Manual.On = oldManual;
             Dodge.Enabled = oldDodge; Collision.SolidTest = null; Collision.HurtTest = null;
             CombatForecast.ReservesRoutePrefix = oldPrefix;
         }

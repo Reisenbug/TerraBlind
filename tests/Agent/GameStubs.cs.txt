@@ -210,6 +210,9 @@ namespace Terraria
         public bool controlUp, controlDown, controlHook, controlMount, controlUseTile, controlThrow, ExtraJump;
         public float wingTime, manaCost = 1;
         public static float jumpSpeed = 5.01f;
+        public static int jumpHeight = 15;
+        public bool releaseJump = true;
+        public int jump;
         public float jumpSpeedBoost, maxRunSpeed = 3, accRunSpeed = 3, runAcceleration = .08f, gravity = .4f;
         public int statMana = 200, statLifeMax = 100, statLifeMax2 = 100, itemTime;
         public Mount mount = new();
