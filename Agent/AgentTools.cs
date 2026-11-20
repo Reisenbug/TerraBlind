@@ -509,7 +509,9 @@ public static partial class AgentTools
             return;
         }
         continuedActions.Add(attempt);
-        if (!verified && !prepared)
+        bool completedChild = action["tool"]?.ToString() != "run_script" && action["status"]?.ToString() == "completed"
+            && workflow is { Yielded: false, ReviewRequested: false };
+        if (!verified && !prepared && !completedChild)
         {
             if (TryDeferNode(owner, action["result"]) is string sibling)
                 StartPreparedNode(sibling, handle, token);
