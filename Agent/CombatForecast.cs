@@ -135,7 +135,7 @@ public sealed class CombatForecast : ModSystem
                     int handoff = args["route_handoff"]?.GetValue<bool>() == true ? Math.Min(16, prefix.Length) : 0;
                     unavailable = null;
                     pending = new Forecast(id, tick, snapshot, frozen, prefix, goal,
-                        Generate(id, tick, snapshot, frozen, prefix, goal, walk,
+                        Generate(id, tick, snapshot, frozen, prefix, goal, walk, NeedsLavaCoastCheck(player),
                             Stopwatch.GetElapsedTime(started).TotalMilliseconds, lifetime.Token, handoffFrames: handoff),
                         VanillaPrediction.Observe(player, false), handoff);
                     var submitted = pending;
@@ -178,8 +178,12 @@ public sealed class CombatForecast : ModSystem
             : unavailable?.DeepClone().AsObject() ?? new JsonObject { ["status"] = "unavailable", ["reason"] = "no_current_forecast" };
     }
 
+    static bool NeedsLavaCoastCheck(Player player) => Collision.LavaCollision(
+        player.position - new Vector2(24 * 16, 8 * 16), player.width + 48 * 16, player.height + 24 * 16);
+
     static async Task<JsonObject> Generate(long id, long tick, JsonObject snapshot, JsonObject scene, int[] prefix,
-        JsonObject destination, (int Direction, float TargetX, float ArrivalPixels)? walk, double captureMs, CancellationToken token,
+        JsonObject destination, (int Direction, float TargetX, float ArrivalPixels)? walk, bool nearLava,
+        double captureMs, CancellationToken token,
         string executionName = null, int handoffFrames = 0)
     {
         var clock = Stopwatch.StartNew();
@@ -189,6 +193,7 @@ public sealed class CombatForecast : ModSystem
         var definitions = new[] { ("follow_route", -1), ("left", 1), ("right", 2), ("jump_left", 5), ("jump_right", 6) }
             .Where(d => !execution || d.Item1 == executionName).ToArray();
         int[] lead = execution ? prefix : prefix.Take(handoffFrames).ToArray();
+        int minimum = lead.Length + 24;
         var inputs = definitions.ToDictionary(d => d.Item1, d => d.Item2 < 0 ? prefix.Take(horizon).ToArray()
             : lead.Concat(Enumerable.Repeat(d.Item2, 24)).Concat(Enumerable.Repeat(0, 48)).ToArray());
         using var deadline = handoffFrames > 0 ? CancellationTokenSource.CreateLinkedTokenSource(token) : null;
@@ -197,7 +202,7 @@ public sealed class CombatForecast : ModSystem
             ["snapshot"] = snapshot.DeepClone(), ["trace_damage"] = true,
             ["branches"] = new JsonArray(inputs.Select(pair => (JsonNode)new JsonObject {
                 ["id"] = pair.Key, ["controls"] = new JsonArray(pair.Value.Select(k => (JsonNode)JsonValue.Create(k)).ToArray()),
-                ["stop_grounded_after"] = pair.Key == "follow_route" ? 0 : lead.Length + 24 }).ToArray()) }, token);
+                ["stop_grounded_after"] = pair.Key == "follow_route" || nearLava ? 0 : minimum }).ToArray()) }, token);
         if (!execution && walk != null)
         {
             double center = Number(scene["player"]["pos"]["x"]) + Number(scene["player"]["size_pixels"]["width"]) / 2;
@@ -214,9 +219,8 @@ public sealed class CombatForecast : ModSystem
             int[] controls = inputs[name];
             var response = batch["branches"].AsArray().First(branch => branch["id"].ToString() == name);
             var trace = response["frames"].AsArray();
-            int minimum = lead.Length + 24;
             var landingCheck = keys < 0 ? (Frame: 0, Reason: (string)null)
-                : EvaluateLanding(response.AsObject(), scene["player"]["hp"].GetValue<int>(), minimum);
+                : ClassifyLanding(response.AsObject(), scene["player"]["hp"].GetValue<int>(), minimum, nearLava);
             int landing = landingCheck.Frame;
             int count = landing > 0 ? landing : trace.Count;
             int compared = Math.Min(horizon, trace.Count);
@@ -253,17 +257,21 @@ public sealed class CombatForecast : ModSystem
                 ["target_x_pixels"] = walk.Value.TargetX, ["arrival_pixels"] = walk.Value.ArrivalPixels },
             ["known_route_frames"] = prefix.Length, ["capture_ms"] = captureMs, ["compute_ms"] = clock.Elapsed.TotalMilliseconds,
             ["handoff_frames"] = handoffFrames,
+            ["lava_coast_check"] = nearLava,
             ["known_route_controls"] = new JsonArray(prefix.Select(k => (JsonNode)JsonValue.Create(k)).ToArray()),
             ["destination"] = destination.DeepClone(), ["progress_metric"] = "straight_line_distance_to_goal",
             ["comparison_frames"] = horizon, ["mode"] = execution ? "execution" : "comparison",
             ["batch_prepare_ms"] = batch["prepare_ms"]?.DeepClone(), ["batch_engine_ms"] = batch["total_ms"]?.DeepClone(),
             ["batch_roundtrip_ms"] = batch["roundtrip_ms"]?.DeepClone(), ["batch_queue_ms"] = batch["queue_ms"]?.DeepClone(),
             ["movements"] = movements,
-            ["scope"] = execution ? "Fresh execution proof: observed movement prefix, then selected input for 24 frames, then release until landing."
+            ["scope"] = execution ? "Fresh execution proof: observed movement prefix, selected input for 24 frames, then release until landing or until settled on ground near lava."
                 : "All comparison metrics cover the same comparison_frames starting now, bounded by known route inputs and handoff_frames+24. Baseline replays queued keys or the current walk intent until its arrival threshold; later navigation is unknown. With no navigation, the idle baseline assumes released movement; live reflex inputs may differ. Alternatives first replay handoff_frames route inputs, then their input for 24 frames; safe_landing checks the longer landing continuation. Fresh execution proof reserves its movement prefix. damage includes ongoing health decay; hurt_events records new native hurts. Entity motion is a constant-velocity hypothesis." };
     }
 
     internal static (int Frame, string Reason) EvaluateLanding(JsonObject branch, int initialHp, int minimum)
+        => ClassifyLanding(branch, initialHp, minimum, false);
+
+    static (int Frame, string Reason) ClassifyLanding(JsonObject branch, int initialHp, int minimum, bool nearLava)
     {
         var trace = branch["frames"].AsArray();
         var health = branch["health_frames"]?.AsArray() ?? throw new InvalidOperationException("combat_health_trace_missing");
@@ -285,9 +293,10 @@ public sealed class CombatForecast : ModSystem
                 if (health[i]["life_regen"].GetValue<int>() >= 0) return (0, "unattributed_health_loss");
             }
             previousHp = hp;
-            if (i + 1 >= minimum && trace[i]["grounded"].GetValue<bool>()) return (i + 1, null);
+            if (i + 1 >= minimum && trace[i]["grounded"].GetValue<bool>()
+                && (!nearLava || Number(trace[i]["vx"]) == 0)) return (i + 1, null);
         }
-        return (0, "no_ground_contact_in_horizon");
+        return (0, nearLava ? "no_settled_landing_in_horizon" : "no_ground_contact_in_horizon");
     }
 
     static double Number(JsonNode value) => double.Parse(value.ToString(), System.Globalization.CultureInfo.InvariantCulture);
@@ -450,7 +459,7 @@ public sealed class CombatForecast : ModSystem
                     var scene = observe();
                     refreshLifetime = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
                     var job = new Forecast(freshId, tick, snapshot, scene, prefix, original.Destination,
-                        Generate(freshId, tick, snapshot, scene, prefix, original.Destination, walk,
+                        Generate(freshId, tick, snapshot, scene, prefix, original.Destination, walk, NeedsLavaCoastCheck(player),
                             Stopwatch.GetElapsedTime(captureStarted).TotalMilliseconds, refreshLifetime.Token, plan["movement"].ToString()), anchor);
                     reservedUntilTick = tick + prefix.Length;
                     return (Job: job, Error: (JsonObject)null);
