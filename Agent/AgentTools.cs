@@ -1418,6 +1418,7 @@ public static partial class AgentTools
         state["dag_continuation"] = LastContinuation?.DeepClone();
         state["local_intents"] = AgentScript.IntentStatus;
         state["execution_continuity"] = ExecutionContinuity?.DeepClone();
+        state["parallel_agent_receipts"] = NativeAgent.ParallelReceipts;
         state["last_route_loot"] = LastRouteLoot?.DeepClone();
         state["control_overrides"] = Control.Snapshot();
         state["control_execution"] = ControlSession.Snapshot();
@@ -3144,9 +3145,15 @@ public static partial class AgentTools
                 }
                 break;
             case "loot_all":
-                result = await NativeAgent.OnMain(() => args["expected_container"] != null && Int(args, "expected_container") != Main.LocalPlayer.chest
-                    ? new JsonObject { ["error"] = "container_changed", ["container"] = Main.LocalPlayer.chest }
-                    : HttpServerSystem.LootOpenChest(), token);
+                result = await NativeAgent.OnMain(() =>
+                {
+                    int chest = Main.LocalPlayer.chest;
+                    if (args["expected_container"] != null && Int(args, "expected_container") != chest)
+                        return new JsonObject { ["error"] = "container_changed", ["container"] = chest };
+                    var loot = HttpServerSystem.LootOpenChest();
+                    if (chest >= 0 && Int(loot, "transferred_items") > 0) AgentTaskEvidence.NoteChestTransfer();
+                    return loot;
+                }, token);
                 break;
             case "craft_into_inventory":
                 result = await NativeAgent.OnMain(() =>

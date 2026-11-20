@@ -121,6 +121,7 @@ public sealed class CodexAgent : IDisposable
     JsonObject _usage;
     JsonObject _goal;
     readonly object _goalGate = new();
+    internal bool HasActiveManagedGoal { get { lock (_goalGate) return _goal?["status"]?.ToString() == "active"; } }
     string _goalRequest;
     string _deliveredGoal;
     int _deliveredGoalRevision = -1;

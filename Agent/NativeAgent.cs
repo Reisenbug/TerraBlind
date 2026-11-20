@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -31,6 +32,11 @@ public class NativeAgent : ModSystem
     Task _goalStopping = Task.CompletedTask;
     Task _dangerDelivery = Task.CompletedTask;
     Task _idleReaction = Task.CompletedTask;
+    readonly ParallelAgentWork _parallel = new();
+    Func<string, JsonObject, CancellationToken, Task<JsonObject>> _propose;
+    ulong _inventoryReviewTick, _chestReviewRevision, _preparationTick;
+    JsonNode _lastAutomaticTrash;
+    internal static JsonArray ParallelReceipts => _instance?._parallel.Receipts() ?? new JsonArray();
     internal static Task IdleReaction => _instance?._idleReaction ?? Task.CompletedTask;
     int _lastDangerNotice;
     internal static JsonObject GoalState => _instance?._codex?.GoalState;
@@ -178,6 +184,8 @@ public class NativeAgent : ModSystem
         _pending = null;
         bool stopActions = _running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false;
         _cancel?.Cancel();
+        _parallel.Reset();
+        _propose = null;
         if (_goalStopping.IsCompleted && _codex?.GoalState?["native"]?["status"]?.ToString() == "active")
         {
             var codex = _codex;
@@ -206,6 +214,260 @@ public class NativeAgent : ModSystem
 
     public override void PostUpdateEverything()
         => UpdateAgent(true);
+
+    static readonly string[] proposalQueries = { "game_catalog", "find_tiles", "find_descent", "early_descent", "inspect_terrain", "recipe", "npc_find" };
+    static readonly JsonObject proposalTool = JsonNode.Parse("""
+        {"type":"function","function":{"name":"submit_proposal","description":"Return a proposal to the game host without executing it.",
+         "parameters":{"type":"object","properties":{"proposal":{"type":"object"}},"required":["proposal"]}}}
+        """).AsObject();
+
+    async Task<JsonObject> RequestProposal(string role, JsonObject facts, string executable, string cwd, string model, CancellationToken token)
+    {
+        var tools = new JsonArray(proposalTool.DeepClone());
+        bool successor = role == "successor";
+        if (!successor)
+        {
+            using var fast = CancellationTokenSource.CreateLinkedTokenSource(token);
+            fast.CancelAfter(TimeSpan.FromSeconds(3));
+            try
+            {
+                var decision = await JudgeInventory(role, facts, async (request, ct) =>
+                    JsonNode.Parse(await AgentTools.Execute("jev_judge", request, ct)).AsObject(), fast.Token);
+                if (decision != null) return decision;
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+        }
+        if (successor)
+            foreach (var schema in _schemas.Where(s => proposalQueries.Contains(s["function"]?["name"]?.ToString())))
+                tools.Add(schema.DeepClone());
+        string instructions = role switch
+        {
+            "equip" => "Evaluate the carried equipment against the equipped gear, current goal and progress. Submit {inventory_slot,equipment_slot} for one clear upgrade, or {}. Use only the supplied slots. Prefer survivability and practical mobility.",
+            "cleanup" => "Review disposal candidates in the context of the current goal and inventory. Submit {trash_slots:[...]} with up to three stacks safe to discard entirely. Consider replacements, recipes, rarity and utility. Return an empty list when uncertain. Only use slots in candidates.",
+            _ => "Prepare the supplied DAG node as an executable TerraBlind JavaScript script. The current action continues. Query only facts needed to prepare this node. Submit {script:string} or {} if the facts do not support an executable script. Use tool(name,args), verify actual node conditions with tool('task_step',{action:'verify'}), and return a concrete blocked reason when needed. Preserve the goal, dependencies and permissions. Do not change the plan or call tools that mutate the game."
+        };
+        JsonObject proposal = null;
+        int queryCount = 0;
+        using var worker = new CodexAgent();
+        await worker.RunAsync(facts.ToJsonString(AgentTools.ModelJson), executable, cwd, model, instructions, tools,
+            async (name, args, ct) =>
+            {
+                if (name == "submit_proposal" && args["proposal"] is JsonObject value && value.ToJsonString().Length <= 12000)
+                {
+                    proposal ??= (JsonObject)value.DeepClone();
+                    return "{\"received\":true}";
+                }
+                if (!successor || !proposalQueries.Contains(name) || ++queryCount > 6)
+                    return "{\"error\":\"proposal_query_unavailable\"}";
+                return await AgentTools.Execute(name, args, ct);
+            }, _ => { }, token);
+        return proposal;
+    }
+
+    internal static async Task<JsonObject> JudgeInventory(string role, JsonObject facts,
+        Func<JsonObject, CancellationToken, Task<JsonObject>> judge, CancellationToken token)
+    {
+        var bag = facts["bag"];
+        var items = bag["inventory"].AsArray().OfType<JsonObject>().ToArray();
+        var questions = new JsonObject();
+        var choices = new Dictionary<string, (int Source, int Equipment)>();
+        void Ask(string key, string instruction, IEnumerable<(string Key, string Label)> options)
+        {
+            var criteria = new JsonObject { ["keep"] = "Keep current items and equipment; no clear improvement." };
+            foreach (var (id, label) in options) criteria[id] = label;
+            if (criteria.Count > 1) questions[key] = new JsonObject { ["type"] = "choice", ["instructions"] = instruction, ["criteria"] = criteria };
+        }
+        if (role == "equip")
+        {
+            var equipment = bag["equipment"].AsArray().OfType<JsonObject>()
+                .Where(slot => slot["unlocked"]?.GetValue<bool>() == true && slot["favorited"]?.GetValue<bool>() != true).ToArray();
+            var options = new List<(string, string)>();
+            foreach (var item in items.Where(i => i["favorited"]?.GetValue<bool>() != true))
+            {
+                int armorSlot = ReadNumber(item["armor_slot"]), from = ReadNumber(item["slot"]);
+                var targets = equipment.Where(slot => armorSlot >= 0 ? ReadNumber(slot["slot"]) == armorSlot
+                    : item["accessory"]?.GetValue<bool>() == true && ReadNumber(slot["slot"]) >= 3).ToArray();
+                var empty = targets.FirstOrDefault(slot => ReadNumber(slot["type"]) == 0);
+                foreach (var target in (empty != null ? new[] { empty } : targets))
+                {
+                    if (JsonNode.DeepEquals(item["type"], target["type"]) && JsonNode.DeepEquals(item["prefix"], target["prefix"])) continue;
+                    if (options.Count == 48) break;
+                    int to = ReadNumber(target["slot"]);
+                    string id = $"equip_{from}_{to}";
+                    choices[id] = (from, to);
+                    options.Add((id, $"Equip carried slot {from} ({item["name"]}), replacing slot {to} ({target["name"]})."));
+                }
+            }
+            Ask("equip", "Which option clearly improves survivability or mobility for the current goal? Read the carried and equipped item facts; preserve unusual or goal-critical effects.", options);
+        }
+        else
+        {
+            var slots = facts["candidates"].AsArray().Select(ReadNumber).ToHashSet();
+            var candidates = items.Where(i => slots.Contains(ReadNumber(i["slot"]))).ToArray();
+            foreach (var (part, index) in candidates.Chunk(16).Select((part, index) => (part, index)))
+                Ask("trash_" + index, "Which single stack in these options is safe to discard entirely, given the goal, substitutes and the rest of the backpack? Preserve useful materials and rare items. Choose keep when uncertain.",
+                    part.Select(item => ($"slot_{item["slot"]}", $"Discard slot {item["slot"]}: {item["stack"]} × {item["name"]}.")));
+        }
+        if (questions.Count == 0) return new JsonObject();
+        var result = await judge(new JsonObject { ["state"] = facts.DeepClone(), ["questions"] = questions }, token);
+        if (result?["answers"] is not JsonObject answers) return null;
+        string Pick(JsonNode answer)
+        {
+            string choice = answer?["choice"]?.ToString();
+            return choice != null && answer["probabilities"]?[choice] is JsonValue probability
+                && probability.TryGetValue<double>(out double score) && score >= 0.9 ? choice : null;
+        }
+        if (role == "equip")
+        {
+            string choice = Pick(answers["equip"]);
+            return choice == null ? null : choices.TryGetValue(choice, out var selected)
+                ? new JsonObject { ["inventory_slot"] = selected.Source, ["equipment_slot"] = selected.Equipment } : new JsonObject();
+        }
+        var discarded = new JsonArray();
+        foreach (var (key, answer) in answers)
+        {
+            string choice = Pick(answer);
+            if (choice != null && choice.StartsWith("slot_", StringComparison.Ordinal)
+                && questions[key]?["criteria"]?[choice] != null && int.TryParse(choice[5..], out int slot)) discarded.Add(slot);
+        }
+        return discarded.Count > 0 ? new JsonObject { ["trash_slots"] = discarded }
+            : answers.Any(pair => Pick(pair.Value) == null) ? null : new JsonObject();
+    }
+
+    void UpdateParallelWork()
+    {
+        if (_propose == null || !Processing || Manual.On || !Config.I.AgentEnabled || !AgentNetwork.CanAutomate
+            || Main.LocalPlayer.dead || PvpDuel.Active || _codex?.HasActiveManagedGoal != true) return;
+        var token = _cancel.Token;
+        var propose = _propose;
+        _parallel.Poll(token);
+        ulong now = Main.GameUpdateCount;
+        ulong chest = AgentTaskEvidence.ChestRevision;
+        int free = Main.LocalPlayer.inventory.Take(50).Count(i => i.IsAir);
+        if (chest != _chestReviewRevision || now >= _inventoryReviewTick)
+        {
+            _chestReviewRevision = chest;
+            _inventoryReviewTick = now + (free == 0 ? 120UL : 1800UL);
+            var bag = PvpInventory.Review();
+            string revision = bag.ToJsonString();
+            var items = bag["inventory"].AsArray().OfType<JsonObject>();
+            var equipment = bag["equipment"].AsArray().OfType<JsonObject>();
+            var scene = new JsonObject { ["objective"] = _goalOptions?["objective"]?.DeepClone(),
+                ["step"] = AgentTools.Plan.CurrentDescription, ["bag"] = bag,
+                ["hardmode"] = Main.hardMode, ["life"] = Main.LocalPlayer.statLifeMax2 };
+            if (items.Any(i => i["accessory"]?.GetValue<bool>() == true || i["armor_slot"] != null)
+                && equipment.Any(i => i["unlocked"]?.GetValue<bool>() == true))
+                _parallel.Offer("inventory:equip", revision, ct => propose("equip", scene, ct), answer => ApplyEquipment(bag, answer), token);
+            var plan = AgentTools.Plan.Snapshot();
+            var protectedTypes = ProtectedItems(plan);
+            var candidates = items.Where(i => DiscardCandidate(i, protectedTypes)).ToArray();
+            if (candidates.Length > 0)
+            {
+                var cleanup = (JsonObject)scene.DeepClone();
+                cleanup["candidates"] = new JsonArray(candidates.Select(i => i["slot"].DeepClone()).ToArray());
+                _parallel.Offer("inventory:cleanup", revision, ct => propose("cleanup", cleanup, ct),
+                    answer => ApplyCleanup(bag, candidates, answer), token);
+            }
+        }
+        if (now < _preparationTick || !AgentTools.Actions.HasPrimaryControl || !AgentTools.Plan.RequiresNodeExecution) return;
+        _preparationTick = now + 15;
+        string owner = AgentTools.Actions.ActiveNode;
+        if (owner == null) return;
+        var opportunities = AgentTools.Plan.PreparationNodes(owner, AgentTaskEvidence.Measure);
+        if (opportunities.Count == 0) return;
+        var graph = AgentTools.Plan.Snapshot();
+        foreach (var node in opportunities)
+        {
+            string id = node.GetValue<string>();
+            if (id == owner) continue;
+            var step = graph["steps"].AsArray().OfType<JsonObject>().First(s => s["id"].ToString() == id);
+            string stamp = step["workflow"] + ":" + AgentTools.Plan.ExecutionRevision(id);
+            if (!_parallel.CanOffer("dag:" + id, stamp)) continue;
+            var facts = new JsonObject { ["goal"] = graph["goal"]?.DeepClone(), ["active_node"] = owner,
+                ["node"] = step.DeepClone(), ["inventory"] = PvpInventory.Snapshot(),
+                ["position_tiles"] = new JsonArray(Main.LocalPlayer.Center.X / 16, Main.LocalPlayer.Center.Y / 16),
+                ["tools"] = "Use find_tiles and other read-only tools now. Scripts can use nav_to, gather, collect_treasure, build_house, craft_to_slot, equip_item, task_step and existing skills with verified arguments." };
+            _parallel.Offer("dag:" + id, stamp, ct => propose("successor", facts, ct),
+                answer => ApplySuccessor(id, stamp, answer), token);
+        }
+    }
+
+    static HashSet<int> ProtectedItems(JsonObject plan) => plan["steps"].AsArray().OfType<JsonObject>()
+        .Where(s => s["status"]?.ToString() != "completed")
+        .SelectMany(s => s["conditions"].AsArray().OfType<JsonObject>())
+        .Where(c => c["kind"]?.ToString() is "item" or "equipped")
+        .Select(c => c["type"].GetValue<int>()).ToHashSet();
+
+    static int ReadNumber(JsonNode value) => value is JsonValue v && v.TryGetValue<int>(out int number) ? number : -1;
+
+    static bool DiscardCandidate(JsonObject item, HashSet<int> protectedTypes)
+        => ReadNumber(item["slot"]) >= 10 && item["favorited"]?.GetValue<bool>() != true && item["accessory"]?.GetValue<bool>() != true
+            && item["armor_slot"] == null && ReadNumber(item["heal_life"]) <= 0
+            && ReadNumber(item["damage"]) <= 0 && ReadNumber(item["pick"]) <= 0 && ReadNumber(item["axe"]) <= 0 && ReadNumber(item["hammer"]) <= 0
+            && !protectedTypes.Contains(ReadNumber(item["type"])) && ReadNumber(item["type"]) is not (>= 71 and <= 74);
+
+    static bool InventoryBusy()
+    {
+        var p = Main.LocalPlayer;
+        return p.itemAnimation != 0 || p.itemTime != 0 || p.chest != -1 || !Main.mouseItem.IsAir
+            || AgentTools.ContactEscapeActive || ItemUseCoordinator.IsActive || PlaceAnywhere.IsRunning
+            || StateSpacePlanner.ReservesItemUse || !AgentTools.ControlAllows(ControlBehavior.Workflow, ControlChannels.ItemUse, delegated: true)
+            || AgentTools.ControlSession.Tool is "act" or "mine" or "mine_vein" or "use_item" or "build_house" or "place_at" or "craft_recipe" or "slot_click" or "npc_chat";
+    }
+
+    internal static JsonObject ApplyEquipment(JsonObject bag, JsonObject answer)
+    {
+        int source = ReadNumber(answer?["inventory_slot"]), target = ReadNumber(answer?["equipment_slot"]);
+        if (source is < 0 or >= 50 || target is < 0 or >= 10) return new JsonObject();
+        if (InventoryBusy()) return null;
+        var item = bag["inventory"].AsArray().FirstOrDefault(i => ReadNumber(i["slot"]) == source);
+        var equipped = bag["equipment"].AsArray().FirstOrDefault(i => ReadNumber(i["slot"]) == target);
+        var p = Main.LocalPlayer;
+        if (item == null || equipped == null || p.inventory[source].favorited || p.armor[target].favorited || source == p.selectedItem)
+            return new JsonObject();
+        var result = Equipment.Swap(new JsonObject { ["inventory_slot"] = source, ["equipment_slot"] = target,
+            ["expected_inventory"] = item.DeepClone(), ["expected_equipment"] = equipped.DeepClone() });
+        return result["ok"]?.GetValue<bool>() == true ? new JsonObject { ["equipped"] = result["after"]["equipment"]["name"]?.DeepClone() }
+            : new JsonObject();
+    }
+
+    internal JsonObject ApplyCleanup(JsonObject bag, JsonObject[] candidates, JsonObject answer)
+    {
+        if (answer?["trash_slots"] is not JsonArray slots || slots.Count == 0) return new JsonObject();
+        if (InventoryBusy()) return null;
+        var now = PvpInventory.Review();
+        var trash = now["trash"];
+        if (!JsonNode.DeepEquals(trash, bag["trash"]) || ReadNumber(trash["type"]) > 0 && !JsonNode.DeepEquals(trash, _lastAutomaticTrash))
+            return new JsonObject();
+        var protectedTypes = ProtectedItems(AgentTools.Plan.Snapshot());
+        var removed = new JsonArray();
+        foreach (int slot in slots.Select(ReadNumber).Distinct().Take(3))
+        {
+            var original = candidates.FirstOrDefault(i => ReadNumber(i["slot"]) == slot);
+            var fresh = now["inventory"].AsArray().OfType<JsonObject>().FirstOrDefault(i => ReadNumber(i["slot"]) == slot);
+            if (original == null || fresh == null || !DiscardCandidate(fresh, protectedTypes)) continue;
+            var result = PvpInventory.Trash(new JsonObject { ["slot"] = slot,
+                ["expected"] = original.DeepClone(), ["expected_trash"] = trash.DeepClone() });
+            if (result["ok"]?.GetValue<bool>() != true) continue;
+            _lastAutomaticTrash = trash = result["trash"].DeepClone();
+            removed.Add(new JsonObject { ["name"] = original["name"]?.DeepClone(), ["stack"] = original["stack"].DeepClone() });
+        }
+        return removed.Count > 0 ? new JsonObject { ["trashed"] = removed, ["slots_freed"] = removed.Count } : new JsonObject();
+    }
+
+    internal static JsonObject ApplySuccessor(string id, string stamp, JsonObject answer)
+    {
+        if (answer?["script"] is not JsonValue value || !value.TryGetValue<string>(out var code)
+            || string.IsNullOrWhiteSpace(code) || code.Length > 10000 || AgentScript.PreparationOnly(code)) return new JsonObject();
+        var plan = AgentTools.Plan.Snapshot();
+        var step = plan["steps"].AsArray().OfType<JsonObject>().FirstOrDefault(s => s["id"].ToString() == id);
+        if (step == null || step["status"]?.ToString() == "completed" || step["preparation_only"]?.GetValue<bool>() != true
+            || stamp != step["workflow"] + ":" + AgentTools.Plan.ExecutionRevision(id)) return new JsonObject();
+        new Acornima.Parser().ParseScript("(function(){\n" + code + "\n});");
+        AgentTools.Plan.Revise(new JsonObject { ["expected_revision"] = plan["revision"].DeepClone(),
+            ["reason"] = "Prepared by parallel game agent", ["nodes"] = new JsonArray(new JsonObject { ["id"] = id, ["script"] = code }) }, AgentTaskEvidence.Measure);
+        return new JsonObject { ["prepared_node"] = id };
+    }
 
     internal static JsonObject UpcomingBoss(Player player)
     {
@@ -258,6 +520,7 @@ public class NativeAgent : ModSystem
             {
                 AgentTools.ObserveBossControl(Processing);
                 AgentTools.LootPassingChest();
+                UpdateParallelWork();
             }
         }
         if (worldAdvanced && !Main.gameMenu && (AgentTools.Watches.LocalDelivery || AgentTools.Watches.HasScriptHandlers
@@ -356,6 +619,10 @@ public class NativeAgent : ModSystem
         _cancel = new CancellationTokenSource();
         var token = _cancel.Token;
         AgentTools.NewTask(goal, allowPassingChestLoot: goalOptions != null);
+        _inventoryReviewTick = _chestReviewRevision = _preparationTick = 0;
+        _lastAutomaticTrash = null;
+        if (goalOptions != null && goalOptions["tokenBudget"] == null && useCodex)
+            _propose = (role, facts, ct) => RequestProposal(role, facts, codexPath, cwd, codexModel, ct);
         string safetyPolicy = AgentTools.AllowTaskRecall
             ? "skill('safety_reactions',0);"
             : "skill('safety_reactions',0,{allow_recall:false});";
@@ -684,6 +951,73 @@ public class NativeAgent : ModSystem
         _http?.Dispose();
         _instance = null;
         while (MainQueue.TryDequeue(out _)) { }
+    }
+}
+
+internal sealed class ParallelAgentWork
+{
+    const int Capacity = 5;
+    sealed record Work(string Key, Task<JsonObject> Result, Func<JsonObject, JsonObject> Apply,
+        long Started, CancellationTokenSource Lifetime);
+    readonly List<Work> running = new();
+    readonly Dictionary<string, string> attempted = new();
+    readonly Queue<JsonObject> receipts = new();
+
+    internal bool CanOffer(string key, string revision) => running.Count < Capacity
+        && !running.Any(job => job.Key == key) && (!attempted.TryGetValue(key, out var previous) || previous != revision);
+
+    internal void Offer(string key, string revision, Func<CancellationToken, Task<JsonObject>> propose,
+        Func<JsonObject, JsonObject> apply, CancellationToken token)
+    {
+        if (token.IsCancellationRequested || !CanOffer(key, revision)) return;
+        attempted[key] = revision;
+        var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
+        lifetime.CancelAfter(TimeSpan.FromSeconds(30));
+        var result = Task.Run(() => propose(lifetime.Token), lifetime.Token);
+        running.Add(new Work(key, result, apply, System.Diagnostics.Stopwatch.GetTimestamp(), lifetime));
+    }
+
+    internal void Poll(CancellationToken token)
+    {
+        if (token.IsCancellationRequested) return;
+        for (int i = 0; i < running.Count; i++)
+        {
+            var job = running[i];
+            if (!job.Result.IsCompleted) continue;
+            try
+            {
+                var proposal = job.Result.GetAwaiter().GetResult();
+                if (proposal != null && !job.Lifetime.IsCancellationRequested)
+                {
+                    var receipt = job.Apply(proposal);
+                    if (receipt == null) continue;
+                    if (receipt.Count > 0)
+                    {
+                        receipt["worker"] = job.Key;
+                        receipt["elapsed_ms"] = (long)System.Diagnostics.Stopwatch.GetElapsedTime(job.Started).TotalMilliseconds;
+                        if (receipts.Count == 8) receipts.Dequeue();
+                        receipts.Enqueue(receipt);
+                        DiagLog.Write("[agent_parallel] " + receipt.ToJsonString());
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception error) { DiagLog.Write($"[agent_parallel] worker={job.Key} failed={error.Message}"); }
+            job.Lifetime.Dispose();
+            running.RemoveAt(i--);
+        }
+    }
+
+    internal JsonArray Receipts() => new(receipts.Select(r => r.DeepClone()).ToArray());
+
+    internal void Reset()
+    {
+        foreach (var job in running)
+        {
+            job.Lifetime.Cancel();
+            _ = job.Result.ContinueWith(task => { _ = task.Exception; job.Lifetime.Dispose(); }, TaskScheduler.Default);
+        }
+        running.Clear(); attempted.Clear(); receipts.Clear();
     }
 }
 

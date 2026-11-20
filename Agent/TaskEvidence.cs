@@ -13,7 +13,9 @@ public class AgentTaskEvidence : GlobalNPC
     static readonly Dictionary<int, int> Kills = new();
     static readonly HashSet<(int X, int Y)> LootedChests = new();
     static readonly HashSet<(int X, int Y)> UnlockedLootedChests = new();
-    internal static void Reset() { Kills.Clear(); LootedChests.Clear(); UnlockedLootedChests.Clear(); }
+    internal static ulong ChestRevision { get; private set; }
+    internal static void NoteChestTransfer() => ChestRevision++;
+    internal static void Reset() { Kills.Clear(); LootedChests.Clear(); UnlockedLootedChests.Clear(); ChestRevision = 0; }
 
     internal sealed record ChestObservation(int X, int Y, bool Locked, Dictionary<int, int> Contents, Dictionary<int, int> Inventory);
     static Dictionary<int, int> Counts(IEnumerable<Item> items) => items.Where(i => i != null && !i.IsAir)
@@ -32,7 +34,9 @@ public class AgentTaskEvidence : GlobalNPC
         if (after == null) return false;
         bool transferred = before.Contents.Any(item => item.Value > after.Contents.GetValueOrDefault(item.Key)
             && after.Inventory.GetValueOrDefault(item.Key) > before.Inventory.GetValueOrDefault(item.Key));
-        if (!transferred || !LootedChests.Add((before.X, before.Y))) return false;
+        if (!transferred) return false;
+        NoteChestTransfer();
+        if (!LootedChests.Add((before.X, before.Y))) return false;
         if (before.Locked && !after.Locked) UnlockedLootedChests.Add((before.X, before.Y));
         return true;
     }

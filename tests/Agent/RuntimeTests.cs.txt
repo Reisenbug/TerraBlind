@@ -203,6 +203,7 @@ static class RuntimeTests
                 && banked["value"]?["portable_bank_recovered"]?.GetValue<bool>() == true
                 && bankCalls.Count(name => name == "interact") == 2 && container == -1 && coins == 0,
                 "portable banking did not verify the coins and pick the bank back up");
+            await ParallelProposals();
             await RailHookBoost();
             Console.WriteLine("PASS: housing is reused and protected from navigation, surface desert routes are rejected, and default loot can be disabled");
         }
@@ -215,6 +216,88 @@ static class RuntimeTests
             AgentTools.Control.ReplaceHousing(Array.Empty<(int, int, int, int)>());
             directory.Delete(recursive: true);
         }
+    }
+
+    static async Task ParallelProposals()
+    {
+        var jobs = new ParallelAgentWork();
+        var roles = new[] { "inventory:equip", "inventory:cleanup", "dag:route", "dag:build" };
+        var starts = roles.Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
+        var outputs = roles.Select(_ => new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
+        for (int i = 0; i < roles.Length; i++)
+        {
+            int slot = i;
+            jobs.Offer(roles[i], "rev-1", _ => { starts[slot].SetResult(); return outputs[slot].Task; },
+                answer => answer, default);
+        }
+        await Task.WhenAll(starts.Select(start => start.Task)).WaitAsync(TimeSpan.FromSeconds(5));
+        Check(roles.All(role => !jobs.CanOffer(role, "rev-1")), "side agents could be duplicated against one snapshot");
+        outputs[2].SetResult(new JsonObject { ["accepted"] = true });
+        var deadline = System.Diagnostics.Stopwatch.StartNew();
+        while (jobs.Receipts().Count == 0 && deadline.Elapsed < TimeSpan.FromSeconds(5))
+        { jobs.Poll(default); await Task.Delay(5); }
+        Check(jobs.Receipts().Single()["worker"].ToString() == "dag:route"
+            && !outputs[0].Task.IsCompleted && !outputs[1].Task.IsCompleted && !outputs[3].Task.IsCompleted,
+            "a finished result waited for other models to complete");
+        jobs.Reset();
+        for (int i = 0; i < roles.Length; i++) outputs[i].TrySetResult(new JsonObject { ["accepted"] = true });
+        jobs.Poll(default);
+        Check(jobs.Receipts().Count == 0, "late proposals survived task cancellation");
+
+        AgentTools.Plan.Create(JsonNode.Parse("""
+            {"goal":"Find a site then build","mode":"dag","steps":[
+            {"id":"route","description":"Find route","depends_on":[],"script":"return {};","conditions":[{"kind":"permanent_health","count":200}]},
+            {"id":"build","description":"Prepare construction","depends_on":["route"],"script":"return {};","conditions":[{"kind":"item","type":444,"count":1}]}]}
+            """).AsObject(), AgentTaskEvidence.Measure);
+        try
+        {
+            var before = AgentTools.Plan.Snapshot();
+            string Stamp(int index) => before["steps"][index]["workflow"] + ":0";
+            var proposal = new JsonObject { ["script"] = "return tool('nav_to',{x:80,y:70});" };
+            var route = NativeAgent.ApplySuccessor("route", Stamp(0), proposal);
+            var building = NativeAgent.ApplySuccessor("build", Stamp(1), proposal);
+            var stale = NativeAgent.ApplySuccessor("route", Stamp(0), new JsonObject { ["script"] = "return tool('nav_to',{x:1,y:2});" });
+            Check(route["prepared_node"]?.ToString() == "route" && building["prepared_node"]?.ToString() == "build"
+                && stale.Count == 0 && AgentTools.Plan.Snapshot()["steps"][0]["script"].ToString() == proposal["script"].ToString(),
+                "independent proposals lost a valid sibling or overwrote a revised node");
+
+            var player = Game.LocalPlayer;
+            var original = (player.inventory[20], player.inventory[21], player.trashItem, Game.mouseItem);
+            try
+            {
+                player.inventory[20] = new Terraria.Item { type = 443, stack = 3 };
+                player.inventory[21] = new Terraria.Item { type = 444, stack = 2 };
+                player.trashItem = Game.mouseItem = new Terraria.Item();
+                var bag = PvpInventory.Review();
+                var facts = new JsonObject { ["bag"] = bag.DeepClone(), ["candidates"] = new JsonArray(20) };
+                foreach (double chance in new[] { 0.51, 0.96 })
+                {
+                    var judged = await NativeAgent.JudgeInventory("cleanup", facts, (request, _) =>
+                    {
+                        var criteria = request["questions"]["trash_0"]["criteria"].AsObject();
+                        Check(criteria.ContainsKey("slot_20") && !criteria.ContainsKey("slot_21"),
+                            "Jev was offered an item outside the reviewed candidates");
+                        return Task.FromResult(new JsonObject { ["answers"] = new JsonObject { ["trash_0"] = new JsonObject
+                        { ["choice"] = "slot_20", ["probabilities"] = new JsonObject { ["slot_20"] = chance } } } });
+                    }, default);
+                    Check(chance < 0.9 ? judged == null : judged?["trash_slots"]?[0]?.GetValue<int>() == 20,
+                        "uncertain Jev decisions did not defer to the inventory agent, or a decisive answer was lost");
+                }
+                var candidate = bag["inventory"].AsArray().OfType<JsonObject>().Where(i => i["slot"].GetValue<int>() is 20 or 21).ToArray();
+                var answer = new JsonObject { ["trash_slots"] = new JsonArray(20, 21) };
+                player.inventory[20].stack++;
+                var discarded = Agent.ApplyCleanup(bag, candidate, answer);
+                Check(discarded.Count == 0 && player.inventory[20].stack == 4 && player.inventory[21].stack == 2,
+                    "cleanup discarded a changed stack or a protected goal item");
+                player.inventory[20].stack--;
+                discarded = Agent.ApplyCleanup(bag, candidate, answer);
+                Check(discarded["slots_freed"]?.GetValue<int>() == 1 && player.inventory[20].IsAir && player.inventory[21].stack == 2,
+                    "the completed inventory proposal did not immediately free the verified slot");
+            }
+            finally { (player.inventory[20], player.inventory[21], player.trashItem, Game.mouseItem) = original; }
+        }
+        finally { AgentTools.Plan.Reset(); }
+        Console.WriteLine("PASS: parallel agents run independent jobs concurrently, apply the first valid result, and preserve newer revisions and protected items");
     }
 
     static async Task RailHookBoost()
