@@ -348,6 +348,8 @@ public static partial class AgentTools
     static readonly AsyncLocal<bool> preparedDispatch = new();
     static string pendingNode;
     internal static JsonObject LastContinuation;
+    sealed record PreparedFollowup(string Attempt, string Node, string Revision, string Code);
+    static PreparedFollowup preparedFollowup;
     static readonly HashSet<(int, int)> routeChests = new();
     static readonly Dictionary<(int, int), long> routeChestRetries = new();
     static bool routeLootEnabled;
@@ -410,6 +412,27 @@ public static partial class AgentTools
         var preparing = Plan.PreparationNodes(node, AgentTaskEvidence.Measure);
         return "node:" + node + ":" + Plan.ExecutionRevision(node) + ":"
             + string.Join(",", preparing.Select(id => id + ":" + Plan.ExecutionRevision(id.ToString())));
+    }
+
+    internal static string ActionAttempt(JsonNode action) => action?["handle"]?.ToString() is string handle
+        ? handle + ":" + action["attempt"] : null;
+
+    internal static string StepVersion(JsonNode step) => step == null ? null
+        : step["workflow"] + ":" + Plan.ExecutionRevision(step["id"].ToString()) + ":"
+            + ((step["condition_corrections"] as JsonArray)?.Count ?? 0);
+
+    internal static JsonObject StageActionFollowup(string attempt, string node, string revision, JsonObject answer)
+    {
+        if (answer?["script"] is not JsonValue value || !value.TryGetValue<string>(out var code)
+            || code.Length > 10000 || !AgentScript.ContainsInput(code)) return new JsonObject();
+        var action = Actions.HasPrimaryControl ? Actions.RunningPrimary() : Actions.LatestFinishedPrimary();
+        if (ActionAttempt(action) != attempt || action?["task_node"]?.ToString() != node || Actions.HasQueuedSuccessor)
+            return new JsonObject();
+        var step = Plan.Snapshot()["steps"].AsArray().FirstOrDefault(n => n["id"].ToString() == node);
+        if (step == null || step["status"]?.ToString() == "completed" || StepVersion(step) != revision
+            || step["script"]?.ToString().Trim() == code.Trim()) return new JsonObject();
+        preparedFollowup = new PreparedFollowup(attempt, node, revision, code);
+        return new JsonObject { ["prepared_followup"] = node, ["after_attempt"] = attempt };
     }
 
     internal static Task NotifyExecution(CodexAgent codex, CancellationToken token)
@@ -497,7 +520,12 @@ public static partial class AgentTools
         var preparationNodes = Plan.PreparationNodes(node, AgentTaskEvidence.Measure);
         notice["task_policy"] = TaskPolicyStatus();
         if (kind == "prepare_successor" && preparationNodes.Count > 0) notice["preparation_nodes"] = preparationNodes;
-        string instruction = kind == "prepare_successor"
+        bool followupRunning = kind == "prepare_successor" && LastContinuation?["mode"]?.ToString() == "prepared_followup"
+            && LastContinuation["started_handle"]?.ToString() == action["handle"]?.ToString();
+        if (followupRunning) notice["handoff"] = LastContinuation.DeepClone();
+        string instruction = followupRunning
+            ? "上一段动作已结束，提前写好的后续脚本现在正在运行。并行核对上一段结果与当前行动。发现问题时再调整；合适则继续行动并准备再下一段。"
+            : kind == "prepare_successor"
             ? "宿主执行变化：当前后台动作继续运行。task_policy未启用时先准备整趟反应并设置，使当前节点和后继节点同时受益。趁本轮准备已查证的后继script及适用的on_failure；preparation_nodes列出的节点目前只有准备代码，趁行进补齐行动。复用适用技能，结合runtime修订本轮可复用的逻辑。准备和只读查询保持当前动作运行。已有充分准备则沿用。"
             : "宿主执行变化：当前动作已经结束且没有后续动作运行。结合最新句柄与现场优先恢复有效行动；保留已完成进度，修改后续script或准备恢复，随后执行。";
         return Send();
@@ -561,18 +589,23 @@ public static partial class AgentTools
             || !Plan.RequiresNodeExecution || Main.LocalPlayer.dead || ContactEscapeActive) return;
         if (pendingNode != null)
         {
-            if (Watches.HasRecoveryBlocker || Plan.NeedsPreparation(pendingNode, AgentTaskEvidence.Measure)) return;
+            if (Watches.HasRecoveryBlocker) return;
+            var pendingPlan = Plan.Snapshot();
             string ready = pendingNode;
+            if (Plan.NeedsPreparation(ready, AgentTaskEvidence.Measure))
+                ready = NextPreparedNode(pendingPlan, allowPreparation: false);
+            if (ready == null) return;
             pendingNode = null;
-            if (Plan.Snapshot()["ready_steps"].AsArray().Any(n => n?.ToString() == ready))
+            if (pendingPlan["ready_steps"].AsArray().Any(n => n?.ToString() == ready))
                 StartPreparedNode(ready, LastContinuation?["after_handle"]?.ToString(), token);
             return;
         }
         var action = Actions.LatestFinishedPrimary();
         string handle = action?["handle"]?.ToString(), owner = action?["task_node"]?.ToString();
-        string execution = handle + ":" + action?["attempt"];
+        string execution = ActionAttempt(action);
         string attempt = execution + ":" + Plan.ExecutionRevision(owner);
-        if (handle == null || string.IsNullOrEmpty(owner) || continuedActions.Contains(attempt)) return;
+        bool followupArrived = preparedFollowup is { } staged && staged.Attempt == execution && staged.Node == owner;
+        if (handle == null || string.IsNullOrEmpty(owner) || !followupArrived && continuedActions.Contains(attempt)) return;
         var plan = Plan.Snapshot();
         var previous = plan["steps"].AsArray().FirstOrDefault(s => s["id"]?.ToString() == owner);
         if (previous == null) return;
@@ -583,6 +616,25 @@ public static partial class AgentTools
             || Plan.Advance(owner, AgentTaskEvidence.Measure)["verified"]?.GetValue<bool>() == true;
         bool prepared = !verified && (workflow?.HasPreparedContinuation(previous["script"]?.ToString(), action) == true
             || action["result"]?["resume_saved_node"] is JsonValue resumeSaved && resumeSaved.TryGetValue<bool>(out bool resume) && resume);
+        if (followupArrived)
+        {
+            var nextAction = preparedFollowup;
+            bool compatible = !verified && !prepared && nextAction.Revision == StepVersion(previous)
+                && FollowupCanRun(action, workflow);
+            if (compatible && (Watches.HasRecoveryBlocker || Main.LocalPlayer.suffocating)) return;
+            preparedFollowup = null;
+            if (compatible)
+            {
+                Plan.Revise(new JsonObject { ["expected_revision"] = plan["revision"].DeepClone(),
+                    ["reason"] = "Action completed; use prepared follow-up", ["nodes"] = new JsonArray(new JsonObject
+                    { ["id"] = owner, ["script"] = nextAction.Code }) }, AgentTaskEvidence.Measure);
+                continuedActions.Add(execution + ":" + Plan.ExecutionRevision(owner));
+                Watches.AcknowledgeResult(action);
+                StartPreparedNode(owner, handle, token, followup: true);
+                return;
+            }
+            if (continuedActions.Contains(attempt)) return;
+        }
         string recovery = previous["on_failure"]?.ToString();
         if (!verified && action["status"]?.ToString() == "failed" && !string.IsNullOrWhiteSpace(recovery)
             && (!recoveredActions.TryGetValue(execution, out string recovered) || recovered != recovery))
@@ -616,6 +668,19 @@ public static partial class AgentTools
             return;
         }
         StartPreparedNode(next, handle, token);
+    }
+
+    static bool FollowupCanRun(JsonObject action, ScriptProgress workflow)
+    {
+        if (action["tool"]?.ToString() != "run_script")
+            return workflow == null && action["status"]?.ToString() == "completed";
+        var receipt = action["result"] as JsonObject;
+        if (receipt == null || !Bool(receipt, "ok") || !Bool(receipt, "input_effects") || receipt["failure"] != null
+            || workflow?.Snapshot()["steps"].AsArray().Any(s => s["status"]?.ToString() == "uncertain") == true) return false;
+        var value = receipt["value"] as JsonObject;
+        return value?["wake"] == null && value?["blocked"] == null && value?["reason"] == null && value?["continue_after"] == null
+            && value?["handle"] == null && (action["status"]?.ToString() == "completed"
+                || value?["status"]?.ToString() == "yield" && value["error"] == null && value["outcome"] == null);
     }
 
     static string NextPreparedNode(JsonObject plan, bool allowPreparation = true)
@@ -653,12 +718,13 @@ public static partial class AgentTools
         return next == node ? null : next;
     }
 
-    static void StartPreparedNode(string next, string handle, CancellationToken token, string recovery = null)
+    static void StartPreparedNode(string next, string handle, CancellationToken token, string recovery = null, bool followup = false)
     {
         LastContinuation = new JsonObject { ["after_handle"] = handle, ["task_node"] = next,
             ["status"] = "starting", ["tick"] = Main.GameUpdateCount };
         var report = LastContinuation;
         if (recovery != null) report["mode"] = "recovery";
+        if (followup) report["mode"] = "prepared_followup";
         continuation = Task.Run(async () =>
         {
             preparedDispatch.Value = true;
@@ -666,6 +732,7 @@ public static partial class AgentTools
             try
             {
                 var args = new JsonObject { ["task_node"] = next };
+                if (followup) args["background"] = true;
                 JsonObject failedAction = null;
                 if (recovery != null)
                 {
@@ -709,10 +776,28 @@ public static partial class AgentTools
                 {
                     report["status"] = "returned"; report["ok"] = returned?["ok"]?.DeepClone();
                     report["error"] = returned?["error"]?.DeepClone();
+                    if (followup && returned?["handle"]?.ToString() is string started)
+                    {
+                        report["started_handle"] = started;
+                        if (Actions.PrimaryHandle == started) Watches.ResolveExecutionGap("execution_resumed");
+                    }
                     if (recovery != null && returned?["value"] is JsonObject recoveryValue)
                         report["recovery_reason"] = recoveryValue["reason"]?.DeepClone();
-                    if (returned?["ok"]?.ToString() == "false" || returned?["value"] is JsonObject value
-                        && (value["status"]?.ToString() is "yield" or "needs_review" || value["wake"] != null || value["error"] != null))
+                    var value = returned?["value"] as JsonObject;
+                    bool reviewRequired = returned?["ok"]?.ToString() == "false" || value != null
+                        && (value["status"]?.ToString() is "yield" or "needs_review" || value["wake"] != null || value["error"] != null);
+                    if (reviewRequired && recovery == null && !Actions.HasPrimaryControl && !Watches.HasRecoveryBlocker
+                        && returned?["ok"]?.ToString() == "true" && returned["failure"] == null
+                        && value?["status"]?.ToString() == "yield" && value["wake"] == null
+                        && value["error"] == null && value["continue_after"] == null && value["blocked"] == null
+                        && value["reason"] == null && value["next"] is JsonValue)
+                    {
+                        var plan = Plan.Snapshot();
+                        if (plan["ready_steps"].AsArray().Any(n => n?.ToString() == next))
+                            plan = Plan.Advance(next, AgentTaskEvidence.Measure);
+                        reviewRequired = !plan["steps"].AsArray().Any(n => n["id"]?.ToString() == next && n["status"]?.ToString() == "completed");
+                    }
+                    if (reviewRequired)
                     {
                         var localFailure = returned?["value"] is JsonObject uncovered && uncovered["reason"]?.ToString() == "uncovered_failure"
                             && uncovered["status"]?.ToString() == "needs_review" && uncovered["wake"] == null && uncovered["error"] == null
@@ -727,12 +812,11 @@ public static partial class AgentTools
                     }
                     else if (!Actions.HasPrimaryControl)
                     {
-                        var script = Plan.Script(next);
-                        bool continuing = Workflows.TryGetValue(script["workflow"].ToString(), out var workflow)
-                            && workflow.IntentContinuationReady(script["code"].ToString());
                         var plan = Plan.Snapshot();
-                        if (plan["ready_steps"].AsArray().Any(n => n?.ToString() == next))
-                            plan = Plan.Advance(next, AgentTaskEvidence.Measure);
+                        var step = plan["steps"].AsArray().FirstOrDefault(n => n["id"]?.ToString() == next);
+                        bool continuing = step != null && Workflows.TryGetValue(step["workflow"].ToString(), out var workflow)
+                            && workflow.IntentContinuationReady(step["script"].ToString());
+                        if (plan["ready_steps"].AsArray().Any(n => n?.ToString() == next)) plan = Plan.Advance(next, AgentTaskEvidence.Measure);
                         if (plan["steps"].AsArray().Any(n => n["id"]?.ToString() == next && n["status"]?.ToString() == "completed"))
                             pendingNode = NextPreparedNode(plan);
                         else if (!continuing) ReportExecutionGap(report, "script_returned_without_action_or_completion");
@@ -945,6 +1029,7 @@ public static partial class AgentTools
             System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
         ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); PreparationMaterials.Clear(); Discoveries.Clear(); continuedActions.Clear();
         recoveredActions.Clear(); deferredNodes.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null;
+        preparedFollowup = null;
         inventoryPreparationNotified = false; LastContinuation = ExecutionContinuity = LastRouteLoot = null;
         routeChests.Clear(); routeChestRetries.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset();
         Watches.DefaultRouteLoot = allowPassingChestLoot;

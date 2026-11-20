@@ -336,7 +336,7 @@ public static class AgentScript
             + "节点可提供on_failure（JS函数体），在赶路时提前准备失败恢复；task_plan_patch nodes仅修改on_failure时保持当前动作运行，空串移除。动作失败后宿主直接执行一次已保存恢复，使用独立一次性上下文，不占持久workflow名额；failure是原动作的完整action_query结果（含handle/tool/args/attempt/result），原script与step进度保留。核验修复结果后在同段JS恢复failure.handle；未覆盖的失败返回{status:'needs_review',handle:failure.handle,reason:'具体原因'}交回模型。模型直接调用action_query读取完整失败。死亡、窒息和其他主动决策事件独立处理。"
             + "DAG后台动作成功结束后，宿主按真实条件验收所属节点，并自动运行current_step中下一个就绪节点的已保存script，无需模型再次run_script。"
             + "动作成功但节点条件尚未满足时，宿主自动续跑该节点原workflow；用step保存句柄，查询已完成动作后执行下一项，不重复启动。"
-            + "可在赶路时用task_plan_patch准备后续节点；显式action_queue优先。危险事件、暂停、取消或脚本主动yield/wake时交回模型。脚本返回后既无动作也未达成条件会报告execution_gap，不空转。";
+            + "可在赶路时用task_plan_patch准备后续节点；显式action_queue优先。危险事件、暂停、取消或脚本明确要求审阅时交回模型。只有next提示的yield可以在条件已验收后自动交接。脚本返回后既无动作也未达成条件会报告execution_gap。";
         var queue = tools.First(t => t["function"]?["name"]?.ToString() == "action_queue")["function"];
         queue["parameters"]["properties"]["tool"]["enum"].AsArray().Add("run_script");
         queue["description"] = queue["description"].ToString()

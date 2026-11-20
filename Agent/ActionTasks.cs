@@ -72,6 +72,12 @@ public sealed class ActionTasks
     internal string ActiveAttempt { get { lock (gate) { var entry = active ?? attack; return entry == null ? null : entry.Id + ":" + entry.Attempt; } } }
     internal bool RunningScript { get { lock (gate) return active?.Tool == "run_script" && caller.Value == active.Id; } }
     internal bool RunningBackgroundFight { get { lock (gate) return attack is { Inline: false } && caller.Value == attack.Id; } }
+    internal JsonObject RunningPrimary()
+    {
+        lock (gate) return active is { Status: "running", Requested: null, ExecutionStarted: > 0 } entry
+            ? new JsonObject { ["handle"] = entry.Id, ["attempt"] = entry.Attempt, ["task_node"] = entry.Node,
+                ["tool"] = entry.Tool, ["args"] = entry.Args.DeepClone() } : null;
+    }
     internal JsonObject LatestFinishedPrimary()
     {
         lock (gate)

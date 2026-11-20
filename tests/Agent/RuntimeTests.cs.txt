@@ -3488,6 +3488,7 @@ static class RuntimeTests
             await TestDagRepairDuringDefense();
             await TestQueuedDagActions();
             await TestAutomaticDagContinuation();
+            await TestParallelActionFollowup();
             await TestVerifiedNodeHandoff();
             await TestTemporaryProgressHandoff();
             await TestBackgroundDescent();
@@ -3633,7 +3634,7 @@ static class RuntimeTests
         int oldMax = Game.LocalPlayer.statLifeMax;
         try
         {
-            foreach (string mode in new[] { "ready", "unmet", "danger", "cancelled", "within_node", "instant", "background", "late", "sibling" })
+            foreach (string mode in new[] { "ready", "unmet", "danger", "cancelled", "within_node", "instant", "background", "late", "sibling", "late_sibling", "verified_yield" })
             {
                 AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask();
                 Game.LocalPlayer.statLifeMax = mode == "unmet" ? 80 : 100;
@@ -3655,21 +3656,22 @@ static class RuntimeTests
                        "script":"return tool('action_start',{tool:'nav_to',args:{x:16,y:34}});",
                        "conditions":[{"kind":"item","type":191,"count":1}]}]}
                     """).AsObject(), _ => 0);
-                if (mode is "late" or "sibling")
+                if (mode is "late" or "sibling" or "late_sibling")
                 {
                     var patch = new JsonObject { ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(),
                         ["reason"] = "Leave the first successor in preparation", ["nodes"] = new JsonArray(new JsonObject
                         { ["id"] = "collect", ["script"] = "return {status:'yield',next:'prepare_node_script'};" }) };
-                    if (mode == "sibling") patch["add_nodes"] = JsonNode.Parse("""
+                    if (mode is "sibling" or "late_sibling") patch["add_nodes"] = JsonNode.Parse("""
                         [{"id":"scout","description":"Scout","depends_on":["travel"],
                           "script":"return tool('action_start',{tool:'nav_to',args:{x:18,y:34}});",
                           "conditions":[{"kind":"item","type":192,"count":1}]}]
                         """);
+                    if (mode == "late_sibling") patch["add_nodes"][0]["script"] = "return {status:'yield',next:'prepare_node_script'};";
                     AgentTools.Plan.Revise(patch, _ => 0);
                 }
-                if (mode == "instant")
+                if (mode is "instant" or "verified_yield")
                 {
-                    AgentTools.Plan.Revise(new JsonObject
+                    var patch = new JsonObject
                     {
                         ["expected_revision"] = AgentTools.Plan.Snapshot()["revision"].DeepClone(), ["reason"] = "instant node handoff",
                         ["add_nodes"] = JsonNode.Parse("""
@@ -3678,7 +3680,10 @@ static class RuntimeTests
                             "conditions":[{"kind":"permanent_health","count":100}]}]
                             """),
                         ["nodes"] = new JsonArray(new JsonObject { ["id"] = "collect", ["depends_on"] = new JsonArray("inspect") })
-                    }, _ => 0);
+                    };
+                    if (mode == "verified_yield")
+                        patch["add_nodes"][0]["script"] = "return {status:'yield',next:'Proceed to the collection site'};";
+                    AgentTools.Plan.Revise(patch, _ => 0);
                 }
                 if (mode == "background")
                 {
@@ -3768,26 +3773,27 @@ static class RuntimeTests
                 if (mode == "cancelled") cancel.Cancel();
                 var elapsed = System.Diagnostics.Stopwatch.StartNew();
                 AgentTools.ContinuePreparedNode(cancel.Token);
-                if (mode == "late")
+                if (mode is "late" or "late_sibling")
                 {
                     Check(starts == 1 && AgentTools.LastContinuation?["status"]?.ToString() == "awaiting_preparation",
                         "handoff ran a placeholder before the worker supplied an action");
-                    var step = AgentTools.Plan.Snapshot()["steps"][1];
-                    string stamp = step["workflow"] + ":" + AgentTools.Plan.ExecutionRevision("collect");
-                    Check(NativeAgent.ApplySuccessor("collect", stamp, new JsonObject
+                    string id = mode == "late_sibling" ? "scout" : "collect";
+                    var step = AgentTools.Plan.Snapshot()["steps"].AsArray().First(node => node["id"].ToString() == id);
+                    string stamp = step["workflow"] + ":" + AgentTools.Plan.ExecutionRevision(id);
+                    Check(NativeAgent.ApplySuccessor(id, stamp, new JsonObject
                         { ["script"] = "return tool('action_start',{tool:'nav_to',args:{x:16,y:34}});" })["prepared_node"] != null,
                         "late worker's actionable plan was rejected");
                     elapsed.Restart();
                     AgentTools.ContinuePreparedNode(cancel.Token);
                 }
-                if (mode is "ready" or "instant" or "late" or "sibling")
+                if (mode is "ready" or "instant" or "late" or "sibling" or "late_sibling" or "verified_yield")
                 {
-                    if (mode == "instant")
+                    if (mode is "instant" or "verified_yield")
                         await PumpUntil(() => { AgentTools.ContinuePreparedNode(cancel.Token); return starts == 2; });
                     await PumpUntil(() => starts == 2 && AgentTools.LastContinuation?["status"]?.ToString() == "returned");
                     Check(elapsed.ElapsedMilliseconds < 1000 && AgentTools.Plan.Snapshot()["steps"][0]["status"].ToString() == "completed",
                         $"prepared DAG handoff mode={mode} elapsed_ms={elapsed.ElapsedMilliseconds} status={AgentTools.Plan.Snapshot()["steps"][0]["status"]} threads={System.Threading.ThreadPool.ThreadCount} pending={System.Threading.ThreadPool.PendingWorkItemCount}");
-                    if (mode == "sibling") Check(AgentTools.LastContinuation["task_node"].ToString() == "scout",
+                    if (mode is "sibling" or "late_sibling") Check(AgentTools.LastContinuation["task_node"].ToString() == "scout",
                         "a placeholder blocked a ready independent action");
                     AgentTools.ContinuePreparedNode(cancel.Token);
                     Check(starts == 2, "automatic continuation replayed the same predecessor");
@@ -5164,6 +5170,100 @@ static class RuntimeTests
         {
             AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Workflows.Clear();
             Game.LocalPlayer.statLifeMax = oldHealth; HttpServerSystem.Handler = previous;
+        }
+    }
+
+    static async Task TestParallelActionFollowup()
+    {
+        var previous = HttpServerSystem.Handler;
+        int oldHealth = Game.LocalPlayer.statLifeMax;
+        try
+        {
+            foreach (string scenario in new[] { "prepared", "late", "blocked", "stale", "verified" })
+            {
+                AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask(); AgentTools.Workflows.Clear();
+                Game.LocalPlayer.statLifeMax = 100;
+                int starts = 0;
+                bool finish = false;
+                HttpServerSystem.Handler = (path, _) =>
+                {
+                    if (path == "/nav_recede") { starts++; RecedingNav.Active = true; }
+                    return (200, path == "/nav_recede_done"
+                        ? new JsonObject { ["done"] = finish && starts == 1 }.ToJsonString()
+                        : "{\"accepted\":true}");
+                };
+                var plan = JsonNode.Parse("""
+                    {"goal":"collect equipment then increase health","mode":"dag","steps":[
+                    {"id":"prepare","description":"prepare for exploration","depends_on":[],"script":"placeholder",
+                     "conditions":[{"kind":"permanent_health","count":200}]}]}
+                    """).AsObject();
+                plan["steps"][0]["script"] = "tool('nav_to',{x:12,y:34}); return {status:'yield',"
+                    + (scenario == "blocked" ? "blocked:'unsafe_to_continue'};" : "next:'collect equipment'};");
+                AgentTools.Plan.Create(plan, AgentTaskEvidence.Measure);
+                var predecessor = JsonNode.Parse(await Execute(AgentTools.Execute("run_script",
+                    new JsonObject { ["task_node"] = "prepare", ["background"] = true }, default)));
+                await PumpUntil(() => starts == 1);
+                var workerStarted = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var proposal = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var jobs = new ParallelAgentWork();
+                var pendingPlan = AgentTools.Plan.Snapshot();
+                NativeAgent.OfferActionFollowup(jobs, pendingPlan, JsonValue.Create("reach 200 health"), (role, facts, _) =>
+                {
+                    Check(role == "action_followup", "wrong preparation role");
+                    workerStarted.SetResult(facts);
+                    return proposal.Task;
+                }, default);
+                JsonObject seen = await workerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Check(starts == 1 && AgentTools.Actions.HasPrimaryControl
+                    && seen["active_action"]["handle"].ToString() == predecessor["handle"].ToString(),
+                    "follow-up preparation did not overlap the first input action");
+                if (scenario == "stale")
+                    AgentTools.Plan.Revise(new JsonObject { ["expected_revision"] = pendingPlan["revision"].DeepClone(),
+                        ["reason"] = "user updated the plan", ["nodes"] = new JsonArray(new JsonObject
+                        { ["id"] = "prepare", ["on_failure"] = "" }) }, AgentTaskEvidence.Measure);
+                async Task Publish()
+                {
+                    proposal.SetResult(new JsonObject { ["script"] = "return tool('nav_to',{x:16,y:34});" });
+                    await PumpUntil(() =>
+                    {
+                        jobs.Poll(default);
+                        return jobs.CanOffer("dag:action_followup", "unused");
+                    });
+                    Check(jobs.Receipts().Count == (scenario == "stale" ? 0 : 1), "worker publication did not respect the plan revision");
+                }
+                if (scenario != "late") await Publish();
+                Check(starts == 1, "worker wrote into an active input channel");
+                if (scenario == "verified") Game.LocalPlayer.statLifeMax = 200;
+                finish = true;
+                await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
+                var timer = System.Diagnostics.Stopwatch.StartNew();
+                AgentTools.ContinuePreparedNode(default);
+                if (scenario == "late")
+                {
+                    Check(starts == 1, "an unprepared follow-up started");
+                    await Publish();
+                    timer.Restart();
+                    AgentTools.ContinuePreparedNode(default);
+                }
+                if (scenario is "prepared" or "late")
+                {
+                    await PumpUntil(() => starts == 2 && AgentTools.LastContinuation?["started_handle"] != null);
+                    Check(AgentTools.LastContinuation?["mode"]?.ToString() == "prepared_followup" && AgentTools.Actions.HasPrimaryControl
+                        && AgentTools.Plan.Incomplete && timer.ElapsedMilliseconds < 1000,
+                        "completion waited for another decision or marked unmet work complete");
+                    Console.WriteLine($"ACTION_FOLLOWUP scenario={scenario} handoff_ms={timer.ElapsedMilliseconds} completion_model_calls=0");
+                }
+                else Check(starts == 1 && AgentTools.Plan.Snapshot()["steps"][0]["script"].ToString() != "return tool('nav_to',{x:16,y:34});",
+                    "blocked or stale follow-up replaced the plan");
+                if (scenario == "verified") Check(!AgentTools.Plan.Incomplete, "follow-up kept playing after the validated goal ended");
+                jobs.Reset();
+                AgentTools.Stop(); await PumpUntil(() => !AgentTools.Actions.HasActive);
+            }
+        }
+        finally
+        {
+            AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.Workflows.Clear();
+            HttpServerSystem.Handler = previous; Game.LocalPlayer.statLifeMax = oldHealth;
         }
     }
 

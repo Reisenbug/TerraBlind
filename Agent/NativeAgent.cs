@@ -237,7 +237,7 @@ public class NativeAgent : ModSystem
     async Task<JsonObject> RequestProposal(string role, JsonObject facts, string executable, string cwd, string model, CancellationToken token)
     {
         var tools = new JsonArray(proposalTool.DeepClone());
-        bool successor = role == "successor";
+        bool successor = role is "successor" or "action_followup";
         if (!successor)
         {
             using var fast = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -257,6 +257,7 @@ public class NativeAgent : ModSystem
         {
             "equip" => "Evaluate the carried equipment against the equipped gear, current goal and progress. Submit {inventory_slot,equipment_slot} for one clear upgrade, or {}. Use only the supplied slots. Prefer survivability and practical mobility.",
             "cleanup" => "Review disposal candidates in the context of the current goal and inventory. Submit {trash_slots:[...]} with up to three stacks safe to discard entirely. Consider replacements, recipes, rarity and utility. Return an empty list when uncertain. Only use slots in candidates.",
+            "action_followup" => "The supplied action is still running. Prepare the next useful action assuming its effects succeed. Continue the supplied DAG node toward its unmet conditions. Submit {script:string}, or {} if the current script already has enough work to reach the conditions. Write executable TerraBlind JavaScript. At runtime check the live result and current inventory or location where they affect the next action. Do not repeat the running action merely to reproduce its effects. Use direct tool calls such as tool('nav_to',args); the host will run this as a background script. Preserve user constraints, goal, and permissions. Only query facts while preparing.",
             _ => "Prepare the supplied DAG node as an executable TerraBlind JavaScript script. The current action continues. Query only facts needed to prepare this node. Submit {script:string} or {} if the facts do not support an executable script. Use tool(name,args), verify actual node conditions with tool('task_step',{action:'verify'}), and return a concrete blocked reason when needed. Preserve the goal, dependencies and permissions. Do not change the plan or call tools that mutate the game."
         };
         JsonObject proposal = null;
@@ -388,7 +389,7 @@ public class NativeAgent : ModSystem
         _preparationTick = now + 15;
         string owner = AgentTools.Actions.ActiveNode;
         var opportunities = AgentTools.Plan.PreparationNodes(owner, AgentTaskEvidence.Measure);
-        if (opportunities.Count == 0) return;
+        if (opportunities.Count == 0 && owner == null) return;
         var graph = AgentTools.Plan.Snapshot();
         var ready = graph["ready_steps"].AsArray().Select(step => step.ToString()).ToHashSet();
         foreach (var node in opportunities)
@@ -408,6 +409,33 @@ public class NativeAgent : ModSystem
             _parallel.Offer("dag:" + id, offer, ct => propose("successor", facts, ct),
                 answer => ApplySuccessor(id, stamp, answer), token);
         }
+        if (AgentTools.ControlSession.PrimaryActive)
+            OfferActionFollowup(_parallel, graph, _goalOptions?["objective"], propose, token);
+    }
+
+    internal static void OfferActionFollowup(ParallelAgentWork jobs, JsonObject graph, JsonNode objective,
+        Func<string, JsonObject, CancellationToken, Task<JsonObject>> propose, CancellationToken token)
+    {
+        if (AgentTools.Actions.HasQueuedSuccessor) return;
+        var running = AgentTools.Actions.RunningPrimary();
+        string owner = running?["task_node"]?.ToString();
+        if (string.IsNullOrEmpty(owner)) return;
+        var steps = graph["steps"].AsArray();
+        var step = steps.FirstOrDefault(n => n["id"].ToString() == owner);
+        if (step == null || step["status"]?.ToString() == "completed" || steps.Any(n => n["status"]?.ToString() != "completed"
+            && n["depends_on"].AsArray().Any(id => id.ToString() == owner))) return;
+        string attempt = AgentTools.ActionAttempt(running), version = AgentTools.StepVersion(step);
+        const string key = "dag:action_followup";
+        if (!jobs.CanOffer(key, attempt + ":" + version)) return;
+        AgentTools.Plan.Observe(AgentTaskEvidence.Measure);
+        step = AgentTools.Plan.Snapshot()["steps"].AsArray().First(n => n["id"].ToString() == owner);
+        running["live_tool"] = AgentTools.ControlSession.Tool;
+        var facts = new JsonObject { ["goal"] = graph["goal"]?.DeepClone(), ["objective"] = objective?.DeepClone(),
+            ["node"] = step.DeepClone(), ["active_action"] = running, ["inventory"] = PvpInventory.Snapshot(),
+            ["position_tiles"] = new JsonArray(Main.LocalPlayer.Center.X / 16, Main.LocalPlayer.Center.Y / 16),
+            ["tools"] = "Use action_query and get_state inside the script to check current results. Scripts can use nav_to, gather, collect_treasure, build_house, craft_to_slot, equip_item, task_step and existing skills with verified arguments." };
+        jobs.Offer(key, attempt + ":" + version, ct => propose("action_followup", facts, ct),
+            answer => AgentTools.StageActionFollowup(attempt, owner, version, answer), token);
     }
 
     static HashSet<int> ProtectedItems(JsonObject plan)
@@ -752,7 +780,12 @@ public class NativeAgent : ModSystem
                         preparedAttempt = preparingAttempt;
                         var healthNotices = await OnMain(AgentTools.Watches.TakeHealthNotices, token);
                         var opportunities = await OnMain(AgentTools.Watches.Advisories, token);
-                        input = "并行观察：后台动作继续。补齐当前节点on_failure和后继script；独立动作的父脚本已退出时用action_queue衔接。"
+                        var handoff = await OnMain(() => AgentTools.LastContinuation?["mode"]?.ToString() == "prepared_followup"
+                            && AgentTools.LastContinuation["started_handle"]?.ToString() == AgentTools.Actions.PrimaryHandle
+                            ? AgentTools.LastContinuation.DeepClone() : null, token);
+                        input = (handoff != null
+                            ? "并行观察：上一段动作已结束，提前写好的后续脚本正在执行。核对上一段实际结果与当前行动，发现问题时再调整。交接：" + handoff.ToJsonString()
+                            : "并行观察：后台动作继续。补齐当前节点on_failure和后继script；独立动作的父脚本已退出时用action_queue衔接。")
                             + "\n待补齐节点：" + preparation.Nodes.ToJsonString()
                             + "\n健康通知：" + healthNotices.ToJsonString()
                             + "\n沿途机会：" + opportunities.ToJsonString(AgentTools.ModelJson)
