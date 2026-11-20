@@ -348,8 +348,9 @@ public static partial class AgentTools
     static readonly AsyncLocal<bool> preparedDispatch = new();
     static string pendingNode;
     internal static JsonObject LastContinuation;
-    sealed record PreparedFollowup(string Attempt, string Node, string Revision, string Code);
+    sealed record PreparedFollowup(string ActionKey, string Node, string Revision, string Code);
     static PreparedFollowup preparedFollowup;
+    static (string Attempt, bool CleanHandoff) lastInlineHandoff;
     static readonly HashSet<(int, int)> routeChests = new();
     static readonly Dictionary<(int, int), long> routeChestRetries = new();
     static bool routeLootEnabled;
@@ -417,23 +418,40 @@ public static partial class AgentTools
     internal static string ActionAttempt(JsonNode action) => action?["handle"]?.ToString() is string handle
         ? handle + ":" + action["attempt"] : null;
 
+    internal static string FollowupKey(JsonNode action) => action?["script_invocation"]?.GetValue<long>() is > 0 and var invocation
+        ? "script:" + invocation : ActionAttempt(action);
+
     internal static string StepVersion(JsonNode step) => step == null ? null
         : step["workflow"] + ":" + Plan.ExecutionRevision(step["id"].ToString()) + ":"
             + ((step["condition_corrections"] as JsonArray)?.Count ?? 0);
 
-    internal static JsonObject StageActionFollowup(string attempt, string node, string revision, JsonObject answer)
+    internal static JsonObject StageActionFollowup(string actionKey, string node, string revision, JsonObject answer)
     {
         if (answer?["script"] is not JsonValue value || !value.TryGetValue<string>(out var code)
             || code.Length > 10000 || !AgentScript.ContainsInput(code)) return new JsonObject();
         var action = Actions.HasPrimaryControl ? Actions.RunningPrimary() : Actions.LatestFinishedPrimary();
-        if (ActionAttempt(action) != attempt || action?["task_node"]?.ToString() != node || Actions.HasQueuedSuccessor)
+        if (FollowupKey(action) != actionKey || action?["task_node"]?.ToString() != node || Actions.HasQueuedSuccessor)
             return new JsonObject();
         var step = Plan.Snapshot()["steps"].AsArray().FirstOrDefault(n => n["id"].ToString() == node);
         if (step == null || step["status"]?.ToString() == "completed" || StepVersion(step) != revision
             || step["script"]?.ToString().Trim() == code.Trim()) return new JsonObject();
-        preparedFollowup = new PreparedFollowup(attempt, node, revision, code);
-        return new JsonObject { ["prepared_followup"] = node, ["after_attempt"] = attempt };
+        preparedFollowup = new PreparedFollowup(actionKey, node, revision, code);
+        return new JsonObject { ["prepared_followup"] = node, ["after_attempt"] = ActionAttempt(action) };
     }
+
+    static bool RecordInlineHandoff(long invocation, JsonObject receipt)
+    {
+        var action = Actions.LatestFinishedPrimary(invocation);
+        if (action == null) return false;
+        lastInlineHandoff = (ActionAttempt(action), action["status"]?.ToString() == "completed"
+            && Bool(receipt, "ok") && Bool(receipt, "input_effects") && receipt["failure"] == null
+            && PlainHandoff(receipt["value"] as JsonObject));
+        return lastInlineHandoff.CleanHandoff && preparedFollowup is { } staged && staged.ActionKey == FollowupKey(action);
+    }
+
+    static bool PlainHandoff(JsonObject value) => value?["status"]?.ToString() == "yield"
+        && value["wake"] == null && value["blocked"] == null && value["reason"] == null && value["error"] == null
+        && value["outcome"] == null && value["ok"] == null && value["done"] == null && value["continue_after"] == null && value["handle"] == null;
 
     internal static Task NotifyExecution(CodexAgent codex, CancellationToken token)
     {
@@ -604,7 +622,7 @@ public static partial class AgentTools
         string handle = action?["handle"]?.ToString(), owner = action?["task_node"]?.ToString();
         string execution = ActionAttempt(action);
         string attempt = execution + ":" + Plan.ExecutionRevision(owner);
-        bool followupArrived = preparedFollowup is { } staged && staged.Attempt == execution && staged.Node == owner;
+        bool followupArrived = preparedFollowup is { } staged && staged.ActionKey == FollowupKey(action) && staged.Node == owner;
         if (handle == null || string.IsNullOrEmpty(owner) || !followupArrived && continuedActions.Contains(attempt)) return;
         var plan = Plan.Snapshot();
         var previous = plan["steps"].AsArray().FirstOrDefault(s => s["id"]?.ToString() == owner);
@@ -619,6 +637,7 @@ public static partial class AgentTools
         if (followupArrived)
         {
             var nextAction = preparedFollowup;
+            if (!verified && !prepared && action["script_invocation"]?.GetValue<long>() > 0 && lastInlineHandoff.Attempt != execution) return;
             bool compatible = !verified && !prepared && nextAction.Revision == StepVersion(previous)
                 && FollowupCanRun(action, workflow);
             if (compatible && (Watches.HasRecoveryBlocker || Main.LocalPlayer.suffocating)) return;
@@ -672,15 +691,17 @@ public static partial class AgentTools
 
     static bool FollowupCanRun(JsonObject action, ScriptProgress workflow)
     {
+        if (workflow?.Snapshot()["steps"].AsArray().Any(s => s["status"]?.ToString() == "uncertain") == true) return false;
         if (action["tool"]?.ToString() != "run_script")
-            return workflow == null && action["status"]?.ToString() == "completed";
+            return action["script_invocation"]?.GetValue<long>() > 0
+                ? lastInlineHandoff.CleanHandoff && lastInlineHandoff.Attempt == ActionAttempt(action)
+                : workflow == null && action["status"]?.ToString() == "completed";
         var receipt = action["result"] as JsonObject;
-        if (receipt == null || !Bool(receipt, "ok") || !Bool(receipt, "input_effects") || receipt["failure"] != null
-            || workflow?.Snapshot()["steps"].AsArray().Any(s => s["status"]?.ToString() == "uncertain") == true) return false;
+        if (receipt == null || !Bool(receipt, "ok") || !Bool(receipt, "input_effects") || receipt["failure"] != null) return false;
+        if (PlainHandoff(receipt["value"] as JsonObject)) return true;
         var value = receipt["value"] as JsonObject;
         return value?["wake"] == null && value?["blocked"] == null && value?["reason"] == null && value?["continue_after"] == null
-            && value?["handle"] == null && (action["status"]?.ToString() == "completed"
-                || value?["status"]?.ToString() == "yield" && value["error"] == null && value["outcome"] == null);
+            && value?["handle"] == null && action["status"]?.ToString() == "completed";
     }
 
     static string NextPreparedNode(JsonObject plan, bool allowPreparation = true)
@@ -797,7 +818,9 @@ public static partial class AgentTools
                             plan = Plan.Advance(next, AgentTaskEvidence.Measure);
                         reviewRequired = !plan["steps"].AsArray().Any(n => n["id"]?.ToString() == next && n["status"]?.ToString() == "completed");
                     }
-                    if (reviewRequired)
+                    if (reviewRequired && recovery == null && returned?["handoff"]?["status"]?.ToString() == "prepared_handoff")
+                        report["status"] = "prepared_handoff";
+                    else if (reviewRequired)
                     {
                         var localFailure = returned?["value"] is JsonObject uncovered && uncovered["reason"]?.ToString() == "uncovered_failure"
                             && uncovered["status"]?.ToString() == "needs_review" && uncovered["wake"] == null && uncovered["error"] == null
@@ -1030,6 +1053,7 @@ public static partial class AgentTools
         ClearTaskPolicy(true); AgentModelOutput.Clear(); Tracking.Clear(); PreparationMaterials.Clear(); Discoveries.Clear(); continuedActions.Clear();
         recoveredActions.Clear(); deferredNodes.Clear(); pendingNode = lastExecutionNotice = PreparationNotifiedContext = null;
         preparedFollowup = null;
+        lastInlineHandoff = default;
         inventoryPreparationNotified = false; LastContinuation = ExecutionContinuity = LastRouteLoot = null;
         routeChests.Clear(); routeChestRetries.Clear(); routeLootEnabled = false; gapStarted = null; gapReported = false; Watches.Reset();
         Watches.DefaultRouteLoot = allowPassingChestLoot;
@@ -1946,7 +1970,7 @@ public static partial class AgentTools
         if (name == "fight" && !AgentPermissions.Attack) return await Execute(name, args, token);
         if (Actions.RunningScript) return await ExecuteWithTaskPolicy(name, args, token);
         await NativeAgent.OnMain(() => { Watches.EnsureDefaults(); return true; }, token);
-        string handle = Actions.Start(name, args, root, inline: true)["handle"].ToString();
+        string handle = Actions.Start(name, args, root, inline: true, scriptInvocation: scriptInvocation.Value)["handle"].ToString();
         while (true)
         {
             var current = await Actions.Query(handle, 250, token);
@@ -2505,13 +2529,14 @@ public static partial class AgentTools
                     {
                         string active = Actions.ActiveHandle;
                         if (active == scriptHandle) active = null;
+                        bool hasFollowup = !queuedScript && active == null && RecordInlineHandoff(currentInvocation, result);
                         var value = result["value"] as JsonObject;
                         bool review = !Bool(result, "ok") || value?["wake"] is JsonObject || value?["status"]?.ToString() == "needs_review";
-                        var handoff = new JsonObject { ["status"] = active != null ? "action_running"
+                        var handoff = new JsonObject { ["status"] = active != null ? "action_running" : hasFollowup ? "prepared_handoff"
                             : review ? "review_requested"
                             : Text(args, "task_node") != "" ? "verify_and_continue" : "returned_to_caller",
                             ["active_handle"] = active };
-                        if (active == null && !queuedScript && Plan.Incomplete
+                        if (active == null && !queuedScript && Plan.Incomplete && !hasFollowup
                             && NativeAgent.GoalState?["native"]?["status"]?.ToString() == "active")
                             Watches.ExecutionFault(new JsonObject { ["reason"] = "foreground_script_returned_without_action",
                                 ["task_node"] = result["task_node"]?.DeepClone(), ["handoff"] = handoff.DeepClone() });

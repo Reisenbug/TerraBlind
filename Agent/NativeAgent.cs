@@ -392,6 +392,8 @@ public class NativeAgent : ModSystem
         if (opportunities.Count == 0 && owner == null) return;
         var graph = AgentTools.Plan.Snapshot();
         var ready = graph["ready_steps"].AsArray().Select(step => step.ToString()).ToHashSet();
+        if (AgentTools.ControlSession.PrimaryActive)
+            OfferActionFollowup(_parallel, graph, _goalOptions?["objective"], propose, token);
         foreach (var node in opportunities)
         {
             string id = node.GetValue<string>();
@@ -409,8 +411,6 @@ public class NativeAgent : ModSystem
             _parallel.Offer("dag:" + id, offer, ct => propose("successor", facts, ct),
                 answer => ApplySuccessor(id, stamp, answer), token);
         }
-        if (AgentTools.ControlSession.PrimaryActive)
-            OfferActionFollowup(_parallel, graph, _goalOptions?["objective"], propose, token);
     }
 
     internal static void OfferActionFollowup(ParallelAgentWork jobs, JsonObject graph, JsonNode objective,
@@ -422,20 +422,21 @@ public class NativeAgent : ModSystem
         if (string.IsNullOrEmpty(owner)) return;
         var steps = graph["steps"].AsArray();
         var step = steps.FirstOrDefault(n => n["id"].ToString() == owner);
-        if (step == null || step["status"]?.ToString() == "completed" || steps.Any(n => n["status"]?.ToString() != "completed"
-            && n["depends_on"].AsArray().Any(id => id.ToString() == owner))) return;
-        string attempt = AgentTools.ActionAttempt(running), version = AgentTools.StepVersion(step);
+        if (step == null || step["status"]?.ToString() == "completed") return;
+        string actionKey = AgentTools.FollowupKey(running), version = AgentTools.StepVersion(step);
         const string key = "dag:action_followup";
-        if (!jobs.CanOffer(key, attempt + ":" + version)) return;
+        if (!jobs.CanOffer(key, actionKey + ":" + version)) return;
         AgentTools.Plan.Observe(AgentTaskEvidence.Measure);
         step = AgentTools.Plan.Snapshot()["steps"].AsArray().First(n => n["id"].ToString() == owner);
         running["live_tool"] = AgentTools.ControlSession.Tool;
         var facts = new JsonObject { ["goal"] = graph["goal"]?.DeepClone(), ["objective"] = objective?.DeepClone(),
             ["node"] = step.DeepClone(), ["active_action"] = running, ["inventory"] = PvpInventory.Snapshot(),
+            ["downstream"] = new JsonArray(steps.Where(n => n["depends_on"].AsArray().Any(id => id.ToString() == owner))
+                .Select(n => new JsonObject { ["id"] = n["id"].DeepClone(), ["description"] = n["description"].DeepClone() }).ToArray<JsonNode>()),
             ["position_tiles"] = new JsonArray(Main.LocalPlayer.Center.X / 16, Main.LocalPlayer.Center.Y / 16),
             ["tools"] = "Use action_query and get_state inside the script to check current results. Scripts can use nav_to, gather, collect_treasure, build_house, craft_to_slot, equip_item, task_step and existing skills with verified arguments." };
-        jobs.Offer(key, attempt + ":" + version, ct => propose("action_followup", facts, ct),
-            answer => AgentTools.StageActionFollowup(attempt, owner, version, answer), token);
+        jobs.Offer(key, actionKey + ":" + version, ct => propose("action_followup", facts, ct),
+            answer => AgentTools.StageActionFollowup(actionKey, owner, version, answer), token);
     }
 
     static HashSet<int> ProtectedItems(JsonObject plan)

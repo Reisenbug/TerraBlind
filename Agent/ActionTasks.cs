@@ -20,6 +20,7 @@ public sealed class ActionTasks
         public int Attempt;
         public int TaskSerial;
         public bool Inline;
+        public long ScriptInvocation;
         public CancellationTokenSource Cancel;
         public Task Running;
         public CancellationToken Root;
@@ -76,15 +77,18 @@ public sealed class ActionTasks
     {
         lock (gate) return active is { Status: "running", Requested: null, ExecutionStarted: > 0 } entry
             ? new JsonObject { ["handle"] = entry.Id, ["attempt"] = entry.Attempt, ["task_node"] = entry.Node,
-                ["tool"] = entry.Tool, ["args"] = entry.Args.DeepClone() } : null;
+                ["tool"] = entry.Tool, ["args"] = entry.Args.DeepClone(), ["script_invocation"] = entry.ScriptInvocation } : null;
     }
-    internal JsonObject LatestFinishedPrimary()
+    internal JsonObject LatestFinishedPrimary(long scriptInvocation = 0)
     {
         lock (gate)
         {
             var entry = entries.Values.Where(e => e.TaskSerial == taskSerial && e.Tool != "fight" && e.ExecutionEnded > 0)
                 .OrderByDescending(e => e.ExecutionEnded).FirstOrDefault();
-            return entry?.Status is "completed" or "failed" ? Snapshot(entry) : null;
+            if (entry?.Status is not ("completed" or "failed") || scriptInvocation != 0 && entry.ScriptInvocation != scriptInvocation) return null;
+            var finished = Snapshot(entry);
+            finished["script_invocation"] = entry.ScriptInvocation;
+            return finished;
         }
     }
 
@@ -103,6 +107,9 @@ public sealed class ActionTasks
         or "mine_vein" or "chop_wood" or "collect_treasure" or "run_script";
 
     public JsonObject Start(string tool, JsonObject args, CancellationToken root, bool inline = false)
+        => Start(tool, args, root, inline, 0);
+
+    internal JsonObject Start(string tool, JsonObject args, CancellationToken root, bool inline, long scriptInvocation)
     {
         if (!Supports(tool)) throw new ArgumentException("不支持的后台动作。");
         root.ThrowIfCancellationRequested();
@@ -118,7 +125,7 @@ public sealed class ActionTasks
                         + paused.Id + "；若确需放弃，请先cancel并根据新事实调整方案。");
             }
             var entry = new Entry { Id = Guid.NewGuid().ToString("N"), Tool = tool, Args = (JsonObject)args.DeepClone(), Inline = inline,
-                Node = NodeContext.Value };
+                Node = NodeContext.Value, ScriptInvocation = scriptInvocation };
             entries.Add(entry.Id, entry);
             Launch(entry, root);
             return Snapshot(entry);
