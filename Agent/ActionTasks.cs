@@ -55,6 +55,15 @@ public sealed class ActionTasks
     { lock (gate) { var owner = tool == "fight" ? attack : active; return handingOff || owner != null && caller.Value != owner.Id; } }
     public bool HasActive { get { lock (gate) return active != null || attack != null; } }
     public bool HasPrimaryControl { get { lock (gate) return handingOff || active != null; } }
+    internal bool HasQueuedSuccessor
+    {
+        get
+        {
+            lock (gate)
+                return active != null && entries.Values.Any(entry => entry.After == active.Id
+                    && entry.Status == "queued" && entry.TaskSerial == taskSerial && !entry.Root.IsCancellationRequested);
+        }
+    }
     public bool HasAttack { get { lock (gate) return attack != null; } }
     public string ActiveHandle { get { lock (gate) return active?.Id ?? attack?.Id; } }
     internal string ActiveNode { get { lock (gate) return active?.Node; } }

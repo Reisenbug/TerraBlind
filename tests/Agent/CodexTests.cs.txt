@@ -627,20 +627,24 @@ static class CodexTests
 
     static async Task InTurnCompaction()
     {
-        foreach (var (executing, holdReply, ends) in new[] { (false, false, false), (true, true, false), (true, false, false), (true, true, true) })
+        foreach (var (executing, queued, holdReply, ends) in new[] {
+            (false, false, false, false), (true, false, false, false), (true, true, true, false),
+            (true, true, false, false), (true, true, true, true) })
         {
             var actions = new ActionTasks(async (_, _, ct) => { await Task.Delay(Timeout.Infinite, ct); return "{}"; },
                 _ => Task.FromResult(new JsonObject()), _ => Task.CompletedTask);
             var action = executing ? actions.Start("nav_to", new JsonObject(), default) : null;
+            if (queued) actions.Enqueue(action["handle"].ToString(), "nav_to", new JsonObject(), null, default);
             var server = new Server { InputTokens = CodexAgent.ContextTokenLimit + 1000,
-                HoldFinalReply = holdReply, HoldCompaction = executing, RejectIdleInterrupt = executing && !holdReply };
+                HoldFinalReply = holdReply, HoldCompaction = queued, RejectIdleInterrupt = queued && !holdReply };
             using var agent = new CodexAgent((_, _) => server.Connect());
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var goal = new JsonObject { ["objective"] = "continue the current action", ["request"] = "compact-active-action" };
             var run = agent.RunAsync("continue", "", "", "fixture", "system", Tools,
                 (_, _, _) => Task.FromResult("{\"running\":true}"), _ => { }, timeout.Token, goal,
-                canCompact: () => Task.FromResult(actions.HasPrimaryControl));
-            if (executing)
+                canCompact: () => Task.FromResult(actions.HasPrimaryControl),
+                canStartCompaction: () => Task.FromResult(actions.HasQueuedSuccessor));
+            if (queued)
             {
                 while (server.Compactions == 0) await Task.Delay(5, timeout.Token);
                 Check(!run.IsCompleted && server.Interrupts == 1 && agent.GoalState["native"]["status"].ToString() == "active",
@@ -651,16 +655,16 @@ static class CodexTests
                 else server.FinishCompaction();
             }
             await run;
-            Check(server.Compactions == (executing ? 1 : 0) && server.Threads == 1
-                && server.Interrupts == (ends ? 2 : executing ? 1 : 0) && !agent.HasActiveTurn,
+            Check(server.Compactions == (queued ? 1 : 0) && server.Threads == 1
+                && server.Interrupts == (ends ? 2 : queued ? 1 : 0) && !agent.HasActiveTurn,
                 "in-turn compaction ignored action coverage, replaced the thread or retained active reasoning");
-            Check(agent.Compactions == (executing && !ends ? 1 : 0) && !server.Stopped
+            Check(agent.Compactions == (queued && !ends ? 1 : 0) && !server.Stopped
                 && agent.GoalState["native"]["status"].ToString() == "active"
                 && (!ends || agent.LastCompactionError == "background_action_ended"),
                 "ended action waited for held compaction or lost its unfinished goal/history connection");
             actions.Reset();
         }
-        Console.WriteLine("PASS: large active reasoning hands off history only under background execution, preserving its thread and active goal");
+        Console.WriteLine("PASS: background navigation without a queued successor lets the current model turn continue; a queued successor permits compaction");
     }
 
     static void PreparationContexts()
