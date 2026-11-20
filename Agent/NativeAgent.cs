@@ -37,8 +37,9 @@ public class NativeAgent : ModSystem
     Task _idleReaction = Task.CompletedTask;
     readonly ParallelAgentWork _parallel = new();
     Func<string, JsonObject, CancellationToken, Task<JsonObject>> _propose;
-    ulong _inventoryReviewTick, _chestReviewRevision, _preparationTick;
+    ulong _inventoryReviewTick, _chestReviewRevision, _potionReviewTick, _preparationTick;
     JsonNode _lastAutomaticTrash;
+    Action _finishPotion;
     internal static JsonArray ParallelReceipts => _instance?._parallel.Receipts() ?? new JsonArray();
     internal static Task IdleReaction => _instance?._idleReaction ?? Task.CompletedTask;
     int _lastDangerNotice;
@@ -198,6 +199,9 @@ public class NativeAgent : ModSystem
         _pending = null;
         bool stopActions = _running != null && !_running.IsCompleted && _cancel?.IsCancellationRequested == false;
         _cancel?.Cancel();
+        if (_finishPotion != null && ItemUseCoordinator.IsActive) ItemUseCoordinator.Stop();
+        _finishPotion?.Invoke();
+        _finishPotion = null;
         _parallel.Reset();
         _propose = null;
         if (_goalStopping.IsCompleted && _codex?.GoalState?["native"]?["status"]?.ToString() == "active")
@@ -258,6 +262,7 @@ public class NativeAgent : ModSystem
         {
             "equip" => "Evaluate the carried equipment against the equipped gear, current goal and progress. Submit {inventory_slot,equipment_slot} for one clear upgrade, or {}. Use only the supplied slots. Prefer survivability and practical mobility.",
             "cleanup" => "Review disposal candidates in the context of the current goal and inventory. Submit {trash_slots:[...]} with up to three stacks safe to discard entirely. Consider replacements, recipes, rarity and utility. Return an empty list when uncertain. Only use slots in candidates.",
+            "potions" => "Choose one carried potion to drink now or keep all. Consider the current activity, goal, health, mana, and active effects. Submit {potion_slot:number} or {}. Prefer potions that help with current or imminent work. Save short or scarce buffs for that work. Use special effects such as teleportation only when specifically useful for the objective.",
             "action_followup" => "While this action runs, prepare the next useful actions for this DAG node. Submit {script:string,on_failure:string}. Either field may be omitted when the existing plan covers it. The success script runs after a clean handoff. The failure script receives the previous action as `failure` and runs for a blocked route or exhausted source. In that branch, check live state and choose a different reachable source, a safe retreat, or another useful part of the node. For an overhead boulder, inspect terrain before choosing an escape with clear footing. Preserve all user constraints and safety checks. Write executable TerraBlind JavaScript with direct tool calls. Use read-only tools during preparation.",
             _ => "Prepare the supplied DAG node as an executable TerraBlind JavaScript script. The current action continues. Query only facts needed to prepare this node. Submit {script:string} or {} if the facts do not support an executable script. Use tool(name,args), verify actual node conditions with tool('task_step',{action:'verify'}), and return a concrete blocked reason when needed. Preserve the goal, dependencies and permissions. Do not change the plan or call tools that mutate the game."
         };
@@ -283,7 +288,7 @@ public class NativeAgent : ModSystem
         Func<JsonObject, CancellationToken, Task<JsonObject>> judge, CancellationToken token)
     {
         var bag = facts["bag"];
-        var items = bag["inventory"].AsArray().OfType<JsonObject>().ToArray();
+        var items = (bag?["inventory"] as JsonArray)?.OfType<JsonObject>().ToArray() ?? Array.Empty<JsonObject>();
         var questions = new JsonObject();
         var choices = new Dictionary<string, (int Source, int Equipment)>();
         void Ask(string key, string instruction, IEnumerable<(string Key, string Label)> options)
@@ -315,6 +320,12 @@ public class NativeAgent : ModSystem
             }
             Ask("equip", "Which option clearly improves survivability or mobility for the current goal? Read the carried and equipped item facts; preserve unusual or goal-critical effects.", options);
         }
+        else if (role == "potions")
+        {
+            Ask("potion", "Which potion should the player drink now? Choose keep if its effect will be more useful later. Use healing and mana potions when the restored amount is useful. Movement, mining, building, exploration and combat buffs should match the current work. For special effects, check the objective.",
+                facts["potions"].AsArray().Select(item => ($"slot_{item["slot"]}",
+                    $"Drink slot {item["slot"]}: {item["name"]} (effect {item["buff"]}, heal {item["heal_life"]}, mana {item["heal_mana"]}).")));
+        }
         else
         {
             var slots = facts["candidates"].AsArray().Select(ReadNumber).ToHashSet();
@@ -338,6 +349,13 @@ public class NativeAgent : ModSystem
             return choice == null ? null : choices.TryGetValue(choice, out var selected)
                 ? new JsonObject { ["inventory_slot"] = selected.Source, ["equipment_slot"] = selected.Equipment } : new JsonObject();
         }
+        if (role == "potions")
+        {
+            string choice = Pick(answers["potion"]);
+            return choice == null ? null : choice.StartsWith("slot_", StringComparison.Ordinal)
+                && questions["potion"]?["criteria"]?[choice] != null && int.TryParse(choice[5..], out int slot)
+                ? new JsonObject { ["potion_slot"] = slot } : new JsonObject();
+        }
         var discarded = new JsonArray();
         foreach (var (key, answer) in answers)
         {
@@ -357,6 +375,31 @@ public class NativeAgent : ModSystem
         var propose = _propose;
         _parallel.Poll(token);
         ulong now = Main.GameUpdateCount;
+        if (now >= _potionReviewTick)
+        {
+            _potionReviewTick = now + 60;
+            var p = Main.LocalPlayer;
+            var potions = PotionCandidates(p);
+            if (potions.Count > 0)
+            {
+                string potionNode = AgentTools.Actions.ActiveNode;
+                string activity = AgentTools.ControlSession.Tool;
+                var facts = new JsonObject { ["objective"] = _goalOptions?["objective"]?.DeepClone(),
+                    ["step"] = AgentTools.Plan.CurrentDescription, ["activity"] = activity,
+                    ["hp"] = p.statLife, ["max_hp"] = p.statLifeMax2, ["mana"] = p.statMana, ["max_mana"] = p.statManaMax2,
+                    ["wet"] = p.wet, ["held_weapon"] = p.HeldItem.Name, ["held_mana_cost"] = p.HeldItem.mana,
+                    ["mining"] = MineCoordinator.IsActive || p.itemAnimation > 0 && p.HeldItem.pick > 0,
+                    ["placing"] = PlaceAnywhere.IsRunning || p.itemAnimation > 0 && p.HeldItem.createTile >= 0,
+                    ["buffs"] = new JsonArray(p.buffType.Select((type, i) => (Type: type, Time: p.buffTime[i]))
+                        .Where(buff => buff.Type > 0 && buff.Time > 0)
+                        .Select(buff => (JsonNode)new JsonObject { ["buff"] = Lang.GetBuffName(buff.Type), ["ticks"] = buff.Time }).ToArray()),
+                    ["potions"] = potions };
+                string revision = potionNode + ":" + activity + ":" + p.statLife * 4 / Math.Max(1, p.statLifeMax2)
+                    + ":" + p.statMana * 4 / Math.Max(1, p.statManaMax2) + ":" + p.wet + ":" + p.HeldItem.type + ":" + potions.ToJsonString();
+                _parallel.Offer("inventory:potions", revision, ct => propose("potions", facts, ct),
+                    DrinkPotion(potions, potionNode, activity, finish => _finishPotion = finish), token);
+            }
+        }
         ulong chest = AgentTaskEvidence.ChestRevision;
         int free = Main.LocalPlayer.inventory.Take(50).Count(i => i.IsAir);
         if (chest != _chestReviewRevision || now >= _inventoryReviewTick)
@@ -471,7 +514,81 @@ public class NativeAgent : ModSystem
             && item["armor_slot"] == null && ReadNumber(item["heal_life"]) <= 0
             && ReadNumber(item["damage"]) <= 0 && ReadNumber(item["pick"]) <= 0 && ReadNumber(item["axe"]) <= 0 && ReadNumber(item["hammer"]) <= 0
             && ReadNumber(item["create_tile"]) is not (TileID.Painting3X3 or TileID.Painting4X3 or TileID.Painting6X4 or TileID.Painting2X3 or TileID.Painting3X2)
-            && !protectedTypes.Contains(ReadNumber(item["type"])) && ReadNumber(item["type"]) is not (>= 71 and <= 74);
+            && !protectedTypes.Contains(ReadNumber(item["type"])) && ReadNumber(item["type"]) is not (>= 71 and <= 74)
+            && !IsPotion(Main.LocalPlayer.inventory[ReadNumber(item["slot"])]);
+
+    static bool IsPotion(Item item) => !item.IsAir && item.consumable
+        && (item.potion || item.healLife > 0 || item.healMana > 0 || item.buffType > 0
+            || item.useStyle == ItemUseStyleID.DrinkLiquid || AgentTools.IsRecallItem(item.type));
+
+    static bool CanDrink(Player p, Item item) => IsPotion(item) && (!item.potion || p.potionDelay == 0)
+        && (item.buffType <= 0 || !p.HasBuff(item.buffType))
+        && (item.healLife <= 0 && item.healMana <= 0 || item.healLife > 0 && p.statLife < p.statLifeMax2
+            || item.healMana > 0 && p.statMana < p.statManaMax2)
+        && (AgentTools.AllowTaskRecall || !AgentTools.IsRecallItem(item.type));
+
+    internal static JsonArray PotionCandidates(Player p) => new(Enumerable.Range(0, 50)
+        .Where(slot => CanDrink(p, p.inventory[slot]))
+        .GroupBy(slot => p.inventory[slot].type)
+        .Select(group =>
+        {
+            int slot = group.First();
+            var item = p.inventory[slot];
+            return (JsonNode)new JsonObject { ["slot"] = slot, ["type"] = item.type, ["prefix"] = item.prefix,
+                ["name"] = item.Name, ["count"] = group.Sum(s => p.inventory[s].stack),
+                ["heal_life"] = item.healLife, ["heal_mana"] = item.healMana,
+                ["buff"] = item.buffType > 0 ? Lang.GetBuffName(item.buffType) : null, ["buff_ticks"] = item.buffTime };
+        }).ToArray());
+
+    internal static Func<JsonObject, JsonObject> DrinkPotion(JsonArray candidates, string owner, string activity, Action<Action> setFinish = null)
+    {
+        int source = -1, hotbar = -1, selected = -1, type = 0, count = 0, buff = 0;
+        Item displaced = null;
+        void Restore(Player player)
+        {
+            var held = player.inventory[hotbar];
+            if (displaced != null && ReferenceEquals(player.inventory[source], displaced) && (held.IsAir || held.type == type))
+                PvpInventory.SwapSlots(hotbar, source);
+            if (player.selectedItem == hotbar) player.selectedItem = selected;
+        }
+        return answer =>
+        {
+            var p = Main.LocalPlayer;
+            if (hotbar >= 0)
+            {
+                if (ItemUseCoordinator.IsActive || p.itemAnimation > 0 || p.itemTime > 0) return null;
+                var held = p.inventory[hotbar];
+                bool consumed = held.IsAir || held.type == type && held.stack < count;
+                Restore(p);
+                setFinish?.Invoke(null);
+                bool activeBuff = buff > 0 && p.HasBuff(buff);
+                return new JsonObject { ["potion_type"] = type, ["consumed"] = consumed, ["buff_active"] = activeBuff,
+                    ["outcome"] = consumed && (buff <= 0 || activeBuff) ? "used" : "potion_use_unconfirmed" };
+            }
+            source = ReadNumber(answer?["potion_slot"]);
+            var expected = candidates.FirstOrDefault(item => ReadNumber(item?["slot"]) == source);
+            if (expected == null || source is < 0 or >= 50 || AgentTools.Actions.ActiveNode != owner
+                || AgentTools.ControlSession.Tool != activity || p.dead) return new JsonObject();
+            var potion = p.inventory[source];
+            if (potion.type != ReadNumber(expected["type"]) || potion.prefix != ReadNumber(expected["prefix"]) || !CanDrink(p, potion))
+                return new JsonObject();
+            if (InventoryBusy() || MineCoordinator.IsActive) return null;
+            selected = p.selectedItem;
+            hotbar = source < 10 ? source : Enumerable.Range(0, 10).FirstOrDefault(i => p.inventory[i].IsAir, selected);
+            if (hotbar is < 0 or >= 10) { hotbar = -1; return new JsonObject(); }
+            type = potion.type; count = potion.stack; buff = potion.buffType;
+            if (source != hotbar)
+            {
+                var swap = PvpInventory.SwapSlots(source, hotbar);
+                if (swap["ok"]?.GetValue<bool>() != true) { hotbar = -1; return new JsonObject(); }
+                displaced = p.inventory[source];
+            }
+            ItemUseCoordinator.Start(new ItemUseRequest { Slot = hotbar, TargetWx = (int)(p.Center.X / 16),
+                TargetWy = (int)(p.Center.Y / 16), DurationTicks = Math.Max(24, potion.useAnimation + 6) });
+            setFinish?.Invoke(() => Restore(p));
+            return null;
+        };
+    }
 
     static bool InventoryBusy()
     {
@@ -697,7 +814,7 @@ public class NativeAgent : ModSystem
         var token = _cancel.Token;
         AgentTools.NewTask(goal, allowPassingChestLoot: goalOptions != null);
         AgentTools.Plan.SetObjective(goalOptions?["objective"]?.ToString(), AgentCatalog.BossNames);
-        _inventoryReviewTick = _chestReviewRevision = _preparationTick = 0;
+        _inventoryReviewTick = _chestReviewRevision = _potionReviewTick = _preparationTick = 0;
         _lastAutomaticTrash = null;
         if (goalOptions != null && goalOptions["tokenBudget"] == null && useCodex)
             _propose = (role, facts, ct) => RequestProposal(role, facts, codexPath, cwd, codexModel, ct);

@@ -228,6 +228,7 @@ namespace Terraria
         public bool wet, honeyWet, lavaWet, ignoreWater;
         public int[] buffTime = new int[10], buffType = new int[10];
         public int FindBuffIndex(int type) => Array.IndexOf(buffType, type);
+        public bool HasBuff(int type) => FindBuffIndex(type) is >= 0 and var index && buffTime[index] > 0;
         public int[] grappling = { -1 };
         public float gravDir = 1, maxFallSpeed = 10;
         public int fallStart, extraFall;
@@ -243,7 +244,7 @@ namespace Terraria
         public bool releaseJump = true;
         public int jump;
         public float jumpSpeedBoost, maxRunSpeed = 3, accRunSpeed = 3, runAcceleration = .08f, gravity = .4f;
-        public int statMana = 200, statLifeMax = 100, statLifeMax2 = 100, itemTime;
+        public int statMana = 200, statManaMax2 = 200, statLifeMax = 100, statLifeMax2 = 100, itemTime;
         public Mount mount = new();
         public Item HeldItem => inventory[selectedItem];
         public bool AnyExtraJumpUsable() => ExtraJump;
@@ -292,6 +293,7 @@ namespace Terraria
         public static (string Value, int Id)[] chestType = new[] { ("Chest", 0) }, chestType2 = chestType, dresserType = chestType;
         public static string GetItemNameValue(int type) => "Item " + type;
         public static string GetNPCNameValue(int type) => "NPC " + type;
+        public static string GetBuffName(int type) => "Buff " + type;
         public static Dictionary<int, string> MapLabels = new();
         public static string GetMapObjectName(int id) => MapLabels.GetValueOrDefault(id, "");
     }
@@ -303,7 +305,8 @@ namespace Terraria
         public int shopSpecialCurrency = -1;
         public bool favorited, accessory, material;
         public int defense, headSlot = -1, bodySlot = -1, legSlot = -1;
-        public int healLife;
+        public int healLife, healMana, buffType, buffTime;
+        public bool potion;
         public Microsoft.Xna.Framework.Vector2 velocity;
         public Microsoft.Xna.Framework.Vector2 position;
         public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
@@ -449,6 +452,7 @@ namespace Terraria.ID
         }
     }
     public static class BuffID { public const int ObsidianSkin = 1; }
+    public static class ItemUseStyleID { public const int DrinkLiquid = 9; }
     public static class LiquidID { public const int Water = 0, Lava = 1, Honey = 2, Shimmer = 3; }
     public static class TileID
     {
@@ -593,7 +597,14 @@ namespace TerraBlind
         public static void Display(string text) => Terraria.Main.NewText(text);
     }
     public static class DiagLog { public static void Write(string text) { } }
-    public static class ItemUseCoordinator { public static bool IsActive; public static void Stop() => IsActive = false; }
+    public class ItemUseRequest { public int Slot, TargetWx, TargetWy, DurationTicks; }
+    public static class ItemUseCoordinator
+    {
+        public static bool IsActive;
+        public static ItemUseRequest LastRequest;
+        public static void Start(ItemUseRequest request) { LastRequest = request; IsActive = true; }
+        public static void Stop() => IsActive = false;
+    }
     public static class PlaceAnywhere { public static bool IsRunning; }
     public static class PlaceAction
     {

@@ -439,6 +439,44 @@ static class RuntimeTests
                 Check(Agent.ApplyCleanup(afterVerification, afterVerification["inventory"].AsArray().OfType<JsonObject>().ToArray(),
                     new JsonObject { ["trash_slots"] = new JsonArray(24) }).Count == 0 && player.inventory[24].stack == 36,
                     "cleanup discarded verified task supplies while a dependent step was still running");
+
+                var previousHotbar = player.inventory[0];
+                int oldBuff = player.buffType[0], oldBuffTime = player.buffTime[0], oldSelected = player.selectedItem;
+                try
+                {
+                    player.selectedItem = 0;
+                    player.buffType[0] = 0; player.buffTime[0] = 0;
+                    player.inventory[25] = new Terraria.Item { type = 888, stack = 2, consumable = true,
+                        buffType = 99, buffTime = 3600, Name = "Custom travel potion" };
+                    var reviewed = PvpInventory.Review();
+                    Check(Agent.ApplyCleanup(reviewed, reviewed["inventory"].AsArray().OfType<JsonObject>().ToArray(),
+                        new JsonObject { ["trash_slots"] = new JsonArray(25) }).Count == 0,
+                        "cleanup discarded an unlisted buff potion");
+                    var potions = NativeAgent.PotionCandidates(player);
+                    var drink = await NativeAgent.JudgeInventory("potions", new JsonObject { ["potions"] = potions.DeepClone() },
+                        (request, _) =>
+                        {
+                            Check(request["questions"]["potion"]["criteria"]["slot_25"] != null,
+                                "inventory worker did not send an unlisted potion to Jev");
+                            return Task.FromResult(JsonNode.Parse("""{"answers":{"potion":{"choice":"slot_25","probabilities":{"slot_25":0.95}}}}""").AsObject());
+                        }, default);
+                    var apply = NativeAgent.DrinkPotion(potions, AgentTools.Actions.ActiveNode, AgentTools.ControlSession.Tool);
+                    Check(drink?["potion_slot"]?.GetValue<int>() == 25 && apply(drink) == null
+                        && ItemUseCoordinator.IsActive && player.inventory[0].type == 888,
+                        "potion proposal failed to start native item use");
+                    ItemUseCoordinator.Stop();
+                    player.inventory[0].stack--;
+                    player.buffType[0] = 99; player.buffTime[0] = 3600;
+                    var receipt = apply(drink);
+                    Check(receipt["outcome"].ToString() == "used" && ReferenceEquals(player.inventory[0], previousHotbar)
+                        && player.inventory[25].stack == 1 && NativeAgent.PotionCandidates(player).Count == 0,
+                        "potion use lost the hotbar item, missed the Buff, or offered a duplicate dose");
+                }
+                finally
+                {
+                    ItemUseCoordinator.Stop();
+                    player.buffType[0] = oldBuff; player.buffTime[0] = oldBuffTime; player.selectedItem = oldSelected;
+                }
             }
             finally
             {
@@ -4008,6 +4046,7 @@ static class RuntimeTests
                     "route loot failed verification, repeated or interrupted navigation");
 
                 await Execute(AgentTools.Actions.Control(handle, "cancel", null, default));
+                await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
                 AgentTools.NewTask();
                 Game.chest[0].x = 24;
                 Game.chest[0].item[0].stack = 3;
