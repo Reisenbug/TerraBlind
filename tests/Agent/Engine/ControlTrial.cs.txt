@@ -23,7 +23,7 @@ public sealed class ControlTrial : ModSystem
 {
     readonly ConcurrentQueue<Action> queue = new();
     bool enabled, started, opened, finished;
-    bool explorationPauseTrial;
+    bool explorationPauseTrial, resumeExploration;
     string explorationObjective;
     int explorationInputFrames;
     double explorationWorldTime;
@@ -47,7 +47,11 @@ public sealed class ControlTrial : ModSystem
     {
         enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentcontrolcheck");
         explorationPauseTrial = enabled && Environment.GetEnvironmentVariable("TB_EXPLORATION_PAUSE_CHECK") == "1";
-        if (explorationPauseTrial) explorationObjective = Environment.GetEnvironmentVariable("TB_EXPLORATION_OBJECTIVE");
+        if (explorationPauseTrial)
+        {
+            explorationObjective = Environment.GetEnvironmentVariable("TB_EXPLORATION_OBJECTIVE");
+            resumeExploration = explorationObjective != null && Environment.GetEnvironmentVariable("TB_EXPLORATION_REUSE_PLAYER") == "1";
+        }
         if (explorationPauseTrial && explorationObjective == null) On_PlayerInput.UpdateInput += CheckExplorationPauseInput;
         if (enabled && Environment.GetEnvironmentVariable("TB_NATIVE_PRIMITIVES") == "1")
             PrimitiveBindingProbe.Binding = KeybindLoader.RegisterKeybind(Mod, "PrimitiveInputProbe", "F10");
@@ -128,7 +132,9 @@ public sealed class ControlTrial : ModSystem
             player.inventory[1] = new Item(ItemID.CopperPickaxe);
             player.inventory[2] = new Item(ItemID.CopperAxe);
         }
-        var file = PlayerFileData.CreateAndSave(player);
+        var file = resumeExploration
+            ? Player.LoadPlayer(Path.Combine(Main.SavePath, "Players", "Control_trial.plr"), false)
+            : PlayerFileData.CreateAndSave(player);
         Check(!file.IsCloudSave && file.Path.StartsWith(Main.SavePath, StringComparison.Ordinal), "player_not_isolated");
         Player.LoadPlayer(file.Path, false).SetAsActive();
         WorldGen.playWorld();
@@ -168,11 +174,15 @@ public sealed class ControlTrial : ModSystem
         {
             if (explorationObjective != null && !Main.gameMenu && Main.LocalPlayer.active && ++frames == 90)
             {
-                Check(Main.LocalPlayer.CountItem(ItemID.Starfury) == 0, "exploration_starfury_in_starting_inventory");
-                Check(Main.LocalPlayer.CountItem(ItemID.CopperShortsword) > 0
-                    && Main.LocalPlayer.CountItem(ItemID.CopperPickaxe) > 0 && Main.LocalPlayer.CountItem(ItemID.CopperAxe) > 0,
-                    "exploration_missing_copper_starter_gear");
-                Console.WriteLine("EXPLORATION_STARTING_GEAR copper_sword_pick_axe=true starfury=false");
+                if (!resumeExploration)
+                {
+                    Check(Main.LocalPlayer.CountItem(ItemID.Starfury) == 0, "exploration_starfury_in_starting_inventory");
+                    Check(Main.LocalPlayer.CountItem(ItemID.CopperShortsword) > 0
+                        && Main.LocalPlayer.CountItem(ItemID.CopperPickaxe) > 0 && Main.LocalPlayer.CountItem(ItemID.CopperAxe) > 0,
+                        "exploration_missing_copper_starter_gear");
+                    Console.WriteLine("EXPLORATION_STARTING_GEAR copper_sword_pick_axe=true starfury=false");
+                }
+                else Console.WriteLine($"EXPLORATION_PLAYER_RESTORED hp={Main.LocalPlayer.statLife} max_hp={Main.LocalPlayer.statLifeMax}");
                 Config.I.AgentEnabled = true;
                 Config.I.AiClient = false;
                 Config.I.AgentUseCodex = true;
@@ -2028,18 +2038,25 @@ public sealed class PrimitiveBindingProbe : ModPlayer
 public sealed class ExplorationProgressProbe : ModSystem
 {
     internal static bool Enabled { get; private set; }
+    bool shine;
     string lastProgression;
 
-    public override void Load() => Enabled = !Main.dedServ
-        && Terraria.Program.LaunchParameters.ContainsKey("-agentcontrolcheck")
-        && Environment.GetEnvironmentVariable("TB_EXPLORATION_PAUSE_CHECK") == "1"
-        && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("TB_EXPLORATION_OBJECTIVE"));
+    public override void Load()
+    {
+        Enabled = !Main.dedServ && Terraria.Program.LaunchParameters.ContainsKey("-agentcontrolcheck")
+            && Environment.GetEnvironmentVariable("TB_EXPLORATION_PAUSE_CHECK") == "1"
+            && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("TB_EXPLORATION_OBJECTIVE"));
+        shine = Enabled && Environment.GetEnvironmentVariable("TB_EXPLORATION_SHINE") == "1";
+    }
 
     public override void OnWorldLoad() => lastProgression = null;
 
     public override void PostUpdateEverything()
     {
-        if (!Enabled || Main.gameMenu || Main.GameUpdateCount % 60 != 0) return;
+        if (!Enabled || Main.gameMenu) return;
+        if (shine && Main.LocalPlayer is { active: true, dead: false } player)
+            player.AddBuff(BuffID.Shine, 2, quiet: true);
+        if (Main.GameUpdateCount % 60 != 0) return;
         string progression = $"hardmode={Main.hardMode}"
             + $" destroyer={NPC.downedMechBoss1} twins={NPC.downedMechBoss2} prime={NPC.downedMechBoss3}"
             + $" plantera={NPC.downedPlantBoss} golem={NPC.downedGolemBoss} cultist={NPC.downedAncientCultist}"
