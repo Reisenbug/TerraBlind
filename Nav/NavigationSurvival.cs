@@ -14,6 +14,7 @@ public static class NavigationSurvival
     static int gravityPhase, gravityTicks;
     static float originalGravity;
     static Point webTarget;
+    static int lavaRedirect;
     public static int Interventions { get; private set; }
 
     public static void Reset(Player player)
@@ -25,6 +26,65 @@ public static class NavigationSurvival
         heldSlot = previousSlot = stashedSlot = -1;
         holdingPlacement = holdingPotion = false;
         gravityPhase = gravityTicks = 0;
+    }
+
+    internal static void ApplyLavaRedirect(Player player)
+    {
+        if (!RecedingNav.Active || player.dead || player.lavaImmune || player.lavaTime > 0 || player.gravDir != 1
+            || player.velocity.Y <= 0 || player.mount.Active || player.grappling[0] >= 0
+            || !AgentTools.ControlAllows(ControlBehavior.Survival, ControlChannels.Movement, delegated: true))
+        { lavaRedirect = 0; return; }
+
+        (bool Lava, bool Safe) Forecast(int direction)
+        {
+            var position = player.position;
+            var velocity = player.velocity;
+            bool up = Collision.up, down = Collision.down;
+            try
+            {
+                for (int frame = 0; frame < 45; frame++)
+                {
+                    if (direction != 0)
+                    {
+                        float desired = direction * System.Math.Max(player.maxRunSpeed, player.accRunSpeed);
+                        velocity.X += System.Math.Clamp(desired - velocity.X, -player.runAcceleration, player.runAcceleration);
+                    }
+                    velocity.Y = System.Math.Min(velocity.Y + player.gravity, player.maxFallSpeed);
+                    var movement = Collision.TileCollision(position, velocity, player.width, player.height,
+                        player.controlDown, player.controlDown);
+                    if (player.waterWalk || player.waterWalk2)
+                        movement = Collision.WaterCollision(position, movement, player.width, player.height, player.controlDown, false, player.waterWalk);
+                    position += movement;
+                    if (Collision.LavaCollision(position, player.width, player.height)) return (true, false);
+                    if (!AgentTools.Control.BoundsAllowed(ControlBehavior.Navigation, position.X / 16, position.Y / 16,
+                        player.width / 16f, player.height / 16f)) return (false, false);
+                    if (movement.Y < velocity.Y)
+                        return (false, FallSafety.LandingDamage(player, position, player.fallStart) < player.statLife);
+                    if (movement.X != velocity.X) velocity.X = 0;
+                }
+                return (false, false);
+            }
+            finally { Collision.up = up; Collision.down = down; }
+        }
+
+        int current = player.controlRight ? 1 : player.controlLeft ? -1 : 0;
+        if (lavaRedirect == 0 || !Forecast(lavaRedirect).Safe)
+        {
+            lavaRedirect = 0;
+            if (!Forecast(current).Lava) return;
+            int away = player.velocity.X > 0 ? -1 : 1;
+            foreach (int direction in new[] { away, -away })
+            {
+                if (direction == current || !Forecast(direction).Safe) continue;
+                lavaRedirect = direction;
+                RecedingNav.InterruptForSurvival();
+                DiagLog.Write($"[survival] action=lava_redirect direction={direction} pos=({player.position.X:0.##},{player.position.Y:0.##}) vx={player.velocity.X:0.##} vy={player.velocity.Y:0.##}");
+                break;
+            }
+        }
+        if (lavaRedirect == 0) return;
+        player.controlRight = lavaRedirect > 0;
+        player.controlLeft = lavaRedirect < 0;
     }
 
     public static bool Apply(Player player)
