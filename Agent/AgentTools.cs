@@ -3079,12 +3079,43 @@ public static partial class AgentTools
                 }
                 break;
             case "hell_run":
-                result = await NativeAgent.OnMain(() => new JsonObject
+            {
+                var started = await NativeAgent.OnMain(() =>
                 {
-                    ["accepted"] = StateSnapshotPlayer.StartHellRun(out string reason), ["reason"] = reason
+                    var escape = LastContactEscape;
+                    var response = new JsonObject
+                    {
+                        ["accepted"] = StateSnapshotPlayer.StartHellRun(out string reason), ["reason"] = reason
+                    };
+                    return (Result: response, Escape: escape);
                 }, token);
-                if (!Rejected(result)) result = await Wait("/hell_run_status", "running", "/hell_run_stop", 0, token);
+                result = started.Result;
+                if (!Rejected(result))
+                {
+                    var ended = await Wait("/hell_run_status", "running", "/hell_run_stop", 0, token);
+                    result = await NativeAgent.OnMain(() =>
+                    {
+                        if (Text(ended, "phase") != "idle") return ended;
+                        ended["hardmode"] = Main.hardMode;
+                        if (Main.hardMode) return ended;
+                        if (LastContactEscape != null && !ReferenceEquals(started.Escape, LastContactEscape))
+                        {
+                            ended["error"] = "hell_run_contact_escape";
+                            ended["outcome"] = "interrupted";
+                            ended["contact_escape"] = LastContactEscape.DeepClone();
+                        }
+                        else
+                        {
+                            ended["error"] = "hell_run_ended_before_hardmode";
+                            ended["outcome"] = "incomplete";
+                            ended["bridge_outcome"] = BridgeStart.Outcome;
+                            ended["bridge_reason"] = BridgeStart.Reason;
+                        }
+                        return ended;
+                    }, token);
+                }
                 break;
+            }
             case "interact":
                 if (Text(args, "track_mode") == "boost")
                 {

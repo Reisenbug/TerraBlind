@@ -635,6 +635,10 @@ namespace TerraBlind
         public static bool StartHellRun(out string why) { why = "fixture_start"; return HellStart?.Invoke() == true; }
         public static void StopRemoteTask() { }
     }
+    public static class BridgeStart
+    {
+        public static string Outcome = "stuck", Reason = "fixture_bridge";
+    }
     public static class ReplaySystem { public static void Stop() { } }
     public static class KeyPress { public static void Clear() { } }
     public static class Combat

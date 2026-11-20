@@ -142,6 +142,36 @@ static class RuntimeTests
             }
             finally { foreach (var (point, tile) in savedTiles) Game.tile[point.x, point.y] = tile; }
 
+            var previousEscape = AgentTools.LastContactEscape;
+            bool previousHardmode = Game.hardMode;
+            try
+            {
+                Game.hardMode = false;
+                StateSnapshotPlayer.HellStart = () => true;
+                HttpServerSystem.Handler = (_, _) => (200, "{\"phase\":\"idle\",\"running\":false,\"wof_outcome\":\"idle\"}");
+                var incomplete = await Call("hell_run", new JsonObject());
+                Check(incomplete["error"]?.ToString() == "hell_run_ended_before_hardmode"
+                    && incomplete["bridge_reason"].ToString() == "fixture_bridge", "idle hell run lost the failed bridge evidence");
+                HttpServerSystem.Handler = (_, _) =>
+                {
+                    AgentTools.LastContactEscape = new JsonObject { ["reason"] = "predicted_contact" };
+                    return (200, "{\"phase\":\"idle\",\"running\":false,\"wof_outcome\":\"idle\"}");
+                };
+                var interrupted = await Call("hell_run", new JsonObject());
+                Check(interrupted["error"]?.ToString() == "hell_run_contact_escape"
+                    && interrupted["contact_escape"]?["reason"]?.ToString() == "predicted_contact", "survival takeover was reported as an idle result");
+                Game.hardMode = true;
+                var complete = await Call("hell_run", new JsonObject());
+                Check(complete["error"] == null && complete["hardmode"]?.GetValue<bool>() == true,
+                    "a verified progression transition was obscured by a later survival event");
+            }
+            finally
+            {
+                StateSnapshotPlayer.HellStart = null;
+                Game.hardMode = previousHardmode;
+                AgentTools.LastContactEscape = previousEscape;
+            }
+
             Game.invasionType = 3; Game.invasionSize = 25;
             var facts = await Call("invasion_status", new JsonObject());
             Check(facts["kind"].ToString() == "pirate_invasion" && facts["remaining"].GetValue<int>() == 25, "native invasion progress was lost");
