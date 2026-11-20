@@ -890,6 +890,14 @@ static class GatherTests
             Check(!p.controlLeft && !p.controlRight && !p.controlJump && !p.controlUseItem,
                 "legacy evasion replaced the movement prefix while its native execution proof was pending");
             CombatForecast.ReservesRoutePrefix = false;
+            BridgeStart.ReservesMovement = true;
+            try
+            {
+                FightCoordinator.Tick(p, true);
+                Check(!p.controlLeft && !p.controlRight && !p.controlJump,
+                    "incoming projectile pulled the player off a bridge anchor during settlement");
+            }
+            finally { BridgeStart.ReservesMovement = false; }
             FightCoordinator.Tick(p, true);
             Check((p.controlLeft || p.controlRight) && !p.controlUseItem,
                 $"thinking defense ignored projectile: dead={p.dead} manual={Manual.On} enabled={Config.I.AgentEnabled} automate={AgentNetwork.CanAutomate} attack={AgentPermissions.CanAttack(delegated: true)} dodge={AgentPermissions.CanDodge(delegated: true)} left={p.controlLeft} right={p.controlRight} idle={FightCoordinator.IsIdleDefending}");

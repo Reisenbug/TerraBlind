@@ -305,6 +305,7 @@ namespace TerraBlind
             if ((processing || IsActive) && !p.dead && !Manual.On && AgentNetwork.CanAutomate
                 && !PvpDuel.Active && !PlayerCombat.Active && !AgentTools.ContactEscapeActive
                 && !AgentTools.ControlSession.OwnsDirectMovement
+                && !BridgeStart.ReservesMovement
                 && !FeedbackControl.IsApplying
                 && !CombatForecast.ReservesRoutePrefix
                 && AgentPermissions.CanDodge(delegated: true))

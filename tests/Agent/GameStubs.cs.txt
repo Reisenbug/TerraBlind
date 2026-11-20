@@ -640,6 +640,7 @@ namespace TerraBlind
     public static class BridgeStart
     {
         public static string Outcome = "stuck", Reason = "fixture_bridge";
+        internal static bool ReservesMovement;
     }
     public static class ReplaySystem { public static void Stop() { } }
     public static class KeyPress { public static void Clear() { } }

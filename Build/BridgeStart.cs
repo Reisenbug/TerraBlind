@@ -26,6 +26,7 @@ namespace TerraBlind
 		const int MaxTries = 3;
 
 		public static bool IsRunning => _ph != Ph.Idle && _ph != Ph.Done;
+		internal static bool ReservesMovement => _ph == Ph.Verify || _ph == Ph.Stand && SettleAt.IsRunning;
 		public static string Outcome = "idle";
 		public static string Reason = "";
 
