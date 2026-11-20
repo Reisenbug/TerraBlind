@@ -18,6 +18,7 @@ public sealed class AgentControlSession
     string releasedTool;
     ControlBehavior[] delegates = Array.Empty<ControlBehavior>();
     readonly Dictionary<long, int[]> gatheredItems = new();
+    readonly Dictionary<long, (int X, int Y)> chestTargets = new();
 
     public AgentControlSession(AgentControlPolicy policy) { this.policy = policy; }
     public bool PrimaryActive => current != 0;
@@ -26,6 +27,16 @@ public sealed class AgentControlSession
     internal void BindGatherTargets(GatherTarget[] targets)
     {
         if (current != 0 && tool == "gather") gatheredItems[current] = targets.Select(t => t.ItemType).ToArray();
+    }
+    internal void BindChestTarget(int x, int y)
+    {
+        if (current != 0 && tool == "collect_treasure") chestTargets[current] = (x, y);
+    }
+    internal bool TargetsChest(int x, int y)
+    {
+        foreach (var target in chestTargets.Values)
+            if ((uint)(target.X - x) <= 1 && (uint)(target.Y - y) <= 1) return true;
+        return false;
     }
     internal bool OwnsItemUse => current != 0 && (primaryChannels & ControlChannels.ItemUse) != 0;
     internal bool OwnsDirectMovement => current != 0 && tool == "act" && (primaryChannels & ControlChannels.Movement) != 0;
@@ -136,6 +147,7 @@ public sealed class AgentControlSession
     public void End(long ticket)
     {
         gatheredItems.Remove(ticket);
+        chestTargets.Remove(ticket);
         if (ticket != 0 && ticket == attackTicket) { attackTicket = 0; attackClaim = null; return; }
         if (ticket == 0 || ticket != current) return;
         releasedAt = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -162,7 +174,7 @@ public sealed class AgentControlSession
         };
     }
 
-    public void Reset() { End(current); End(attackTicket); gatheredItems.Clear(); sequence++; resetGeneration++; releasedAt = releasedScript = scriptInvocation = 0; releasedTool = null; }
+    public void Reset() { End(current); End(attackTicket); gatheredItems.Clear(); chestTargets.Clear(); sequence++; resetGeneration++; releasedAt = releasedScript = scriptInvocation = 0; releasedTool = null; }
     public JsonObject Snapshot() => new()
     {
         ["tool"] = tool, ["claim"] = claim, ["execution"] = current,

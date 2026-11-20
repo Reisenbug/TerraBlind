@@ -292,7 +292,7 @@ public static partial class AgentTools
         foreach (var chest in Main.chest)
         {
             if (chest == null || routeChests.Contains((chest.x, chest.y)) || !chest.item.Any(i => !i.IsAir)
-                || !Reach.CanInteract(p, chest.x, chest.y)) continue;
+                || !Reach.CanInteract(p, chest.x, chest.y) || ControlSession.TargetsChest(chest.x, chest.y)) continue;
             routeChests.Add((chest.x, chest.y));
             var before = AgentTaskEvidence.ObserveChest(chest.x, chest.y);
             bool inventoryOpen = Main.playerInventory;
@@ -2319,9 +2319,11 @@ public static partial class AgentTools
                 result = await Call("/npc_find", args, token);
                 break;
             case "collect_treasure":
-                result = await Navigate(new JsonObject { ["x"] = Int(args, "x"), ["y"] = Int(args, "y"), ["reach"] = true }, token);
+                int targetChestX = Int(args, "x"), targetChestY = Int(args, "y");
+                await NativeAgent.OnMain(() => { ControlSession.BindChestTarget(targetChestX, targetChestY); return true; }, token);
+                result = await Navigate(new JsonObject { ["x"] = targetChestX, ["y"] = targetChestY, ["reach"] = true }, token);
                 if (result["done"]?.GetValue<bool>() != true) break;
-                var chestBefore = await NativeAgent.OnMain(() => AgentTaskEvidence.ObserveChest(Int(args, "x"), Int(args, "y")), token);
+                var chestBefore = await NativeAgent.OnMain(() => AgentTaskEvidence.ObserveChest(targetChestX, targetChestY), token);
                 bool inventoryWasOpen = await NativeAgent.OnMain(() => Main.playerInventory, token);
                 try
                 {

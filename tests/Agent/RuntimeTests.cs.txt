@@ -3351,6 +3351,38 @@ static class RuntimeTests
                 Check(opens == 1 && RecedingNav.Active && AgentTools.Actions.ActiveHandle == handle
                     && AgentTools.LastRouteLoot["verified_transfer"].GetValue<bool>() && Game.LocalPlayer.chest == -1,
                     "route loot failed verification, repeated or interrupted navigation");
+
+                await Execute(AgentTools.Actions.Control(handle, "cancel", null, default));
+                AgentTools.NewTask();
+                Game.chest[0].x = 24;
+                Game.chest[0].item[0].stack = 3;
+                Game.LocalPlayer.inventory[0] = new Terraria.Item();
+                bool arrived = false;
+                HttpServerSystem.Handler = (path, payload) =>
+                {
+                    if (path == "/nav_recede") RecedingNav.Active = true;
+                    if (path == "/nav_recede_done") return (200, arrived ? "{\"done\":true}" : "{\"done\":false}");
+                    if (path == "/collect_treasure")
+                    {
+                        TreasureGrab.OpenAt(25, 35, out _);
+                        Terraria.UI.ChestUI.LootAll();
+                    }
+                    if (path == "/collect_treasure_status") return (200, "{\"running\":false,\"outcome\":\"done\"}");
+                    return (200, "{\"accepted\":true}");
+                };
+                AgentTools.Watches.Configure(new JsonObject { ["events"] = new JsonArray("nearby_chest"), ["loot_chests_in_reach"] = true });
+                ActionTasks.NodeContext.Value = "travel";
+                string chestHandle = AgentTools.Actions.Start("collect_treasure", new JsonObject { ["x"] = 25, ["y"] = 35 }, default)["handle"].ToString();
+                ActionTasks.NodeContext.Value = null;
+                await PumpUntil(() => RecedingNav.Active && AgentTools.ControlSession.TargetsChest(24, 34));
+                AgentTools.LootPassingChest();
+                Check(opens == 1 && Game.chest[0].item[0].stack == 3, "route loot consumed the explicit target before its receipt");
+                arrived = true;
+                await PumpUntil(() => !AgentTools.Actions.HasActive);
+                var receipt = await Execute(AgentTools.Actions.Query(chestHandle, 0, default));
+                Check(opens == 2 && receipt["result"]?["new_chest_loot_verified"]?.GetValue<bool>() == true
+                    && !AgentTools.ControlSession.TargetsChest(24, 34), "explicit chest lost its transfer or retained its reservation: " + receipt);
+                Console.WriteLine("PASS: explicit chest keeps its verified loot during opportunistic navigation");
             }
             finally
             {
