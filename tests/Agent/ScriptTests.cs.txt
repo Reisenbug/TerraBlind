@@ -4758,6 +4758,10 @@ static class ScriptTests
                 && JsonNode.DeepEquals(focused["permanent_max_health"], fullState["permanent_max_health"]),
                 "focused state hid requested evidence, added unrequested history or changed field values: "
                 + string.Join(',', focused.Select(pair => pair.Key)));
+            var goalOnly = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("codex_goal") });
+            Check(goalOnly.Count == 2 && goalOnly.ContainsKey("codex_goal") && goalOnly["snapshot_tick"] != null
+                && JsonNode.DeepEquals(goalOnly["codex_goal"], fullState["codex_goal"]),
+                "goal-only projection changed the goal or tick envelope");
             var invalid = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("made_up_state") });
             Check(invalid["error"] != null && invalid["detail"].ToString().Contains("made_up_state"), "unknown state field silently returned missing evidence");
             Console.WriteLine($"STATE_PROJECTION full_chars={fullState.ToJsonString().Length} focused_chars={focused.ToJsonString().Length}");

@@ -1304,6 +1304,8 @@ public static partial class AgentTools
         if (selected is { Length: 0 } || selected?.Any(string.IsNullOrWhiteSpace) == true)
             throw new ArgumentException("fields需要至少一个顶层状态字段名。");
         Plan.Observe(AgentTaskEvidence.Measure);
+        if (selected is ["codex_goal"])
+            return new JsonObject { ["codex_goal"] = NativeAgent.GoalState, ["snapshot_tick"] = Main.GameUpdateCount }.ToJsonString(ModelJson);
         var state = JsonNode.Parse(StateSerializer.ToJson(HttpServerSystem.LatestSnapshot)) as JsonObject ?? new();
         if (!includeTiles && state["tiles"] is JsonObject tiles)
         {
