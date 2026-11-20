@@ -587,7 +587,7 @@
     "type": "function",
     "function": {
       "name": "recipe",
-      "description": "查物品配方。can_craft_now 是游戏当前可制作列表的实际判断；为 true 时使用 craft_recipes 查实际配方索引后调用 craft_recipe，也可用 craft_into_inventory，不要再索要材料。ingredients 每项有 need、have（随身背包加可用虚空袋）、in_inventory、in_void_bag。have 不覆盖所有模组合成来源和配方组，是否能做优先看 can_craft_now。stations 是所需工作台，每项列出能放出该工作台的物品及其随身背包数量。也返回当前不能制作的配方，不能仅因查到配方就判断能做。",
+      "description": "查物品配方。can_craft_now 是游戏当前可制作列表的实际判断；为 true 时使用 craft_recipes 查实际配方索引后调用 craft_recipe，也可用 craft_into_inventory，不要再索要材料。ingredients 每项有 need、have（随身背包加可用虚空袋）、in_inventory、in_void_bag。have 不覆盖所有模组合成来源和配方组，是否能做优先看 can_craft_now。stations 是所需工作台，每项列出能放出该工作台的物品及其随身背包数量。conditions 列出配方额外条件及当前 met 状态，例如 Conditions.NearWater。Also shows recipes that cannot currently be crafted.",
       "parameters": {
         "type": "object",
         "properties": {

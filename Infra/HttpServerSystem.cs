@@ -1029,10 +1029,11 @@ namespace TerraBlind
 						found++;
 						string inm = Terraria.ID.ItemID.Search.ContainsId(r.createItem.type)
 							? Terraria.ID.ItemID.Search.GetName(r.createItem.type) : "";
+						bool canCraft = available.Contains(ri);
 						sbr.Append("{\"makes\":\"").Append(JsonEsc(r.createItem.Name ?? ""))
 						   .Append("\",\"internal\":\"").Append(JsonEsc(inm))
 						   .Append("\",\"amount\":").Append(r.createItem.stack)
-						   .Append(",\"can_craft_now\":").Append(available.Contains(ri) ? "true" : "false")
+						   .Append(",\"can_craft_now\":").Append(canCraft ? "true" : "false")
 						   .Append(",\"ingredients\":[");
 						for (int k = 0; k < r.requiredItem.Count; k++)
 						{
@@ -1089,7 +1090,21 @@ namespace TerraBlind
 							}
 							sbr.Append("],\"total\":").Append(mk.Count).Append('}');
 						}
-						sbr.Append("]}");
+						sbr.Append(']');
+						if (r.Conditions.Count > 0)
+						{
+							sbr.Append(",\"conditions\":[");
+							for (int k = 0; k < r.Conditions.Count; k++)
+							{
+								if (k > 0) sbr.Append(',');
+								var condition = r.Conditions[k];
+								sbr.Append("{\"key\":\"").Append(JsonEsc(condition.Description.Key))
+								   .Append("\",\"description\":\"").Append(JsonEsc(condition.Description.Value))
+								   .Append("\",\"met\":").Append(canCraft || condition.IsMet() ? "true" : "false").Append('}');
+							}
+							sbr.Append(']');
+						}
+						sbr.Append('}');
 					}
 					sbr.Append("],\"found\":").Append(found).Append('}');
 					body = sbr.ToString();
