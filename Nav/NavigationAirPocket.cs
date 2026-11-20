@@ -11,6 +11,10 @@ public static class NavigationAirPocket
     static readonly Queue<Point> dig = new();
     static readonly Queue<Point> seal = new();
     static bool active, sealedPocket, surfacing;
+    static bool surfaceFailed, surfaceJumpStarted;
+    static Vector2 surfaceOrigin, failedSurfaceOrigin;
+    static float surfacePeakY;
+    static int surfaceBestBreath, surfaceIdle;
     static int slot, blockSlot, savedSlot, idle, elapsed, retry;
     static float destinationX;
     static int plannedFrames;
@@ -22,6 +26,7 @@ public static class NavigationAirPocket
         active = false;
         sealedPocket = false;
         surfacing = false;
+        surfaceFailed = false;
         dig.Clear();
         seal.Clear();
     }
@@ -30,21 +35,7 @@ public static class NavigationAirPocket
     {
         if (player.gills || player.accMerman || player.gravDir != 1)
         { Reset(player); return false; }
-        if (!active && (surfacing || player.breath < player.breathMax - 25) && TrySurface(player))
-        {
-            if (!surfacing)
-            {
-                if (RecedingNav.Active) RecedingNav.InterruptForSurvival();
-                DiagLog.Write($"[survival-air] surfacing breath={player.breath}");
-                AgentChat.Say("Low air. Surfacing.");
-            }
-            surfacing = true;
-            player.controlLeft = player.controlRight = player.controlDown = player.controlUseItem = false;
-            player.controlUp = !player.gravControl && !player.gravControl2;
-            player.controlJump = player.accFlipper ? player.releaseJump : true;
-            return true;
-        }
-        surfacing = false;
+        if (!active && ApplySurface(player)) return true;
         if (!active)
         {
             if (retry > 0) { retry--; return false; }
@@ -123,11 +114,65 @@ public static class NavigationAirPocket
         return true;
     }
 
-    static bool TrySurface(Player player)
+    static bool ApplySurface(Player player)
     {
-        if (!Collision.DrownCollision(player.position, player.width, player.height, player.gravDir)) return false;
+        if (player.breath >= player.breathMax)
+        {
+            if (surfacing) DiagLog.Write($"[survival-air] surfaced breath={player.breath}");
+            surfacing = surfaceFailed = false;
+            return false;
+        }
+        if (!surfacing && player.breath >= player.breathMax - 25) return false;
+        bool submerged = Collision.DrownCollision(player.position, player.width, player.height, player.gravDir);
         bool canSwim = player.accFlipper || player.wingTime > 0;
-        if (!surfacing && !canSwim && player.velocity.Y != 0 && !player.AnyExtraJumpUsable()) return false;
+        if (!surfacing)
+        {
+            if (!submerged) return false;
+            if (surfaceFailed && Vector2.DistanceSquared(player.position, failedSurfaceOrigin) < 32 * 32) return false;
+            if (!CanReachAirAbove(player, canSwim)) return false;
+            if (RecedingNav.Active) RecedingNav.InterruptForSurvival();
+            surfacing = true;
+            surfaceOrigin = player.position;
+            surfaceJumpStarted = player.velocity.Y != 0;
+            surfacePeakY = player.position.Y;
+            surfaceBestBreath = player.breath;
+            surfaceIdle = 0;
+            DiagLog.Write($"[survival-air] surfacing breath={player.breath} x={surfaceOrigin.X:0.##} y={surfaceOrigin.Y:0.##}");
+            AgentChat.Say("Low air. Surfacing.");
+        }
+        else
+        {
+            if (player.position.Y < surfacePeakY - 1 || player.breath > surfaceBestBreath)
+            {
+                surfacePeakY = Math.Min(surfacePeakY, player.position.Y);
+                surfaceBestBreath = Math.Max(surfaceBestBreath, player.breath);
+                surfaceIdle = 0;
+            }
+            else surfaceIdle++;
+            surfaceJumpStarted |= player.velocity.Y != 0;
+            if (submerged && (surfaceIdle >= 30 || !canSwim && surfaceJumpStarted
+                && player.velocity.Y >= 0 && !player.AnyExtraJumpUsable()))
+            {
+                surfacing = false;
+                surfaceFailed = true;
+                failedSurfaceOrigin = surfaceOrigin;
+                DiagLog.Write($"[survival-air] ascent_failed breath={player.breath} rise={surfaceOrigin.Y - surfacePeakY:0.##}");
+                return false;
+            }
+        }
+        player.controlLeft = player.controlRight = player.controlDown = player.controlUseItem = false;
+        player.controlUp = submerged && !player.gravControl && !player.gravControl2;
+        player.controlJump = player.accFlipper ? submerged && player.releaseJump
+            : canSwim || (submerged && (surfaceJumpStarted || player.releaseJump))
+                || surfaceJumpStarted && player.velocity.Y < 0;
+        if (submerged && !canSwim && player.AnyExtraJumpUsable() && player.velocity.Y >= 0 && player.velocity.Y != 0)
+            player.controlJump = player.releaseJump;
+        return true;
+    }
+
+    static bool CanReachAirAbove(Player player, bool canSwim)
+    {
+        if (!canSwim && player.velocity.Y != 0 && !player.AnyExtraJumpUsable()) return false;
         int reach = canSwim ? 128 : 32;
         for (int pixels = 8; pixels <= reach; pixels += 8)
         {
