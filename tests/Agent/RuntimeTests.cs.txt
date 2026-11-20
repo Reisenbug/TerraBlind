@@ -276,7 +276,7 @@ static class RuntimeTests
 
         AgentTools.Plan.Create(JsonNode.Parse("""
             {"goal":"Find a site then build","mode":"dag","steps":[
-            {"id":"route","description":"Find route","depends_on":[],"script":"return {};","conditions":[{"kind":"permanent_health","count":200}]},
+            {"id":"route","description":"Find route","depends_on":[],"script":"return {};","conditions":[{"kind":"permanent_health","count":200},{"kind":"item","type":446,"count":1}]},
             {"id":"build","description":"Prepare construction","depends_on":["route"],"script":"return {};","conditions":[{"kind":"item","type":444,"count":1}]}]}
             """).AsObject(), AgentTaskEvidence.Measure);
         try
@@ -300,6 +300,7 @@ static class RuntimeTests
                 player.inventory[21] = new Terraria.Item { type = 444, stack = 2 };
                 player.inventory[22] = new Terraria.Item { type = 5254, stack = 1, createTile = Terraria.ID.TileID.Painting2X3 };
                 player.inventory[23] = new Terraria.Item { type = 445, stack = 4 };
+                player.inventory[24] = new Terraria.Item { type = 446, stack = 36 };
                 player.trashItem = Game.mouseItem = new Terraria.Item();
                 var answer = new JsonObject { ["trash_slots"] = new JsonArray(20, 21, 22, 23) };
                 var roomyBag = PvpInventory.Review();
@@ -335,6 +336,12 @@ static class RuntimeTests
                 discarded = Agent.ApplyCleanup(bag, candidate, answer);
                 Check(discarded["slots_freed"]?.GetValue<int>() == 1 && player.inventory[20].IsAir && player.inventory[21].stack == 2,
                     "the completed inventory proposal did not immediately free the verified slot");
+                Check(AgentTools.Plan.Advance("route", _ => 200)["verified"].GetValue<bool>() && AgentTools.Plan.Incomplete,
+                    "completed-supply test did not advance the prerequisite while a consumer remained unfinished");
+                var afterVerification = PvpInventory.Review();
+                Check(Agent.ApplyCleanup(afterVerification, afterVerification["inventory"].AsArray().OfType<JsonObject>().ToArray(),
+                    new JsonObject { ["trash_slots"] = new JsonArray(24) }).Count == 0 && player.inventory[24].stack == 36,
+                    "cleanup discarded verified task supplies while a dependent step was still running");
             }
             finally
             {
