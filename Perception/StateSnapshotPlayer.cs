@@ -87,7 +87,8 @@ namespace TerraBlind
 				// BridgeStart 已经把"放第一格 + 站上去 + 站稳60帧"全办了,这里只看它的结论
 				if (BridgeStart.Outcome != "done")
 				{
-					if (_hellConstruction is { Replanned: false } current && RecedingNav.LastStop == "walled_in"
+					if (_hellConstruction is { Replanned: false } current
+						&& (BridgeStart.ApproachFailed || RecedingNav.LastStop == "walled_in")
 						&& TryAlternateHellSite(Main.LocalPlayer, current)) return;
 					// 【必须写日志】。原来只 Chatter.Say,而录视频时 Diag=false ---
 					// 房子没开工、屏幕和日志都一个字没有,只能靠猜

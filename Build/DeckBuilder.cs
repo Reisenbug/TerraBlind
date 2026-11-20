@@ -48,7 +48,8 @@ namespace TerraBlind
 			int nx = _line[_idx].x, npx = ActExecutor.OriginCx(p);
 			int col = nx > npx ? br + 1 : bl - 1;
 			int fy = ActExecutor.OriginCy(p);
-			return Predicates.IsGround(col, fy + 1) || Predicates.IsGround(col, fy + 2);
+			int support = Predicates.IsGround(col, fy + 1) ? fy + 1 : fy + 2;
+			return Predicates.IsGround(col, support) && !TerrainInspection.BurnsOnContact(p, col, support);
 		}
 
 		// 【绝不走到桥头】:站在边缘那一格,一个残余横速就掉下去。距离不写死,
@@ -85,7 +86,7 @@ namespace TerraBlind
 		// 【要先挖才能铺的格子必须断开连续段】。BridgeBuilder 只会放不会挖:段里混着
 		// 地狱石砖(76)/平台/罐子,它就对着那格空挥到超时,那两格永远换不掉
 		static bool NeedsDig(int x, int y)
-			=> Predicates.IsPlatform(x, y) || IsHellBrick(x, y) || Predicates.IsClutter(x, y);
+			=> Predicates.IsPlatform(x, y) || IsHotTile(x, y) || Predicates.IsClutter(x, y);
 
 		// 桥面用任何方块都行:挑存量最多的那种,一种铺光自动换下一种(平台不算,要站得住)
 		public static int PickBlock()
@@ -98,6 +99,7 @@ namespace TerraBlind
 				var it = p.inventory[i];
 				if (it == null || it.IsAir || it.favorited) continue;
 				if (it.createTile < 0 || it.stack <= 0) continue;
+				if (Terraria.ID.TileID.Sets.TouchDamageHot[it.createTile]) continue;
 				if (Main.tileFrameImportant[it.createTile]) continue;   // 家具/门那些不是方块
 				if (!Main.tileSolid[it.createTile] || Main.tileSolidTop[it.createTile]) continue;
 				if (it.stack > bestStack) { bestStack = it.stack; best = it.type; }
@@ -135,16 +137,15 @@ namespace TerraBlind
 			PlaceAnywhere.Stop();
 		}
 
-		// 地狱石砖:废墟自带,踩上去烧人 --- 桥面不能留它
-		static bool IsHellBrick(int x, int y)
+		static bool IsHotTile(int x, int y)
 		{
 			var t = Main.tile[x, y];
-			return t.HasTile && t.TileType == Terraria.ID.TileID.HellstoneBrick;
+			return t.HasUnactuatedTile && Terraria.ID.TileID.Sets.TouchDamageHot[t.TileType];
 		}
 
 		// 这一格已经是合格的桥面。铺桥的验收和算线的免铺折扣都问这一份,别各编一套
 		public static bool DeckReady(int x, int y)
-			=> Predicates.IsGround(x, y) && !Predicates.IsPlatform(x, y) && !IsHellBrick(x, y);
+			=> Predicates.IsGround(x, y) && !Predicates.IsPlatform(x, y) && !IsHotTile(x, y);
 
 		public static void Tick()
 		{
@@ -225,7 +226,7 @@ namespace TerraBlind
 			// 平台/地狱石砖/占位物(罐子、草、藤)都挖掉换方块。罐子原来直接跳过,桥面就留了洞;
 			// 占位物敲不动就别死磕,落到下面那条跳过
 			bool clutterGaveUp = Predicates.IsClutter(x, y) && _cellFrames > MaxCellFrames;
-			if ((Predicates.IsPlatform(x, y) || IsHellBrick(x, y) || Predicates.IsClutter(x, y)) && !clutterGaveUp)
+			if (NeedsDig(x, y) && !clutterGaveUp)
 			{
 				if (ItemUseCoordinator.IsActive) { Mark("挖平台中"); return; }
 				int ppk = ClearWay.PickSlot(p);

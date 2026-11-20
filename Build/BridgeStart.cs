@@ -19,6 +19,7 @@ namespace TerraBlind
 		static string _item = "";
 		static int _tx, _ty;
 		static int _phaseFrames, _held, _tries;
+		static (int X, int Y, RecedingNav.Mode Mode)? _navigationGoal;
 
 		// 站住这么多帧才认。1 秒 -- 短于此的"到了"都可能是路过
 		const int HoldFrames = 60;
@@ -29,6 +30,7 @@ namespace TerraBlind
 		internal static bool ReservesMovement => _ph == Ph.Verify || _ph == Ph.Stand && SettleAt.IsRunning;
 		public static string Outcome = "idle";
 		public static string Reason = "";
+		internal static bool ApproachFailed { get; private set; }
 
 		public static bool Start(string item, int tx, int ty, out string why)
 		{
@@ -37,11 +39,14 @@ namespace TerraBlind
 			if (p == null) { why = "no_player"; return false; }
 			_item = item; _tx = tx; _ty = ty;
 			_phaseFrames = 0; _held = 0; _tries = 0; _gotoTries = 0;
+			_navigationGoal = null;
+			ApproachFailed = false;
 			Outcome = "running"; Reason = "";
 			DiagLog.Write($"[bstart] START 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → 桥起点({tx},{ty})");
+			if (ReadyToPlace(p)) { _ph = Ph.Place; return true; }
 			// 【不能用 Mode.Stand】:桥起点此刻还是空气,让 A* 去站一个不存在的落脚点只会报 unreachable。
 			// 站上去是 Ph.Stand 的事 -- 那时方块已经放好,是实的
-			RecedingNav.Start(tx, ty, RecedingNav.Mode.Reach);
+			Navigate(tx, ty, RecedingNav.Mode.Reach);
 			_ph = Ph.Goto;
 			return true;
 		}
@@ -71,8 +76,28 @@ namespace TerraBlind
 		const int FootScan = 12;
 		static int _gotoTries;
 
+		static bool ReadyToPlace(Player player) => player.velocity == Microsoft.Xna.Framework.Vector2.Zero
+			&& Reach.CanPlace(player, _tx, _ty) && !Predicates.IsLava(_tx, _ty)
+			&& Collision.HurtTiles(player.position, player.width, player.height, player).type < 0
+			&& !Collision.LavaCollision(player.position, player.width, player.height);
+
+		static void Navigate(int x, int y, RecedingNav.Mode mode)
+		{
+			RecedingNav.Start(x, y, mode);
+			_navigationGoal = RecedingNav.DisplayGoal;
+		}
+
+		static void StopApproach()
+		{
+			if (_navigationGoal.HasValue && RecedingNav.DisplayGoal == _navigationGoal)
+				RecedingNav.Stop();
+			_navigationGoal = null;
+		}
+
 		static void Fail(string why)
 		{
+			ApproachFailed = _ph == Ph.Goto;
+			StopApproach();
 			Outcome = "stuck"; Reason = why; _ph = Ph.Done;
 			DiagLog.Write($"[bstart] STUCK {why}");
 		}
@@ -89,6 +114,12 @@ namespace TerraBlind
 				// 走过去。【收尾要用放置那把尺子,不是交互那把】:Reach 判 CanInteract 按玩家中心格算,
 				// 撒手时 CanPlace 未必过(向导入住前范围还是原版 5/4),够不着就送到正下方那格实地
 				case Ph.Goto:
+					if (ReadyToPlace(p))
+					{
+						StopApproach();
+						DiagLog.Write($"[bstart] 可放置({_tx},{_ty})，结束接近并开始放置");
+						_phaseFrames = 0; _ph = Ph.Place; return;
+					}
 					if (RecedingNav.Active) return;
 					if (RecedingNav.LastStop != "done")
 					{ Fail($"寻路没到:{RecedingNav.LastStop}"); return; }
@@ -112,7 +143,7 @@ namespace TerraBlind
 							_phaseFrames = 0; _ph = Ph.Place; return;
 						}
 						DiagLog.Write($"[bstart] 够得着但放不了({_tx},{_ty}) 人({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) → 去({_tx},{fy})站住 第{_gotoTries}次");
-						RecedingNav.Start(_tx, fy, RecedingNav.Mode.Stand);
+						Navigate(_tx, fy, RecedingNav.Mode.Stand);
 						_phaseFrames = 0;
 						return;
 					}
@@ -148,7 +179,7 @@ namespace TerraBlind
 						// 不知道是走不到还是走到了没站稳
 						if (_tries > 1 && RecedingNav.LastStop != null && RecedingNav.LastStop != "done")
 							DiagLog.Write($"[bstart] 上一轮寻路结果={RecedingNav.LastStop}");
-						RecedingNav.Start(_tx, _ty - 1, RecedingNav.Mode.Stand);
+						Navigate(_tx, _ty - 1, RecedingNav.Mode.Stand);
 					}
 					return;
 

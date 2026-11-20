@@ -2842,6 +2842,12 @@ namespace TerraBlind
             // 所有候选,连 total 一起留着。选边要按 total 采样,不是取最小(见下面的 softmax)
             var jigglePool = new List<((SSNode node, List<PhysicsSimulator.ControlInput> frames, float cost, bool pillar, List<(int, int)> dig) edge, (int, int) cell, int h, float total)>();
             bool blockedByCycle = false;
+            bool HotLanding(SSNode node)
+            {
+                if (p.fireWalk) return false;
+                int type = Collision.HurtTiles(new Vector2(node.Px, node.Py), p.width, p.height, p).type;
+                return type >= 0 && Terraria.ID.TileID.Sets.TouchDamageHot[type];
+            }
             var _candLog = new System.Text.StringBuilder();
             var _swCycle = System.Diagnostics.Stopwatch.StartNew();
             foreach (var (next, frames, cost, pillar, digTiles) in Expand(ctx, cur, ph, gx, gy, BuildHoldOptions(), platformTile, hasPick))
@@ -2855,6 +2861,7 @@ namespace TerraBlind
                 var (ncx, ncy) = alters ? RawCell(landed.Px, landed.Py) : StandCell(landed.Px, landed.Py);
                 if (ncx == curCx && ncy == curCy) continue;   // self-loop (no real move)
                 if (IsLavaCell(ncx, ncy)) continue;           // never step into lava (deadly, not drift)
+                if (!alters && HotLanding(landed)) continue;
                 if (!field.TryGetValue((ncx, ncy), out int nH)) continue;   // off the field → can't value it
                 if (RecedingNav.BlocksCycleEdge(p, (curCx, curCy), (ncx, ncy)))
                 { blockedByCycle = true; continue; }
@@ -3069,7 +3076,8 @@ namespace TerraBlind
                         var esc = SimulateSegment(cur, edir, ehold, ph);
                         if (!esc.HasValue) continue;
                         var (ecx, ecy) = StandCell(esc.Value.node.Px, esc.Value.node.Py);
-                        if (IsLavaCell(ecx, ecy)) continue;
+                        if (IsLavaCell(ecx, ecy) || HotLanding(esc.Value.node)
+                            || RecedingNav.BlocksCycleEdge(p, (curCx, curCy), (ecx, ecy))) continue;
                         // 【落回原格不算逃逸】。(692,860) 那次 18 条边全 OK 但落点都是自己那格
                         // (像素上动了几格不到一格),派发出去人原地抽搐,而且它排在放置前面,
                         // 垫一格那条永远轮不到。死循环就是这么来的
