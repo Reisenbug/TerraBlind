@@ -221,7 +221,9 @@ namespace Terraria
         public bool noFallDmg;
         public bool waterWalk, waterWalk2, slowFall, gravControl, gravControl2;
         public int breath = 200, breathMax = 200;
-        public bool wet, honeyWet, ignoreWater;
+        public bool wet, honeyWet, lavaWet, ignoreWater;
+        public int[] buffTime = new int[10], buffType = new int[10];
+        public int FindBuffIndex(int type) => Array.IndexOf(buffType, type);
         public int[] grappling = { -1 };
         public float gravDir = 1, maxFallSpeed = 10;
         public int fallStart, extraFall;
@@ -374,6 +376,7 @@ namespace Terraria
     public static class Collision
     {
         public static bool up, down;
+        public static bool LavaCollision(Microsoft.Xna.Framework.Vector2 position, int width, int height) => false;
         public static bool CanTileHurt(int type, int x, int y, Player player) => true;
         public struct HurtTile { public int type; }
         public static Func<Microsoft.Xna.Framework.Vector2, int, int, Player, bool> HurtTest;
@@ -417,6 +420,7 @@ namespace Terraria.ID
     public static class ProjAIStyleID { public const int ShortSword = 161, Spear = 19, Explosive = 16; }
     public static class ItemID
     {
+        public const int ObsidianSkinPotion = 288;
         public const int FixtureGoal = 191, Umbrella = 946, DeadMansChest = 3988, TragicUmbrella = 4707;
         public const int MagicMirror = 50, RecallPotion = 2350, CellPhone = 3124, IceMirror = 3199,
             PotionOfReturn = 4870, Shellphone = 5358, ShellphoneSpawn = 5359;
@@ -434,6 +438,7 @@ namespace Terraria.ID
             public static bool[] Explosive = new bool[1200], RocketsSkipDamageForPlayers = new bool[1200];
         }
     }
+    public static class BuffID { public const int ObsidianSkin = 1; }
     public static class LiquidID { public const int Water = 0, Lava = 1, Honey = 2, Shimmer = 3; }
     public static class TileID
     {

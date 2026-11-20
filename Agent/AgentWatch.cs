@@ -142,9 +142,11 @@ public sealed class AgentWatch
         passive.Add("honey_slowdown");
         passive.Add("invasion_started");
         passive.Add("boss_warning");
+        passive.Add("lava_protection_expiring");
         events.UnionWith(new[] { "action_finished", "target_acquired", "low_health", "suffocating", "player_died", "boss_appeared", "inventory_full", "honey_slowdown" });
         events.Add("invasion_started");
         events.Add("boss_warning");
+        events.Add("lava_protection_expiring");
         if (!configured)
         {
             events.Add("nearby_chest");
@@ -307,6 +309,16 @@ public sealed class AgentWatch
         }
         if (state["inventory_full"]?.GetValue<bool>() == true) Emit("inventory_full", "task", state);
         else if (state["inventory_full"]?.GetValue<bool>() == false) seen.Remove("inventory_full:task");
+        if (state["lava_protection_warning"] is JsonObject lava) Emit("lava_protection_expiring", "obsidian_skin", lava);
+        else if (state.ContainsKey("lava_protection_warning") && seen.Remove("lava_protection_expiring:obsidian_skin"))
+        {
+            int count = pending.Count;
+            for (int i = 0; i < count; i++)
+            {
+                var item = pending.Dequeue();
+                if (item["kind"]?.ToString() != "lava_protection_expiring") pending.Enqueue(item);
+            }
+        }
         if (state["upcoming_boss"] is JsonObject warning) Emit("boss_warning", warning["type"].ToString(), warning);
         else if (state.ContainsKey("upcoming_boss") && seen.RemoveWhere(key => key.StartsWith("boss_warning:", StringComparison.Ordinal)) > 0)
         {
@@ -412,7 +424,7 @@ public sealed class AgentWatch
         }
         return result;
     }
-    static int ReviewPriority(JsonObject item) => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "boss_appeared" or "boss_warning" or "decision_point" or "execution_gap" or "honey_slowdown"
+    static int ReviewPriority(JsonObject item) => item["kind"]?.ToString() is "low_health" or "suffocating" or "player_died" or "boss_appeared" or "boss_warning" or "decision_point" or "execution_gap" or "honey_slowdown" or "lava_protection_expiring"
         || item["kind"]?.ToString() == "action_finished" && item["evidence"]?["status"]?.ToString() == "failed" ? 0 : 1;
 
     public JsonObject Pending(bool recoveryOnly = false)
@@ -455,7 +467,7 @@ public sealed class AgentWatch
             if (dx * dx + dy * dy > Radius * Radius) return false;
         }
         return !advised.Contains(item["id"].GetValue<int>())
-            && (kind is "nearby_chest" or "nearby_tile" or "nearby_drop" or "honey_slowdown" or "inventory_full" or "tactical_review" or "boss_warning"
+            && (kind is "nearby_chest" or "nearby_tile" or "nearby_drop" or "honey_slowdown" or "inventory_full" or "tactical_review" or "boss_warning" or "lava_protection_expiring"
                 || item["wake_deferred"]?.GetValue<bool>() != true
                     && (kind == "target_acquired" && (!passive.Contains(kind) || background.Contains(kind))
                         || kind == "action_finished" && item["evidence"]?["status"]?.ToString() == "failed"));

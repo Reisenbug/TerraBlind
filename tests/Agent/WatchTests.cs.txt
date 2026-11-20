@@ -20,6 +20,22 @@ static class WatchTests
         alarm.Observe(new JsonObject { ["upcoming_boss"] = null });
         Check(!alarm.HasPending, "an expired boss warning remained pending");
 
+        var lavaPlayer = new Terraria.Player { lavaWet = true };
+        lavaPlayer.buffType[0] = Terraria.ID.BuffID.ObsidianSkin;
+        lavaPlayer.buffTime[0] = 2701;
+        Check(NativeAgent.LavaProtectionWarning(lavaPlayer) == null, "lava protection warned before its alert window");
+        lavaPlayer.buffTime[0] = 2700;
+        var lavaEvidence = NativeAgent.LavaProtectionWarning(lavaPlayer);
+        Check(lavaEvidence?["expires_in_ticks"]?.GetValue<int>() == 2700 && lavaEvidence["in_lava"].GetValue<bool>(),
+            "lava protection warning omitted the measured deadline or contact state");
+        var lavaState = new JsonObject { ["lava_protection_warning"] = lavaEvidence };
+        alarm.Observe(lavaState); alarm.Observe(lavaState);
+        Check(alarm.PendingCount == 1 && alarm.HasAdvisories && !alarm.HasInterrupting,
+            "lava protection did not warn once while leaving current input running");
+        lavaPlayer.lavaWet = false;
+        alarm.Observe(new JsonObject { ["lava_protection_warning"] = NativeAgent.LavaProtectionWarning(lavaPlayer) });
+        Check(!alarm.HasPending, "leaving the hazard did not clear the old warning");
+
         var healthWatch = new AgentWatch();
         healthWatch.EnsureDefaults();
         foreach (int hp in new[] { 100, 80, 30 })
