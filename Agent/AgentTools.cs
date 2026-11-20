@@ -509,8 +509,7 @@ public static partial class AgentTools
             return;
         }
         continuedActions.Add(attempt);
-        if (!verified && !prepared && (workflow == null || workflow.Yielded || workflow.ReviewRequested
-            || action["status"]?.ToString() != "completed"))
+        if (!verified && !prepared)
         {
             if (TryDeferNode(owner, action["result"]) is string sibling)
                 StartPreparedNode(sibling, handle, token);
@@ -552,7 +551,7 @@ public static partial class AgentTools
         var value = receipt["value"] as JsonObject ?? receipt;
         if (value["wake"] != null || value["error"] != null) return null;
         var outcome = (value["blocked"] as JsonObject ?? value["collection"] as JsonObject ?? value)["outcome"]?.ToString();
-        if (outcome is not ("source_unavailable" or "source_area_exhausted" or "navigation_no_progress")) return null;
+        if (!ActionTasks.SourceExhausted(outcome) && outcome != "navigation_no_progress") return null;
         var plan = Plan.Snapshot();
         var blocked = plan["steps"].AsArray().FirstOrDefault(step => step["id"]?.ToString() == node);
         if (blocked == null) return null;

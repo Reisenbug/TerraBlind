@@ -210,9 +210,9 @@ public sealed class ActionTasks
                         || returned["status"]?.ToString() is "needs_review" or "failed" or "stopped_short"
                         || returned["wake"] != null || returned["error"] != null || returned["ok"]?.ToString() == "false"
                         || returned["done"]?.ToString() == "false"
-                        || returned["outcome"]?.ToString() is "timeout" or "no_progress" or "interrupted_by_death" or "failed" or "stopped" or "partial")
+                        || FailedOutcome(returned))
                 || entry.Tool == "nav_to" && value["done"]?.ToString() == "false"
-                || value["outcome"]?.ToString() is "timeout" or "no_progress" or "interrupted_by_death" or "failed" or "stopped" or "partial"
+                || FailedOutcome(value)
                 || value["status"]?.ToString() is "failed" or "stopped_short") ? "failed" : "completed";
         }
         catch (OperationCanceledException) { status = "cancelled"; }
@@ -272,6 +272,16 @@ public sealed class ActionTasks
             }
             caller.Value = null;
         }
+    }
+
+    internal static bool SourceExhausted(string outcome) =>
+        outcome is "source_unavailable" or "source_area_exhausted" or "no_available_trees";
+
+    static bool FailedOutcome(JsonObject receipt)
+    {
+        string outcome = receipt["outcome"]?.ToString();
+        return SourceExhausted(outcome)
+            || outcome is "timeout" or "no_progress" or "interrupted_by_death" or "failed" or "stopped" or "partial";
     }
 
     static bool Moved(JsonObject before, JsonObject after)
