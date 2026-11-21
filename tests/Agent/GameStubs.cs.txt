@@ -776,8 +776,9 @@ namespace TerraBlind
     public static class ActExecutor
     {
         public static bool IsActive => false;
-        public static int OriginCx(Terraria.Player player) => 12;
-        public static int OriginCy(Terraria.Player player) => 34;
+        public static int TestOriginCx = 12, TestOriginCy = 34;
+        public static int OriginCx(Terraria.Player player) => TestOriginCx;
+        public static int OriginCy(Terraria.Player player) => TestOriginCy;
     }
     public static class VanillaContactRegion
     {
@@ -791,6 +792,9 @@ namespace TerraBlind
     {
         public static int TestLadderLength = 4;
         public static int LadderLen(int x, int y) => TestLadderLength;
+        public static bool CanStand(int x, int y) => Terraria.Main.tile[x, y + 1].HasUnactuatedTile;
+        public static bool IsLava(int x, int y) => Terraria.Main.tile[x, y].LiquidAmount > 0
+            && Terraria.Main.tile[x, y].LiquidType == Terraria.ID.LiquidID.Lava;
     }
     public static class HouseBuilder
     {

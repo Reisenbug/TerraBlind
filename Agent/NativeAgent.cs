@@ -286,7 +286,7 @@ public class NativeAgent : ModSystem
                 if (!successor || !proposalQueries.Contains(name) || ++queryCount > 6)
                     return "{\"error\":\"proposal_query_unavailable\"}";
                 return await AgentTools.Execute(name, args, ct);
-            }, _ => { }, token);
+            }, _ => { }, token, proposalAccepted: () => proposal != null);
         return proposal;
     }
 
@@ -465,7 +465,7 @@ public class NativeAgent : ModSystem
             && Math.Abs(player.velocity.X) + Math.Abs(player.velocity.Y) < .15f) return;
         _preparationTick = now + 15;
         string owner = AgentTools.Actions.ActiveNode;
-        var opportunities = AgentTools.Plan.PreparationNodes(owner, AgentTaskEvidence.Measure);
+        var opportunities = AgentTools.Plan.PreparationNodes(owner, AgentTaskEvidence.Measure, prefetchFollowing: true);
         if (opportunities.Count == 0 && owner == null) return;
         var graph = AgentTools.Plan.Snapshot();
         var ready = graph["ready_steps"].AsArray().Select(step => step.ToString()).ToHashSet();

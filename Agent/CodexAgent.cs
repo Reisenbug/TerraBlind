@@ -438,7 +438,7 @@ public sealed class CodexAgent : IDisposable
     public async Task RunAsync(string input, string executable, string cwd, string model, string system, JsonArray tools,
         Func<string, JsonObject, CancellationToken, Task<string>> execute, Action<string> say, CancellationToken token,
         JsonObject goalOptions = null, Func<Task<string>> refreshContext = null, Func<Task<bool>> canCompact = null,
-        Func<Task<bool>> canStartCompaction = null)
+        Func<Task<bool>> canStartCompaction = null, Func<bool> proposalAccepted = null)
     {
         string turn = null;
         var elapsed = Stopwatch.StartNew();
@@ -506,6 +506,7 @@ public sealed class CodexAgent : IDisposable
                         await Tool(message, tools, execute, token);
                         lastToolFinished = elapsed.ElapsedMilliseconds;
                         DiagLog.Write($"[agent-timing] phase=tool_returned turn={turn} tool={args["tool"]} elapsed_ms={lastToolFinished} tool_ms={lastToolFinished - toolStarted}");
+                        if (proposalAccepted?.Invoke() == true) return;
                     }
                     else await _rpc.Send(new JsonObject { ["id"] = message["id"].DeepClone(),
                         ["error"] = new JsonObject { ["code"] = -32601, ["message"] = "该游戏会话不支持此请求。" } }, token);

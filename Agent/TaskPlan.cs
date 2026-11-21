@@ -32,13 +32,22 @@ public sealed class AgentTaskPlan
     internal bool NeedsPreparation(string id, Func<JsonObject, int> measure)
         => NeedsPreparation(_steps.FirstOrDefault(step => step["id"]?.ToString() == id), measure);
 
-    internal JsonArray PreparationNodes(string owner, Func<JsonObject, int> measure)
+    internal JsonArray PreparationNodes(string owner, Func<JsonObject, int> measure, bool prefetchFollowing = false)
     {
         var completed = _steps.Where(s => s["status"]?.ToString() == "completed").Select(s => s["id"].ToString()).ToHashSet();
-        return new JsonArray(_steps.Where(s => s["status"]?.ToString() != "completed"
+        var next = _steps.Where(s => s["status"]?.ToString() != "completed"
             && (s["id"]?.ToString() == owner
-                || s["depends_on"].AsArray().All(d => d?.ToString() == owner || completed.Contains(d.ToString())))
-            && NeedsPreparation(s, measure))
+                || s["depends_on"].AsArray().All(d => d?.ToString() == owner || completed.Contains(d.ToString())))).ToArray();
+        var direct = next.Where(s => NeedsPreparation(s, measure));
+        if (prefetchFollowing && owner != null)
+        {
+            var activeFrontier = next.Select(s => s["id"].ToString()).ToHashSet();
+            direct = direct.Concat(_steps.Where(s => s["status"]?.ToString() != "completed"
+                && !activeFrontier.Contains(s["id"].ToString())
+                && s["depends_on"].AsArray().All(d => activeFrontier.Contains(d.ToString()) || completed.Contains(d.ToString()))
+                && NeedsPreparation(s, measure)).Take(1));
+        }
+        return new JsonArray(direct
             .Select(s => s["id"].DeepClone()).ToArray());
     }
 

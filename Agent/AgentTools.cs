@@ -3396,7 +3396,15 @@ public static partial class AgentTools
                 result = await Place(args, token);
                 break;
             case "build_bridge":
-                result = await NativeAgent.OnMain(() => StartBridgeSegment(args), token);
+                result = await NativeAgent.OnMain(() => StartBridgeSegment(args, locateApproach: true), token);
+                if (result["approach"] is JsonObject bridgeEntry)
+                {
+                    var arrival = await NavigateTreasure(bridgeEntry, token);
+                    result = Bool(arrival, "done")
+                        ? await NativeAgent.OnMain(() => StartBridgeSegment(args), token)
+                        : new JsonObject { ["error"] = "bridge_entry_not_reached", ["approach"] = bridgeEntry.DeepClone(),
+                            ["navigation"] = arrival };
+                }
                 if (Bool(result, "accepted")) result = await Wait("/bridge_status", "running", "/bridge_stop", 0, token);
                 break;
             case "house_site":
@@ -4662,7 +4670,7 @@ public static partial class AgentTools
         return result;
     }
 
-    static JsonObject StartBridgeSegment(JsonObject args)
+    static JsonObject StartBridgeSegment(JsonObject args, bool locateApproach = false)
     {
         int from = Int(args, "from_x"), to = Int(args, "to_x"), row = Int(args, "y"), itemType = Int(args, "item_type");
         if (!WorldGen.InWorld(from, row, 1) || !WorldGen.InWorld(to, row, 1) || Math.Abs(to - from) >= 512)
@@ -4674,6 +4682,16 @@ public static partial class AgentTools
         if (tile < 0 || !Main.tileSolid[tile] || Terraria.ID.TileID.Sets.TouchDamageHot[tile]
             || Terraria.ID.TileID.Sets.Falling[tile] || Main.tileFrameImportant[tile] && !Main.tileSolidTop[tile])
             return new JsonObject { ["error"] = "bridge_material_not_safe_support", ["item_type"] = itemType };
+        var player = Main.LocalPlayer;
+        if (locateApproach && ActExecutor.OriginCy(player) != row - 1)
+        {
+            int? entry = Enumerable.Range(-3, 7).Select(dx => from + dx).Where(x =>
+                WorldGen.InWorld(x, row, 4) && Predicates.CanStand(x, row - 1)
+                && !Predicates.IsLava(x, row) && Control.CheckAt(ControlBehavior.Navigation, x, row - 1) == null)
+                .OrderBy(x => Math.Abs(x - ActExecutor.OriginCx(player))).Select(x => (int?)x).FirstOrDefault();
+            if (entry is int x)
+                return new JsonObject { ["approach"] = new JsonObject { ["x"] = x, ["y"] = row - 1, ["mode"] = "stand" } };
+        }
         bool started = BridgeBuilder.Start(itemType.ToString(), to < from ? "left" : "right", Math.Abs(to - from) + 1,
             from, row, out string reason, exactSegment: true);
         return started ? new JsonObject { ["accepted"] = true }

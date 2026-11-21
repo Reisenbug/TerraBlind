@@ -40,6 +40,8 @@ static class TaskPlanTests
             "deferred successor blocked the root or fabricated task completion");
         Check(plan.PreparationNodes("travel", _ => 100).ToJsonString() == "[\"collect\"]",
             "preparation request included completed conditions or distant dependent work");
+        Check(plan.PreparationNodes("travel", _ => 100, prefetchFollowing: true).ToJsonString() == "[\"collect\",\"later\"]",
+            "parallel preparation did not look beyond a short successor while the current segment was running");
         Check(plan.PreparationNodes(null, _ => 100).Count == 0 && plan.Advance("travel", _ => 9999)["verified"].GetValue<bool>()
             && plan.PreparationNodes(null, _ => 100).ToJsonString() == "[\"collect\"]", "idle preparation skipped the ready successor");
         plan.Revise(new JsonObject { ["expected_revision"] = plan.Snapshot()["revision"].DeepClone(),

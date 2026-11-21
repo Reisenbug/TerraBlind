@@ -220,22 +220,42 @@ static class RuntimeTests
 
             var previousMaterial = Game.LocalPlayer.inventory[0];
             bool previouslyHot = TileID.Sets.TouchDamageHot[1];
-            int bridgeCalls = 0;
+            var previousSupport = Game.tile[112, 124];
+            int previousX = ActExecutor.TestOriginCx, previousFeet = ActExecutor.TestOriginCy, bridgeCalls = 0, bridgeApproaches = 0;
             try
             {
                 Game.LocalPlayer.inventory[0] = new Terraria.Item { type = 9, stack = 8, createTile = 1 };
+                Game.tile[112, 124] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
                 BridgeBuilder.StartObserved = segment =>
                 {
                     bridgeCalls++;
-                    Check(segment == ("9", "left", 8, 112, 124, true), "bridge replaced the chosen site, direction, length or material");
+                    Check(ActExecutor.TestOriginCy == 123 && segment == ("9", "left", 8, 112, 124, true),
+                        "bridge did not reach the supported row or changed the requested segment");
                 };
-                HttpServerSystem.Handler = (path, _) => path == "/bridge_status"
-                    ? (200, "{\"running\":false,\"outcome\":\"blocked\",\"placed\":3,\"target_cell\":[109,124]}")
-                    : throw new Exception("bridge construction started an unrelated workflow: " + path);
+                HttpServerSystem.Handler = (path, payload) =>
+                {
+                    if (path == "/nav_recede")
+                    {
+                        bridgeApproaches++;
+                        var approach = JsonNode.Parse(payload);
+                        Check(approach["gx"].GetValue<int>() == 112 && approach["gy"].GetValue<int>() == 123
+                            && approach["stand"].GetValue<bool>(), "bridge did not target the actual stand beside the seed");
+                        return (200, "{\"accepted\":true}");
+                    }
+                    if (path == "/nav_recede_done")
+                    {
+                        ActExecutor.TestOriginCx = 112;
+                        ActExecutor.TestOriginCy = 123;
+                        return (200, "{\"done\":true}");
+                    }
+                    return path == "/bridge_status"
+                        ? (200, "{\"running\":false,\"outcome\":\"blocked\",\"placed\":3,\"target_cell\":[109,124]}")
+                        : throw new Exception("bridge construction started an unrelated workflow: " + path);
+                };
                 var bridgeArgs = new JsonObject { ["from_x"] = 112, ["to_x"] = 105, ["y"] = 124, ["item_type"] = 9 };
                 var bridge = await Call("build_bridge", bridgeArgs);
-                Check(bridge["outcome"].ToString() == "blocked" && bridge["placed"].GetValue<int>() == 3
-                    && bridge["target_cell"][0].GetValue<int>() == 109, "bridge lost its partial result or blocked tile");
+                Check(bridgeApproaches == 1 && bridge["outcome"]?.ToString() == "blocked" && bridge["placed"].GetValue<int>() == 3
+                    && bridge["target_cell"][0].GetValue<int>() == 109, "bridge lost its partial result or blocked tile: " + bridge);
                 TileID.Sets.TouchDamageHot[1] = true;
                 var hotBridge = await Call("build_bridge", bridgeArgs);
                 Check(hotBridge["error"].ToString() == "bridge_material_not_safe_support" && bridgeCalls == 1,
@@ -244,6 +264,9 @@ static class RuntimeTests
             finally
             {
                 BridgeBuilder.StartObserved = null;
+                ActExecutor.TestOriginCx = previousX;
+                ActExecutor.TestOriginCy = previousFeet;
+                Game.tile[112, 124] = previousSupport;
                 Game.LocalPlayer.inventory[0] = previousMaterial;
                 TileID.Sets.TouchDamageHot[1] = previouslyHot;
             }
