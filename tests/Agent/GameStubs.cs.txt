@@ -712,6 +712,7 @@ namespace TerraBlind
         public static void Stop() => Stops++;
     }
     public static class Dodge { public static bool Enabled; public static string Last = "idle"; public static float MovementReserveScale = 1;
+        internal static bool OwnsMovement;
         public static int BossDps;
         public static JevariaCombat.CombatSnapshot Snapshot; public static void Stop() { Last = "stopped"; } }
     public static class Equipment

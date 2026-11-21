@@ -410,7 +410,7 @@ public static partial class AgentTools
     static bool gapReported, gapLimitExceeded, primaryObserved;
     const int ExecutionGapLimitMs = 1000;
     internal static bool BossMovementHasControl => Dodge.Enabled && AgentPermissions.Dodge
-        && Dodge.Last.StartsWith("driving ", StringComparison.Ordinal);
+        && Dodge.OwnsMovement;
     sealed record IdleOption(string Node, string Description, Action<CancellationToken> Start);
     static long emptyIdleGap;
     static readonly HashSet<(string Node, int X, int Y)> idleWalks = new();

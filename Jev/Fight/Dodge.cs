@@ -42,6 +42,7 @@ namespace TerraBlind
 		public static float MovementReserveScale { get => _sensor.MovementReserveScale; set => _sensor.MovementReserveScale = value; }
 		static string _movementReason = "";
 		public static string Last = "idle";
+		internal static bool OwnsMovement { get; private set; }
 		public static DodgeAction Action = DodgeAction.Idle;
 		static Dictionary<string, DodgeAction> _availableActions = new();
 		static string _lastBlocked = "";
@@ -112,6 +113,7 @@ namespace TerraBlind
 
 		public static void Tick()
 		{
+			OwnsMovement = false;
 			if (!Enabled || !AgentPermissions.Dodge) { Release(); return; }
 			var p = Main.LocalPlayer;
 			if (p != null && p.active && p.dead) FightEnd("死亡");
@@ -217,6 +219,7 @@ namespace TerraBlind
 				_appliedAction = DodgeAction.Idle;
 				return;
 			}
+			OwnsMovement = true;
 			var result = _movement.Apply(p, ToIntent(action),
 				_snapshot with { Sequence = (ulong)_appliedSequence });
 			_appliedAction = FromIntent(result.Applied);
@@ -433,6 +436,7 @@ namespace TerraBlind
 
 		static void Release()
 		{
+			OwnsMovement = false;
 			_releasedAtMs = _clock.ElapsedMilliseconds;
 			_movement.Release(Main.LocalPlayer);
 			_movementReason = "";
