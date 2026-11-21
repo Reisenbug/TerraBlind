@@ -29,6 +29,7 @@ static class CodexTests
         await GoalProtocol();
         await ResumeSavedConversation();
         await NativeGoalProtocol();
+        await VerifiedGoalWithOldYield();
         await NativeExecutionSteering();
         await NativeExecutionSteering(script: true);
         await NativeExecutionSteering(preparedReview: true);
@@ -1031,6 +1032,47 @@ static class CodexTests
         }
         finally { native.OnWorldUnload(); native.Unload(); Config.I.AgentUseCodex = false; }
         Console.WriteLine("PASS: unverified game goal continues beyond no-progress turns on the same thread until explicit stop");
+    }
+
+    static async Task VerifiedGoalWithOldYield()
+    {
+        var native = new NativeAgent();
+        var server = new Server();
+        Config.I.AgentUseCodex = true;
+        native.Load();
+        typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .SetValue(native, new CodexAgent((_, _) => server.Connect()));
+        server.AfterTool = calls =>
+        {
+            if (calls != 1) return;
+            _ = NativeAgent.OnMain(() =>
+            {
+                AgentTools.Plan.Create(JsonNode.Parse("""
+                    {"goal":"verify existing health","mode":"dag","steps":[{"id":"health","description":"check health",
+                    "script":"return {};","depends_on":[],"conditions":[{"kind":"permanent_health","count":1}]}]}
+                    """).AsObject(), AgentTaskEvidence.Measure);
+                AgentTools.Plan.Advance("health", AgentTaskEvidence.Measure);
+                var old = new ScriptProgress();
+                old.Begin();
+                old.End(new JsonObject { ["value"] = new JsonObject { ["status"] = "yield" } });
+                AgentTools.Workflows["old-recovery"] = old;
+                return true;
+            }, default);
+        };
+        try
+        {
+            NativeAgent.Submit("/goal verify the host's health check");
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (server.Goal?["status"]?.ToString() != "complete" || NativeAgent.Processing)
+            {
+                Check(DateTime.UtcNow < deadline, "the verified fixture did not complete");
+                native.PostUpdateEverything(); await Task.Delay(5);
+            }
+            Check(NativeAgent.Status == "complete" && AgentTools.Workflows["old-recovery"].Yielded,
+                "a retained workflow's old yield overrode confirmed goal completion");
+            Console.WriteLine("PASS: a retained yield cannot override verified native goal completion");
+        }
+        finally { native.OnWorldUnload(); native.Unload(); Config.I.AgentUseCodex = false; }
     }
 
     static async Task ResumeSavedConversation()

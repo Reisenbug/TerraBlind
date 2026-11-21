@@ -1044,9 +1044,10 @@ public class NativeAgent : ModSystem
                     if (report["ended"] != null) break;
                     input = "PvP新要求或本会话一次受阻求助：处理后结束本轮，Jev继续控制。\n战况：" + report.ToJsonString();
                 }
+                JsonObject final = null;
                 if (goalOptions != null)
                 {
-                    var final = await codex.CompleteGoal(ct => OnMain(() =>
+                    final = await codex.CompleteGoal(ct => OnMain(() =>
                     {
                         var verified = AgentTools.Plan.VerifyFinal(AgentTaskEvidence.Measure);
                         if (AgentTools.Actions.HasActive) verified["verified"] = false;
@@ -1059,16 +1060,12 @@ public class NativeAgent : ModSystem
                         if (await OnMain(() => AgentTools.Recovery.Exhausted || AgentTools.Plan.Snapshot()["status"]?.ToString() == "blocked", token))
                             await codex.SuspendGoal("blocked", token);
                     }
-                    await OnMain(() =>
-                    {
-                        DiagLog.Write("[agent] goal result " + final?.ToJsonString());
-                        if (final?["verified"]?.GetValue<bool>() == true) Progress("Goal complete. Verified in game.", "complete");
-                        return true;
-                    }, token);
                 }
                 await OnMain(() =>
                 {
-                    if (AgentTools.Plan.Incomplete || AgentTools.Workflows.Values.Any(w => w.Yielded)
+                    if (goalOptions != null) DiagLog.Write("[agent] goal result " + final?.ToJsonString());
+                    if (final?["verified"]?.GetValue<bool>() == true) Progress("Goal complete. Verified in game.", "complete");
+                    else if (AgentTools.Plan.Incomplete || AgentTools.Workflows.Values.Any(w => w.Yielded)
                         || goalOptions != null && codex.GoalState?["native"]?["status"]?.ToString() != "complete")
                     {
                         if (goalOptions != null)
