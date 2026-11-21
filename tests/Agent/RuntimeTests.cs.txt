@@ -29,6 +29,17 @@ static class RuntimeTests
             async Task<JsonNode> Call(string name, JsonObject args) =>
                 JsonNode.Parse(await Execute(AgentTools.Execute(name, args, default)));
             var p = Game.LocalPlayer;
+            var originalAmmoSlot = p.inventory[54];
+            var originalMainSlot = p.inventory[49];
+            try
+            {
+                p.inventory[49] = new Terraria.Item { type = 40, stack = 3 };
+                p.inventory[54] = new Terraria.Item { type = 40, stack = 25 };
+                var carried = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("inventory_counts") });
+                Check(carried["inventory_counts"]["40"]?.GetValue<int>() == 28,
+                    "crafted ammo in the dedicated slot was omitted from the inventory count");
+            }
+            finally { p.inventory[49] = originalMainSlot; p.inventory[54] = originalAmmoSlot; }
             var savedPosition = p.position;
             var savedVelocity = p.velocity;
             try
@@ -5656,7 +5667,7 @@ static class RuntimeTests
         int oldHealth = Game.LocalPlayer.statLifeMax;
         try
         {
-            foreach (string scenario in new[] { "prepared", "native_receipt", "late", "blocked", "stale", "verified", "inline", "inline_blocked", "chained", "failed", "inline_failed" })
+            foreach (string scenario in new[] { "prepared", "native_receipt", "receipt_done", "late", "blocked", "stale", "verified", "inline", "inline_blocked", "chained", "failed", "inline_failed" })
             {
                 AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask(); AgentTools.Workflows.Clear();
                 Game.LocalPlayer.statLifeMax = 100;
@@ -5686,7 +5697,8 @@ static class RuntimeTests
                     ? "tool('nav_to',{x:12,y:34});return {outcome:'done',reason:'looted'};"
                     : "tool('nav_to',{x:12,y:34});"
                     + (scenario == "inline" ? "tool('nav_to',{x:14,y:34});" : "") + "return {status:'yield',"
-                    + (scenario is "blocked" or "inline_blocked" ? "blocked:'unsafe_to_continue'};" : "next:'collect equipment'};");
+                    + (scenario is "blocked" or "inline_blocked" ? "blocked:'unsafe_to_continue'};" : scenario == "receipt_done"
+                        ? "completed:{visited:true},blocked:'done',next:'collect equipment'};" : "next:'collect equipment'};");
                 if (scenario == "chained") plan["steps"].AsArray().Add(JsonNode.Parse("""
                     {"id":"explore","description":"Explore after preparation","depends_on":["prepare"],
                      "script":"return tool('action_start',{tool:'nav_to',args:{x:24,y:34}});",
@@ -5760,7 +5772,7 @@ static class RuntimeTests
                     timer.Restart();
                     AgentTools.ContinuePreparedNode(default);
                 }
-                if (scenario is "prepared" or "native_receipt" or "late" or "inline" or "chained" or "failed" or "inline_failed")
+                if (scenario is "prepared" or "native_receipt" or "receipt_done" or "late" or "inline" or "chained" or "failed" or "inline_failed")
                 {
                     await PumpUntil(() => starts == predecessorActions + 1 && AgentTools.LastContinuation?["started_handle"] != null);
                     Check(AgentTools.LastContinuation?["mode"]?.ToString() == (failed ? "prepared_failure" : "prepared_followup")

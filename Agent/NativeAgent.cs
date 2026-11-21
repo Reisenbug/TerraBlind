@@ -235,7 +235,7 @@ public class NativeAgent : ModSystem
 
     static readonly string[] proposalQueries = { "get_state", "game_catalog", "find_tiles", "find_descent", "early_descent", "inspect_terrain", "recipe", "npc_find" };
     const string SuccessorInventory = " For live inventory use tool('get_state',{fields:['inventory_counts','inventory_slots']}). "
-        + "Read item counts as state.inventory_counts[String(itemType)] ?? 0 and individual slots from state.inventory_slots. "
+        + "Read item counts as state.inventory_counts[String(itemType)] ?? 0, including ammo slots, and main inventory slots from state.inventory_slots. "
         + "Use the same field names in the generated script. Player positions from get_state are pixels; nav_to coordinates are tiles.";
     static readonly JsonObject proposalTool = JsonNode.Parse("""
         {"type":"function","function":{"name":"submit_proposal","description":"Return a proposal to the game host without executing it.",

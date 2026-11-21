@@ -480,7 +480,9 @@ public static partial class AgentTools
     }
 
     static bool PlainHandoff(JsonObject value) => value?["status"]?.ToString() == "yield"
-        && value["wake"] == null && value["blocked"] == null && value["reason"] == null && value["error"] == null
+        && value["wake"] == null && (value["blocked"] == null || value["completed"] != null
+            && value["blocked"] is JsonValue blocked && blocked.TryGetValue<string>(out string outcome) && outcome == "done")
+        && value["reason"] == null && value["error"] == null
         && value["outcome"] == null && value["ok"] == null && value["done"] == null && value["continue_after"] == null && value["handle"] == null;
 
     internal static Task NotifyExecution(CodexAgent codex, CancellationToken token)
@@ -1720,7 +1722,8 @@ public static partial class AgentTools
         state["combat"] = PvpDuel.Report();
         state["inventory_slots"] = PvpInventory.Snapshot();
         if (selected?.Contains("inventory_counts") == true)
-            state["inventory_counts"] = new JsonObject(healthPlayer.inventory.Take(50).Where(item => !item.IsAir && item.stack > 0)
+            state["inventory_counts"] = new JsonObject(healthPlayer.inventory.Take(58)
+                .Where((item, slot) => (slot < 50 || slot >= 54) && !item.IsAir && item.stack > 0)
                 .GroupBy(item => item.type).Select(group => new KeyValuePair<string, JsonNode>(group.Key.ToString(), JsonValue.Create(group.Sum(item => item.stack)))));
         state["healing_items"] = new JsonArray(Main.LocalPlayer.inventory.Take(50)
             .Select((item, slot) => (item, slot)).Where(entry => !entry.item.IsAir && entry.item.healLife > 0)
