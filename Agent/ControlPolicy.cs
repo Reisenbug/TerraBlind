@@ -137,14 +137,27 @@ public sealed class AgentControlPolicy
         return false;
     }
 
-    public bool BoundsAllowed(ControlBehavior behavior, float x, float y, float width, float height)
+    public bool BoundsAllowed(ControlBehavior behavior, float x, float y, float width, float height,
+        (float X, float Y)? returningFrom = null)
     {
         foreach (var rule in spatialRules)
         {
             if (!rule.Behaviors.Contains(behavior) || rule.Region is not { } area) continue;
-            if (rule.Outside ? x < area.X || y < area.Y || x + width > (long)area.X + area.Width || y + height > (long)area.Y + area.Height
-                : x < (long)area.X + area.Width && y < (long)area.Y + area.Height && x + width > area.X && y + height > area.Y)
-                return false;
+            float right = (long)area.X + area.Width, bottom = (long)area.Y + area.Height;
+            if (!rule.Outside)
+            {
+                if (x < right && y < bottom && x + width > area.X && y + height > area.Y) return false;
+                continue;
+            }
+            var target = Overflow(x, y);
+            if (target == default) continue;
+            if (returningFrom is not { } origin) return false;
+            var source = Overflow(origin.X, origin.Y);
+            if (target.Left > source.Left || target.Top > source.Top || target.Right > source.Right || target.Bottom > source.Bottom
+                || target == source) return false;
+
+            (float Left, float Top, float Right, float Bottom) Overflow(float px, float py) =>
+                (Math.Max(0, area.X - px), Math.Max(0, area.Y - py), Math.Max(0, px + width - right), Math.Max(0, py + height - bottom));
         }
         return true;
     }

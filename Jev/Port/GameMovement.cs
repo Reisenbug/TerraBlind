@@ -354,7 +354,9 @@ public sealed class GameMovement : IMovementDriver
         float jump = Math.Max(Player.jumpSpeed + player.jumpSpeedBoost, Math.Max(0, -player.velocity.Y));
         float verticalReach = vertical < 0 ? jump * Player.jumpHeight + jump * jump / (2 * Math.Max(.01f, player.gravity)) + 16
             : Math.Max(16, Math.Abs(player.velocity.Y) * 12 + 16);
-        bool Allowed(float x, float y) => policy.BoundsAllowed(ControlBehavior.Dodge, x / 16, y / 16, player.width / 16f, player.height / 16f);
+        var origin = (player.position.X / 16, player.position.Y / 16);
+        bool Allowed(float x, float y) => policy.BoundsAllowed(ControlBehavior.Dodge, x / 16, y / 16, player.width / 16f, player.height / 16f,
+            returningFrom: origin);
         return Allowed(player.position.X + horizontal * horizontalReach, player.position.Y + vertical * verticalReach)
             && (hook is not Vector2 target || Allowed(target.X - player.width / 2f, target.Y - player.height / 2f));
     }

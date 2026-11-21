@@ -153,6 +153,11 @@ static class ControlTests
         Check(policy.BoundsAllowed(ControlBehavior.Dodge, 20, 30, 1.25f, 2.625f)
             && !policy.BoundsAllowed(ControlBehavior.Dodge, 59, 31, 1.25f, 2.625f)
             && !policy.BoundsAllowed(ControlBehavior.Dodge, 30, 48, 1.25f, 2.625f), "confinement ignored body width or height");
+        Check(policy.BoundsAllowed(ControlBehavior.Dodge, 14, 31, 1.25f, 2.625f, (10, 31))
+            && !policy.BoundsAllowed(ControlBehavior.Dodge, 8, 31, 1.25f, 2.625f, (10, 31))
+            && !policy.BoundsAllowed(ControlBehavior.Dodge, 14, 48, 1.25f, 2.625f, (10, 31))
+            && !policy.BoundsAllowed(ControlBehavior.Dodge, 14, 31, 1.25f, 2.625f, (20, 31)),
+            "confinement rejected recovery from knockback or allowed movement farther outside");
         policy.Release(arena);
         Check(policy.BoundsAllowed(ControlBehavior.Dodge, 59, 31, 1.25f, 2.625f), "released arena still restricted movement");
         Console.WriteLine("PASS: rejected excavation remains forbidden after handback while other terrain actions remain available");
