@@ -33,9 +33,15 @@ public sealed class ScriptLibrary
             const recovered=[];
             for(const {item_type,tile_name,placement} of stations){
               const cell=placement?.cells?.[0],at=cell?.world;
-              if(placement?.placed!==1||cell?.verified!==true||cell.cells?.[0]?.result!=='placed'||!Array.isArray(at)||at.length!==2
+              if(placement?.placed!==1||cell?.verified!==true||!Array.isArray(at)||at.length!==2
                 ||!at.every(Number.isInteger)||!Number.isInteger(item_type)||item_type<=0||!tile_name)
                 return {error:'workstation_placement_unverified',recovered};
+              if(cell.cells?.[0]?.result!=='placed'){
+                const item=tool('game_catalog',{kind:'item',name:String(item_type)}).matches?.find(m=>m.type===item_type);
+                if(!item?.places_tile?.names?.some(n=>n.internal===tile_name)
+                  ||!item.display_names?.some(name=>placement.lost?.[name]===1))
+                  return {error:'workstation_placement_unverified',recovered};
+              }
               const [x,y]=at;
               const inventory=()=>tool('get_state',{fields:['inventory_counts']}).inventory_counts[item_type]??0;
               const area={x,y,width:1,height:1};

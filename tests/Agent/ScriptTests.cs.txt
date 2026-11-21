@@ -1346,17 +1346,26 @@ static class ScriptTests
 
     static async Task TestPackWorkstations()
     {
-        foreach (string scenario in new[] { "packed", "moved", "no_pickup" })
+        foreach (string scenario in new[] { "packed", "moved", "no_pickup", "automatic", "already_there" })
         {
             int collected = 0;
             var input = JsonNode.Parse("""
-                {"stations":[{"item_type":35,"tile_name":"Furnaces",
+                {"stations":[{"item_type":35,"tile_name":"Anvils",
                   "placement":{"placed":1,"cells":[{"world":[12,34],"verified":true,"cells":[{"result":"placed"}]}]}}]}
                 """);
+            bool packed = scenario is "packed" or "automatic";
+            if (scenario is "automatic" or "already_there")
+            {
+                input["stations"][0]["placement"]["cells"][0].AsObject().Remove("cells");
+                input["stations"][0]["placement"]["lost"] = new JsonObject { ["Iron Anvil"] = scenario == "automatic" ? 1 : 0 };
+            }
             var report = await AgentScript.Run("const input=" + input.ToJsonString() + ";\n" + ScriptLibrary.Example("pack_workstations")["code"],
                 5, (_, _) => { }, (name, args, _) =>
                 {
-                    if (name == "get_state") return Task.FromResult(scenario == "packed" && collected > 0
+                    if (name == "game_catalog") return Task.FromResult("""
+                        {"matches":[{"type":35,"display_names":["Iron Anvil"],"places_tile":{"names":[{"internal":"Anvils"}]}}]}
+                        """);
+                    if (name == "get_state") return Task.FromResult(packed && collected > 0
                         ? """{"inventory_counts":{"35":1}}""" : """{"inventory_counts":{}}""");
                     Check(args["source_area"]["x"].GetValue<int>() == 12 && args["source_area"]["y"].GetValue<int>() == 34
                         && args["source_area"]["width"].GetValue<int>() == 1 && args["source_area"]["height"].GetValue<int>() == 1,
@@ -1368,8 +1377,8 @@ static class ScriptTests
                     collected++;
                     return Task.FromResult("""{"outcome":"enough"}""");
                 }, _ => Task.CompletedTask, default);
-            Check(report["ok"].GetValue<bool>() && collected == (scenario == "moved" ? 0 : 1)
-                && (report["value"]["ok"]?.GetValue<bool>() == true) == (scenario == "packed"),
+            Check(report["ok"].GetValue<bool>() && collected == (scenario is "moved" or "already_there" ? 0 : 1)
+                && (report["value"]["ok"]?.GetValue<bool>() == true) == packed,
                 "workstation recovery accepted the wrong outcome: " + scenario + " " + report);
         }
         Console.WriteLine("PASS: portable workstation recovery uses the verified cell and confirms native pickup");

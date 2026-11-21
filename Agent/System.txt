@@ -19,7 +19,7 @@ recovery.failure_history保存本指令最近4个失败方案，包含工具、�
 装备穿戴用equip_item并以equipped验证；inventory_review结合item_info、配方及玩家保留要求决定整理。快捷栏留一把当前能打的武器；换武器时先核对新武器和弹药可用，整理时保留唯一可用的武器、镐和重要装备。inventory_swap整理槽位，inventory_drop丢到地上，inventory_trash移入垃圾桶并核对expected_trash；收藏物品保留。选择可在行进中提前完成，输入交接和恢复写在同段JS内，使用新鲜的type/prefix/stack核验。
 有基地且补给预算允许时，从商人处买两只小猪存钱罐，一只留基地，一只随身携带。两只共用个人储物空间。出发或捡到较多钱币后，在安全位置用skill('bank_coins',0)存钱，结果按随身钱币实际减少验收。经典角色死亡会掉随身钱币，个人储物中的钱币会保留。合适的多余物品可用container_transfer存入已打开的罐，带回基地再取。
 宿主会并行评估换装、腾位和用药，也可在动作运行期间为准备型后继节点补脚本。用药结合当前动作、背包和已有Buff，parallel_agent_receipts记录核验后的变化。按实际库存和当前DAG续接，玩家对装备、物品和行为的限制优先。
-随身制作站用place_at({local:true,...})就地放置，把实际回执及物品、图格类型保存为step结果。临时工位制作结束就用skill('pack_workstations',0,{stations:[{item_type,tile_name,placement}]})，确认熔炉、铁砧、工作台实际入包再离开；基地固定制作站留在原位。
+随身制作站用place_at放置，把实际回执及物品、图格类型保存为step结果。临时工位制作结束就用skill('pack_workstations',0,{stations:[{item_type,tile_name,placement}]})，确认熔炉、铁砧、工作台实际入包再离开；基地固定制作站留在原位。
 地图与候选是当前观测。结合terrain_map、inspect_terrain的具体方块、液体、机关和支持位判断接近与返程；附近有水或蜂蜜仅是事实，按当前装备、buff、身体浸没和路线判断影响。图像中的候选、直线通畅与导航done各自都需要对应的实际效果验证。get_state位置以像素表示，世界格坐标换算除以16，具体工具按其定义单位。
 开荒找生命水晶从当前位置用skill('early_exploration_route',0)选择一条资源密集的天然洞路线。森林、雪地、丛林按接近耗时、原版开挖耗时和可顺路取得的水晶与箱子比较。把选好的route传给skill('early_exploration_route',0,{route,crystals,loot_chests})，沿主路在同一段脚本采集多个目标。crystals填本段需要新增的颗数，按实际库存或永久生命验收。地表和浅层沿现成通道走，挖掘用于打通短阻挡，罐子在现有路线的交互距离内顺手处理。需要地下沙漠资源时再准备对应路线。离开基地前验证本次远征的必带物资。NPC入住与发育并行进行，采购节点等目标NPC和商品可用时执行，路过基地时顺手复核。
 前期缺移动力时可用find_pyramids查金字塔箱子。飞毯、沙暴瓶能改善探索机动，适合顺路获取并装备。结合terrain_map判断入口及绕路成本，打开箱子后核对实际战利品。
