@@ -531,6 +531,12 @@ public static partial class AgentTools
             action = Actions.LatestFinishedPrimary();
         }
         if (action == null) return Task.CompletedTask;
+        if (kind == "prepare_successor")
+        {
+            var p = Main.LocalPlayer;
+            if (!ControlSession.PrimaryActive || Math.Abs(p.velocity.X) + Math.Abs(p.velocity.Y) < .15f)
+                return Task.CompletedTask;
+        }
         string node = action["task_node"]?.ToString();
         string preparationContext = PreparationContext(action["handle"] + ":" + action["attempt"], node);
         string key = kind == "prepare_successor" ? kind + ":" + preparationContext
@@ -2762,8 +2768,20 @@ public static partial class AgentTools
                 if (eventLimit is < 1 or > 16) throw new ArgumentException("max_events需要1..16。");
                 if (eventWait < 0 || eventWait > 1000) throw new ArgumentException("wait_ms需要0..1000。");
                 var eventClock = Stopwatch.StartNew();
-                while (!await NativeAgent.OnMain(() => Watches.HasPending, token) && eventClock.ElapsedMilliseconds < eventWait)
+                while (eventClock.ElapsedMilliseconds < eventWait)
+                {
+                    var (pending, uncovered) = await NativeAgent.OnMain(() => (Watches.HasPending,
+                        Plan.RequiresNodeExecution && Plan.Incomplete && !ControlSession.PrimaryActive
+                        && !(Actions.HasPrimaryControl && Actions.PrimaryTool != "run_script")
+                        && !BossMovementHasControl && !Main.LocalPlayer.sleeping.isSleeping), token);
+                    if (pending) break;
+                    if (uncovered)
+                        return new JsonObject { ["host_yield"] = true, ["reason"] = "event_wait_without_action",
+                            ["detail"] = "Start a prepared movement or another useful action, then observe it in parallel. Poll with wait_ms:0 for existing events.",
+                            ["events"] = new JsonArray(), ["remaining_events"] = 0,
+                            ["paused_action"] = null, ["action"] = null }.ToJsonString();
                     await Task.Delay((int)Math.Clamp(eventWait - eventClock.ElapsedMilliseconds, 1, 25), token);
+                }
                 if (!await NativeAgent.OnMain(() => Watches.HasPending, token))
                     return new JsonObject { ["events"] = new JsonArray(), ["remaining_events"] = 0, ["paused_action"] = null, ["action"] = null }.ToJsonString();
                 bool scriptOwnsAction = Actions.RunningScript;

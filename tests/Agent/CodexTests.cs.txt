@@ -699,6 +699,9 @@ static class CodexTests
         var native = new NativeAgent();
         var server = new Server { HoldFinalReply = true, RejectSteer = rejectSteer };
         var handler = HttpServerSystem.Handler;
+        var player = Terraria.Main.LocalPlayer;
+        var originalVelocity = player.velocity;
+        player.velocity = default;
         bool fail = false;
         int starts = 0;
         string handle = null;
@@ -754,7 +757,12 @@ static class CodexTests
         try
         {
             NativeAgent.Submit("prepare the next operation while this one executes");
-            await Until(() => server.Steers.Count >= 1 && starts == 1);
+            await Until(() => starts == 1);
+            var standing = DateTime.UtcNow.AddMilliseconds(300);
+            while (DateTime.UtcNow < standing) { native.PostUpdateEverything(); await Task.Delay(5); }
+            Check(server.Steers.Count == 0, "preparation was triggered while navigation had not moved the player");
+            player.velocity = new(2, 0);
+            await Until(() => server.Steers.Count >= 1);
             Check(server.Inputs.Count == 1 && server.Interrupts == 0 && AgentTools.Actions.ActiveHandle == handle,
                 "preparation steering started another turn, paused or replaced the route");
             Check(server.Steers[0]["input"][0]["text"].ToString().Contains("prepare_successor"),
@@ -810,6 +818,7 @@ static class CodexTests
         {
             NativeAgent.Stop(); native.OnWorldUnload(); native.Unload();
             Config.I.AgentUseCodex = false; HttpServerSystem.Handler = handler;
+            player.velocity = originalVelocity;
             AgentTools.Plan.Reset(); AgentTools.Watches.Reset();
         }
     }

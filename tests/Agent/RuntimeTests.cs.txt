@@ -3914,6 +3914,7 @@ static class RuntimeTests
             await TestMineVeinInventoryLoop();
             await TestContinuedReview();
             await TestPassiveOpportunity();
+            await TestUncoveredEventWait();
             await TestBoundedState();
             await TestQueryRecovery();
             await TestPartialProgress();
@@ -4939,6 +4940,36 @@ static class RuntimeTests
         }
         finally { NativeAgent.Stop(); AgentTools.Actions.Reset(); HttpServerSystem.Handler = null; }
         Console.WriteLine("PASS: passive discoveries retain evidence without stopping movement; independent danger still pauses the same action");
+    }
+
+    static async Task TestUncoveredEventWait()
+    {
+        AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask();
+        try
+        {
+            AgentTools.Plan.Create(JsonNode.Parse("""
+                {"goal":"prepare equipment","mode":"dag","steps":[{"id":"prepare","description":"collect materials",
+                "depends_on":[],"conditions":[{"kind":"permanent_health","count":200}],
+                "script":"return tool('nav_to',{x:12,y:34});"}]}
+                """).AsObject(), _ => 0);
+            var result = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["task_node"] = "prepare",
+                ["code"] = "for(let i=0;i<30;i++)tool('script_events',{wait_ms:1000});return 'silently skipped';"
+            }, default)));
+            Check(result["tool_counts"]?["script_events"]?.GetValue<int>() == 1
+                && result["value"]?["wake"]?["reason"]?.ToString() == "event_wait_without_action",
+                "An observation script polled more than once without work running: " + result);
+            var immediate = JsonNode.Parse(await Execute(AgentTools.Execute("script_events", new JsonObject { ["wait_ms"] = 0 }, default)));
+            Check(immediate["events"] is JsonArray && immediate["host_yield"] == null,
+                "An explicit immediate observation was rejected: " + immediate);
+            AgentTools.Watches.Request("Run a useful action while making the next decision");
+            var pending = JsonNode.Parse(await Execute(AgentTools.Execute("script_events", new JsonObject { ["wait_ms"] = 1000 }, default)));
+            Check(pending["events"] is JsonArray { Count: > 0 } && pending["host_yield"] == null,
+                "Pending evidence was discarded because no actor was moving: " + pending);
+            Console.WriteLine("PASS: an uncovered event wait exits the script; observations and pending events still work");
+        }
+        finally { AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); }
     }
 
     static async Task TestBoundedState()

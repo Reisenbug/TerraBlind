@@ -190,6 +190,7 @@ namespace Terraria
     }
     public class Player
     {
+        public (bool isSleeping, int unused) sleeping;
         public int talkNPC = -1, coins;
         public bool discountAvailable;
         public (float PriceAdjustment, int unused) currentShoppingSettings = (1f, 0);

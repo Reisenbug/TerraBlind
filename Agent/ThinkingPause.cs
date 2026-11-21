@@ -19,6 +19,8 @@ public sealed class ThinkingPause : ModSystem
     static Vector2 previousPosition;
     static int uncoveredFrames, uncoveredRun, longestUncoveredRun;
     static int decisionFrames, decisionIdleFrames, decisionIdleRun, longestDecisionIdleRun;
+    static long decisionIdleSince;
+    static bool decisionIdleLogged;
     static long stationarySince;
     static bool stationaryLogged;
     static string stationaryReason;
@@ -54,6 +56,8 @@ public sealed class ThinkingPause : ModSystem
         history.Clear(); started = Stopwatch.GetTimestamp();
         uncoveredFrames = uncoveredRun = longestUncoveredRun = 0;
         decisionFrames = decisionIdleFrames = decisionIdleRun = longestDecisionIdleRun = 0;
+        decisionIdleSince = 0;
+        decisionIdleLogged = false;
         stationarySince = 0;
         stationaryLogged = false;
         stationaryReason = null;
@@ -132,15 +136,27 @@ public sealed class ThinkingPause : ModSystem
         bool decisionMoving = positionKnown && !stationary && (RecedingNav.Active || ActExecutor.IsActive
             || AgentTools.ControlSession.PrimaryActive || StateSpacePlanner.IsActive || FrameProgram.Active
             || AgentTools.ContactEscapeActive || AgentTools.BossMovementHasControl);
-        bool decisionIdle = deciding && !decisionMoving && player.itemAnimation == 0 && player.itemTime == 0;
+        bool decisionIdle = deciding && !decisionMoving && !player.sleeping.isSleeping && player.itemAnimation == 0 && player.itemTime == 0;
         decisionIdleRun = decisionIdle ? decisionIdleRun + 1 : 0;
         if (decisionIdle) decisionIdleFrames++;
         longestDecisionIdleRun = Math.Max(longestDecisionIdleRun, decisionIdleRun);
-        if (decisionIdleRun == 61)
+        if (decisionIdle && decisionIdleSince == 0) decisionIdleSince = Stopwatch.GetTimestamp();
+        if (decisionIdle && !decisionIdleLogged && Stopwatch.GetElapsedTime(decisionIdleSince).TotalMilliseconds > 1000)
+        {
+            decisionIdleLogged = true;
             DiagLog.Write($"[agent_decision_idle] tick={Main.GameUpdateCount} frames={decisionIdleRun} status={NativeAgent.Status}" +
                 $" continuity={AgentTools.ExecutionContinuity?["reason"]} owner={AgentTools.ControlSession.Tool}" +
                 $" action={AgentTools.Actions.PrimaryHandle} nav_goal={RecedingNav.DisplayGoal} field_ready={RecedingNav.FieldReady}" +
                 $" at=({player.Center.X / 16:0.0},{player.Center.Y / 16:0.0})");
+        }
+        if (!decisionIdle && decisionIdleSince != 0)
+        {
+            if (decisionIdleLogged)
+                DiagLog.Write($"[agent_decision_idle_end] tick={Main.GameUpdateCount} elapsed_ms={Stopwatch.GetElapsedTime(decisionIdleSince).TotalMilliseconds:0}" +
+                    $" moved={decisionMoving} owner={AgentTools.ControlSession.Tool} status={NativeAgent.Status}");
+            decisionIdleSince = 0;
+            decisionIdleLogged = false;
+        }
         bool uncovered = !Main.gameMenu && !Manual.On && !player.dead
             && (NativeAgent.WorkPending || AgentTools.Actions.HasActive || AgentTools.ControlSession.Active)
             && stationary && player.itemAnimation == 0 && player.itemTime == 0 && player.reuseDelay == 0
