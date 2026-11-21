@@ -50,9 +50,15 @@ public sealed class ScriptLibrary
               if(source.error||!source.tiles?.some(tile=>tile.x===x&&tile.y===y))
                 return {error:source.error??'workstation_source_changed',x,y,item_type,recovered};
               const before=inventory();
-              const result=tool('gather',{targets:[{item_type,count:before+1,tile_names:[tile_name]}],
+              let result=tool('gather',{targets:[{item_type,count:before+1,tile_names:[tile_name]}],
                 source_area:area});
-              const count=inventory()-before,after=observe();
+              let count=inventory()-before;
+              const after=observe();
+              if(count<1&&!after.error&&after.tiles?.length===0){
+                result=tool('gather',{targets:[{item_type,count:before+1}],
+                  source_area:{x:Math.max(0,x-4),y:Math.max(0,y-4),width:9,height:9}});
+                count=inventory()-before;
+              }
               if(count<1||after.error||after.tiles?.length!==0)
                 return {error:result.error??after.error??'workstation_pickup_unverified',outcome:result.outcome,x,y,item_type,recovered};
               recovered.push({item_type,x,y,count});
