@@ -1617,6 +1617,12 @@ static class RuntimeTests
             Check(single["ok"]?.GetValue<bool>() == true && single["value"]?["status"]?.ToString() == "running"
                 && AgentTools.Actions.ActiveHandle == handle && AgentTools.Plan.Script("travel")["code"].ToString() == originalScript,
                 "node-owned single-tool recovery was rejected or replaced its saved script: " + single);
+            string arena = AgentTools.Control.Deny(new[] { ControlBehavior.Dodge }, ControlLifetime.Task,
+                null, "Previously prepared arena", (20, 30, 40, 20), outside: true);
+            var released = JsonNode.Parse(await Execute(AgentTools.Execute("control",
+                new JsonObject { ["operation"] = "release", ["id"] = arena }, default)));
+            Check(released["status"]?.ToString() == "ready" && AgentTools.Actions.PrimaryHandle == handle
+                && !AgentTools.Control.Contains(arena), "releasing a spatial rule interrupted current navigation: " + released);
             Console.WriteLine("PASS: anonymous pause/query/resume remains atomic; actual abandoned gaps still request recovery");
         }
         finally

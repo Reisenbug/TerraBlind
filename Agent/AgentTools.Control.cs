@@ -18,16 +18,21 @@ public static partial class AgentTools
             return await NativeAgent.OnMain(() => new JsonObject { ["overrides"] = Control.Snapshot(),
                 ["execution"] = ControlSession.Snapshot(), ["actions"] = Actions.Summary() }, token);
         if (operation is not ("claim" or "deny" or "confine" or "release")) throw new ArgumentException("operation需要claim/deny/confine/release/status。");
-        if (ControlSession.Active && !Actions.HasActive)
-            return new JsonObject { ["error"] = "control_direct_action_busy", ["detail"] = "当前直接动作尚未清理，不能宣告接管。" };
-
         string id = Text(args, "id");
         if (operation == "release")
         {
-            await NativeAgent.OnMain(() =>
-            { if (!Control.Contains(id)) throw new ArgumentException("未知覆盖句柄。"); return true; }, token);
+            var released = await NativeAgent.OnMain(() =>
+            {
+                if (Control.IsClaim(id)) return null;
+                Control.Release(id);
+                return new JsonObject { ["status"] = "ready", ["id"] = id, ["overrides"] = Control.Snapshot() };
+            }, token);
+            if (released != null) return released;
         }
-        else
+        if (ControlSession.Active && !Actions.HasActive)
+            return new JsonObject { ["error"] = "control_direct_action_busy", ["detail"] = "当前直接动作尚未清理，不能宣告接管。" };
+
+        if (operation != "release")
         {
             string scope = args["scope"] == null ? "task" : Text(args, "scope");
             if (!Enum.TryParse<ControlLifetime>(scope, true, out var lifetime) || !Enum.IsDefined(lifetime))

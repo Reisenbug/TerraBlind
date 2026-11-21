@@ -29,6 +29,7 @@ public sealed class AgentControlPolicy
     public long Revision { get; private set; }
     public bool HasClaims => rules.Values.Any(rule => rule.Channels != ControlChannels.None);
     public bool Contains(string id) => rules.ContainsKey(id);
+    internal bool IsClaim(string id) => rules.TryGetValue(id, out var rule) && rule.Channels != ControlChannels.None;
     public bool HasSpatial(ControlBehavior behavior) => ProtectsHousing(behavior) || spatialRules.Any(rule => rule.Behaviors.Contains(behavior));
 
     internal bool InHousing(int x, int y)
