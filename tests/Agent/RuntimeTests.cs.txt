@@ -5722,7 +5722,7 @@ static class RuntimeTests
         int oldHealth = Game.LocalPlayer.statLifeMax;
         try
         {
-            foreach (string scenario in new[] { "prepared", "native_receipt", "receipt_done", "late", "blocked", "stale", "verified", "inline", "inline_blocked", "chained", "failed", "inline_failed" })
+            foreach (string scenario in new[] { "prepared", "native_receipt", "receipt_done", "observed_outcome", "late", "blocked", "stale", "verified", "inline", "inline_blocked", "chained", "failed", "inline_failed" })
             {
                 AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask(); AgentTools.Workflows.Clear();
                 Game.LocalPlayer.statLifeMax = 100;
@@ -5753,7 +5753,8 @@ static class RuntimeTests
                     : "tool('nav_to',{x:12,y:34});"
                     + (scenario == "inline" ? "tool('nav_to',{x:14,y:34});" : "") + "return {status:'yield',"
                     + (scenario is "blocked" or "inline_blocked" ? "blocked:'unsafe_to_continue'};" : scenario == "receipt_done"
-                        ? "completed:{visited:true},blocked:'done',next:'collect equipment'};" : "next:'collect equipment'};");
+                        ? "completed:{visited:true},blocked:'done',next:'collect equipment'};" : scenario == "observed_outcome"
+                        ? "item:0,outcome:'done',next:'find a different source'};" : "next:'collect equipment'};");
                 if (scenario == "chained") plan["steps"].AsArray().Add(JsonNode.Parse("""
                     {"id":"explore","description":"Explore after preparation","depends_on":["prepare"],
                      "script":"return tool('action_start',{tool:'nav_to',args:{x:24,y:34}});",
@@ -5827,7 +5828,7 @@ static class RuntimeTests
                     timer.Restart();
                     AgentTools.ContinuePreparedNode(default);
                 }
-                if (scenario is "prepared" or "native_receipt" or "receipt_done" or "late" or "inline" or "chained" or "failed" or "inline_failed")
+                if (scenario is "prepared" or "native_receipt" or "receipt_done" or "observed_outcome" or "late" or "inline" or "chained" or "failed" or "inline_failed")
                 {
                     await PumpUntil(() => starts == predecessorActions + 1 && AgentTools.LastContinuation?["started_handle"] != null);
                     Check(AgentTools.LastContinuation?["mode"]?.ToString() == (failed ? "prepared_failure" : "prepared_followup")

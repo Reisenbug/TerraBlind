@@ -485,7 +485,8 @@ public static partial class AgentTools
         && value["wake"] == null && (value["blocked"] == null || value["completed"] != null
             && value["blocked"] is JsonValue blocked && blocked.TryGetValue<string>(out string outcome) && outcome == "done")
         && value["reason"] == null && value["error"] == null
-        && value["outcome"] == null && value["ok"] == null && value["done"] == null && value["continue_after"] == null && value["handle"] == null;
+        && (value["outcome"] == null || value["outcome"]?.ToString() == "done")
+        && value["ok"] == null && value["done"] == null && value["continue_after"] == null && value["handle"] == null;
 
     internal static Task NotifyExecution(CodexAgent codex, CancellationToken token)
     {
