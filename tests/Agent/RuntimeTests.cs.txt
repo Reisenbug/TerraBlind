@@ -3914,7 +3914,7 @@ static class RuntimeTests
             await TestMineVeinInventoryLoop();
             await TestContinuedReview();
             await TestPassiveOpportunity();
-            await TestUncoveredEventWait();
+            await TestUncoveredWaits();
             await TestBoundedState();
             await TestQueryRecovery();
             await TestPartialProgress();
@@ -4942,7 +4942,7 @@ static class RuntimeTests
         Console.WriteLine("PASS: passive discoveries retain evidence without stopping movement; independent danger still pauses the same action");
     }
 
-    static async Task TestUncoveredEventWait()
+    static async Task TestUncoveredWaits()
     {
         AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask();
         try
@@ -4967,7 +4967,14 @@ static class RuntimeTests
             var pending = JsonNode.Parse(await Execute(AgentTools.Execute("script_events", new JsonObject { ["wait_ms"] = 1000 }, default)));
             Check(pending["events"] is JsonArray { Count: > 0 } && pending["host_yield"] == null,
                 "Pending evidence was discarded because no actor was moving: " + pending);
-            Console.WriteLine("PASS: an uncovered event wait exits the script; observations and pending events still work");
+            var emptyAct = JsonNode.Parse(await Execute(AgentTools.Execute("run_script", new JsonObject
+            {
+                ["task_node"] = "prepare",
+                ["code"] = "tool('act',{steps:[{keys:[],until:{frames:150}}],timeout_frames:155});return 'silently skipped';"
+            }, default)));
+            Check(emptyAct["value"]?["wake"]?["reason"]?.ToString() == "timed_wait_without_action",
+                "Empty controls were accepted as an action during an unfinished DAG: " + emptyAct);
+            Console.WriteLine("PASS: uncovered event and control waits exit the script; observations and pending events still work");
         }
         finally { AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); }
     }

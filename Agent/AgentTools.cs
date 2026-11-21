@@ -3601,6 +3601,14 @@ public static partial class AgentTools
                 }, token);
                 break;
             case "act":
+                if (args["steps"] is JsonArray { Count: > 0 } waitSteps && waitSteps.All(step => step is JsonObject wait
+                    && wait.All(pair => pair.Key is "keys" or "until") && wait["keys"] is null or JsonArray { Count: 0 }
+                    && wait["until"] is JsonObject { Count: 1 } until && until["frames"] is JsonValue)
+                    && waitSteps.Sum(step => (long)Int(step["until"].AsObject(), "frames")) > 60
+                    && await NativeAgent.OnMain(() => Plan.RequiresNodeExecution && Plan.Incomplete
+                        && !FightCoordinator.IsActive && !BossMovementHasControl && !Main.LocalPlayer.sleeping.isSleeping, token))
+                    return new JsonObject { ["host_yield"] = true, ["reason"] = "timed_wait_without_action",
+                        ["detail"] = "Continue a prepared movement or other task action. For physics transitions use an observed condition such as landing." }.ToJsonString();
                 bool cursorInput = args["expected_cursor"] is JsonObject;
                 if (cursorInput && (args["steps"] is not JsonArray { Count: 1 } cursorSteps || cursorSteps[0] is not JsonObject cursorStep
                     || !Bool(cursorStep, "use") || Int(cursorStep["until"] as JsonObject ?? new JsonObject(), "frames") != 1
