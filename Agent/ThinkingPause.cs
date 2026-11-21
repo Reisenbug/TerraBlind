@@ -130,7 +130,8 @@ public sealed class ThinkingPause : ModSystem
         bool deciding = NativeAgent.AwaitingDecision && !Main.gameMenu && player.active && !player.dead && !Manual.On;
         if (deciding) decisionFrames++;
         bool decisionMoving = positionKnown && !stationary && (RecedingNav.Active || ActExecutor.IsActive
-            || AgentTools.ControlSession.PrimaryActive || StateSpacePlanner.IsActive || FrameProgram.Active || AgentTools.ContactEscapeActive);
+            || AgentTools.ControlSession.PrimaryActive || StateSpacePlanner.IsActive || FrameProgram.Active
+            || AgentTools.ContactEscapeActive || AgentTools.BossMovementHasControl);
         bool decisionIdle = deciding && !decisionMoving && player.itemAnimation == 0 && player.itemTime == 0;
         decisionIdleRun = decisionIdle ? decisionIdleRun + 1 : 0;
         if (decisionIdle) decisionIdleFrames++;

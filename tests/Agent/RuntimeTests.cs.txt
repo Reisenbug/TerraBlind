@@ -1588,6 +1588,17 @@ static class RuntimeTests
                 "continuity monitor interrupted an executing anonymous recovery script: " + result);
             AgentTools.ObserveContinuity();
             await Execute(AgentTools.Actions.Control(handle, "pause", null, default));
+            var priorDodge = (Dodge.Enabled, Dodge.Last, Game.LocalPlayer.velocity);
+            try
+            {
+                Dodge.Enabled = true;
+                Dodge.Last = "driving King Slime";
+                Game.LocalPlayer.velocity = new(2, 0);
+                AgentTools.ObserveContinuity();
+                Check(AgentTools.ExecutionContinuity?["movement_owner"]?.ToString() == "boss_dodge",
+                    "Jev-controlled movement was counted as a gap after the summon action");
+            }
+            finally { (Dodge.Enabled, Dodge.Last, Game.LocalPlayer.velocity) = priorDodge; }
             long gapStart = System.Diagnostics.Stopwatch.GetTimestamp();
             long second = System.Diagnostics.Stopwatch.Frequency;
             AgentTools.ObserveContinuity(gapStart);

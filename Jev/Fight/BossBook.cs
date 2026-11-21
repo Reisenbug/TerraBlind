@@ -27,8 +27,9 @@ namespace TerraBlind
 			[Terraria.ID.NPCID.KingSlime] = new BossInfo
 			{
 				HowItFights =
-					"King Slime in one sentence: keep away from it and never stop. It teleports onto the player, "
-					+ "and touching it after the teleport hurts. Standing still makes that easy to eat, so keep moving at all times."
+					"Keep moving and leave enough room for a clear shot. King Slime can teleport onto you. "
+					+ "Use the open length of the arena and turn before terrain blocks the next escape. "
+					+ "Use a reachable platform to change height or cross above it when the opening is clear."
 			},
 
 			[Terraria.ID.NPCID.BrainofCthulhu] = new BossInfo

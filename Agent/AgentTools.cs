@@ -409,6 +409,8 @@ public static partial class AgentTools
     static long gapTimestamp;
     static bool gapReported, gapLimitExceeded, primaryObserved;
     const int ExecutionGapLimitMs = 1000;
+    internal static bool BossMovementHasControl => Dodge.Enabled && AgentPermissions.Dodge
+        && Dodge.Last.StartsWith("driving ", StringComparison.Ordinal);
     sealed record IdleOption(string Node, string Description, Action<CancellationToken> Start);
     static long emptyIdleGap;
     static readonly HashSet<(string Node, int X, int Y)> idleWalks = new();
@@ -594,7 +596,9 @@ public static partial class AgentTools
         if (last == null) return;
         long now = timestamp ?? Stopwatch.GetTimestamp();
         bool scriptOwnsInput = Actions.HasPrimaryControl && last["tool"]?.ToString() == "run_script";
-        if (ControlSession.PrimaryActive || Actions.HasPrimaryControl && !scriptOwnsInput || !Plan.Incomplete || Main.LocalPlayer.dead)
+        var p = Main.LocalPlayer;
+        bool bossMoving = BossMovementHasControl && !Manual.On && Math.Abs(p.velocity.X) + Math.Abs(p.velocity.Y) > .15f;
+        if (ControlSession.PrimaryActive || Actions.HasPrimaryControl && !scriptOwnsInput || bossMoving || !Plan.Incomplete || p.dead)
         {
             if (!Main.LocalPlayer.dead && (gapStarted != null || LastContinuation?["status"]?.ToString() == "execution_gap"))
             {
@@ -610,9 +614,10 @@ public static partial class AgentTools
                 DiagLog.Write($"[execution_gap_end] frames={Main.GameUpdateCount - began} elapsed_ms={Stopwatch.GetElapsedTime(gapTimestamp, now).TotalMilliseconds:0} handle={Actions.ActiveHandle}");
             gapStarted = null;
             gapReported = gapLimitExceeded = false;
-            primaryObserved |= ControlSession.PrimaryActive || Actions.HasPrimaryControl && !scriptOwnsInput;
+            primaryObserved |= ControlSession.PrimaryActive || Actions.HasPrimaryControl && !scriptOwnsInput || bossMoving;
             ExecutionContinuity = new JsonObject { ["status"] = Main.LocalPlayer.dead ? "waiting_respawn"
                 : !Plan.Incomplete ? "completed" : "executing", ["active_handle"] = Actions.ActiveHandle };
+            if (bossMoving) ExecutionContinuity["movement_owner"] = "boss_dodge";
             return;
         }
         if (gapStarted == null)
