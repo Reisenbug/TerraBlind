@@ -5782,7 +5782,8 @@ static class RuntimeTests
                     }, default);
                     JsonObject seen = await workerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
                     Check(starts == expectedStarts && AgentTools.Actions.HasPrimaryControl
-                        && seen["active_action"]["handle"].ToString() == predecessor && seen["downstream"].AsArray().Count == downstream,
+                        && seen["active_action"]["handle"].ToString() == predecessor && seen["downstream"].AsArray().Count == downstream
+                        && seen["world_phase"]?.ToString() == (Game.dayTime ? "day" : "night"),
                         "follow-up preparation did not overlap the live input action");
                     return output;
                 }

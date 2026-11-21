@@ -266,10 +266,11 @@ public class NativeAgent : ModSystem
             "equip" => "Evaluate the carried equipment against the equipped gear, current goal and progress. Submit {inventory_slot,equipment_slot} for one clear upgrade, or {}. Use only the supplied slots. Prefer survivability and practical mobility.",
             "cleanup" => "Review disposal candidates in the context of the current goal and inventory. Submit {trash_slots:[...]} with up to three stacks safe to discard entirely. Consider replacements, recipes, rarity and utility. Return an empty list when uncertain. Only use slots in candidates.",
             "potions" => "Choose one carried potion to drink now or keep all. Consider the current activity, goal, health, mana, and active effects. Submit {potion_slot:number} or {}. Prefer potions that help with current or imminent work. Save short or scarce buffs for that work. Use special effects such as teleportation only when specifically useful for the objective.",
-            "action_followup" => "While this action runs, prepare the next useful actions for this DAG node. Submit {script:string,on_failure:string}. Either field may be omitted when the existing plan covers it. The success script runs after a clean handoff. Include an executable branch that makes useful progress if the primary action is temporarily unavailable. For a time gate, check the clock at execution and use the intervening time on verified preparations with their own movement. The failure script receives the previous action as `failure` and runs for a blocked route or exhausted source. Check live state and choose a different reachable source, a safe retreat, or another useful part of the node. For an overhead boulder, inspect terrain before choosing an escape with clear footing. Preserve all user constraints and safety checks. Write executable TerraBlind JavaScript with direct tool calls. Use read-only tools during preparation.",
+            "action_followup" => "While this action runs, prepare the next useful actions for this DAG node. Submit {script:string,on_failure:string}. Either field may be omitted when the existing plan covers it. The success script runs after a clean handoff. The failure script receives the previous action as `failure` and runs for a blocked route or exhausted source. Check live state and choose a different reachable source, a safe retreat, or another useful part of the node. For an overhead boulder, inspect terrain before choosing an escape with clear footing. Preserve all user constraints and safety checks. Write executable TerraBlind JavaScript with direct tool calls. Use read-only tools during preparation.",
             _ => "Prepare the supplied DAG node as an executable TerraBlind JavaScript script. The current action continues. Query only facts needed to prepare this node. Submit {script:string} or {} if the facts do not support an executable script. Use tool(name,args), verify actual node conditions with tool('task_step',{action:'verify'}), and return a concrete blocked reason when needed. Preserve the goal, dependencies and permissions. Do not change the plan or call tools that mutate the game."
         };
-        if (successor) instructions += " The host runs synchronous JavaScript. tool() and skill() return directly. Write plain statements without await or async wrappers."
+        if (successor) instructions += " Prepare for the supplied world_phase. Recheck the phase when the script runs. When the primary action depends on a later phase, include concrete, useful preparations with their own movement that can start in the current phase. Return {} if you have no such verified action."
+            + " The host runs synchronous JavaScript. tool() and skill() return directly. Write plain statements without await or async wrappers."
             + SuccessorInventory;
         JsonObject proposal = null;
         int queryCount = 0;
@@ -480,7 +481,7 @@ public class NativeAgent : ModSystem
             if (!_parallel.CanOffer("dag:" + id, offer)) continue;
             var facts = new JsonObject { ["goal"] = graph["goal"]?.DeepClone(), ["active_node"] = owner,
                 ["node"] = step.DeepClone(), ["inventory"] = PvpInventory.Snapshot(),
-                ["dependencies_verified"] = dependenciesVerified,
+                ["dependencies_verified"] = dependenciesVerified, ["world_phase"] = Main.dayTime ? "day" : "night",
                 ["position_tiles"] = new JsonArray(Main.LocalPlayer.Center.X / 16, Main.LocalPlayer.Center.Y / 16),
                 ["tools"] = "Use find_tiles and other read-only tools now. Scripts can use nav_to, gather, collect_treasure, build_house, craft_to_slot, equip_item, task_step and existing skills with verified arguments." };
             _parallel.Offer("dag:" + id, offer, ct => propose("successor", facts, ct),
@@ -508,6 +509,7 @@ public class NativeAgent : ModSystem
         running["live_tool"] = AgentTools.ControlSession.Tool;
         var facts = new JsonObject { ["goal"] = graph["goal"]?.DeepClone(), ["objective"] = objective?.DeepClone(),
             ["node"] = step.DeepClone(), ["active_action"] = running, ["inventory"] = PvpInventory.Snapshot(),
+            ["world_phase"] = Main.dayTime ? "day" : "night",
             ["downstream"] = new JsonArray(steps.Where(n => n["depends_on"].AsArray().Any(id => id.ToString() == owner))
                 .Select(n => new JsonObject { ["id"] = n["id"].DeepClone(), ["description"] = n["description"].DeepClone() }).ToArray<JsonNode>()),
             ["position_tiles"] = new JsonArray(Main.LocalPlayer.Center.X / 16, Main.LocalPlayer.Center.Y / 16),
