@@ -482,7 +482,10 @@ public static partial class AgentTools
     }
 
     static bool PlainHandoff(JsonObject value) => value?["status"]?.ToString() == "yield"
-        && value["wake"] == null && (value["blocked"] == null || value["completed"] != null
+        && (value["wake"] == null || value["wake"] is JsonObject wake && Bool(wake, "host_yield")
+            && wake["reason"]?.ToString() is "event_wait_without_action" or "timed_wait_without_action"
+            && wake["events"] is null or JsonArray { Count: 0 })
+        && (value["blocked"] == null || value["completed"] != null
             && value["blocked"] is JsonValue blocked && blocked.TryGetValue<string>(out string outcome) && outcome == "done")
         && value["reason"] == null && value["error"] == null
         && (value["outcome"] == null || value["outcome"]?.ToString() == "done")
