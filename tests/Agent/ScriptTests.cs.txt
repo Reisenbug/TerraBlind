@@ -198,7 +198,9 @@ static class ScriptTests
             var combat = JsonNode.Parse("""
                 {"tick":100,"boss_present":false,"player":{"hp":100,"max_hp":100,"pos":{"x":160,"y":320}},"projectiles":[],
                  "targets":[{"who":7,"type":42,"attackable":true,"contact_damage":20,"distance_tiles":6,"weapons":[]}],
-                 "forecast":{"status":"ready","id":1,"movements":[],"sample_targets":[],"sample_projectiles":[],
+                 "forecast":{"status":"ready","id":1,"sample_targets":[],"sample_projectiles":[],
+                   "movements":[{"id":"follow_route","comparison_complete":true,"damage":10,"hurt_events":[{}]},
+                     {"id":"right","comparison_complete":true,"safe_landing":true,"damage":0,"hurt_events":[]}],
                    "plans":[{"id":"follow","movement":"follow_route","weapon_type":24,"movement_available":true},
                      {"id":"avoid","movement":"right","weapon_type":24,"movement_available":true}]}}
                 """).AsObject();
@@ -1339,6 +1341,38 @@ static class ScriptTests
             HttpServerSystem.Handler = previous; AgentTools.Stop(); AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.Actions.Reset(); agent.Unload();
         }
         Console.WriteLine("PASS: local placement verifies native cell results and returns displacement without automatic navigation or scaffolding");
+        await TestPackWorkstations();
+    }
+
+    static async Task TestPackWorkstations()
+    {
+        foreach (string scenario in new[] { "packed", "moved", "no_pickup" })
+        {
+            int collected = 0;
+            var input = JsonNode.Parse("""
+                {"stations":[{"item_type":35,"tile_name":"Furnaces",
+                  "placement":{"placed":1,"cells":[{"world":[12,34],"verified":true,"cells":[{"result":"placed"}]}]}}]}
+                """);
+            var report = await AgentScript.Run("const input=" + input.ToJsonString() + ";\n" + ScriptLibrary.Example("pack_workstations")["code"],
+                5, (_, _) => { }, (name, args, _) =>
+                {
+                    if (name == "get_state") return Task.FromResult(scenario == "packed" && collected > 0
+                        ? """{"inventory_counts":{"35":1}}""" : """{"inventory_counts":{}}""");
+                    Check(args["source_area"]["x"].GetValue<int>() == 12 && args["source_area"]["y"].GetValue<int>() == 34
+                        && args["source_area"]["width"].GetValue<int>() == 1 && args["source_area"]["height"].GetValue<int>() == 1,
+                        "the station collection escaped the verified placement");
+                    if (name == "find_tiles") return Task.FromResult(collected > 0 || scenario == "moved"
+                        ? """{"tiles":[]}""" : """{"tiles":[{"x":12,"y":34}]}""");
+                    Check(name == "gather" && args["targets"][0]["count"].GetValue<int>() == 1,
+                        "the script did not use the native collection path and inventory target");
+                    collected++;
+                    return Task.FromResult("""{"outcome":"enough"}""");
+                }, _ => Task.CompletedTask, default);
+            Check(report["ok"].GetValue<bool>() && collected == (scenario == "moved" ? 0 : 1)
+                && (report["value"]["ok"]?.GetValue<bool>() == true) == (scenario == "packed"),
+                "workstation recovery accepted the wrong outcome: " + scenario + " " + report);
+        }
+        Console.WriteLine("PASS: portable workstation recovery uses the verified cell and confirms native pickup");
     }
 
     static async Task CoverDecisionContracts()
@@ -1449,7 +1483,9 @@ static class ScriptTests
                 ["intent"] = memo?.DeepClone() };
             var combat = JsonNode.Parse("""
                 {"tick":100,"boss_present":false,"player":{"hp":100},"targets":[{"contact_damage":20,"weapons":[]}],"projectiles":[],
-                 "forecast":{"status":"ready","id":22,"plans":[
+                 "forecast":{"status":"ready","id":22,"movements":[
+                   {"id":"follow_route","comparison_complete":true,"damage":10,"hurt_events":[{}]},
+                   {"id":"left","comparison_complete":true,"safe_landing":true,"damage":0,"hurt_events":[]}],"plans":[
                    {"id":"follow","movement":"follow_route","weapon_type":24,"movement_available":true},
                    {"id":"left","movement":"left","weapon_type":24,"movement_available":true}]}}
                 """).AsObject();
@@ -2724,7 +2760,7 @@ static class ScriptTests
     {
         Console.WriteLine("DECISION_TEMPLATE_CHARS " + string.Join(' ', new[] { "decision_reactions", "joint_reactions", "joint_combat" }
             .Select(name => name + "=" + ScriptLibrary.Example(name)["code"].ToString().Length)));
-        foreach (string scenario in new[] { "pending", "follow", "move", "invalid", "unsafe", "replayed", "projectile_only", "fall_only" })
+        foreach (string scenario in new[] { "pending", "follow", "move", "invalid", "unsafe", "replayed", "projectile_only", "fall_only", "idle_no_gain" })
         {
             int acted = 0, selected = 0, judged = 0;
             var input = new JsonObject { ["context"] = "journey", ["destination"] = new JsonObject { ["x"] = 50, ["y"] = 20 },
@@ -2732,12 +2768,22 @@ static class ScriptTests
             var combat = JsonNode.Parse("""
                 {"player":{"hp":100},"targets":[{"who":1,"contact_damage":20,"weapons":[{"type":279,"has_ammo":true,"mana_available":true}]}],
                  "projectiles":[],"forecast":{"status":"ready","id":11,"sample_tick":10,"age_frames":12,"known_route_frames":40,
-                 "sample_player":{},"scope":"test engine boundary","movements":[{"id":"follow_route"},{"id":"left"}],
+                 "sample_player":{},"scope":"test engine boundary","movements":[
+                   {"id":"follow_route","comparison_complete":true,"damage":10,"hurt_events":[{}]},
+                   {"id":"left","comparison_complete":true,"safe_landing":true,"damage":0,"hurt_events":[]}],
                  "plans":[{"id":"follow_route_weapon_279","movement":"follow_route","weapon_type":279,"movement_available":true},
                           {"id":"left_weapon_279","movement":"left","weapon_type":279,"movement_available":true}]}}
                 """).AsObject();
             if (scenario == "pending") combat["forecast"]["status"] = "pending";
             if (scenario == "unsafe") combat["forecast"]["plans"][1]["movement_available"] = false;
+            if (scenario == "idle_no_gain")
+            {
+                combat["forecast"]["prefix_source"] = "idle_inputs";
+                combat["forecast"]["movements"][0]["damage"] = 0;
+                combat["forecast"]["movements"][0]["hurt_events"] = new JsonArray();
+                combat["forecast"]["movements"][0]["route_progress_tiles"] = 0;
+                combat["forecast"]["movements"][1]["route_progress_tiles"] = 1.8;
+            }
             if (scenario is "projectile_only" or "fall_only")
             {
                 combat["targets"] = new JsonArray();
@@ -2757,6 +2803,9 @@ static class ScriptTests
                             && (scenario is "projectile_only" or "fall_only" ? args["state"]["weapons"].AsArray().Count == 0
                                 : args["state"]["weapons"][0]["type"].GetValue<int>() == 279),
                             "joint judgment lost coherent movement/weapon alternatives or source forecast");
+                        if (scenario == "idle_no_gain")
+                            Check(args["questions"]["response"]["criteria"]["left_weapon_279"] == null,
+                                "a nearby enemy with equal forecast harm caused idle sidestepping");
                         result = new JsonObject { ["status"] = "ready", ["request_id"] = 1, ["request_age_ms"] = 200,
                             ["input_state"] = args["state"].DeepClone(), ["result"] = new JsonObject { ["elapsed_ms"] = 150,
                                 ["answers"] = new JsonObject { ["response"] = new JsonObject {

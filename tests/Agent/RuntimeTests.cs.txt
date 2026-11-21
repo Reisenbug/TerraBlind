@@ -328,7 +328,42 @@ static class RuntimeTests
             }
             finally { foreach (var (point, tile) in savedTiles) Game.tile[point.x, point.y] = tile; }
 
-            await TestIdleDecision();
+            await TestIdleAction();
+
+            var originalHook = p.miscEquips[4];
+            try
+            {
+                p.miscEquips[4] = new Terraria.Item { type = 84, stack = 1 };
+                Check(AgentTaskEvidence.Measure(new JsonObject { ["kind"] = "equipped", ["type"] = 84 }) == 1,
+                    "equipped condition failed to count the real grapple slot");
+                var grappleState = await Call("get_state", new JsonObject { ["fields"] = new JsonArray("movement_capabilities") });
+                Check(grappleState["movement_capabilities"]["grapple"]["equipped_type"].GetValue<int>() == 84,
+                    "movement state discarded the equipped grapple");
+            }
+            finally { p.miscEquips[4] = originalHook; }
+            foreach (string scenario in new[] { "latch", "wrong_direction", "changed_anchor" })
+            {
+                int casts = 0;
+                var pull = await AgentScript.Run("const input={x:24,y:34};\n" + ScriptLibrary.Example("grapple_move")["code"], 10,
+                    (_, _) => { }, (name, args, _) =>
+                    {
+                        if (name == "act")
+                        {
+                            casts++;
+                            Check(args["steps"][0]["at"][0].GetValue<int>() == 12 && args["steps"][0]["keys"][0].ToString() == "hook",
+                                "grapple did not send the native hook input to the observed tile");
+                            return Task.FromResult("{\"outcome\":\"done\"}");
+                        }
+                        int x = casts == 0 ? 192 : scenario == "wrong_direction" ? 144 : 240;
+                        return Task.FromResult(new JsonObject { ["player"] = new JsonObject { ["pos"] = new JsonObject { ["x"] = x, ["y"] = 544 } },
+                            ["movement_capabilities"] = new JsonObject { ["grapple"] = new JsonObject { ["origin_x"] = 12, ["origin_y"] = 34,
+                                ["latched"] = casts > 0, ["anchors"] = scenario == "changed_anchor" ? new JsonArray()
+                                    : new JsonArray(new JsonObject { ["x"] = 24, ["y"] = 34 }) } } }.ToJsonString());
+                    }, _ => Task.CompletedTask, default);
+                Check(pull["value"]["verified"].GetValue<bool>() == (scenario == "latch")
+                    && casts == (scenario == "changed_anchor" ? 0 : 1), "unverified grapple was credited: " + pull);
+            }
+            Console.WriteLine("GRAPPLE_SCRIPT_PASS equipment_state confirmed_latch wrong_direction changed_anchor");
 
             var previousEscape = AgentTools.LastContactEscape;
             bool previousHardmode = Game.hardMode;
@@ -3953,7 +3988,7 @@ static class RuntimeTests
         Console.WriteLine("PASS: descent exposes the main route immediately and retrieves separate paged background treasures");
     }
 
-    static async Task TestIdleDecision()
+    static async Task TestIdleAction()
     {
         var oldHandler = HttpServerSystem.Handler;
         var p = Game.LocalPlayer;
@@ -3962,7 +3997,7 @@ static class RuntimeTests
         var oldField = MazeWand.Field;
         try
         {
-            foreach (string scenario in new[] { "choice", "detour", "timeout", "takeover", "no_option", "hazard", "prepared_node" })
+            foreach (string scenario in new[] { "forward", "detour", "takeover", "no_option", "hazard", "prepared_node" })
             {
                 AgentTools.Stop(); AgentTools.Actions.Reset(); AgentTools.Plan.Reset(); AgentTools.NewTask(); AgentTools.Workflows.Clear();
                 p.position = new(12 * 16, 34 * 16);
@@ -3970,7 +4005,7 @@ static class RuntimeTests
                 MazeWand.Field = scenario == "detour" ? new() { [(12, 34)] = 80, [(10, 34)] = 70, [(14, 34)] = 81, [(16, 34)] = 82 } : null;
                 VanillaContactRegion.Walkable = () => scenario is not ("no_option" or "prepared_node");
                 var destinations = new List<int>();
-                int moved = 0, requests = 0;
+                int moved = 0;
                 bool finish = false;
                 HttpServerSystem.Handler = (path, payload) =>
                 {
@@ -4009,50 +4044,32 @@ static class RuntimeTests
                 await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
                 Check((await Execute(AgentTools.Actions.Query(first["handle"].ToString(), 0, default)))["status"].ToString() == "failed",
                     "the idle fixture did not reproduce the protected route failure");
-                var sent = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
-                var reply = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
-                Task<JsonObject> Judge(JsonObject request, CancellationToken _)
-                {
-                    Interlocked.Increment(ref requests);
-                    sent.TrySetResult(request);
-                    return reply.Task;
-                }
-                void Update() { AgentTools.ObserveContinuity(); AgentTools.ContinueIdleDecision(default, Judge); }
-                Update();
-                if (scenario is "no_option" or "hazard")
-                {
-                    Check(requests == 0 && destinations.Count == 1 && moved == 0, "the idle scheduler invented an action without supporting evidence");
-                    continue;
-                }
-                var firstRequest = await Execute(sent.Task);
-                var choices = firstRequest["state"]["options"].AsArray();
-                Check((scenario switch
-                {
-                    "prepared_node" => choices.Count == 1 && choices[0].ToString().Contains("other entrance"),
-                    "detour" => choices.Count == 1 && choices[0].ToString().Contains("left") && choices[0].ToString().Contains("80 to 70"),
-                    _ => choices.Count == 2 && choices.All(option => option.ToString().Contains("right") && option.ToString().Contains("(30,34)"))
-                }),
-                    "Jev received an option without concrete task progress: " + firstRequest);
+                void Update() { AgentTools.ObserveContinuity(); AgentTools.ContinueIdleAction(default); }
                 if (scenario == "takeover")
                 {
                     finish = false; StartNav(42);
                     await PumpUntil(() => destinations.Count == 2);
                     Update();
-                    reply.SetResult(JsonNode.Parse("{\"answers\":{\"next\":{\"choice\":\"1\"}}}").AsObject());
-                    VanillaContactRegion.Walkable = () => false;
+                    Check(moved == 0, "local recovery interrupted a new movement owner");
                     finish = true;
                     await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl);
-                    Update();
-                    Check(moved == 0, "the old Jev answer regained control after a new route started");
                     continue;
                 }
-                if (scenario != "timeout") reply.SetResult(JsonNode.Parse(scenario is "prepared_node" or "detour"
-                    ? "{\"answers\":{\"next\":{\"noul\":0.9}}}" : "{\"answers\":{\"next\":{\"choice\":\"1\"}}}").AsObject());
-                await PumpUntil(() => { Update(); return moved != 0 || destinations.Count > 1; });
-                Check(requests == 1 && (scenario == "prepared_node" ? destinations.SequenceEqual(new[] { 30, 38 })
-                    : destinations.Count == 1 && moved == (scenario == "timeout" ? 4 : scenario == "detour" ? -2 : 2)),
-                    "the selected or deadline fallback action did not execute exactly once: " + scenario);
-                await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl && !AgentTools.ControlSession.PrimaryActive);
+                Update();
+                if (scenario is "no_option" or "hazard")
+                {
+                    Check(destinations.Count == 1 && moved == 0 && AgentTools.LastContinuation == null,
+                        "the idle scheduler invented an action without supporting evidence");
+                    continue;
+                }
+                Check(AgentTools.LastContinuation?["status"]?.ToString() == "starting",
+                    "an available fallback was not dispatched on the first update: " + scenario);
+                await PumpUntil(() => moved != 0 || destinations.Count > 1);
+                Check(scenario == "prepared_node" ? destinations.SequenceEqual(new[] { 30, 38 })
+                    : destinations.Count == 1 && moved == (scenario == "detour" ? -2 : 4),
+                    "the verified direction or prepared node did not execute: " + scenario);
+                await PumpUntil(() => !AgentTools.Actions.HasPrimaryControl && !AgentTools.ControlSession.PrimaryActive
+                    && AgentTools.LastContinuation?["status"]?.ToString() != "starting");
                 Check(AgentTools.Plan.Incomplete, "a short fallback action falsely verified the task");
             }
         }
@@ -4062,7 +4079,7 @@ static class RuntimeTests
             VanillaContactRegion.Walkable = null; MazeWand.Field = oldField;
             HttpServerSystem.Handler = oldHandler; p.position = oldPosition; p.velocity = oldVelocity;
         }
-        Console.WriteLine("IDLE_JEV_PASS choice detour timeout takeover no_option hazard prepared_node model_calls=0");
+        Console.WriteLine("IDLE_ACTION_PASS forward detour takeover no_option hazard prepared_node first_update=true model_calls=0");
     }
 
     static async Task TestAutomaticDagContinuation()

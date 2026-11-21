@@ -11,8 +11,8 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel", "bank_coins" };
-    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel", "bank_coins" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel", "grapple_move", "bank_coins", "pack_workstations" };
+    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel", "grapple_move", "bank_coins", "pack_workstations" };
     internal static string BuiltinIndex => string.Join("\n", BuiltIns.Select(name =>
         name + "@0: " + Example(name)["detail"].ToString().Split('。')[0]));
 
@@ -25,6 +25,34 @@ public sealed class ScriptLibrary
 
     public static JsonObject Example(string name)
     {
+        if (name == "pack_workstations") return Template(name,
+            "收回自己临时放置的制作站。传入stations:[{item_type,tile_name,placement}]，placement为原place_at回执。离开前核验实际拾取。Reclaim verified temporary workstations before leaving.",
+            """
+            const stations=input?.stations;
+            if(!Array.isArray(stations)||stations.length===0)return {error:'missing_workstation_placements'};
+            const recovered=[];
+            for(const {item_type,tile_name,placement} of stations){
+              const cell=placement?.cells?.[0],at=cell?.world;
+              if(placement?.placed!==1||cell?.verified!==true||cell.cells?.[0]?.result!=='placed'||!Array.isArray(at)||at.length!==2
+                ||!at.every(Number.isInteger)||!Number.isInteger(item_type)||item_type<=0||!tile_name)
+                return {error:'workstation_placement_unverified',recovered};
+              const [x,y]=at;
+              const inventory=()=>tool('get_state',{fields:['inventory_counts']}).inventory_counts[item_type]??0;
+              const area={x,y,width:1,height:1};
+              const observe=()=>tool('find_tiles',{name:tile_name,n:1,source_area:area});
+              const source=observe();
+              if(source.error||!source.tiles?.some(tile=>tile.x===x&&tile.y===y))
+                return {error:source.error??'workstation_source_changed',x,y,item_type,recovered};
+              const before=inventory();
+              const result=tool('gather',{targets:[{item_type,count:before+1,tile_names:[tile_name]}],
+                source_area:area});
+              const count=inventory()-before,after=observe();
+              if(count<1||after.error||after.tiles?.length!==0)
+                return {error:result.error??after.error??'workstation_pickup_unverified',outcome:result.outcome,x,y,item_type,recovered};
+              recovered.push({item_type,x,y,count});
+            }
+            return {ok:true,recovered};
+            """);
         if (name == "bank_coins") return Template(name,
             "就地用小猪存钱罐快速堆叠钱币与可合堆物品。传x/y交互已放好的存钱罐，带place:true可在指定的可达家具或平台上临时放好，存钱后收回。Quick-stack into a Piggy Bank, verify the coins and reclaim a temporarily placed bank.",
             """
@@ -96,6 +124,24 @@ public sealed class ScriptLibrary
               }
             }
             return {status:wanted>0&&actual-before>=wanted?'collected':'route_finished',crystals:actual-before,visited};
+            """);
+        if (name == "grapple_move") return Template(name,
+            "使用get_state movement_capabilities.grapple.anchors里的x/y，瞄准已复核锚点发钩。以真实挂钩和向锚点位移一起验收。成功会停留在挂钩状态。Grapple to a currently observed anchor and verify the latch and travel.",
+            """
+            const read=()=>tool('get_state',{fields:['player','movement_capabilities']});
+            const start=read(), g=start.movement_capabilities.grapple;
+            const anchor=g.anchors.find(a=>a.x===input?.x&&a.y===input?.y);
+            if(!anchor)return {verified:false,outcome:'grapple_anchor_unavailable'};
+            const dx=anchor.x-g.origin_x,dy=anchor.y-g.origin_y;
+            const horizontal=Math.abs(dx)>=Math.abs(dy);
+            const move={dx:horizontal?Math.sign(dx)*3:0,dy:horizontal?0:Math.sign(dy)*3};
+            const action=tool('act',{steps:[{keys:['hook'],at:[dx,dy],until:{moved:move}}],timeout_frames:96});
+            const end=read(), foot=end.movement_capabilities.grapple;
+            const along=horizontal?(end.player.pos.x-start.player.pos.x)*Math.sign(dx)
+              :(end.player.pos.y-start.player.pos.y)*Math.sign(dy);
+            const verified=foot.latched===true&&along>=24;
+            return {verified,outcome:verified?'grapple_travel_observed':'grapple_travel_unverified',
+              latched:foot.latched,travel_pixels:along,action:action.outcome};
             """);
         if (name == "minecart_travel") return Template(name,
             "沿途上车或利用原版上轨钩子提速。输入x/y为铁轨格，mode为ride或boost；boost可传place_item在此格就地放一格铁轨后再右键、拉动、跳脱。ride可传direction和ride_tiles沿已确认的轨道短程行驶。Ride existing track or cancel the native track hook before mounting to gain speed.",
@@ -902,14 +948,23 @@ public sealed class ScriptLibrary
             """
             const c=tool('combat_assess',{radius:25,terrain_radius:8,forecast:true,context:input.context,destination:input.destination});
             const f=c.forecast;
-            const plans=f.status==='ready'?f.plans:[];
+            const movements=(f.movements??[]).map(({engine_ms,roundtrip_ms,queue_ms,...m})=>m);
+            const baseline=movements.find(m=>m.id==='follow_route');
+            const overlap=m=>(m.linear_threat_overlap?.npc_object_frames??0)+(m.linear_threat_overlap?.projectile_object_frames??0);
+            const usefulMove=movement=>{
+              const m=movements.find(candidate=>candidate.id===movement);
+              if(!baseline?.comparison_complete||!m?.comparison_complete||m.safe_landing!==true||m.damage>baseline.damage
+                ||m.hurt_events.length>baseline.hurt_events.length)return false;
+              return m.damage<baseline.damage||m.hurt_events.length<baseline.hurt_events.length||overlap(baseline)-overlap(m)>=2
+                ||f.prefix_source!=='idle_inputs'&&m.route_progress_tiles-baseline.route_progress_tiles>=1.5;
+            };
+            const plans=f.status==='ready'?f.plans.filter(p=>p.movement==='follow_route'||usefulMove(p.movement)):[];
             const covers=input.allow_cover===false?[]:c.cover_candidates??[];
             if(c.boss_present||plans.length+covers.length<1) return {status:f.status,reason:f.reason};
             if(!c.targets.some(n=>n.contact_damage>0)&&!c.projectiles.length&&(c.fall_forecast?.damage??0)<=0) return {status:'no_threat'};
-            const criteria={...(plans.length?{}:{keep_current:'Continue the current action while preparation runs.'}),
+            const criteria={...(plans.length+covers.length<2||!plans.length?{keep_current:'Continue the current action while preparation runs.'}:{}),
               ...Object.fromEntries(plans.map(p=>[p.id,{movement:p.movement,weapon_type:p.weapon_type}])),
               ...Object.fromEntries(covers.map(p=>[p.id,{build:p.action,side:p.side,cost:p.cost,item:p.item_name}]))};
-            const movements=(f.movements??[]).map(({engine_ms,roundtrip_ms,queue_ms,...m})=>m);
             const weapons=[...new Map(c.targets.flatMap(n=>n.weapons).map(({line_or_reach_passed,...w})=>[w.type,w])).values()];
             const r=tool('jev_judge',{channel:'combat',context:input.context,interval_ms:input.interval_ms??750,
               max_age_ms:input.max_age_ms??2000,state:{instruction:input.instruction??'',destination:input.destination,execution:input.execution,
@@ -977,6 +1032,7 @@ public sealed class ScriptLibrary
             }
             else if(choice==='keep_current') applied={};
             else if(!plan?.movement_available) applied={error:'landing_unresolved'};
+            else if(!plans.some(p=>p.id===choice&&p.movement_available)) applied={error:'combat_candidate_changed'};
             else if(plan.movement==='follow_route') applied=plan.weapon_type>0&&plan.weapon_type!==c.preferred_weapon_type
               ?tool('set_combat',{weapon_type:plan.weapon_type}):{};
             else applied=move(plan,r.input_state.forecast_id);

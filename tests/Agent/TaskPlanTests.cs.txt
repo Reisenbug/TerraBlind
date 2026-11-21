@@ -47,6 +47,16 @@ static class TaskPlanTests
             { ["id"] = "collect", ["script"] = "return skill('saved',1,{target_health:140});" }) }, _ => 100);
         Check(plan.PreparationNodes("travel", _ => 100).Count == 0,
             "published action source retained an obsolete preparation marker");
+        request["steps"][3]["depends_on"] = new JsonArray();
+        request["steps"][3]["script"] = "return {};";
+        plan.Reset();
+        plan.Create(request, _ => 100);
+        Check(plan.PreparationNodes("travel", _ => 100).ToJsonString() == "[\"collect\",\"later\"]",
+            "preparation waited for an independent ready branch while travel was running");
+        Check(NativeAgent.CheckProposalScript(new JsonObject { ["script"] = "return await tool('nav_to',{x:2,y:3});" })?["error"]?.ToString()
+            == "invalid_proposal_script"
+            && NativeAgent.CheckProposalScript(new JsonObject { ["script"] = "return tool('nav_to',{x:2,y:3});" }) == null,
+            "the worker could submit asynchronous code that the game host cannot execute");
         Console.WriteLine("PASS: preparation coverage identifies query-only successors, preserves dynamic actions and checks current completion evidence");
     }
 

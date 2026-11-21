@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Text.Json.Nodes;
 using Microsoft.Xna.Framework;
 using Terraria;
 
@@ -31,6 +32,7 @@ public class GameSensor
 
 public class GameMovement
 {
+    internal static JsonObject GrappleState(Player player, bool findAnchors) => new() { ["equipped_type"] = player.miscEquips[4].type };
     public const int HorizontalReserveCells = 35, UpperReserveCells = 18, LowerReserveCells = 4;
     public static int Calls;
     public static bool ExtraJumpObserved;

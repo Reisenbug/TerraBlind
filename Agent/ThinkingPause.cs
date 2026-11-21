@@ -135,8 +135,11 @@ public sealed class ThinkingPause : ModSystem
         decisionIdleRun = decisionIdle ? decisionIdleRun + 1 : 0;
         if (decisionIdle) decisionIdleFrames++;
         longestDecisionIdleRun = Math.Max(longestDecisionIdleRun, decisionIdleRun);
-        if (decisionIdleRun == 120)
-            DiagLog.Write($"[agent_decision_idle] tick={Main.GameUpdateCount} frames={decisionIdleRun} status={NativeAgent.Status} continuity={AgentTools.ExecutionContinuity?["reason"]}");
+        if (decisionIdleRun == 61)
+            DiagLog.Write($"[agent_decision_idle] tick={Main.GameUpdateCount} frames={decisionIdleRun} status={NativeAgent.Status}" +
+                $" continuity={AgentTools.ExecutionContinuity?["reason"]} owner={AgentTools.ControlSession.Tool}" +
+                $" action={AgentTools.Actions.PrimaryHandle} nav_goal={RecedingNav.DisplayGoal} field_ready={RecedingNav.FieldReady}" +
+                $" at=({player.Center.X / 16:0.0},{player.Center.Y / 16:0.0})");
         bool uncovered = !Main.gameMenu && !Manual.On && !player.dead
             && (NativeAgent.WorkPending || AgentTools.Actions.HasActive || AgentTools.ControlSession.Active)
             && stationary && player.itemAnimation == 0 && player.itemTime == 0 && player.reuseDelay == 0

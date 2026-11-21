@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Nodes;
 using Microsoft.Xna.Framework;
 using Terraria;
 using Terraria.ID;
@@ -8,6 +9,39 @@ namespace TerraBlind.JevariaCombat;
 
 public sealed class GameMovement : IMovementDriver
 {
+    internal static JsonObject GrappleState(Player player, bool findAnchors)
+    {
+        float range = HookRange(player);
+        var anchors = new JsonArray();
+        var state = new JsonObject { ["equipped_type"] = player.miscEquips[4].type,
+            ["usable"] = range > 0, ["range_pixels"] = range, ["latched"] = player.grapCount > 0,
+            ["origin_x"] = ActExecutor.OriginCx(player), ["origin_y"] = ActExecutor.OriginCy(player),
+            ["anchors"] = anchors };
+        if (!findAnchors || range <= 0 || player.dead || player.grapCount > 0 || player.mount.Active || player.gravDir != 1) return state;
+        var seen = new HashSet<(int X, int Y)>();
+        foreach (var (horizontal, vertical) in new[] { (0, -1), (-1, -1), (1, -1), (-1, 0), (1, 0) })
+        {
+            if (!TryHookPoint(player, horizontal, vertical, vertical == 0, out var point)) continue;
+            int x = (int)(point.X / 16), y = (int)(point.Y / 16);
+            if (seen.Contains((x, y)) || VanillaContactRegion.Hazard(x, y)) continue;
+            Vector2 delta = point - player.Center;
+            float length = delta.Length();
+            bool clear = true;
+            for (float travelled = 8; travelled < length - 40; travelled += 8)
+            {
+                Vector2 position = player.position + delta * (travelled / length);
+                if (!VanillaContactRegion.SafeBody(position, player.width, player.height)
+                    || AgentTools.Control.ForbiddenAt(ControlBehavior.Navigation, (int)((position.X + player.width / 2f) / 16),
+                        (int)((position.Y + player.height - 2) / 16))) { clear = false; break; }
+            }
+            if (!clear) continue;
+            seen.Add((x, y));
+            anchors.Add(new JsonObject { ["x"] = x, ["y"] = y, ["distance_tiles"] = length / 16f,
+                ["horizontal"] = horizontal, ["vertical"] = vertical });
+        }
+        return state;
+    }
+
     private const float MountEntrySpeed = 4f;
     public static int EquippedVerticalMount(Player player) => player.miscEquips[3].type switch
     {

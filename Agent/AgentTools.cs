@@ -409,11 +409,8 @@ public static partial class AgentTools
     static long gapTimestamp;
     static bool gapReported, gapLimitExceeded, primaryObserved;
     const int ExecutionGapLimitMs = 1000;
-    const int IdleDecisionBudgetMs = 600;
-    sealed record IdleOption(string Node, string Description, Func<bool> Valid, Action<CancellationToken> Start);
-    sealed record IdleDecision(long Gap, long Requested, string Predecessor, int Revision, int Progress, IdleOption[] Options, Task<JsonObject> Answer);
-    static IdleDecision idleDecision;
-    static long idleDecisionGap, emptyIdleGap;
+    sealed record IdleOption(string Node, string Description, Action<CancellationToken> Start);
+    static long emptyIdleGap;
     static readonly HashSet<(string Node, int X, int Y)> idleWalks = new();
 
     internal static string PreparationContext(string attempt, string node)
@@ -753,17 +750,18 @@ public static partial class AgentTools
         StartPreparedNode(next, handle, token);
     }
 
-    static void StartUntriedReadyNode(CancellationToken token)
+    static bool StartUntriedReadyNode(CancellationToken token)
     {
         if (Main.GameUpdateCount < nextIdleNodeScan || Manual.On || Main.LocalPlayer.suffocating
-            || Volatile.Read(ref pendingPrimaryActions) > 0 || Watches.HasRecoveryBlocker) return;
+            || Volatile.Read(ref pendingPrimaryActions) > 0 || Watches.HasRecoveryBlocker) return false;
         nextIdleNodeScan = Main.GameUpdateCount + 15;
         var step = UntriedReadySteps(Plan.Snapshot()).FirstOrDefault();
-        if (step == null) return;
+        if (step == null) return false;
         string id = step["id"].ToString();
         continuedActions.Add("idle:" + id + ":" + StepVersion(step));
         DiagLog.Write($"[dag-ready-dispatch] node={id} revision={Plan.ExecutionRevision(id)}");
         StartPreparedNode(id, null, token, background: true);
+        return true;
     }
 
     static IEnumerable<JsonNode> UntriedReadySteps(JsonObject plan)
@@ -782,8 +780,7 @@ public static partial class AgentTools
         }
     }
 
-    internal static void ContinueIdleDecision(CancellationToken token,
-        Func<JsonObject, CancellationToken, Task<JsonObject>> judge = null)
+    internal static void ContinueIdleAction(CancellationToken token)
     {
         var p = Main.LocalPlayer;
         if (token.IsCancellationRequested || !Plan.RequiresNodeExecution || !continuation.IsCompleted
@@ -793,102 +790,21 @@ public static partial class AgentTools
             || RecedingNav.Active || ActExecutor.IsActive || FrameProgram.Active || Actions.CurrentNodeWork().Paused
             || Main.npc.Any(n => n is { active: true, boss: true } && Math.Abs(n.Center.X - p.Center.X) < 3200
                 && Math.Abs(n.Center.Y - p.Center.Y) < 3200)) return;
-        if (gapStarted == null)
-        {
-            StartUntriedReadyNode(token);
-            return;
-        }
-        var pending = idleDecision;
-        double age = pending == null ? 0 : Stopwatch.GetElapsedTime(pending.Requested).TotalMilliseconds;
-        if (pending == null ? idleDecisionGap == gapTimestamp || Main.GameUpdateCount < nextIdleNodeScan
-            : !pending.Answer.IsCompleted && age < IdleDecisionBudgetMs) return;
+        if (Main.GameUpdateCount < nextIdleNodeScan || StartUntriedReadyNode(token) || gapStarted == null) return;
         var plan = Plan.Snapshot();
-        int revision = Int(plan, "revision"), progress = Int(plan, "progress_revision");
-        string predecessor = ActionAttempt(Actions.LatestPrimary());
-        if (pending != null)
-        {
-            idleDecision = null;
-            if (pending.Gap != gapTimestamp || age > ExecutionGapLimitMs) return;
-            if (pending.Predecessor != predecessor || pending.Revision != revision || pending.Progress != progress)
-            { idleDecisionGap = 0; return; }
-            var result = pending.Answer.IsCompleted ? pending.Answer.GetAwaiter().GetResult() : null;
-            var answer = result?["answers"]?["next"];
-            string mode = "jev";
-            int index = answer?["choice"] is JsonValue selected && int.TryParse(selected.ToString(), out int choice) ? choice
-                : answer?["noul"] is JsonValue probability && probability.TryGetValue<double>(out double yes) ? (yes >= .5 ? 0 : -1) : -2;
-            if (index < -1 || index >= pending.Options.Length) { index = 0; mode = "default"; }
-            if (index == -1)
-            {
-                DiagLog.Write($"[idle_decision] outcome=declined gap_tick={gapStarted}");
-                return;
-            }
-            var option = pending.Options[index];
-            if (!option.Valid())
-            {
-                option = pending.Options.FirstOrDefault(candidate => candidate.Valid());
-                mode = "revalidated_default";
-                if (option == null)
-                {
-                    DiagLog.Write($"[idle_decision] outcome=stale_option gap_tick={gapStarted}");
-                    return;
-                }
-            }
-            DiagLog.Write($"[idle_decision] outcome=dispatched source={mode} node={option.Node} action={option.Description}");
-            option.Start(token);
-            return;
-        }
-        nextIdleNodeScan = Main.GameUpdateCount + 15;
-        var options = UntriedReadySteps(plan).Take(4).Select(step =>
-        {
-            string id = step["id"].ToString();
-            string stamp = "idle:" + id + ":" + StepVersion(step);
-            return new IdleOption(id, "Run prepared task: " + ShortText(step["description"]),
-                () => UntriedReadySteps(Plan.Snapshot()).Any(s => s["id"].ToString() == id), ct =>
-                {
-                    continuedActions.Add(stamp);
-                    StartPreparedNode(id, null, ct, background: true);
-                });
-        }).Concat(IdleWalkOptions(plan, p)).ToArray();
-        if (options.Length == 0)
+        var option = IdleWalkOptions(plan, p).FirstOrDefault();
+        if (option == null)
         {
             if (emptyIdleGap != gapTimestamp)
             {
                 emptyIdleGap = gapTimestamp;
-                DiagLog.Write($"[idle_decision] outcome=no_executable_option gap_tick={gapStarted} node={plan["current_step"]}");
+                DiagLog.Write($"[idle_action] outcome=no_executable_option gap_tick={gapStarted} node={plan["current_step"]}"
+                    + $" last_tool={ExecutionContinuity?["last_tool"]} last_status={ExecutionContinuity?["last_status"]}");
             }
             return;
         }
-        idleDecisionGap = gapTimestamp;
-        var question = new JsonObject { ["type"] = options.Length == 1 ? "noul" : "choice",
-            ["instructions"] = options.Length == 1 ? "Will the supplied action advance the current goal in this situation?"
-                : "Which supplied action should the player execute now to make useful progress toward the goal?" };
-        if (options.Length > 1)
-            question["criteria"] = new JsonObject(options.Select((option, i) => KeyValuePair.Create(i.ToString(), (JsonNode)JsonValue.Create(option.Description))));
-        var request = new JsonObject { ["state"] = new JsonObject { ["goal"] = ShortText(plan["goal"]),
-            ["current_step"] = ShortText(Plan.CurrentDescription), ["gap"] = ExecutionContinuity?["reason"]?.DeepClone(),
-            ["last_tool"] = ExecutionContinuity?["last_tool"]?.DeepClone(),
-            ["last_status"] = ExecutionContinuity?["last_status"]?.DeepClone(), ["hp"] = p.statLife,
-            ["position_tiles"] = new JsonArray(ActExecutor.OriginCx(p), ActExecutor.OriginCy(p)),
-            ["options"] = new JsonArray(options.Select(option => (JsonNode)JsonValue.Create(option.Description)).ToArray()) },
-            ["questions"] = new JsonObject { ["next"] = question } };
-        string key = judge == null ? JevCombat.Key() : null;
-        judge ??= (input, ct) => ScriptDecision.Judge(HarvestHttp, key, input, ct);
-        long requested = Stopwatch.GetTimestamp();
-        idleDecision = new IdleDecision(gapTimestamp, requested, predecessor, revision, progress, options, Task.Run(async () =>
-        {
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-            double remaining = IdleDecisionBudgetMs - Stopwatch.GetElapsedTime(requested).TotalMilliseconds;
-            if (remaining <= 0 || deadline.IsCancellationRequested) return null;
-            deadline.CancelAfter(TimeSpan.FromMilliseconds(remaining));
-            try { return await judge(request, deadline.Token).WaitAsync(deadline.Token); }
-            catch (OperationCanceledException) { return null; }
-            catch (HttpRequestException error) { DiagLog.Write($"[idle_decision] request_failed={error.Message}"); return null; }
-            catch (ArgumentException error) { DiagLog.Write($"[idle_decision] invalid_reply={error.Message}"); return null; }
-            catch (JsonException) { return null; }
-        }));
-        DiagLog.Write($"[idle_decision] outcome=requested options={options.Length} gap_tick={gapStarted}");
-
-        static string ShortText(object value) => value?.ToString() is string text && text.Length > 480 ? text[..480] : value?.ToString();
+        DiagLog.Write($"[idle_action] outcome=dispatched node={option.Node} action={option.Description}");
+        option.Start(token);
     }
 
     static IEnumerable<IdleOption> IdleWalkOptions(JsonObject plan, Player player)
@@ -924,7 +840,7 @@ public static partial class AgentTools
                     ["invariant"] = new JsonObject { ["on_ground"] = true },
                     ["until"] = new JsonObject { ["moved"] = new JsonObject { ["dx"] = tiles, ["dy"] = 0 } } }) }.ToJsonString() + ");";
             yield return new IdleOption(node, $"Walk {distance} tiles {direction} on supported open ground {evidence} after {reason ?? "the blocked route"}.",
-                CanWalk, ct =>
+                ct =>
                 {
                     idleWalks.Add(target);
                     StartPreparedNode(node, navigation["handle"].ToString(), ct, code);
@@ -1323,8 +1239,7 @@ public static partial class AgentTools
         preparedFollowup = null;
         lastInlineHandoff = default;
         nextIdleNodeScan = 0;
-        idleDecision = null;
-        idleDecisionGap = emptyIdleGap = 0;
+        emptyIdleGap = 0;
         idleWalks.Clear();
         inventoryPreparationNotified = false; LastContinuation = ExecutionContinuity = LastRouteLoot = null;
         routeChests.Clear(); routeChestRetries.Clear(); routeLootEnabled = false; gapStarted = null;
@@ -1334,7 +1249,6 @@ public static partial class AgentTools
     }
     public static void Stop()
     {
-        idleDecision = null;
         ClearCombatPreparation();
         AgentScript.ResetIntents();
         AgentNavigationIntent.Reset();
@@ -1731,7 +1645,10 @@ public static partial class AgentTools
             ["breath"] = healthPlayer.breath, ["max_breath"] = healthPlayer.breathMax
         };
         if (selected == null || selected.Contains("movement_capabilities"))
+        {
             state["movement_capabilities"]["fall_forecast"] = NavigationSurvival.AssessFall(healthPlayer);
+            state["movement_capabilities"]["grapple"] = JevariaCombat.GameMovement.GrappleState(healthPlayer, selected != null);
+        }
         state["health_dynamics"] = new JsonObject
         {
             ["tick"] = Main.GameUpdateCount, ["hp"] = healthPlayer.statLife, ["dead"] = healthPlayer.dead,
@@ -4047,31 +3964,47 @@ public static partial class AgentTools
                 var entrance = line[0];
                 int ex = entrance[0].GetValue<int>(), ey = entrance[1].GetValue<int>();
                 int targetDepth = Math.Min((int)Main.rockLayer, ey + 72);
+                int surveyDepth = Math.Min((int)Main.rockLayer + 64, ey + 144);
                 var dig = new HashSet<(int, int)>();
+                var digOrder = new List<(int, int)>();
                 string reason = null;
                 var waypoints = new JsonArray();
                 var spine = new List<(int x, int y)>();
+                bool reached = false;
                 int index = 0;
                 for (; index < line.Count; index++)
                 {
                     int x = line[index][0].GetValue<int>(), y = line[index][1].GetValue<int>();
-                    if (!WorldGen.InWorld(x, y, 4)) { reason = "world_edge"; break; }
+                    if (!WorldGen.InWorld(x, y, 4)) { if (!reached) reason = "world_edge"; break; }
                     int arrivalY = BlocksBody(x, y) && !BlocksBody(x, y - 1)
                         && !BlocksBody(x, y - 2) && !BlocksBody(x, y - 3) ? y - 1 : y;
+                    int beforeDig = digOrder.Count;
                     for (int dy = 0; dy < 3; dy++)
                     for (int dx = -1; dx <= 1; dx++)
                     {
                         int bodyY = arrivalY - dy;
                         if (TerrainInspection.UndergroundDesertWall(x + dx, bodyY)) reason = "underground_desert";
-                        if (dx == 0 && BlocksBody(x, bodyY)) dig.Add((x, bodyY));
+                        if (dx == 0 && BlocksBody(x, bodyY) && dig.Add((x, bodyY))) digOrder.Add((x, bodyY));
                     }
-                    if (reason != null || dig.Count > 8) { reason ??= "surface_excavation"; break; }
+                    if (reason != null || dig.Count > 8)
+                    {
+                        if (!reached) reason ??= "surface_excavation";
+                        else
+                        {
+                            reason = null;
+                            for (int i = beforeDig; i < digOrder.Count; i++) dig.Remove(digOrder[i]);
+                        }
+                        break;
+                    }
                     spine.Add((x, arrivalY));
-                    if (index % 20 == 0 || y >= targetDepth)
+                    reached |= y >= targetDepth;
+                    if (index % 20 == 0 || y >= surveyDepth)
                         waypoints.Add(new JsonObject { ["x"] = x, ["y"] = arrivalY, ["junction"] = index });
-                    if (y >= targetDepth) break;
+                    if (y >= surveyDepth) break;
                 }
-                reason ??= index == line.Count ? "short_descent" : null;
+                if (!reached) reason ??= "short_descent";
+                if (spine.Count > 0 && Int(waypoints[^1].AsObject(), "junction") < spine.Count - 1)
+                    waypoints.Add(new JsonObject { ["x"] = spine[^1].x, ["y"] = spine[^1].y, ["junction"] = spine.Count - 1 });
                 int approach = Math.Abs(ex - origin.x) + Math.Abs(ey - origin.y);
                 int digFrames = dig.Sum(tile => DigTable.CostFrames(tile.Item1, tile.Item2));
                 var findingsForRoute = new JsonObject { ["biome"] = name, ["reason"] = reason, ["estimated_dig_tiles"] = dig.Count,

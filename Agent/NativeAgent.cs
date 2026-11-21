@@ -233,7 +233,10 @@ public class NativeAgent : ModSystem
     public override void PostUpdateEverything()
         => UpdateAgent(true);
 
-    static readonly string[] proposalQueries = { "game_catalog", "find_tiles", "find_descent", "early_descent", "inspect_terrain", "recipe", "npc_find" };
+    static readonly string[] proposalQueries = { "get_state", "game_catalog", "find_tiles", "find_descent", "early_descent", "inspect_terrain", "recipe", "npc_find" };
+    const string SuccessorInventory = " For live inventory use tool('get_state',{fields:['inventory_counts','inventory_slots']}). "
+        + "Read item counts as state.inventory_counts[String(itemType)] ?? 0 and individual slots from state.inventory_slots. "
+        + "Use the same field names in the generated script. Player positions from get_state are pixels; nav_to coordinates are tiles.";
     static readonly JsonObject proposalTool = JsonNode.Parse("""
         {"type":"function","function":{"name":"submit_proposal","description":"Return a proposal to the game host without executing it.",
          "parameters":{"type":"object","properties":{"proposal":{"type":"object"}},"required":["proposal"]}}}
@@ -266,6 +269,8 @@ public class NativeAgent : ModSystem
             "action_followup" => "While this action runs, prepare the next useful actions for this DAG node. Submit {script:string,on_failure:string}. Either field may be omitted when the existing plan covers it. The success script runs after a clean handoff. The failure script receives the previous action as `failure` and runs for a blocked route or exhausted source. In that branch, check live state and choose a different reachable source, a safe retreat, or another useful part of the node. For an overhead boulder, inspect terrain before choosing an escape with clear footing. Preserve all user constraints and safety checks. Write executable TerraBlind JavaScript with direct tool calls. Use read-only tools during preparation.",
             _ => "Prepare the supplied DAG node as an executable TerraBlind JavaScript script. The current action continues. Query only facts needed to prepare this node. Submit {script:string} or {} if the facts do not support an executable script. Use tool(name,args), verify actual node conditions with tool('task_step',{action:'verify'}), and return a concrete blocked reason when needed. Preserve the goal, dependencies and permissions. Do not change the plan or call tools that mutate the game."
         };
+        if (successor) instructions += " The host runs synchronous JavaScript. tool() and skill() return directly. Write plain statements without await or async wrappers."
+            + SuccessorInventory;
         JsonObject proposal = null;
         int queryCount = 0;
         using var worker = new CodexAgent();
@@ -274,6 +279,7 @@ public class NativeAgent : ModSystem
             {
                 if (name == "submit_proposal" && args["proposal"] is JsonObject value && value.ToJsonString().Length <= 12000)
                 {
+                    if (successor && CheckProposalScript(value) is JsonObject error) return error.ToJsonString();
                     proposal ??= (JsonObject)value.DeepClone();
                     return "{\"received\":true}";
                 }
@@ -282,6 +288,25 @@ public class NativeAgent : ModSystem
                 return await AgentTools.Execute(name, args, ct);
             }, _ => { }, token);
         return proposal;
+    }
+
+    internal static JsonObject CheckProposalScript(JsonObject proposal)
+    {
+        foreach (string field in new[] { "script", "on_failure" })
+        {
+            if (proposal[field] == null) continue;
+            if (proposal[field] is not JsonValue value || !value.TryGetValue<string>(out string code)
+                || string.IsNullOrWhiteSpace(code) || code.Length > 10000)
+                return new JsonObject { ["error"] = "invalid_proposal_script", ["field"] = field };
+            try { new Acornima.Parser().ParseScript("(function(){\n" + code + "\n});"); }
+            catch (Acornima.ParseErrorException error)
+            {
+                return new JsonObject { ["error"] = "invalid_proposal_script", ["field"] = field, ["detail"] = error.Message };
+            }
+            if (!AgentScript.ContainsInput(code))
+                return new JsonObject { ["error"] = "proposal_has_no_action", ["field"] = field };
+        }
+        return null;
     }
 
     internal static async Task<JsonObject> JudgeInventory(string role, JsonObject facts,
@@ -306,7 +331,7 @@ public class NativeAgent : ModSystem
             {
                 int armorSlot = ReadNumber(item["armor_slot"]), from = ReadNumber(item["slot"]);
                 var targets = equipment.Where(slot => armorSlot >= 0 ? ReadNumber(slot["slot"]) == armorSlot
-                    : item["accessory"]?.GetValue<bool>() == true && ReadNumber(slot["slot"]) >= 3).ToArray();
+                    : item["accessory"]?.GetValue<bool>() == true && ReadNumber(slot["slot"]) is >= 3 and < 10).ToArray();
                 var empty = targets.FirstOrDefault(slot => ReadNumber(slot["type"]) == 0);
                 foreach (var target in (empty != null ? new[] { empty } : targets))
                 {
@@ -375,6 +400,7 @@ public class NativeAgent : ModSystem
         var propose = _propose;
         _parallel.Poll(token);
         ulong now = Main.GameUpdateCount;
+        PrepareParallelWork(now, propose, token);
         if (now >= _potionReviewTick)
         {
             _potionReviewTick = now + 60;
@@ -429,15 +455,21 @@ public class NativeAgent : ModSystem
                 }
             }
         }
-        if (now < _preparationTick || !AgentTools.Plan.RequiresNodeExecution) return;
+    }
+
+    void PrepareParallelWork(ulong now, Func<string, JsonObject, CancellationToken, Task<JsonObject>> propose, CancellationToken token)
+    {
+        if (now < _preparationTick || !AgentTools.Plan.RequiresNodeExecution || !AgentTools.ControlSession.PrimaryActive) return;
+        var player = Main.LocalPlayer;
+        if ((RecedingNav.Active || AgentTools.ControlSession.OwnsDirectMovement)
+            && Math.Abs(player.velocity.X) + Math.Abs(player.velocity.Y) < .15f) return;
         _preparationTick = now + 15;
         string owner = AgentTools.Actions.ActiveNode;
         var opportunities = AgentTools.Plan.PreparationNodes(owner, AgentTaskEvidence.Measure);
         if (opportunities.Count == 0 && owner == null) return;
         var graph = AgentTools.Plan.Snapshot();
         var ready = graph["ready_steps"].AsArray().Select(step => step.ToString()).ToHashSet();
-        if (AgentTools.ControlSession.PrimaryActive)
-            OfferActionFollowup(_parallel, graph, _goalOptions?["objective"], propose, token);
+        OfferActionFollowup(_parallel, graph, _goalOptions?["objective"], propose, token);
         foreach (var node in opportunities)
         {
             string id = node.GetValue<string>();
@@ -454,6 +486,8 @@ public class NativeAgent : ModSystem
                 ["tools"] = "Use find_tiles and other read-only tools now. Scripts can use nav_to, gather, collect_treasure, build_house, craft_to_slot, equip_item, task_step and existing skills with verified arguments." };
             _parallel.Offer("dag:" + id, offer, ct => propose("successor", facts, ct),
                 answer => ApplySuccessor(id, stamp, answer), token);
+            DiagLog.Write($"[decision_prefetch] role=successor node={id} tick={now} active_node={owner}" +
+                $" movement={(Math.Abs(player.velocity.X) + Math.Abs(player.velocity.Y)):0.00}");
         }
     }
 
@@ -481,6 +515,9 @@ public class NativeAgent : ModSystem
             ["tools"] = "Use action_query and get_state inside the script to check current results. Scripts can use nav_to, gather, collect_treasure, build_house, craft_to_slot, equip_item, task_step and existing skills with verified arguments." };
         jobs.Offer(key, actionKey + ":" + version, ct => propose("action_followup", facts, ct),
             answer => AgentTools.StageActionFollowup(actionKey, owner, version, answer), token);
+        var p = Main.LocalPlayer;
+        DiagLog.Write($"[decision_prefetch] role=action_followup node={owner} tick={Main.GameUpdateCount} handle={running["handle"]}" +
+            $" movement={(Math.Abs(p.velocity.X) + Math.Abs(p.velocity.Y)):0.00}");
     }
 
     static HashSet<int> ProtectedItems(JsonObject plan)
@@ -705,7 +742,7 @@ public class NativeAgent : ModSystem
             {
                 AgentTools.ObserveBossControl(Processing);
                 if (GoalState?["native"]?["status"]?.ToString() is string goalStatus ? goalStatus == "active" : Processing)
-                    AgentTools.ContinueIdleDecision(_cancel.Token);
+                    AgentTools.ContinueIdleAction(_cancel.Token);
                 AgentTools.LootPassingChest();
                 UpdateParallelWork();
             }

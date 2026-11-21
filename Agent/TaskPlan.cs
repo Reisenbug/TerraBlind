@@ -36,8 +36,8 @@ public sealed class AgentTaskPlan
     {
         var completed = _steps.Where(s => s["status"]?.ToString() == "completed").Select(s => s["id"].ToString()).ToHashSet();
         return new JsonArray(_steps.Where(s => s["status"]?.ToString() != "completed"
-            && (s["id"]?.ToString() == owner || (owner == null || s["depends_on"].AsArray().Any(d => d?.ToString() == owner))
-                && s["depends_on"].AsArray().All(d => d?.ToString() == owner || completed.Contains(d.ToString())))
+            && (s["id"]?.ToString() == owner
+                || s["depends_on"].AsArray().All(d => d?.ToString() == owner || completed.Contains(d.ToString())))
             && NeedsPreparation(s, measure))
             .Select(s => s["id"].DeepClone()).ToArray());
     }
