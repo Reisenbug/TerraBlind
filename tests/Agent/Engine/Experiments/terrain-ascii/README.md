@@ -17,6 +17,9 @@ Build `tests/Agent/Engine/AgentChecks.csproj` into an isolated tModLoader save c
 - `TB_TERRAIN_ASCII=live` compares the coarse input with and without ASCII for GPT-6.2 Sol and Jev. It uses the existing Codex login and TypeSafe configuration.
 - `TB_TERRAIN_ASCII=jev-rows` compares the raw ASCII with ASCII prefixed by row numbers, using Jev only.
 - `TB_TERRAIN_ASCII=detour-calibrate` verifies both reachable entrances and executes direct and assisted navigation in separate copies of each detour layout. `detour-live` also runs the paired model choices.
+- `TB_TERRAIN_ASCII=vision-calibrate` verifies the physical actions and captures the input images. `vision-live` additionally tests all three input formats with both models.
+- `TB_TERRAIN_ASCII=vision-deep` compares the three formats on two four-block enclosure layouts. It also measures Jev on the tile maps from the four simpler layouts.
+- `TB_TERRAIN_ASCII=recovery-calibrate` runs direct navigation and a reference waypoint on six layouts. `recovery-live` then asks the Agent for a waypoint from ASCII and from the game frame and runs both choices.
 
 `terrain-ascii.json` contains the exact inputs, measured game outcomes, model selections, and time to the first choice. A model selection is scored against its own scene's physical trial. Agent latency includes opening its isolated session. Jev latency measures the existing `jev_judge` call. Treat this as a small paired trial.
 
@@ -44,3 +47,28 @@ Both entrances lead to a lower landing. Only one landing connects to the goal ch
 | Jev, ASCII | 3.80 s, reached | 2.58 s, reached |
 
 The ASCII arms selected the connected entrance in both layouts. Direct navigation also reached the goal in both layouts and moved within 67 and 137 ms of starting. Model-arm times sum the reported choice latency and the selected route's separate native replay.
+
+## Image comparison / 画面对比
+
+The two cover and two detour layouts are each presented as ASCII, a labeled `terrain_map` image, and a cropped native game frame. The window and candidate markers describe the same tiles in each representation. The game crop uses arena lighting and labeled cells. Native projectile and movement checks establish which option works before the model calls.
+
+Each enclosure layout has two plans of four blocks, all within reach. The outside columns change across layouts, reversing which plan seals the room. The fixture places every block through `WorldGen.PlaceTile` and checks whether a four-connected path from the player to the exterior remains. The model picks one of the two plans using a single observation.
+
+`terrain-vision/report.json` records the scene inputs and decisions. The same directory contains the exact map and game PNGs. Agent decision time starts when the terrain tool returns. Jev time covers the complete request. Image requests use TypeSafe's experimental [image interface](https://docs.typesafe.ai/images).
+
+## Waypoint recovery / 卡点续走
+
+The six fixtures are three layouts and their mirrors. They represent approaching a high crystal shelf from below, backtracking out of a pit, and getting around a wall to a clear shot. The shooting fixture checks the native line-of-sight query at arrival. The layouts reconstruct the geometry of reported problems.
+
+Each arm starts with the same terrain, position and vanilla movement. Direct navigation starts at G. The two Agent arms request one intermediate standing coordinate, navigate there, and continue to G. The only difference in their model inputs is the terrain representation. Terrain editing is disabled. The reference waypoint is recorded for calibration and withheld from the model.
+
+`terrain-recovery/report.json` records completion, the first visible displacement, time to move one tile from start, longest idle frames, the chosen coordinates and movement traces. Report the model session startup and the measured time from observation to choice separately. The total for an Agent arm adds cold-session time to physical execution time.
+
+| Trial | Arrivals | Median observation-to-choice | Median cold session-to-choice |
+| --- | ---: | ---: | ---: |
+| Direct navigation | 1/6 | — | — |
+| Agent with ASCII | 1/6 | 3.02 s | 9.58 s |
+| Agent with game frame | 1/6 | 2.53 s | 8.55 s |
+| Reference route | 2/6 | — | — |
+
+All three comparison arms reached the same right-side firing position. On that layout, direct navigation took 4.11 s. The Agent routes took 2.71 s and 3.57 s to execute, and 12.93 s and 11.87 s including the cold session. Only the reference waypoint reached the mirrored firing position. In the right-side pit, the ASCII choice reached its first rung in 0.90 s, then the final leg hit the limit. Each layout has one run per arm.

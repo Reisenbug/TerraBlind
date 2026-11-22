@@ -4,11 +4,15 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Reflection;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
 using Terraria;
 using Terraria.DataStructures;
@@ -108,6 +112,8 @@ public sealed class AsciiTerrainTrial : ModSystem
     static readonly string[] Options = { "A", "B" };
     static NativeTrial active;
     static DetourRun detour;
+    static ScreenCapture screenCapture;
+    static RecoveryRun recovery;
     internal static bool Enabled => Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII") != null;
 
     sealed record Scene(string Id, bool Cover, string Opening)
@@ -122,6 +128,26 @@ public sealed class AsciiTerrainTrial : ModSystem
     {
         active?.Advance(Main.LocalPlayer);
         detour?.Advance(Main.LocalPlayer);
+        recovery?.Advance(Main.LocalPlayer);
+        if (screenCapture is { } capture)
+            for (int x = 1; x < capture.Width; x += 3)
+            for (int y = 1; y < capture.Height; y += 3)
+                Lighting.AddLight(capture.Origin.X + x, capture.Origin.Y + y, 1f, 1f, 1f);
+    }
+
+    public override void ModifyScreenPosition()
+    {
+        if (screenCapture is { } capture)
+            Main.screenPosition = new Vector2(capture.Origin.X * 16 + capture.Width * 8 - Main.screenWidth / 2f,
+                capture.Origin.Y * 16 + capture.Height * 8 - Main.screenHeight / 2f);
+    }
+
+    public override void PostDrawInterface(SpriteBatch batch)
+    {
+        if (screenCapture is not { } capture || ++capture.Draws < 12) return;
+        screenCapture = null;
+        try { capture.Result.TrySetResult(capture.Read()); }
+        catch (Exception error) { capture.Result.TrySetException(error); }
     }
 
     static void Reset(Scene scene)
@@ -320,6 +346,8 @@ public sealed class AsciiTerrainTrial : ModSystem
     internal static async Task<string> Run()
     {
         string mode = Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII");
+        if (mode is "recovery-calibrate" or "recovery-live") return await RunRecovery(mode == "recovery-live");
+        if (mode is "vision-calibrate" or "vision-live" or "vision-deep") return await RunVision(mode);
         if (mode is "detour-live" or "detour-calibrate") return await RunDetours(mode == "detour-live");
         if (mode is not ("calibrate" or "live" or "jev-rows")) throw new ArgumentException("Unknown ASCII trial mode: " + mode);
         string path = Path.Combine(Main.SavePath, "terrain-ascii.json");
@@ -607,6 +635,583 @@ public sealed class AsciiTerrainTrial : ModSystem
             Flush(); return result.ToJsonString();
         }
         catch (Exception error) { result["error"] = error.Message; Flush(); throw; }
+        finally { await CrossingDiscovery.OnGame(() => { StateSpacePlanner.PreserveTerrain = false; return true; }); }
+    }
+
+    sealed class ScreenCapture(Point origin, int width, int height, IReadOnlyCollection<KeyValuePair<char, Point>> marks)
+    {
+        public Point Origin { get; } = origin;
+        public int Width { get; } = width;
+        public int Height { get; } = height;
+        public int Draws;
+        public readonly TaskCompletionSource<byte[]> Result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        static readonly Dictionary<char, int[]> Glyphs = new()
+        {
+            ['A'] = new[] { 14, 17, 17, 31, 17, 17, 17 },
+            ['B'] = new[] { 30, 17, 17, 30, 17, 17, 30 },
+            ['E'] = new[] { 31, 16, 16, 30, 16, 16, 31 },
+            ['G'] = new[] { 14, 17, 16, 23, 17, 17, 14 },
+            ['P'] = new[] { 30, 17, 17, 30, 16, 16, 16 }
+        };
+
+        public byte[] Read()
+        {
+            var device = Main.instance.GraphicsDevice;
+            int screenW = device.PresentationParameters.BackBufferWidth, screenH = device.PresentationParameters.BackBufferHeight;
+            var zoom = Main.GameViewMatrix.Zoom;
+            var viewCenter = new Vector2(Main.screenWidth / 2f, Main.screenHeight / 2f);
+            var screenScale = new Vector2(screenW / (float)Main.screenWidth, screenH / (float)Main.screenHeight);
+            Vector2 Pixel(Vector2 world) => ((world - Main.screenPosition - viewCenter) * zoom + viewCenter) * screenScale;
+            var start = Pixel(new Vector2(Origin.X * 16, Origin.Y * 16));
+            var end = Pixel(new Vector2((Origin.X + Width) * 16, (Origin.Y + Height) * 16));
+            int left = (int)MathF.Round(start.X), top = (int)MathF.Round(start.Y);
+            int imageW = (int)MathF.Round(end.X) - left, imageH = (int)MathF.Round(end.Y) - top;
+            if (left < 0 || top < 0 || left + imageW > screenW || top + imageH > screenH || imageW < Width || imageH < Height)
+                throw new InvalidOperationException("fixture is outside the real game viewport");
+            var pixels = new Color[screenW * screenH];
+            device.GetBackBufferData(pixels);
+            var cropped = new Color[imageW * imageH];
+            for (int y = 0; y < imageH; y++) Array.Copy(pixels, (top + y) * screenW + left, cropped, y * imageW, imageW);
+            void Put(int x, int y, Color color)
+            {
+                if (x >= 0 && x < imageW && y >= 0 && y < imageH) cropped[y * imageW + x] = color;
+            }
+            foreach (var (label, tile) in marks)
+            {
+                int x = (int)((tile.X + .5f) * imageW / Width) - 5, y = (int)((tile.Y + .5f) * imageH / Height) - 7;
+                for (int dy = -1; dy <= 14; dy++)
+                for (int dx = -1; dx <= 10; dx++) Put(x + dx, y + dy, Color.Black);
+                var rows = Glyphs[label];
+                for (int dy = 0; dy < 14; dy++)
+                for (int dx = 0; dx < 10; dx++)
+                    if ((rows[dy / 2] & (16 >> (dx / 2))) != 0) Put(x + dx, y + dy, Color.Cyan);
+            }
+            using var texture = new Texture2D(device, imageW, imageH); texture.SetData(cropped);
+            using var png = new MemoryStream(); texture.SaveAsPng(png, imageW, imageH);
+            return png.ToArray();
+        }
+    }
+
+    sealed record VisionCase(string Id, JsonObject Coarse, JsonObject Ascii, JsonObject Criteria, string Correct,
+        byte[] TerrainPng, byte[] GamePng);
+
+    static async Task<(byte[] Terrain, byte[] Game)> CaptureVision(Point origin, int width, int height,
+        IReadOnlyCollection<KeyValuePair<char, Point>> marks, CancellationToken token)
+    {
+        var (terrain, screen) = await CrossingDiscovery.OnGame(() =>
+        {
+            Main.GameZoomTarget = 1f;
+            Main.mapStyle = 0;
+            var markers = new JsonArray(marks.Where(m => m.Key != 'P').Select(m => (JsonNode)new JsonObject
+                { ["label"] = m.Key.ToString(), ["x"] = origin.X + m.Value.X, ["y"] = origin.Y + m.Value.Y }).ToArray());
+            var receipt = TerrainMap.Read(new JsonObject { ["x"] = origin.X + width / 2, ["y"] = origin.Y + height / 2,
+                ["width"] = width, ["height"] = height, ["marks"] = markers });
+            var screenshot = new ScreenCapture(origin, width, height, marks);
+            screenCapture = screenshot;
+            using var stream = File.OpenRead(receipt["image_path"].ToString());
+            return (ReadableMapPng(stream), screenshot);
+        });
+        return (terrain, await screen.Result.Task.WaitAsync(token));
+    }
+
+    static byte[] ReadableMapPng(Stream stream)
+    {
+        var device = Main.instance.GraphicsDevice;
+        using var map = Texture2D.FromStream(device, stream);
+        int factor = (int)Math.Ceiling(280d / Math.Min(map.Width, map.Height));
+        int width = map.Width * factor, height = map.Height * factor;
+        var source = new Color[map.Width * map.Height]; map.GetData(source);
+        var enlarged = new Color[width * height];
+        for (int y = 0; y < height; y++)
+        for (int x = 0; x < width; x++) enlarged[y * width + x] = source[y / factor * map.Width + x / factor];
+        using var texture = new Texture2D(device, width, height); texture.SetData(enlarged);
+        using var png = new MemoryStream(); texture.SaveAsPng(png, width, height);
+        return png.ToArray();
+    }
+
+    static readonly Point EnclosureOrigin = new(740, 240);
+    static readonly Point EnclosureFeet = new(14, 14);
+    static readonly Point[] EnclosureA = { new(11, 10), new(11, 11), new(17, 13), new(17, 14) };
+    static readonly Point[] EnclosureB = { new(11, 13), new(11, 14), new(17, 10), new(17, 11) };
+    static Point[] EnclosurePlan(string option) => option == "A" ? EnclosureA : EnclosureB;
+
+    static void ResetEnclosure(string solution)
+    {
+        var p = Main.LocalPlayer;
+        Halt.All();
+        foreach (var npc in Main.npc) npc.active = false;
+        foreach (var projectile in Main.projectile) projectile.active = false;
+        var open = EnclosurePlan(solution);
+        for (int x = -4; x < Width + 4; x++)
+        for (int y = -4; y < Height + 4; y++)
+        {
+            var tile = Main.tile[EnclosureOrigin.X + x, EnclosureOrigin.Y + y];
+            tile.ClearEverything(); tile.LiquidAmount = 0;
+            bool inner = (x is 11 or 17) && (y is 9 or 12);
+            bool outside = (x is 10 or 18) && y is >= 9 and < 15
+                && !open.Contains(new Point(x == 10 ? 11 : 17, y));
+            if (x == 0 || x == Width - 1 || y == 0 || y >= 15 || inner || outside || y == 9 && x is >= 10 and <= 18)
+            { tile.HasTile = true; tile.TileType = TileID.GrayBrick; }
+        }
+        p.position = new Vector2((EnclosureOrigin.X + EnclosureFeet.X) * 16 + 8 - p.width / 2f,
+            (EnclosureOrigin.Y + EnclosureFeet.Y + 1) * 16 - p.height);
+        p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = EnclosureOrigin.Y + EnclosureFeet.Y + 1;
+        p.controlLeft = p.controlRight = p.controlJump = false;
+    }
+
+    static bool EnclosureSolid(Point cell)
+    {
+        var tile = Main.tile[EnclosureOrigin.X + cell.X, EnclosureOrigin.Y + cell.Y];
+        return tile.HasUnactuatedTile && Main.tileSolid[tile.TileType];
+    }
+
+    static JsonObject VerifyEnclosure(string solution, string option)
+    {
+        ResetEnclosure(solution);
+        var states = new JsonArray();
+        var p = Main.LocalPlayer;
+        foreach (var cell in EnclosurePlan(option))
+        {
+            int x = EnclosureOrigin.X + cell.X, y = EnclosureOrigin.Y + cell.Y;
+            bool placed = p.IsInTileInteractionRange(x, y, TileReachCheckSettings.Simple)
+                && WorldGen.PlaceTile(x, y, TileID.GrayBrick, mute: true, plr: p.whoAmI);
+            states.Add(new JsonObject { ["cell"] = new JsonArray(cell.X, cell.Y), ["placed"] = placed });
+        }
+        var seen = new HashSet<Point> { EnclosureFeet };
+        var pending = new Queue<Point>(); pending.Enqueue(EnclosureFeet);
+        bool sealedRoom = true;
+        var directions = new[] { new Point(0, -1), new Point(0, 1), new Point(-1, 0), new Point(1, 0) };
+        while (pending.TryDequeue(out var current))
+        {
+            if (current.X <= 3 || current.X >= Width - 4 || current.Y <= 3) { sealedRoom = false; break; }
+            foreach (var delta in directions)
+            {
+                var next = current + delta;
+                if (!EnclosureSolid(next) && seen.Add(next)) pending.Enqueue(next);
+            }
+        }
+        return new JsonObject { ["placements"] = states, ["all_placed"] = states.All(t => t["placed"].GetValue<bool>()),
+            ["sealed"] = sealedRoom };
+    }
+
+    static JsonObject EnclosureState(IReadOnlyCollection<KeyValuePair<char, Point>> marks, bool map)
+    {
+        var state = new JsonObject { ["goal"] = "Place all four blocks in the chosen plan. Seal P inside a room with no gap leading to the exterior. Every A belongs to plan A and every B belongs to plan B. Both plans are in reach and can be placed.",
+            ["player_feet"] = new JsonArray(EnclosureFeet.X, EnclosureFeet.Y),
+            ["plan_A"] = new JsonArray(EnclosureA.Select(p => (JsonNode)new JsonArray(p.X, p.Y)).ToArray()),
+            ["plan_B"] = new JsonArray(EnclosureB.Select(p => (JsonNode)new JsonArray(p.X, p.Y)).ToArray()) };
+        if (!map) return state;
+        var rows = new JsonArray();
+        for (int y = 0; y < Height; y++)
+        {
+            var row = new StringBuilder(Width);
+            for (int x = 0; x < Width; x++)
+            {
+                var cell = new Point(x, y);
+                char marked = marks.FirstOrDefault(mark => mark.Value == cell).Key;
+                row.Append(marked != '\0' ? marked : EnclosureSolid(cell) ? '#' : '.');
+            }
+            rows.Add(row.ToString());
+        }
+        state["legend"] = Legend; state["ascii_rows"] = rows;
+        return state;
+    }
+
+    static readonly HttpClient VisionHttp = new() { Timeout = TimeSpan.FromSeconds(15) };
+
+    static async Task<JsonObject> JudgeVision(string model, JsonObject facts, JsonObject criteria, byte[] image,
+        string sandbox, string jevKey, CancellationToken token, bool waypoint = false)
+    {
+        string question = waypoint
+            ? "Use this terrain to name one intermediate standing cell that makes useful progress toward G. Return its zero-based column x and row y (the empty tile at the player's feet just above its supporting block). The navigator will travel to that cell first and then to G. Terrain edits are disabled. Send G itself if best."
+            : "Use the supplied terrain representation to select A or B, the action most likely to achieve the stated goal. Reply with one choice.";
+        var clock = Stopwatch.StartNew();
+        if (model == "Jev")
+        {
+            var payload = new JsonObject { ["model"] = JevCombat.Model, ["state"] = facts.DeepClone(), ["questions"] = new JsonObject
+            { ["pick"] = new JsonObject { ["type"] = "choice", ["instructions"] = question, ["criteria"] = criteria.DeepClone() } } };
+            using var request = new HttpRequestMessage(HttpMethod.Post, JevCombat.Url);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", jevKey);
+            if (image != null)
+            {
+                string reference = Guid.NewGuid().ToString("N");
+                payload["state"]["terrain_image"] = reference;
+                payload["assets"] = new JsonObject { [reference] = new JsonObject { ["type"] = "image", ["format"] = "png",
+                    ["data_base64"] = Convert.ToBase64String(image) } };
+                request.Headers.Add("TypeSafe-Danger-Zone-Images", "true");
+            }
+            request.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            using var response = await VisionHttp.SendAsync(request, token);
+            string content = await response.Content.ReadAsStringAsync(token);
+            return response.IsSuccessStatusCode
+                ? new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["receipt"] = JsonNode.Parse(content) }
+                : new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["error"] = $"Jev HTTP {(int)response.StatusCode}: {content[..Math.Min(content.Length, 350)]}" };
+        }
+        var tools = JsonNode.Parse("""
+            [
+              {"type":"function","function":{"name":"terrain_map","description":"Read scene facts and the supplied terrain representation for this trial.","parameters":{"type":"object","properties":{}}}},
+              {"type":"function","function":{"name":"choose","description":"Submit A or B.","parameters":{"type":"object","properties":{"option":{"type":"string","enum":["A","B"]}},"required":["option"]}}}
+            ]
+            """).AsArray();
+        if (waypoint)
+        {
+            tools[1]["function"]["description"] = "Submit the first standing coordinate.";
+            tools[1]["function"]["parameters"] = JsonNode.Parse("""
+                {"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},"required":["x","y"]}
+                """);
+        }
+        JsonNode choice = null;
+        long? observedAt = null, pickedAt = null;
+        MethodInfo register = image == null ? null : typeof(CodexAgent).Assembly.GetType("TerraBlind.AgentImages")
+            .GetMethod("Register", BindingFlags.Static | BindingFlags.NonPublic);
+        using var agent = new CodexAgent();
+        await agent.RunAsync("Read the scene, then choose exactly once.", "", sandbox, Model,
+            question + " Call terrain_map once first, then call choose.", tools, (tool, args, _) =>
+            {
+                if (tool == "terrain_map")
+                {
+                    if (observedAt.HasValue) return Task.FromResult("{\"error\":\"scene_already_read\"}");
+                    var output = new JsonObject { ["scene"] = facts.DeepClone(), ["options"] = criteria.DeepClone() };
+                    if (image != null) output["image_id"] = (string)register!.Invoke(null, new object[] { image });
+                    observedAt = clock.ElapsedMilliseconds;
+                    return Task.FromResult(output.ToJsonString());
+                }
+                if (observedAt.HasValue && choice == null)
+                {
+                    choice = waypoint ? args.DeepClone() : args["option"].DeepClone();
+                    pickedAt = clock.ElapsedMilliseconds;
+                }
+                return Task.FromResult(choice == null ? "{\"error\":\"read_scene_first\"}" : "{\"ok\":true}");
+            }, _ => { }, token);
+        return new JsonObject { ["choice"] = choice, ["elapsed_ms"] = pickedAt - observedAt,
+            ["session_to_pick_ms"] = pickedAt, ["usage"] = agent.TokenUsage };
+    }
+
+    const int RecoveryWidth = 36, RecoveryHeight = 22;
+    sealed record RecoveryScene(string Name, Point Start, Point Goal, Point Waypoint, Rectangle[] Blocks, Point? Opponent = null, bool Mirror = false)
+    {
+        public string Id => Name + (Mirror ? "-left" : "-right");
+        public Point Map(Point p) => Mirror ? new Point(RecoveryWidth - 1 - p.X, p.Y) : p;
+        public Point P => Map(Start);
+        public Point G => Map(Goal);
+        public Point? E => Opponent is Point p ? Map(p) : null;
+        public bool Solid(int x, int y) => x == 0 || x == RecoveryWidth - 1 || y == 0 || y >= 20
+            || Blocks.Any(block => block.Contains(Map(new Point(x, y))));
+    }
+
+    static readonly RecoveryScene[] RecoveryScenes =
+    {
+        new("crystal-shelf", new(21, 19), new(27, 11), new(13, 14),
+            new Rectangle[] { new(9, 13, 3, 7), new(12, 15, 3, 5), new(15, 17, 2, 3), new(16, 12, 17, 2) }),
+        new("pit-backtrack", new(19, 19), new(29, 10), new(11, 13),
+            new Rectangle[] { new(6, 11, 3, 9), new(9, 14, 3, 6), new(12, 17, 3, 3), new(13, 11, 22, 2), new(23, 11, 12, 9) }),
+        new("blocked-shot", new(8, 19), new(26, 19), new(17, 11),
+            new Rectangle[] { new(11, 17, 3, 3), new(14, 15, 3, 5), new(17, 12, 6, 8) }, new(31, 19))
+    };
+
+    static void ResetRecovery(Point origin, RecoveryScene scene)
+    {
+        Halt.All(); MazeWand.InvalidateField(); StateSpacePlanner.PreserveTerrain = true;
+        var p = Main.LocalPlayer;
+        foreach (var item in p.inventory.Concat(p.armor).Concat(p.miscEquips)) item.TurnToAir();
+        foreach (var npc in Main.npc) npc.active = false;
+        foreach (var projectile in Main.projectile) projectile.active = false;
+        p.RemoveAllGrapplingHooks(); p.mount.Dismount(p);
+        for (int i = p.buffType.Length - 1; i >= 0; i--)
+            if (p.buffType[i] != 0) p.DelBuff(i);
+        for (int x = -3; x < RecoveryWidth + 3; x++)
+        for (int y = -3; y < RecoveryHeight + 3; y++)
+        {
+            var tile = Main.tile[origin.X + x, origin.Y + y];
+            tile.ClearEverything();
+            if (x >= 0 && x < RecoveryWidth && y >= 0 && y < RecoveryHeight && scene.Solid(x, y))
+                tile.ResetToType(TileID.GrayBrick);
+        }
+        Point start = origin + scene.P;
+        p.position = new Vector2(start.X * 16 + 8 - p.width / 2f, (start.Y + 1) * 16 - p.height);
+        p.velocity = Vector2.Zero; p.jump = 0; p.releaseJump = true;
+        p.controlLeft = p.controlRight = p.controlJump = p.controlUseItem = false;
+        p.fallStart = p.fallStart2 = start.Y + 1;
+        p.statLife = p.statLifeMax2;
+        Main.playerInventory = Main.mapFullscreen = Main.autoPause = false;
+    }
+
+    static bool ClearShot(Player p, Point opponent)
+        => Collision.CanHitLine(p.position, p.width, p.height, new Vector2(opponent.X * 16 - 2, (opponent.Y + 1) * 16 - p.height), p.width, p.height);
+
+    sealed class RecoveryRun(Point origin, RecoveryScene scene, Point target)
+    {
+        readonly TaskCompletionSource<JsonObject> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly Stopwatch clock = Stopwatch.StartNew();
+        readonly JsonArray trace = new();
+        readonly Vector2 start = Main.LocalPlayer.position;
+        Vector2 last = Main.LocalPlayer.position;
+        int frames, consecutiveIdle, longestIdle;
+        long? firstMove, firstTile, waypointMs;
+        Point destination = target;
+        public Task<JsonObject> Result => done.Task;
+
+        public void Start() => RecedingNav.Start(origin.X + destination.X, origin.Y + destination.Y, RecedingNav.Mode.Stand);
+
+        bool At(Player p, Point to) => MathF.Abs(p.Center.X - ((origin.X + to.X) * 16 + 8)) <= 7.9f
+            && MathF.Abs(p.Bottom.Y - (origin.Y + to.Y + 1) * 16) <= 2 && p.velocity.Y == 0;
+
+        public void Advance(Player p)
+        {
+            frames++;
+            if (Vector2.DistanceSquared(last, p.position) > .04f) { firstMove ??= clock.ElapsedMilliseconds; consecutiveIdle = 0; }
+            else longestIdle = Math.Max(longestIdle, ++consecutiveIdle);
+            if (Vector2.DistanceSquared(start, p.position) >= 256) firstTile ??= clock.ElapsedMilliseconds;
+            last = p.position;
+            if (frames % 8 == 0) trace.Add(new JsonArray(frames, p.Center.X / 16 - origin.X, p.Bottom.Y / 16 - origin.Y));
+            if (p.dead) { Finish(false, "died"); return; }
+            bool reached = At(p, scene.G) && (scene.E is not Point opponent || ClearShot(p, origin + opponent));
+            if (reached) { Finish(true, "goal_reached"); return; }
+            if (frames >= 600) { Finish(false, "route_time_limit"); return; }
+            if (destination != scene.G && At(p, destination))
+            {
+                waypointMs = clock.ElapsedMilliseconds;
+                destination = scene.G; Start(); return;
+            }
+            if (!RecedingNav.Active) Finish(false, RecedingNav.LastStop ?? "navigator_inactive");
+        }
+
+        void Finish(bool reached, string reason)
+        {
+            RecedingNav.Stop(); recovery = null;
+            done.TrySetResult(new JsonObject { ["reached"] = reached, ["reason"] = reason, ["frames"] = frames,
+                ["elapsed_ms"] = clock.ElapsedMilliseconds, ["first_move_ms"] = firstMove, ["first_tile_ms"] = firstTile,
+                ["waypoint_ms"] = waypointMs, ["longest_idle_frames"] = longestIdle, ["trace"] = trace });
+        }
+    }
+
+    static async Task<JsonObject> PlayRecovery(Point origin, RecoveryScene scene, Point target, CancellationToken token)
+    {
+        var result = await CrossingDiscovery.OnGame(() =>
+        {
+            ResetRecovery(origin, scene);
+            if (target.X <= 0 || target.X >= RecoveryWidth - 1 || target.Y <= 2 || target.Y >= 20
+                || scene.Solid(target.X, target.Y) || scene.Solid(target.X, target.Y - 1)
+                || scene.Solid(target.X, target.Y - 2) || !scene.Solid(target.X, target.Y + 1))
+                return Task.FromResult(new JsonObject { ["reached"] = false, ["reason"] = "target_not_a_standing_cell" });
+            recovery = new RecoveryRun(origin, scene, target); recovery.Start();
+            return recovery.Result;
+        });
+        return await result.WaitAsync(token);
+    }
+
+    static async Task<string> RunRecovery(bool live)
+    {
+        string root = Path.Combine(Main.SavePath, "terrain-recovery");
+        Directory.CreateDirectory(root);
+        var cases = new JsonArray();
+        var report = new JsonObject { ["study"] = "physical_waypoint_recovery", ["ok"] = false, ["cases"] = cases };
+        void Save() => File.WriteAllText(Path.Combine(root, "report.json"), report.ToJsonString());
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(8));
+        var token = timeout.Token;
+        await CrossingDiscovery.OnGame(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false; Main.dayTime = true; Main.musicVolume = 0f;
+            report["audio"] = new JsonArray(Main.musicVolume, Main.soundVolume);
+            return true;
+        });
+        try
+        {
+            var tasks = new List<(Point Origin, RecoveryScene Scene, JsonObject Entry, JsonObject Facts, JsonArray Rows, byte[] Image)>();
+            foreach (var template in RecoveryScenes)
+            foreach (bool mirror in new[] { false, true })
+            {
+                var scene = template with { Mirror = mirror };
+                var origin = new Point(900 + cases.Count * 420, 240);
+                var entry = new JsonObject { ["id"] = scene.Id };
+                cases.Add(entry);
+                var (facts, rows, marks) = await CrossingDiscovery.OnGame(() =>
+                {
+                    ResetRecovery(origin, scene);
+                    var labels = new Dictionary<char, Point> { ['P'] = scene.P, ['G'] = scene.G };
+                    if (scene.E is Point e)
+                    {
+                        labels['E'] = e;
+                        entry["initial_line_of_sight"] = ClearShot(Main.LocalPlayer, origin + e);
+                    }
+                    var grid = new JsonArray();
+                    for (int y = 0; y < RecoveryHeight; y++)
+                    {
+                        var row = new StringBuilder(RecoveryWidth);
+                        for (int x = 0; x < RecoveryWidth; x++)
+                        {
+                            var point = new Point(x, y);
+                            row.Append(point == scene.P ? 'P' : point == scene.G ? 'G' : point == scene.E ? 'E'
+                                : scene.Solid(x, y) ? '#' : '.');
+                        }
+                        grid.Add(row.ToString());
+                    }
+                    var state = new JsonObject { ["goal"] = scene.E == null ? "Stand at G." : "Reach firing position G for target E.",
+                        ["player_feet"] = new JsonArray(scene.P.X, scene.P.Y), ["goal_feet"] = new JsonArray(scene.G.X, scene.G.Y),
+                        ["window_tiles"] = new JsonArray(RecoveryWidth, RecoveryHeight), ["coordinate_origin"] = "top left; x right, y down",
+                        ["movement"] = "Terraria vanilla walking and jumping, no accessories, no tile edits." };
+                    return (state, grid, labels);
+                });
+                entry["facts"] = facts.DeepClone(); entry["ascii_rows"] = rows.DeepClone();
+                var (_, image) = await CaptureVision(origin, RecoveryWidth, RecoveryHeight, marks, token);
+                string imagePath = Path.Combine(root, scene.Id + ".png");
+                File.WriteAllBytes(imagePath, image); entry["image_path"] = imagePath; Save();
+                entry["direct"] = await PlayRecovery(origin, scene, scene.G, token); Save();
+                Point reference = scene.Map(scene.Waypoint);
+                entry["reference_waypoint"] = new JsonArray(reference.X, reference.Y);
+                entry["reference"] = await PlayRecovery(origin, scene, reference, token); Save();
+                tasks.Add((origin, scene, entry, facts, rows, image));
+            }
+            if (live)
+            {
+                string workspace = Path.Combine(root, "model-workspace"); Directory.CreateDirectory(workspace);
+                foreach (var task in tasks)
+                {
+                    var replies = await Task.WhenAll(new[] { "ascii", "game" }.Select(async format =>
+                    {
+                        var input = task.Facts.DeepClone().AsObject();
+                        if (format == "ascii") { input["legend"] = Legend; input["ascii_rows"] = task.Rows.DeepClone(); }
+                        else input["image_legend"] = "P player, G goal, E target if present. The crop is exactly the coordinate window.";
+                        JsonObject reply;
+                        try
+                        {
+                            reply = await JudgeVision("Agent", input, new JsonObject(), format == "game" ? task.Image : null,
+                                workspace, null, token, waypoint: true);
+                        }
+                        catch (Exception error) when (!token.IsCancellationRequested) { reply = new JsonObject { ["error"] = error.Message }; }
+                        return (format, reply);
+                    }));
+                    foreach (var (format, reply) in replies)
+                    {
+                        task.Entry[format] = reply;
+                        if (reply["choice"] is JsonObject pick && pick["x"] is JsonValue x && x.TryGetValue<int>(out int col)
+                            && pick["y"] is JsonValue y && y.TryGetValue<int>(out int row))
+                        {
+                            var played = await PlayRecovery(task.Origin, task.Scene, new Point(col, row), token);
+                            reply["physical"] = played;
+                            if (played["elapsed_ms"] is JsonValue elapsed)
+                                reply["decision_plus_route_ms"] = reply["session_to_pick_ms"].GetValue<long>() + elapsed.GetValue<long>();
+                        }
+                        Save();
+                    }
+                }
+            }
+            report["ok"] = cases.Count == 6 && (!live || cases.All(entry => entry["ascii"]?["physical"] != null && entry["game"]?["physical"] != null));
+            Save(); return report.ToJsonString();
+        }
+        catch (Exception error) { report["error"] = error.Message; Save(); throw; }
+        finally { await CrossingDiscovery.OnGame(() => { Halt.All(); recovery = null; StateSpacePlanner.PreserveTerrain = false; return true; }); }
+    }
+
+    static async Task<string> RunVision(string mode)
+    {
+        bool live = mode != "vision-calibrate", deep = mode == "vision-deep";
+        string root = Path.Combine(Main.SavePath, "terrain-vision");
+        Directory.CreateDirectory(root);
+        var cases = new JsonArray(); var selections = new JsonArray();
+        var output = new JsonObject { ["experiment"] = "terrain_ascii", ["study"] = "vision", ["ok"] = false,
+            ["cases"] = cases, ["decisions"] = selections };
+        void Flush() => File.WriteAllText(Path.Combine(root, "report.json"), output.ToJsonString());
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(240));
+        var token = timeout.Token;
+        string jevKey = await CrossingDiscovery.OnGame(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false; Main.dayTime = true; Main.musicVolume = 0f;
+            return live ? JevCombat.Key() : null;
+        });
+        try
+        {
+            var scenarios = new List<VisionCase>();
+            foreach (string side in Options)
+            {
+                var scene = new Scene(side == "A" ? "cover-upper" : "cover-lower", true, side);
+                var physical = new JsonObject();
+                foreach (string candidate in Options) physical[candidate] = await Verify(scene, candidate, token);
+                if (Options.Any(candidate => physical[candidate]["pass"].GetValue<bool>() != (candidate == side)))
+                    throw new InvalidOperationException("cover calibration failed for " + scene.Id);
+                var (coarse, ascii) = await CrossingDiscovery.OnGame(() =>
+                { Reset(scene); return (SceneState(scene, false), SceneState(scene, true)); });
+                var marks = new Dictionary<char, Point> { ['P'] = new(scene.PlayerX, scene.Floor - 1), ['E'] = new(24, scene.Floor - 1),
+                    ['A'] = scene.Mark("A"), ['B'] = scene.Mark("B") };
+                var (map, game) = await CaptureVision(new Point(X, Y), Width, Height, marks, token);
+                Add(scene.Id, coarse, ascii, Criteria(scene), side, map, game, physical);
+            }
+            foreach (string side in Options)
+            {
+                string id = side == "A" ? "detour-left" : "detour-right";
+                var origin = new Point(620, 240);
+                var physical = new JsonObject();
+                foreach (string candidate in Options) physical[candidate] = await RunDetour(origin, side, candidate, true, token);
+                if (Options.Any(candidate => physical[candidate]["entrance_ms"] == null
+                    || physical[candidate]["reached"].GetValue<bool>() != (candidate == side)))
+                    throw new InvalidOperationException("detour calibration failed for " + id);
+                var (coarse, ascii) = await CrossingDiscovery.OnGame(() =>
+                { ResetDetour(origin, side); return (DetourState(origin, false), DetourState(origin, true)); });
+                var marks = new Dictionary<char, Point> { ['P'] = new(PlayerColumn, UpperFloor - 1), ['G'] = new(GoalColumn, LowerFloor - 1),
+                    ['A'] = new(Entrance("A"), LowerFloor - 1), ['B'] = new(Entrance("B"), LowerFloor - 1) };
+                var (map, game) = await CaptureVision(origin, DetourWidth, DetourHeight, marks, token);
+                Add(id, coarse, ascii, new JsonObject { ["A"] = "Go through the left entrance.", ["B"] = "Go through the right entrance." }, side, map, game, physical);
+            }
+            if (deep)
+                foreach (string side in Options)
+                {
+                    var marks = EnclosureA.Select(cell => new KeyValuePair<char, Point>('A', cell))
+                        .Concat(EnclosureB.Select(cell => new KeyValuePair<char, Point>('B', cell)))
+                        .Append(new KeyValuePair<char, Point>('P', EnclosureFeet)).ToArray();
+                    var (physical, coarse, ascii) = await CrossingDiscovery.OnGame(() =>
+                    {
+                        var checkedPlans = new JsonObject();
+                        foreach (string option in Options) checkedPlans[option] = VerifyEnclosure(side, option);
+                        if (Options.Any(option => checkedPlans[option]["all_placed"].GetValue<bool>() != true
+                            || checkedPlans[option]["sealed"].GetValue<bool>() != (option == side)))
+                            throw new InvalidOperationException("enclosure calibration failed: " + side + " " + checkedPlans);
+                        ResetEnclosure(side);
+                        return (checkedPlans, EnclosureState(marks, false), EnclosureState(marks, true));
+                    });
+                    var (map, game) = await CaptureVision(EnclosureOrigin, Width, Height, marks, token);
+                    Add("enclosure-" + side, coarse, ascii, new JsonObject { ["A"] = "Place the four A blocks.", ["B"] = "Place the four B blocks." }, side, map, game, physical);
+                }
+
+            void Add(string id, JsonObject coarse, JsonObject ascii, JsonObject criteria, string side,
+                byte[] map, byte[] game, JsonObject physical)
+            {
+                string mapPath = Path.Combine(root, $"{id}-map.png"), gamePath = Path.Combine(root, $"{id}-game.png");
+                File.WriteAllBytes(mapPath, map); File.WriteAllBytes(gamePath, game);
+                cases.Add(new JsonObject { ["id"] = id, ["ascii"] = ascii.DeepClone(), ["coarse"] = coarse.DeepClone(),
+                    ["map_png"] = mapPath, ["game_png"] = gamePath, ["correct"] = side, ["native"] = physical });
+                scenarios.Add(new VisionCase(id, coarse, ascii, criteria, side, map, game));
+                Flush();
+            }
+
+            if (live)
+            {
+                string sandbox = Path.Combine(root, "model-workspace"); Directory.CreateDirectory(sandbox);
+                var jobs = from scene in scenarios from model in new[] { "Agent", "Jev" }
+                    from format in new[] { "ASCII", "map", "game" }
+                    where !deep || scene.Id.StartsWith("enclosure-", StringComparison.Ordinal) || model == "Jev" && format == "map"
+                    select (scene, model, format);
+                object gate = new();
+                await Parallel.ForEachAsync(jobs, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = token }, async (job, ct) =>
+                {
+                    byte[] image = job.format == "map" ? job.scene.TerrainPng : job.format == "game" ? job.scene.GamePng : null;
+                    var facts = (image == null ? job.scene.Ascii : job.scene.Coarse).DeepClone().AsObject();
+                    if (image != null) facts["image_legend"] = "P player, E opponent, G goal, A/B candidate cells. Same tile window as the coordinate facts.";
+                    JsonObject answer;
+                    try { answer = await JudgeVision(job.model, facts, job.scene.Criteria, image, sandbox, jevKey, ct); }
+                    catch (Exception error) when (!ct.IsCancellationRequested) { answer = new JsonObject { ["error"] = error.Message }; }
+                    string choice = answer["choice"]?.ToString() ?? answer["receipt"]?["answers"]?["pick"]?["choice"]?.ToString();
+                    answer["id"] = job.scene.Id; answer["engine"] = job.model; answer["format"] = job.format;
+                    answer["choice"] = choice; answer["native_pass"] = choice == job.scene.Correct;
+                    lock (gate) { selections.Add(answer); Flush(); }
+                });
+            }
+            output["ok"] = cases.Count == (deep ? 6 : 4)
+                && (!live || selections.Count == (deep ? 16 : 24) && selections.All(n => n["choice"] != null));
+            Flush(); return output.ToJsonString();
+        }
+        catch (Exception error) { output["error"] = error.Message; Flush(); throw; }
         finally { await CrossingDiscovery.OnGame(() => { StateSpacePlanner.PreserveTerrain = false; return true; }); }
     }
 }
