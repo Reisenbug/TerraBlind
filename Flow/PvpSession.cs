@@ -24,6 +24,12 @@ public static partial class PvpDuel
     public static bool RecoveryRequired => obstructedFrames >= 180;
     public static PvpDirective Directive { get; private set; }
 
+    internal static void TraceShot(string phase, Projectile shot)
+    {
+        if (Active && shot.owner == Main.myPlayer && shot.damage > 0)
+            history.TraceShot(Session, phase, shot);
+    }
+
     public static long BeginAction(string kind)
     {
         if (!Active) return 0;
@@ -41,7 +47,7 @@ public static partial class PvpDuel
     {
         if (lease == 0 || lease != actionLease || !Active || actionSession != Session) return;
         Halt.All(); actionLease = 0; ClearControls(Main.LocalPlayer);
-        Movement = new JevariaCombat.GameMovement(); appliedSnapshot = null; fireIntent = false;
+        Movement = NewMovement(); appliedSnapshot = null; fireIntent = false;
         Outcome = Main.LocalPlayer.dead ? "waiting_for_respawn" : "running";
         Event("action_finished", "Resampling the changed world before resuming combat.");
     }

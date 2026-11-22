@@ -74,6 +74,81 @@ public static class PvpTerrain
         return result;
     }
 
+    internal static bool ProjectileClear(Vector2 from, Vector2 to, int width, int height)
+    {
+        if (!WorldGen.InWorld((int)(to.X / 16), (int)(to.Y / 16), 1)) return false;
+        Vector2 half = new(width * .5f, height * .5f);
+        Vector2 motion = to - from;
+        return ClipMotion(from - half, motion, width, height, fallThrough: true) == motion;
+    }
+
+    internal static bool DirectShotClear(Vector2 from, Vector2 to)
+    {
+        int steps = Math.Max(1, (int)Math.Ceiling(Vector2.Distance(from, to) / 8));
+        for (int step = 1; step <= steps; step++)
+        {
+            Vector2 next = Vector2.Lerp(from, to, 1f / (steps - step + 1));
+            if (!ProjectileClear(from, next, 4, 4)) return false;
+            from = next;
+        }
+        return true;
+    }
+
+    static Vector2 ClipMotion(Vector2 position, Vector2 motion, int width, int height, bool fallThrough)
+    {
+        bool up = Collision.up, down = Collision.down;
+        try { return Collision.TileCollision(position, motion, width, height, fallThrough, fallThrough); }
+        finally { Collision.up = up; Collision.down = down; }
+    }
+
+    internal static Vector2? WalkProbe(Player self, int direction)
+    {
+        if (direction == 0 || Math.Abs(self.velocity.Y) > .1f || self.gravDir != 1f || self.wet) return null;
+        Vector2 position = self.Center - new Vector2(self.width * .5f, self.height * .5f);
+        if (ClipMotion(position, new(0, 2), self.width, self.height, false).Y >= 2) return null;
+        Vector2 stride = new(direction * 4, 0);
+        for (int step = 0; step < 12; step++)
+        {
+            if (ClipMotion(position, stride, self.width, self.height, false) != stride) return null;
+            position += stride;
+            if (ClipMotion(position, new(0, 2), self.width, self.height, false).Y >= 2
+                || !VanillaContactRegion.SafeBody(position, self.width, self.height)) return null;
+        }
+        return self.Center + new Vector2(direction * 48, 0);
+    }
+
+    internal static bool CanCoverCell(Player self, Player target, int x, int y)
+    {
+        if (!InWorld(x - 1, y - 1) || !InWorld(x + 1, y + 1) || Main.tile[x, y].HasTile
+            || Main.tile[x, y].LiquidAmount != 0) return false;
+        var cell = new Rectangle(x * 16, y * 16, 16, 16);
+        if (cell.Intersects(self.Hitbox) || cell.Intersects(target.Hitbox)) return false;
+        if (!Support(x - 1, y) && !Support(x + 1, y) && !Support(x, y - 1) && !Support(x, y + 1)) return false;
+        var delta = target.Center - self.Center;
+        float length = delta.Length();
+        for (float distance = 4; distance < Math.Min(length, 80); distance += 4)
+        {
+            var point = self.Center + delta * (distance / length);
+            if (point.X >= cell.Left && point.X < cell.Right && point.Y >= cell.Top && point.Y < cell.Bottom) return true;
+        }
+        return false;
+    }
+
+    internal static (int X, int Y)? FindCoverCell(Player self, Player target, Func<int, int, bool> allowed)
+    {
+        if (!DirectShotClear(self.Center, target.Center)
+            || !WalkProbe(self, Math.Sign(self.Center.X - target.Center.X)).HasValue) return null;
+        Vector2 delta = target.Center - self.Center;
+        float length = delta.Length();
+        for (float distance = 24; distance < Math.Min(length, 80); distance += 8)
+        {
+            Vector2 point = self.Center + delta * (distance / length);
+            int x = (int)(point.X / 16), y = (int)(point.Y / 16);
+            if (CanCoverCell(self, target, x, y) && allowed(x, y)) return (x, y);
+        }
+        return null;
+    }
+
     public static bool ValidStance(Player self, float x, float y)
     {
         if (!float.IsFinite(x) || !float.IsFinite(y) || Vector2.Distance(self.Center, new Vector2(x, y)) > 512) return false;

@@ -13,12 +13,44 @@ public sealed class PvpHistory
         int SelfHp, int TargetHp, bool Firing, bool Clear, int Projectiles);
     readonly Queue<Sample> samples = new();
     readonly HashSet<(int Slot, int Identity, int Owner)> knownShots = new();
+    int aimedWeapon;
+    string aimKind;
+    Vector2 aimPoint;
+    PvpTactics.ShotSolution? predicted;
+    ulong aimTick;
+    internal bool HasObservedShot { get; private set; }
     public int StationaryFrames { get; private set; }
     public void Reset()
     {
         samples.Clear(); knownShots.Clear(); StationaryFrames = 0;
+        HasObservedShot = false;
+        aimedWeapon = 0; aimKind = null; predicted = null; aimTick = 0;
         foreach (var shot in Main.projectile)
             if (shot.active) knownShots.Add((shot.whoAmI, shot.identity, shot.owner));
+    }
+
+    internal void Aim(Item item, string kind, Vector2 point, PvpTactics.ShotSolution? solution)
+    {
+        aimTick = Main.GameUpdateCount;
+        aimedWeapon = item.type;
+        aimKind = kind;
+        aimPoint = point;
+        predicted = solution;
+    }
+
+    internal void TraceShot(long session, string phase, Projectile shot)
+    {
+        var evt = new JsonObject { ["session"] = session, ["tick"] = Main.GameUpdateCount, ["phase"] = phase,
+            ["owner"] = shot.owner, ["identity"] = shot.identity, ["projectile"] = shot.type,
+            ["x"] = shot.Center.X, ["y"] = shot.Center.Y, ["vx"] = shot.velocity.X, ["vy"] = shot.velocity.Y };
+        if (phase == "spawn" && aimedWeapon > 0 && Main.GameUpdateCount - aimTick <= 1)
+        {
+            evt["weapon"] = aimedWeapon; evt["aim_kind"] = aimKind;
+            evt["aim_x"] = aimPoint.X; evt["aim_y"] = aimPoint.Y;
+            evt["predicted_frames"] = predicted?.FlightFrames;
+            evt["predicted_x"] = predicted?.Impact.X; evt["predicted_y"] = predicted?.Impact.Y;
+        }
+        DiagLog.Write("[pvp-shot] " + evt.ToJsonString());
     }
 
     public void Record(Player self, Player target, bool clear)
@@ -35,6 +67,7 @@ public sealed class PvpHistory
             if (shot.owner == self.whoAmI && shot.damage > 0 && !knownShots.Contains(id)) created++;
         }
         knownShots.Clear(); knownShots.UnionWith(active);
+        HasObservedShot |= created > 0;
         samples.Enqueue(new(tick, self.Center, target.Center, target.velocity, self.statLife, target.statLife,
             self.controlUseItem, clear, created));
         while (samples.Count > 0 && tick - samples.Peek().Tick >= 180) samples.Dequeue();

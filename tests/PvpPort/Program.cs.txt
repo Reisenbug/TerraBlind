@@ -62,6 +62,8 @@ class Program
         }
         var trace = TerraBlind.PvpTerrain.Trace(self.Center, target.Center);
         Check(!trace["clear"].GetValue<bool>() && trace["blocker"]["x"].GetValue<int>() == 132, "real collision did not identify the blocking wall");
+        Check(!TerraBlind.PvpTerrain.DirectShotClear(self.Center, target.Center), "projectile-width probe crossed a solid wall");
+        CheckGrapple(self, target, sensor);
         var terrain = TerraBlind.PvpTerrain.Observe(self, target, true);
         var window = terrain["tile_windows"][0];
         Check(window["width"].GetValue<int>() == 65 && window["height"].GetValue<int>() == 41, "tile window dimensions drifted");
@@ -81,11 +83,89 @@ class Program
         var support = Game.tile[136, 140]; support.HasTile = false;
         Check(!TerraBlind.PvpTerrain.ValidStance(self, stanceX, stanceY), "removed support accepted for recovery");
         Check(!TerraBlind.PvpTerrain.ValidStance(self, float.NaN, stanceY), "nonfinite recovery coordinate accepted");
-        Console.WriteLine("PVP_PORT_CHECKS_COMPLETE checks=18 real_engine_objects=true gameplay_loop=false");
+        CheckCover(self, target);
+        Console.WriteLine("PVP_PORT_CHECKS_COMPLETE real_engine_objects=true gameplay_loop=false");
+    }
+
+    static void CheckGrapple(Player self, Player target, GameSensor sensor)
+    {
+        Game.projHook[ProjectileID.Hook] = true;
+        self.miscEquips[4].shoot = ProjectileID.Hook;
+        self.miscEquips[4].shootSpeed = 12f;
+        self.velocity = Vector2.Zero;
+        var snapshot = sensor.CapturePlayer(self, target, 5, DodgeIntent.Idle, 0);
+        var swing = snapshot.AvailableActions.Single(option => option.Intent.Direction == DodgeDirection.Right
+            && option.Intent.HorizontalSize == Magnitude.Medium);
+        var driver = new GameMovement { CommitGrapple = true };
+        var tick = typeof(Game).GetField("_gameUpdateCount", BindingFlags.NonPublic | BindingFlags.Static);
+        tick.SetValue(null, 100u);
+        driver.Apply(self, swing.Intent, snapshot);
+        Check(self.controlHook, "valid anchor did not issue a grapple");
+        var hook = Game.projectile[0] = new Projectile { active = true, owner = self.whoAmI, type = ProjectileID.Hook, identity = 5 };
+        tick.SetValue(null, 101u);
+        driver.Apply(self, DodgeIntent.Idle, snapshot with { Sequence = 6 });
+        Check(!self.controlHook && hook.ai[0] == 0 && driver.GrappleActive, "a follow-up decision cancelled or re-issued the flying hook");
+        tick.SetValue(null, 102u);
+        driver.Apply(self, swing.Intent, snapshot);
+        Check(!self.controlHook, "a flying grapple was pulsed again");
+        self.grapCount = 1;
+        hook.ai[0] = 2;
+        tick.SetValue(null, 103u);
+        var attached = driver.Apply(self, DodgeIntent.Idle, snapshot);
+        Check(attached.Reason == "grapple latched" && !self.controlJump, "latch was not observed before release");
+        tick.SetValue(null, 104u);
+        driver.Apply(self, DodgeIntent.Idle, snapshot);
+        Check(self.controlJump, "a latched grapple could not be released for movement");
+        self.grapCount = 0; hook.active = false;
+
+        tick.SetValue(null, 110u);
+        var vanished = new GameMovement { CommitGrapple = true };
+        for (int y = 124; y <= 130; y++) { var tile = Game.tile[132, y]; tile.HasTile = false; }
+        vanished.Apply(self, swing.Intent, snapshot);
+        Check(!self.controlHook && !vanished.GrappleActive, "grapple fired at an anchor that was removed");
+        for (int y = 124; y <= 130; y++) { var tile = Game.tile[132, y]; tile.HasTile = true; }
+    }
+
+    static void CheckCover(Player self, Player target)
+    {
+        for (int x = 100; x <= 140; x++)
+        {
+            var tile = Game.tile[x, 160]; tile.HasTile = true; tile.TileType = TileID.Dirt;
+        }
+        self.position = new Vector2(120 * 16, 160 * 16 - self.height);
+        target.position = new Vector2(130 * 16, self.position.Y);
+        self.velocity = Vector2.Zero;
+        int y = (int)(self.Center.Y / 16);
+        var anchor = Game.tile[123, y - 1]; anchor.HasTile = true; anchor.TileType = TileID.Dirt;
+        var cover = TerraBlind.PvpTerrain.FindCoverCell(self, target, (x, row) => x == 123 && row == y);
+        Check(cover == (123, y), "direct shot with a free retreat did not offer an attached cover cell");
+        Check(!TerraBlind.PvpTerrain.FindCoverCell(self, target, (_, _) => false).HasValue, "cover ignored placement permissions");
+        var block = Game.tile[123, y]; block.HasTile = true; block.TileType = TileID.Dirt;
+        Check(!TerraBlind.PvpTerrain.DirectShotClear(self.Center, target.Center), "verified cover cell did not close the direct shot");
+        Check(TerraBlind.PvpTerrain.WalkProbe(self, -1).HasValue, "covered stance had no verified retreat");
     }
 }
 
 namespace TerraBlind
 {
     public static class DiagLog { public static void Write(string text) => Console.WriteLine(text); }
+    public enum ControlBehavior { Dodge, Navigation }
+    public sealed class TestControl
+    {
+        public bool HasSpatial(ControlBehavior behavior) => false;
+        public bool ForbiddenAt(ControlBehavior behavior, int x, int y) => false;
+        public bool BoundsAllowed(ControlBehavior behavior, float x, float y, float width, float height,
+            (float X, float Y) returningFrom) => true;
+    }
+    public static class AgentTools { public static TestControl Control { get; } = new(); }
+    public static class ActExecutor
+    {
+        public static int OriginCx(Player player) => (int)(player.Center.X / 16);
+        public static int OriginCy(Player player) => (int)(player.Bottom.Y / 16);
+    }
+    public static class VanillaContactRegion
+    {
+        public static bool Hazard(int x, int y) => false;
+        public static bool SafeBody(Vector2 position, int width, int height) => !Collision.SolidCollision(position, width, height);
+    }
 }

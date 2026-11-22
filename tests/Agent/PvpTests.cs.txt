@@ -31,6 +31,12 @@ static class PvpTests
             && velocityAim.Value.Point.Y < -60 && velocityAim.Value.FlightFrames > 20, "aim intents collapsed or prediction still stops at 20 frames");
         Check(PvpTactics.Aim(origin, target, Vector2.Zero, 10, 0, (_, _) => false) == null, "blocked projectile path was accepted");
         Check(PvpTactics.Aim(origin, target, Vector2.Zero, 0, 0, (_, _) => true) == null, "invalid projectile speed accepted");
+        var flight = new PvpTactics.ShotFlight(10, 2, 80, 15, .1f);
+        var discrete = PvpTactics.SolveFlight(origin, flight, new Vector2(10, 20), t => target + new Vector2(2 * t, 0), (_, _) => true);
+        Check(discrete is { FlightFrames: > 15 and < 22 } && discrete.Value.Point.Y < -10,
+            "lead ignored projectile substeps, gravity delay, or target motion");
+        Check(!PvpTactics.SolveFlight(origin, flight with { Steps = 10 }, new Vector2(10, 20), _ => target, null).HasValue,
+            "shot accepted a hit after projectile expiration");
         Console.WriteLine("PASS: PvP aiming handles straight/curved/delayed-drop trajectories, target lead and obstruction");
 
         using var handler = new DecisionHandler();
@@ -105,7 +111,7 @@ static class PvpTests
                 whoAmI = 0, identity = 1, type = 1, velocity = new Microsoft.Xna.Framework.Vector2(12, 0) };
             Game.projectile[1] = new Terraria.Projectile { active = true, friendly = true, owner = other.whoAmI, damage = 10,
                 Center = self.Center + new Microsoft.Xna.Framework.Vector2(30, 0) };
-            for (int tick = 0; tick < 25; tick++) PvpDuel.Tick(self);
+            for (int tick = 0; tick < 25; tick++) { Game.GameUpdateCount++; PvpDuel.Tick(self); }
             Check(observed["trajectory_observed"].GetValue<bool>() && observed["movement_state"]["incoming_projectiles"].AsArray().Count == 1,
                 "own arrow observation or enemy friendly projectile detection failed");
             self.HasAmmunition = false; PvpDuel.Tick(self);
@@ -261,6 +267,7 @@ static class PvpTests
         }
         Console.WriteLine("PASS: production duel revalidates displacement, dispatches without a 24-frame delay, retains valid movement, switches weapons and cancels stale instructions; movement adapter stubbed");
         Console.WriteLine("PASS: external action leases preserve tool input and activity budget, resume once and reject old-session cleanup");
+        CheckCoverFight();
     }
 
     static bool JevariaCombatExtraJump() => TerraBlind.JevariaCombat.GameMovement.ExtraJumpObserved;
@@ -278,6 +285,83 @@ static class PvpTests
                 && pair.Value["weapon"].ToString() == Mode).Key ?? "invalid";
             return new HttpResponseMessage(HttpStatusCode.OK)
             { Content = new StringContent(new JsonObject { ["answers"] = new JsonObject { ["plan"] = new JsonObject { ["choice"] = selected } } }.ToJsonString()) };
+        }
+    }
+
+    static void CheckCoverFight()
+    {
+        var self = Game.LocalPlayer;
+        var target = Game.player[1];
+        const int floor = 50;
+        Game.netMode = Terraria.ID.NetmodeID.MultiplayerClient;
+        Config.I.AiClient = true;
+        self.active = target.active = self.hostile = target.hostile = true;
+        self.dead = target.dead = false;
+        self.position = new(200, floor * 16 - self.height);
+        target.position = new(360, self.position.Y);
+        self.velocity = target.velocity = Microsoft.Xna.Framework.Vector2.Zero;
+        self.itemAnimation = self.itemTime = target.selectedItem = 0;
+        self.selectedItem = 0;
+        foreach (var item in self.inventory) item.stack = 0;
+        self.inventory[0] = new Terraria.Item { type = Terraria.ID.ItemID.DeathSickle, stack = 1, damage = 25,
+            useStyle = 1, shoot = Terraria.ID.ProjectileID.DeathSickle, shootSpeed = 10 };
+        self.inventory[1] = new Terraria.Item { type = 3, stack = 10, createTile = 1, damage = 0, useTime = 12 };
+        target.inventory[0] = new Terraria.Item { type = 96, stack = 1, shoot = Terraria.ID.ProjectileID.Bullet };
+        Terraria.ID.ContentSamples.ProjectilesByType[Terraria.ID.ProjectileID.DeathSickle] = new()
+            { tileCollide = false, aiStyle = 18, width = 42, height = 42 };
+        Terraria.ID.ContentSamples.ProjectilesByType[Terraria.ID.ProjectileID.Bullet] = new() { tileCollide = true };
+        for (int x = 4; x < 26; x++) Game.tile[x, floor] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+        int row = (int)(self.Center.Y / 16);
+        Game.tile[16, row - 1] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+        var solid = Terraria.Collision.SolidTest;
+        Terraria.Collision.SolidTest = (position, width, height) =>
+        {
+            for (int x = (int)(position.X / 16); x <= (int)((position.X + width - .01f) / 16); x++)
+            for (int y = (int)(position.Y / 16); y <= (int)((position.Y + height - .01f) / 16); y++)
+                if (Game.tile[x, y].HasUnactuatedTile) return true;
+            return false;
+        };
+        JsonObject last = null;
+        bool placeCover = true;
+        try
+        {
+            Check(PvpDuel.Start(1, 30, 0, 120, "use cover", out _, (scene, _) =>
+            {
+                last = scene;
+                return Task.FromResult(placeCover && scene["cover_option"] != null
+                    ? new PvpTactics.Decision("m0", "", "body", false, Cover: true) : new("m0", "ranged"));
+            }), "cover fight failed to start");
+            PvpDuel.Tick(self);
+            Check(last["cover_option"] == null, "terrain mutations offered without the player's permission");
+            PvpDuel.UpdateDirective(new JsonObject { ["session"] = PvpDuel.Session,
+                ["constraints"] = new JsonObject { ["allow_placing"] = true } }, fromPlayer: true);
+            PvpDuel.Tick(self);
+            Check(last["cover_option"]?["x"]?.GetValue<int>() == 16, "safe cover cell was not offered");
+            self.itemAnimation = 4;
+            PvpDuel.Tick(self);
+            Check(!PvpDuel.ExternalAction && !self.controlUseItem, "cover interrupted an active attack animation");
+            self.itemAnimation = 0;
+            PvpDuel.Tick(self);
+            Check(PvpDuel.ExternalAction && ItemUseCoordinator.LastRequest.TargetWx == 16,
+                "cover was not placed after the animation finished");
+            Game.tile[16, row] = new Terraria.Tile { HasUnactuatedTile = true, TileType = 1 };
+            placeCover = false;
+            PvpDuel.Tick(self); PvpDuel.Tick(self);
+            Check(!PvpDuel.ExternalAction && self.controlUseItem, "through-wall projectile did not attack from verified cover");
+            Check(last["weapon_modes"]["ranged"]["aims"]["velocity"]["through_tiles"].GetValue<bool>(),
+                "through-wall capability not exposed to Jev");
+            Console.WriteLine("PASS: PvP guarded placement preserves attack animation and uses a through-wall weapon from cover");
+        }
+        finally
+        {
+            PvpDuel.Stop();
+            Terraria.Collision.SolidTest = solid;
+            Game.netMode = Terraria.ID.NetmodeID.SinglePlayer; Config.I.AiClient = false;
+            Game.tile[16, row] = Game.tile[16, row - 1] = default;
+            for (int x = 4; x < 26; x++) Game.tile[x, floor] = default;
+            Terraria.ID.ContentSamples.ProjectilesByType.Remove(Terraria.ID.ProjectileID.DeathSickle);
+            Terraria.ID.ContentSamples.ProjectilesByType.Remove(Terraria.ID.ProjectileID.Bullet);
+            target.inventory[0] = new Terraria.Item();
         }
     }
 

@@ -32,6 +32,8 @@ public class GameSensor
 
 public class GameMovement
 {
+    internal bool CommitGrapple { get; init; }
+    internal bool GrappleActive => false;
     internal static JsonObject GrappleState(Player player, bool findAnchors) => new() { ["equipped_type"] = player.miscEquips[4].type };
     public const int HorizontalReserveCells = 35, UpperReserveCells = 18, LowerReserveCells = 4;
     public static int Calls;

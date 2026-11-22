@@ -128,6 +128,8 @@ public sealed class GameMovement : IMovementDriver
 
     private ulong _hookSequence;
     private ulong _jumpSequence;
+    internal bool CommitGrapple { get; init; }
+    internal bool GrappleActive => _autoHookActive;
     private bool _autoHookActive;
     private bool _hookHeld;
     private bool _jumpHeld;
@@ -135,6 +137,9 @@ public sealed class GameMovement : IMovementDriver
     private ulong _hookIssuedTick;
     private ulong _hookLatchedTick;
     private ulong _hookCooldownUntil;
+    private ulong _hookDeadline;
+    private int _hookProjectile = -1;
+    private int _hookIdentity;
     private Vector2 _hookTarget;
     private bool _autoMountActive;
     private int _autoMountType = MountID.None;
@@ -230,6 +235,7 @@ public sealed class GameMovement : IMovementDriver
         bool verticalHook = vertical < 0 && verticalSize >= Magnitude.Medium &&
             !_autoMountActive && (_autoHookActive || player.velocity.Y > -MountEntrySpeed);
         bool wantHook = !downMount && (horizontalHook || verticalHook);
+        bool grappleEnded = CommitGrapple && TrackGrapple(player);
         bool hookJump = _autoHookActive && _hookLatchedTick > 0 &&
             player.grapCount > 0 && Main.GameUpdateCount > _hookLatchedTick;
         bool hookFinished = _autoHookActive && _hookLatchedTick > 0 && player.grapCount == 0;
@@ -238,9 +244,10 @@ public sealed class GameMovement : IMovementDriver
             _hookLatchedTick = Main.GameUpdateCount;
             _jumpHeld = false;
             reason = "grapple latched";
+            if (CommitGrapple) LogGrapple("latched");
         }
         if (hookFinished) FinishAutoHook();
-        else if (_autoHookActive && _hookLatchedTick == 0 &&
+        else if (!CommitGrapple && _autoHookActive && _hookLatchedTick == 0 &&
             (!wantHook || Main.GameUpdateCount - _hookIssuedTick >= 45))
         {
             Release(player);
@@ -249,13 +256,14 @@ public sealed class GameMovement : IMovementDriver
         if (player.grapCount > 0 && !_autoHookActive)
             return new ActionResult(intent, DodgeIntent.Idle, "manual grapple");
 
-        if (wantHook && !_autoHookActive && !hookFinished && player.grapCount == 0 &&
+        if (wantHook && !_autoHookActive && !hookFinished && !grappleEnded && player.grapCount == 0 &&
             Main.GameUpdateCount >= _hookCooldownUntil && _hookSequence != snapshot.Sequence)
         {
             _hookSequence = snapshot.Sequence;
             if (snapshot.HasHook && TrySelectedHookPoint(player, plannedHook,
                 horizontalHook ? horizontal : 0, verticalHook ? vertical : 0,
-                horizontalHook && !verticalHook, out Vector2 hook))
+                horizontalHook && !verticalHook, out Vector2 hook)
+                && (!CommitGrapple || CanCommitGrapple(player, hook)))
             {
                 _autoHookActive = true;
                 _hookIssuedTick = Main.GameUpdateCount;
@@ -267,6 +275,7 @@ public sealed class GameMovement : IMovementDriver
                 player.controlHook = true;
                 _hookHeld = true;
                 reason = "grapple";
+                if (CommitGrapple) LogGrapple("issued");
             }
             else
             {
@@ -277,8 +286,8 @@ public sealed class GameMovement : IMovementDriver
         }
         else if (_autoHookActive && player.grapCount == 0)
         {
-            reason = "grapple";
-            _hookHeld = !_hookHeld;
+            reason = CommitGrapple ? "grapple in flight" : "grapple";
+            _hookHeld = !CommitGrapple && !_hookHeld;
             player.controlHook = _hookHeld;
             if (_hookHeld)
             {
@@ -292,6 +301,7 @@ public sealed class GameMovement : IMovementDriver
             player.controlHook = false;
             player.releaseJump = true;
             reason = "grapple jump cancel";
+            if (CommitGrapple) LogGrapple("jump_cancel");
         }
         if (wantHook && !_autoHookActive && !hookFinished &&
             (horizontalSize == Magnitude.Medium || verticalSize >= Magnitude.Medium))
@@ -398,15 +408,94 @@ public sealed class GameMovement : IMovementDriver
             player.releaseJump = true;
             player.controlJump = true;
         }
-        else player.RemoveAllGrapplingHooks();
+        else if (!CommitGrapple) player.RemoveAllGrapplingHooks();
+        else if (TrackedHook(player) is Projectile hook) Retract(hook);
+        if (CommitGrapple) LogGrapple("released");
         FinishAutoHook();
     }
+
+    private bool CanCommitGrapple(Player player, Vector2 anchor)
+    {
+        Item item = player.QuickGrapple_GetItemToUse();
+        if (item == null || player.gravDir != 1f || item.shootSpeed <= 0f) return false;
+        if (FindOwnedHook(player.whoAmI) >= 0) return false;
+        Vector2 delta = anchor - player.Center;
+        float distance = delta.Length();
+        Vector2 direction = delta / distance;
+        int x = (int)(anchor.X / 16), y = (int)(anchor.Y / 16);
+        for (float step = 4; step < distance; step += 4)
+        {
+            Vector2 point = player.Center + direction * step;
+            int tx = (int)(point.X / 16), ty = (int)(point.Y / 16);
+            if (tx == x && ty == y) break;
+            if (!WorldGen.InWorld(tx, ty, 2)) return false;
+            Tile tile = Main.tile[tx, ty];
+            if (tile.HasUnactuatedTile && (Main.tileSolid[tile.TileType] || tile.TileType == TileID.MinecartTrack))
+                return false;
+        }
+        _hookDeadline = Main.GameUpdateCount + (ulong)Math.Clamp(MathF.Ceiling(distance / item.shootSpeed) + 6, 8, 180);
+        return true;
+    }
+
+    private bool TrackGrapple(Player player)
+    {
+        if (!_autoHookActive || _hookLatchedTick != 0) return false;
+        if (_hookProjectile < 0)
+        {
+            int slot = FindOwnedHook(player.whoAmI);
+            if (slot >= 0)
+            {
+                _hookProjectile = slot;
+                _hookIdentity = Main.projectile[slot].identity;
+                LogGrapple("spawned");
+            }
+        }
+        Projectile hook = TrackedHook(player);
+        if (hook?.ai[0] == 2f || player.grapCount > 0) return false;
+        string failed = hook?.ai[0] == 1f ? "retracting"
+            : hook == null && _hookProjectile >= 0 ? "disappeared"
+            : hook == null && Main.GameUpdateCount - _hookIssuedTick >= 3 ? "spawn_rejected"
+            : Main.GameUpdateCount >= _hookDeadline ? "timed_out" : null;
+        if (failed == null) return false;
+        if (failed == "timed_out" && hook != null) Retract(hook);
+        LogGrapple(failed);
+        FinishAutoHook();
+        return true;
+    }
+
+    private static int FindOwnedHook(int owner)
+    {
+        for (int i = 0; i < Main.projectile.Length; i++)
+            if (IsOwnedHook(Main.projectile[i], owner)) return i;
+        return -1;
+    }
+
+    private static bool IsOwnedHook(Projectile hook, int owner) =>
+        hook.active && hook.owner == owner && Main.projHook[hook.type];
+
+    private Projectile TrackedHook(Player player)
+    {
+        if (_hookProjectile < 0) return null;
+        Projectile hook = Main.projectile[_hookProjectile];
+        return IsOwnedHook(hook, player.whoAmI) && hook.identity == _hookIdentity ? hook : null;
+    }
+
+    private static void Retract(Projectile hook)
+    {
+        hook.ai[0] = 1f;
+        hook.netUpdate = true;
+    }
+
+    private void LogGrapple(string state) => global::TerraBlind.DiagLog.Write(
+        $"[pvp-grapple] attempt={_hookIssuedTick} state={state} anchor={_hookTarget} projectile={_hookProjectile}:{_hookIdentity}");
 
     private void FinishAutoHook()
     {
         _autoHookActive = false;
         _hookHeld = false;
         _hookLatchedTick = 0;
+        _hookProjectile = -1;
+        _hookIdentity = 0;
         _hookCooldownUntil = Main.GameUpdateCount + 2;
     }
 

@@ -252,7 +252,7 @@ namespace Terraria
         public bool AnyExtraJumpUsable() => ExtraJump;
         public bool PickAmmo(Item item, out int shot, out float speed, out int damage, out float knockback, out int ammo, bool dontConsume)
         { shot = item.shoot; speed = item.shootSpeed; damage = item.damage; knockback = 0; ammo = 1; return HasAmmunition; }
-        public int itemAnimation, potionDelay, chest = -1;
+        public int itemAnimation, potionDelay, chest = -1, grapCount;
         public int statLife = 100, whoAmI, team, selectedItem, direction, width = 20, height = 40;
         public int SpawnX = -1, SpawnY = -1;
         public int lifeRegen, lifeRegenCount;
@@ -260,6 +260,8 @@ namespace Terraria
         public string name = "test";
         public Microsoft.Xna.Framework.Vector2 velocity;
         public Microsoft.Xna.Framework.Vector2 Center => new(position.X + width / 2f, position.Y + height / 2f);
+        public Microsoft.Xna.Framework.Vector2 MountedCenter => Center;
+        public Microsoft.Xna.Framework.Vector2 RotatedRelativePoint(Microsoft.Xna.Framework.Vector2 position) => position;
         public Microsoft.Xna.Framework.Vector2 Bottom => new(Center.X, position.Y + height);
         public Microsoft.Xna.Framework.Rectangle Hitbox => new((int)position.X, (int)position.Y, width, height);
         public int GetItemGrabRange(Item item) => 38;
@@ -349,7 +351,7 @@ namespace Terraria
         public bool active, arrow, friendly, hostile, ownerHitCheck, tileCollide = true;
         public bool bobber, wet, lavaWet, honeyWet;
         public float[] ai = new float[3], localAI = new float[3];
-        public int owner, damage, identity, whoAmI, type, extraUpdates, aiStyle;
+        public int owner, damage, identity, whoAmI, type, extraUpdates, aiStyle, timeLeft = 600;
         public int width = 8, height = 8;
         public Microsoft.Xna.Framework.Vector2 velocity, Center;
         public Microsoft.Xna.Framework.Rectangle Hitbox => new((int)Center.X - width / 2, (int)Center.Y - height / 2, width, height);
@@ -397,7 +399,7 @@ namespace Terraria
             => HurtTiles(new Microsoft.Xna.Framework.Vector2(position.X, position.Y), width, height, player);
         public static Microsoft.Xna.Framework.Vector2 TileCollision(Microsoft.Xna.Framework.Vector2 position,
             Microsoft.Xna.Framework.Vector2 velocity, int width, int height, bool fallThrough = false, bool fall2 = false, int gravDir = 1)
-            => SolidCollision(position + velocity, width, height) ? Microsoft.Xna.Framework.Vector2.Zero : velocity;
+            => !Clear || SolidCollision(position + velocity, width, height) ? Microsoft.Xna.Framework.Vector2.Zero : velocity;
         public static bool Clear = true;
         public static Func<Microsoft.Xna.Framework.Vector2, Microsoft.Xna.Framework.Vector2, bool> LineTest;
         public static bool CanHitLine(Microsoft.Xna.Framework.Vector2 a, int w, int h, Microsoft.Xna.Framework.Vector2 b, int w2, int h2) => LineTest?.Invoke(a, b) ?? Clear;
@@ -431,6 +433,7 @@ namespace Terraria.ID
     public static class ProjAIStyleID { public const int ShortSword = 161, Spear = 19, Explosive = 16; }
     public static class ItemID
     {
+        public const int MoltenFury = 120, SniperRifle = 1254, Uzi = 1265, VenusMagnum = 1255, DeathSickle = 1327;
         public const int CopperCoin = 71, PlatinumCoin = 74;
         public const int ObsidianSkinPotion = 288;
         public const int FixtureGoal = 191, Umbrella = 946, DeadMansChest = 3988, TragicUmbrella = 4707;
@@ -446,6 +449,9 @@ namespace Terraria.ID
     public static class SoundID { public static readonly int Item37 = 37; }
     public static class ProjectileID
     {
+        public const int WoodenArrowFriendly = 1, FireArrow = 2, Shuriken = 3, UnholyArrow = 4, Bullet = 14,
+            HellfireArrow = 41, ThrowingKnife = 48, CursedArrow = 103, BoneArrow = 117, FrostburnArrow = 172,
+            BulletHighVelocity = 242, IceSickle = 263, DeathSickle = 274, IchorArrow = 278, VenomArrow = 282;
         public const int Boulder = 99, TrackHook = 403;
         public static class Sets
         {
@@ -598,8 +604,8 @@ namespace TerraBlind
         public static void Say(string text) => Messages.Add(text);
         public static void Display(string text) => Terraria.Main.NewText(text);
     }
-    public static class DiagLog { public static void Write(string text) { } }
-    public class ItemUseRequest { public int Slot, TargetWx, TargetWy, DurationTicks; }
+    public static class DiagLog { public static bool Trace => false; public static void Write(string text) { } public static void Trc(string text) { } }
+    public class ItemUseRequest { public int Slot, TargetWx, TargetWy, DurationTicks; public bool Strict; }
     public static class ItemUseCoordinator
     {
         public static bool IsActive;
@@ -784,6 +790,8 @@ namespace TerraBlind
     }
     public static class VanillaContactRegion
     {
+        public static bool SafeBody(Microsoft.Xna.Framework.Vector2 position, int width, int height)
+            => !Terraria.Collision.SolidCollision(position, width, height);
         internal static Func<bool> Walkable;
         public static bool TryWalk(Terraria.Player player, Microsoft.Xna.Framework.Vector2 goal, out VanillaKeys keys)
         { keys = VanillaKeys.Right; return Walkable?.Invoke() == true; }

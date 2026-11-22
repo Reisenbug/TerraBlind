@@ -81,6 +81,7 @@ static class Tests
         if (args.Contains("--script-model-full")) { await CodexTests.ScriptModel(true, args.Length > 1 ? args[1] : ""); return; }
         if (args.Contains("--script-replay")) { await ScriptTests.Replay(args.Last()); return; }
         if (args.Contains("--pvp-smoke")) { await PvpTests.Smoke(); return; }
+        if (args.Contains("--pvp-checks")) { await PvpTests.Run(); return; }
         var handler = new FakeHandler();
         using var http = new HttpClient(handler);
         var agent = new AgentConversation(http);

@@ -18,26 +18,32 @@ public static partial class PvpDuel
 {
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(3) };
     static readonly Port.GameSensor Sensor = new();
-    static Port.GameMovement Movement = new();
+    static Port.GameMovement Movement = NewMovement();
+    static Port.GameMovement NewMovement() => new() { CommitGrapple = true };
     static CancellationTokenSource lifetime;
     static Task<PvpTactics.Decision> pending;
     static Func<JsonObject, CancellationToken, Task<PvpTactics.Decision>> choose;
     static readonly Stopwatch requestClock = new();
-    static readonly Dictionary<int, (int Identity, Vector2 Velocity, int Samples)> arrows = new();
     static Dictionary<string, Port.DodgeOption> options;
     static Dictionary<string, (int Slot, int Type, int Prefix)> requestItems;
     static Port.CombatSnapshot requestSnapshot, appliedSnapshot;
     static Port.DodgeIntent intent = Port.DodgeIntent.Idle;
     static Vector2 requestSelf, requestTarget, lastPosition;
-    static int frames, preferredSlot, activeWeapon, choiceAge, lastHp, lastTargetHp, observedType;
+    static int frames, preferredSlot, choiceAge, lastHp, lastTargetHp;
     static bool lastAimClear, fireIntent = true;
     static string aimKind = "velocity";
-    static int plannedType, plannedPrefix, activePrefix;
+    static int plannedType, plannedPrefix;
     static int observedHp;
     static string key, strategy, mode, movementReason, attackReason;
     static ulong sequence;
-    static float speed, gravity, gravityDelay, range;
+    static float range;
     static bool waitingForRespawn;
+    readonly record struct CoverCell(int X, int Y, int Slot, int Item, int Tile);
+    static CoverCell? offeredCover, queuedCover, activeCover;
+    static long coverLease, coverRevision;
+    static ulong coverDeadline, coverRetryTick, coverQueueDeadline;
+    static ulong moveSequence;
+    static Vector2 moveFrom;
     public static bool UntilStopped { get; private set; }
     public static int Target { get; private set; } = -1;
     public static bool Active => Target >= 0;
@@ -82,17 +88,19 @@ public static partial class PvpDuel
         if (reason == "" && Vector2.Distance(self.Center, Main.player[target].Center) > maxDistance * 16) reason = "out_of_range";
         if (reason != "") { Outcome = reason; return false; }
         AgentTools.Stop();
-        Movement = new Port.GameMovement();
+        Movement = NewMovement();
         self.hostile = true;
         NetMessage.SendData(MessageID.TogglePVP, number: self.whoAmI);
         mode = weapons.ContainsKey("ranged") ? "ranged" : "melee";
-        self.selectedItem = weapons[mode]; activeWeapon = -1;
+        self.selectedItem = weapons[mode];
         aimKind = "velocity"; fireIntent = true; plannedType = self.HeldItem.type; plannedPrefix = self.HeldItem.prefix;
         UntilStopped = untilStopped;
         frames = Math.Clamp(seconds, 1, 120) * 60; range = maxDistance * 16;
         key = Config.I.TypeSafeKey.Trim(); strategy = instructions;
         lastHp = self.statLife; lastTargetHp = Main.player[target].statLife; lastPosition = self.Center;
         observedHp = self.statLife;
+        coverRetryTick = 0;
+        moveSequence = 0;
         intent = Port.DodgeIntent.Idle; appliedSnapshot = requestSnapshot = null;
         choiceAge = 999; Decisions = 0; sequence = 0; movementReason = attackReason = "";
         choose = decide ?? ((scene, token) => PvpTactics.Choose(Http, key, scene, token));
@@ -110,6 +118,8 @@ public static partial class PvpDuel
 
     public static void Stop(string outcome = "stopped")
     {
+        if (coverLease != 0) ItemUseCoordinator.Stop();
+        coverLease = 0; activeCover = offeredCover = queuedCover = null;
         if (Active)
         {
             Movement.Release(Main.LocalPlayer); ClearControls(Main.LocalPlayer);
@@ -120,85 +130,171 @@ public static partial class PvpDuel
         Target = -1; waitingForRespawn = false; actionLease = 0;
         lifetime?.Cancel(); lifetime?.Dispose(); lifetime = null;
         if (pending != null) _ = pending.ContinueWith(task => { _ = task.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
-        pending = null; arrows.Clear(); appliedSnapshot = null;
+        pending = null; appliedSnapshot = null;
     }
 
     static bool Clear(Vector2 from, Vector2 to) => Collision.CanHitLine(from, 4, 4, to, 4, 4);
 
-    static void ObserveArrows(Player self)
-    {
-        foreach (var projectile in Main.projectile)
-        {
-            if (!projectile.active || projectile.owner != self.whoAmI || !projectile.arrow || projectile.damage <= 0) continue;
-            float updates = projectile.extraUpdates + 1;
-            if (!arrows.TryGetValue(projectile.whoAmI, out var previous) || previous.Identity != projectile.identity)
-            {
-                arrows[projectile.whoAmI] = (projectile.identity, projectile.velocity, 0);
-                speed = projectile.velocity.Length() * updates;
-                if (observedType != projectile.type)
-                {
-                    gravity = gravityDelay = 0; observedType = projectile.type;
-                    DiagLog.Write($"[pvp] projectile type={observedType} speed={speed:0.###} updates={updates}");
-                }
-                continue;
-            }
-            if (projectile.type != observedType || previous.Samples >= 90) continue;
-            Vector2 delta = projectile.velocity - previous.Velocity;
-            if (Math.Abs(delta.X) < .1f && delta.Y >= 0 && delta.Y < 2)
-            {
-                if (gravity == 0 && delta.Y > .001f) gravityDelay = previous.Samples;
-                if (delta.Y > .001f) gravity = delta.Y * updates;
-            }
-            arrows[projectile.whoAmI] = (projectile.identity, projectile.velocity, previous.Samples + 1);
-        }
-    }
-
     static float MeleeReach(Player self, Player target, Item item)
         => Math.Max(32, Math.Max(item.width, item.height) * item.scale + self.width / 2f) + target.width / 2f;
 
-    static PvpTactics.ShotSolution? SolveShot(Player self, Player target, Item item, string kind)
+    readonly record struct ShotWeapon(int Projectile, PvpTactics.ShotFlight Flight, int Width, int Height, bool ThroughTiles);
+
+    static ShotWeapon? ReadShot(Player self, Item item)
     {
         float shotSpeed = item.shootSpeed;
         int shotType = item.shoot;
         if (item.useAmmo > 0 && !self.PickAmmo(item, out shotType, out shotSpeed, out _, out _, out _, true)) return null;
-        bool observed = activeWeapon == item.type && activePrefix == item.prefix && observedType != 0;
-        if (ContentSamples.ProjectilesByType.TryGetValue(shotType, out var defaults)) shotSpeed *= defaults.extraUpdates + 1;
-        Vector2 point = target.Center, velocity = target.velocity;
-        if (kind == "landing")
+        if (shotType == ProjectileID.WoodenArrowFriendly && item.type == ItemID.MoltenFury)
+            shotType = ProjectileID.FireArrow;
+        if (shotType == ProjectileID.Bullet && item.type is ItemID.Uzi or ItemID.SniperRifle or ItemID.VenusMagnum)
+            shotType = ProjectileID.BulletHighVelocity;
+        if (shotType <= 0 || shotSpeed <= 0) return null;
+        if (shotType is ProjectileID.DeathSickle or ProjectileID.IceSickle && !ProjectileID.Sets.NoMeleeSpeedVelocityScaling[shotType])
+            shotSpeed *= self.GetTotalAttackSpeed(Terraria.ModLoader.DamageClass.Melee);
+        ContentSamples.ProjectilesByType.TryGetValue(shotType, out var defaults);
+        int updates = 1 + (defaults?.extraUpdates ?? 0);
+        int steps = Math.Min(90 * updates, defaults?.timeLeft ?? int.MaxValue);
+        var flight = new PvpTactics.ShotFlight(shotSpeed, updates, steps);
+        flight = shotType switch
         {
-            var landing = PvpTerrain.Landing(target, history.FallingAcceleration());
-            if (!landing.HasValue) return null;
-            point = landing.Value.Point; velocity = Vector2.Zero;
-        }
+            ProjectileID.WoodenArrowFriendly or ProjectileID.FireArrow or ProjectileID.UnholyArrow or ProjectileID.HellfireArrow
+                or ProjectileID.CursedArrow or ProjectileID.IchorArrow or ProjectileID.VenomArrow => flight with { GravityStart = 15, Gravity = .1f },
+            ProjectileID.FrostburnArrow => flight with { GravityStart = 17, Gravity = .085f },
+            ProjectileID.BoneArrow => flight with { GravityStart = 35, Gravity = .06f },
+            ProjectileID.ThrowingKnife or ProjectileID.Shuriken => flight with { GravityStart = 20, Gravity = .4f, DragX = .97f, FallLimit = 16 },
+            ProjectileID.DeathSickle => flight with { DragX = .96f, DragY = .96f },
+            ProjectileID.IceSickle => flight with { DragX = .95f, DragY = .95f },
+            _ => flight
+        };
+        bool through = !item.channel && defaults is { tileCollide: false, ownerHitCheck: false }
+            && (shotType == ProjectileID.DeathSickle || defaults.aiStyle is 0 or 1);
+        return new(shotType, flight, defaults?.width ?? 4, defaults?.height ?? 4, through);
+    }
+
+    static PvpTactics.ShotSolution? SolveShot(Player self, Player target, ShotWeapon shot, string kind)
+    {
+        Vector2 origin = self.RotatedRelativePoint(self.MountedCenter);
+        V center = N(target.Center), velocity = N(target.velocity);
+        V reach = new((target.width + shot.Width) * .5f, (target.height + shot.Height) * .5f);
+        Func<V, V, bool> clear = shot.ThroughTiles ? null
+            : (from, to) => PvpTerrain.ProjectileClear(new(from.X, from.Y), new(to.X, to.Y), shot.Width, shot.Height);
+        var landing = (kind is "landing" or "coverage") ? PvpTerrain.Landing(target, history.FallingAcceleration()) : null;
+        V Future(float frames, string motion) => motion switch
+        {
+            "body" => center,
+            "brake" => center + velocity * Math.Min(frames, 6),
+            "landing" when landing.HasValue && frames >= landing.Value.Frames => N(landing.Value.Point),
+            "blend" => center + velocity * ((frames + Math.Min(frames, 6)) * .5f),
+            _ => center + velocity * frames
+        };
         if (kind == "exit")
         {
             var exit = PvpTerrain.PlatformExit(target);
-            if (!exit.HasValue) return null;
-            point = exit.Value; velocity = Vector2.Zero;
+            if (!exit.HasValue || Math.Abs(velocity.X) < .5f) return null;
+            float crossing = Math.Abs(exit.Value.X - center.X) / Math.Abs(velocity.X);
+            var shotAtExit = PvpTactics.SolveFlight(N(origin), shot.Flight, reach, _ => N(exit.Value), clear, Math.Max(0, crossing - 4));
+            return shotAtExit.HasValue && shotAtExit.Value.FlightFrames <= crossing + 4 ? shotAtExit : null;
         }
-        return PvpTactics.Solve(N(self.Center), N(point), N(velocity), observed ? speed : shotSpeed,
-            observed ? gravity : 0, (a, b) => Clear(new Vector2(a.X, a.Y), new Vector2(b.X, b.Y)), observed ? gravityDelay : 0, kind);
-    }
-
-    static Vector2? ShotAim(Player self, Player target, Item item, string kind = null)
-    {
-        var aim = SolveShot(self, target, item, kind ?? aimKind);
-        return aim.HasValue ? new Vector2(aim.Value.Point.X, aim.Value.Point.Y) : null;
+        if (kind == "landing" && !landing.HasValue) return null;
+        PvpTactics.ShotSolution? Solve(string motion) => PvpTactics.SolveFlight(N(origin), shot.Flight, reach,
+            frames => Future(frames, motion), clear, motion == "landing" ? landing.Value.Frames : 0);
+        if (kind != "coverage") return Solve(kind);
+        var motions = landing.HasValue ? new[] { "velocity", "brake", "landing" } : new[] { "velocity", "brake" };
+        PvpTactics.ShotSolution? best = null;
+        int bestCoverage = 0;
+        foreach (string motion in motions.Append("blend"))
+        {
+            var solution = Solve(motion);
+            if (!solution.HasValue) continue;
+            int coverage = motions.Count(alternative =>
+            {
+                V miss = solution.Value.Impact - Future(solution.Value.FlightFrames, alternative);
+                return Math.Abs(miss.X) <= reach.X && Math.Abs(miss.Y) <= reach.Y;
+            });
+            if (coverage <= bestCoverage) continue;
+            best = solution;
+            bestCoverage = coverage;
+            if (coverage == motions.Length) break;
+        }
+        return best;
     }
 
     static bool ContactMode(string value) => value.StartsWith("melee", StringComparison.Ordinal);
+
+    static CoverCell? FindCover(Player self, Player target, Dictionary<string, int> weapons)
+    {
+        if (Main.GameUpdateCount < coverRetryTick || self.grapCount > 0 || Movement.GrappleActive
+            || Main.mouseItem?.IsAir == false) return null;
+        int slot = -1;
+        for (int i = 0; i < 10; i++)
+        {
+            var block = self.inventory[i];
+            int type = block.createTile;
+            if (!block.IsAir && type >= 0 && Main.tileSolid[type]
+                && !Main.tileSolidTop[type] && !TileID.Sets.Falling[type])
+            { slot = i; break; }
+        }
+        if (slot < 0 || !weapons.Values.Any(weapon => ReadShot(self, self.inventory[weapon])?.ThroughTiles == true)) return null;
+        int enemyShot = target.HeldItem.shoot;
+        if (enemyShot <= 0 || !ContentSamples.ProjectilesByType.TryGetValue(enemyShot, out var incoming)
+            || !incoming.tileCollide || incoming.aiStyle is not (0 or 1))
+            return null;
+        var cell = PvpTerrain.FindCoverCell(self, target, (x, y) => CanPlaceCover(self, x, y));
+        return cell.HasValue ? new CoverCell(cell.Value.X, cell.Value.Y, slot, self.inventory[slot].type,
+            self.inventory[slot].createTile) : null;
+    }
+
+    static bool CanPlaceCover(Player self, int x, int y) => Directive.AllowsTerrain(true, x, y)
+        && AgentTools.ControlAllows(ControlBehavior.Placement, ControlChannels.ItemUse, delegated: true)
+        && !AgentTools.Control.ForbiddenAt(ControlBehavior.Placement, x, y) && Reach.CanPlace(self, x, y);
+
+    static bool TryPlaceCover(Player self, Player target, CoverCell cell)
+    {
+        if (Movement.GrappleActive || self.grapCount > 0
+            || self.itemAnimation > 0 || self.itemTime > 0 || ItemUseCoordinator.IsActive
+            || Main.mouseItem?.IsAir == false || self.inventory[cell.Slot].IsAir || self.inventory[cell.Slot].type != cell.Item
+            || !CanPlaceCover(self, cell.X, cell.Y) || !PvpTerrain.CanCoverCell(self, target, cell.X, cell.Y)
+            || !PvpTerrain.WalkProbe(self, Math.Sign(self.Center.X - target.Center.X)).HasValue
+            || !PvpTerrain.DirectShotClear(self.Center, target.Center)
+            || !Weapons(self).Values.Any(slot => ReadShot(self, self.inventory[slot])?.ThroughTiles == true)) return false;
+        coverLease = BeginAction("pvp_cover");
+        activeCover = cell;
+        coverDeadline = Main.GameUpdateCount + (ulong)Math.Clamp(self.inventory[cell.Slot].useTime + 12, 20, 60);
+        ItemUseCoordinator.Start(new ItemUseRequest { TargetWx = cell.X, TargetWy = cell.Y, Slot = cell.Slot,
+            DurationTicks = (int)(coverDeadline - Main.GameUpdateCount), Strict = true });
+        DiagLog.Write($"[pvp-cover] session={Session} action={coverLease} state=started x={cell.X} y={cell.Y} tile={cell.Tile}");
+        return true;
+    }
+
+    static void CheckCover(Player self, Player target)
+    {
+        if (activeCover is not CoverCell cell) return;
+        var tile = Main.tile[cell.X, cell.Y];
+        bool placed = tile.HasUnactuatedTile && tile.TileType == cell.Tile;
+        if (ItemUseCoordinator.IsActive && !placed && !self.dead && !target.dead && Main.GameUpdateCount < coverDeadline
+            && CanPlaceCover(self, cell.X, cell.Y)) return;
+        ItemUseCoordinator.Stop();
+        string result = placed ? "cover_present" : "cover_missing";
+        DiagLog.Write($"[pvp-cover] session={Session} action={coverLease} state={result} " +
+            $"x={cell.X} y={cell.Y} direct_line={PvpTerrain.DirectShotClear(self.Center, target.Center)}");
+        activeCover = null;
+        coverRetryTick = Main.GameUpdateCount + 90;
+        long action = coverLease;
+        coverLease = 0;
+        var snapshot = appliedSnapshot;
+        bool resumeFire = fireIntent;
+        EndAction(action);
+        appliedSnapshot = snapshot;
+        fireIntent = resumeFire;
+    }
 
     static bool Attack(Player self, Player target)
     {
         self.controlUseItem = false;
         var item = self.HeldItem;
-        if (activeWeapon != item.type || activePrefix != item.prefix)
-        {
-            activeWeapon = item.type; activePrefix = item.prefix; speed = item.shootSpeed; gravity = gravityDelay = 0; observedType = 0; arrows.Clear();
-            foreach (var projectile in Main.projectile)
-                if (projectile.active) arrows[projectile.whoAmI] = (projectile.identity, projectile.velocity, int.MaxValue);
-        }
         Vector2 point = target.Center;
+        PvpTactics.ShotSolution? solution = null;
         bool clear;
         if (ContactMode(mode))
         {
@@ -206,14 +302,15 @@ public static partial class PvpDuel
         }
         else
         {
-            ObserveArrows(self);
-            Vector2? aim = ShotAim(self, target, item);
-            clear = aim.HasValue;
-            if (aim.HasValue) point = aim.Value;
+            if (ReadShot(self, item) is ShotWeapon shot) solution = SolveShot(self, target, shot, aimKind);
+            clear = solution.HasValue;
+            if (solution.HasValue) point = new(solution.Value.Point.X, solution.Value.Point.Y);
         }
         if (!self.controlHook) Cursor.AimPx(point.X, point.Y);
         self.direction = target.Center.X < self.Center.X ? -1 : 1;
-        self.controlUseItem = clear && !self.controlHook && fireIntent && item.type == plannedType && item.prefix == plannedPrefix;
+        self.controlUseItem = clear && !self.controlHook && fireIntent && queuedCover == null
+            && item.type == plannedType && item.prefix == plannedPrefix;
+        if (self.controlUseItem) history.Aim(item, aimKind, point, solution);
         if (self.controlUseItem && self.itemAnimation == 0) self.releaseUseItem = true;
         string reason = self.controlHook ? "grappling" : !fireIntent ? "plan_reposition_without_firing"
             : item.type != plannedType || item.prefix != plannedPrefix ? "weapon_reference_changed"
@@ -241,8 +338,10 @@ public static partial class PvpDuel
         if (reason == "" && !self.active) reason = "self_inactive";
         if (reason == "" && (!AgentPermissions.Attack || !AgentPermissions.Dodge || !self.hostile)) reason = "combat_permission_denied";
         if (reason != "") { Stop(reason); return; }
+        if (coverLease != 0) CheckCover(self, Main.player[Target]);
         if (self.dead || Main.player[Target].dead)
         {
+            queuedCover = null;
             if (!waitingForRespawn)
             {
                 Movement.Release(self); ClearControls(self);
@@ -260,8 +359,8 @@ public static partial class PvpDuel
         {
             waitingForRespawn = false; Outcome = "running";
             Event("respawn", Outcome);
-            Movement = new Port.GameMovement(); choiceAge = 999;
-            activeWeapon = -1; arrows.Clear(); attackReason = "";
+            Movement = NewMovement(); choiceAge = 999;
+            attackReason = "";
             lastHp = self.statLife; lastTargetHp = Main.player[Target].statLife; lastPosition = self.Center;
             NativeAgent.Progress("复活了，继续对战。", "执行 duel_player");
             DiagLog.Write($"[pvp] resumed target={Target} remaining_frames={frames}");
@@ -269,6 +368,16 @@ public static partial class PvpDuel
         if (ExternalAction) return;
         if (!UntilStopped && frames-- <= 0) { Stop("duration_complete"); return; }
         var target = Main.player[Target];
+        if (queuedCover is CoverCell queued)
+        {
+            if (coverRevision != Directive.Revision || Main.GameUpdateCount >= coverQueueDeadline) queuedCover = null;
+            else if (self.itemAnimation == 0 && self.itemTime == 0)
+            {
+                queuedCover = null;
+                if (TryPlaceCover(self, target, queued)) return;
+                coverRetryTick = Main.GameUpdateCount + 30;
+            }
+        }
         if (self.statLife < observedHp) Event("self_damaged", "HP decreased; inspect current threats and recent outcomes.");
         observedHp = self.statLife;
         history.Record(self, target, lastAimClear);
@@ -291,7 +400,32 @@ public static partial class PvpDuel
                 bool fresh = requestRevision == Directive.Revision;
                 if (fresh)
                 {
+                    if (result.Cover && offeredCover is CoverCell cover)
+                    {
+                        if (TryPlaceCover(self, target, cover))
+                        {
+                            Decisions++;
+                            return;
+                        }
+                        if (self.itemAnimation > 0 || self.itemTime > 0)
+                        {
+                            queuedCover = cover;
+                            coverRevision = Directive.Revision;
+                            coverQueueDeadline = Main.GameUpdateCount + (ulong)Math.Clamp(Math.Max(self.itemAnimation, self.itemTime) + 3, 4, 60);
+                            pending = null;
+                            Decisions++;
+                            return;
+                        }
+                        coverRetryTick = Main.GameUpdateCount + 30;
+                    }
+                    if (moveSequence != 0)
+                        DiagLog.Write($"[pvp-move] session={Session} sequence={moveSequence} state=observed " +
+                            $"from={moveFrom} to={self.Center} reason={movementReason} shot_clear={lastAimClear}");
                     intent = selected.Intent; appliedSnapshot = requestSnapshot;
+                    moveSequence = requestSnapshot.Sequence;
+                    moveFrom = self.Center;
+                    DiagLog.Write($"[pvp-move] session={Session} sequence={moveSequence} state=issued " +
+                        $"at={moveFrom} move={intent} anchor={selected.HookTarget}");
                     fireIntent = result.Fire && requestItems.TryGetValue(result.WeaponMode, out var itemRef)
                         && weapons.TryGetValue(result.WeaponMode, out int currentSlot) && currentSlot == itemRef.Slot
                         && self.inventory[currentSlot].type == itemRef.Type && self.inventory[currentSlot].prefix == itemRef.Prefix;
@@ -313,15 +447,24 @@ public static partial class PvpDuel
             pending = null;
         }
         choiceAge++;
-        if (pending == null)
+        if (pending == null && queuedCover == null)
         {
             requestSnapshot = Sensor.CapturePlayer(self, target, ++sequence, intent, choiceAge * 1000 / 60);
             options = new Dictionary<string, Port.DodgeOption>();
             var criteria = new JsonObject();
+            var left = PvpTerrain.WalkProbe(self, -1);
+            var right = PvpTerrain.WalkProbe(self, 1);
             foreach (var option in requestSnapshot.AvailableActions)
             {
                 string id = "m" + options.Count;
-                options[id] = option; criteria[id] = Port.DecisionFacts.Describe(option, requestSnapshot, true);
+                options[id] = option;
+                string description = Port.DecisionFacts.Describe(option, requestSnapshot, true);
+                Vector2? step = option.Intent is { HorizontalSize: Port.Magnitude.Small, VerticalSize: Port.Magnitude.None }
+                    ? option.Intent.Direction == Port.DodgeDirection.Left ? left : right : null;
+                if (step.HasValue)
+                    description += $" Verified 3-tile ground walk to ({step.Value.X:0},{step.Value.Y:0}); direct line there: " +
+                        $"{(PvpTerrain.DirectShotClear(step.Value, target.Center) ? "open" : "blocked")}.";
+                criteria[id] = description;
             }
             var modes = new JsonObject();
             requestItems = new();
@@ -337,19 +480,21 @@ public static partial class PvpDuel
                 else
                 {
                     var aimKinds = new List<string> { "body", "velocity" };
-                    if (history.ToJson()["horizontal_reversals"]?.GetValue<int>() > 0) aimKinds.Add("brake");
+                    if (target.velocity.LengthSquared() > 1f) aimKinds.Add("coverage");
                     if (PvpTerrain.Landing(target, history.FallingAcceleration()).HasValue) aimKinds.Add("landing");
                     if (PvpTerrain.PlatformExit(target).HasValue) aimKinds.Add("exit");
+                    var shot = ReadShot(self, item);
                     foreach (string kind in aimKinds)
                     {
-                        var solution = SolveShot(self, target, item, kind);
+                        var solution = shot.HasValue ? SolveShot(self, target, shot.Value, kind) : null;
                         aimChoices[kind] = new JsonObject { ["clear"] = solution.HasValue, ["flight_frames"] = solution?.FlightFrames,
+                            ["through_tiles"] = shot?.ThroughTiles ?? false,
                             ["assumption"] = kind switch { "body" => "Target stays at current position.",
-                                "brake" => "Target stops after 6 frames; hypothetical reversal coverage.",
+                                "coverage" => "Compare continuing, braking and any supported landing. Prefer aim covering multiple possibilities.",
                                 "landing" => "Extrapolate measured falling acceleration to sampled support within 30 frames; no future jump/dash/mod physics is known.",
                                 "exit" => "Cover a real nearby platform edge in the current travel direction; target may choose not to cross it.",
                                 _ => "Target continues current velocity; a dash reversal can defeat this." },
-                            ["trajectory_source"] = activeWeapon == item.type && observedType != 0 ? "observed_arrow_model" : "estimated_weapon_ammo_speed" };
+                            ["projectile_type"] = shot?.Projectile };
                     }
                 }
                 modes[pair.Key] = new JsonObject { ["slot"] = pair.Value, ["name"] = item.Name, ["damage"] = self.GetWeaponDamage(item),
@@ -375,13 +520,18 @@ public static partial class PvpDuel
                 ["hp_change"] = self.statLife - lastHp, ["target_hp_change"] = target.statLife - lastTargetHp,
                 ["previous_move"] = intent.ToString(), ["movement_result"] = movementReason,
                 ["moved_pixels"] = Vector2.Distance(self.Center, lastPosition), ["aim_clear"] = lastAimClear,
-                ["trajectory_observed"] = observedType != 0
+                ["trajectory_observed"] = history.HasObservedShot
             };
+            offeredCover = FindCover(self, target, weapons);
+            if (offeredCover is CoverCell cover)
+                scene["cover_option"] = new JsonObject { ["x"] = cover.X, ["y"] = cover.Y,
+                    ["item"] = self.inventory[cover.Slot].Name,
+                    ["fact"] = "Blocks the current direct line; a three-tile walk away remains clear. A compatible through-wall weapon is available." };
             lastHp = self.statLife; lastTargetHp = target.statLife;
             lastPosition = requestSelf = self.Center; requestTarget = target.Center;
             requestRevision = Directive.Revision;
             latestScene = (JsonObject)scene.DeepClone();
-            DiagLog.Write("[pvp] scene " + scene.ToJsonString());
+            if (DiagLog.Trace) DiagLog.Trc("[pvp] scene " + scene.ToJsonString());
             requestClock.Restart(); pending = choose(scene, lifetime.Token);
         }
     }
