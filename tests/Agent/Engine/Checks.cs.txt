@@ -1651,7 +1651,8 @@ public sealed class Driver : ModSystem
                     pending = AgentTools.State(default);
                 return;
             }
-            if (++ticks > (PlanningReadOnly ? 18000 : 7200)) throw new TimeoutException("engine_check_frame_limit");
+            if (++ticks > (PlanningReadOnly ? 18000 : 7200) && !RailSkillTrial.Recording)
+                throw new TimeoutException("engine_check_frame_limit");
             if (!TeleportCheck && !EarlyFallCheck) { Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60; }
             if (pending != null && !pending.IsCompleted) return;
             JsonObject result = pending == null ? null : JsonNode.Parse(pending.GetAwaiter().GetResult()).AsObject();

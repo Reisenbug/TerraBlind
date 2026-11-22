@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Input;
 using Terraria;
 using Terraria.DataStructures;
 using Terraria.ID;
@@ -537,7 +538,22 @@ public sealed class RailSkillTrial : ModSystem
     const int Floor = 220;
     const int StartX = 520;
     const int Stock = 9999;
+    const string Objective = """
+        为了可能的那点惊喜，我会描述为：
+        前置知识：泰拉瑞亚无法凭空放置物块，但是可以凭空放置一些东西再放，比如分线盒。
+        铁轨加速。
+        要求动作：1，可交互范围内，向上放置分线盒后放置铁轨，进行一次铁轨加速。
+        2，在空中连续执行5次1而0次失败。
+        3，使用羽落药水，执行1的同时全程按住w，直到达到最高点。
+        4，在3的基础上，向右凭空分线盒+铁轨加速。
+        5，在4的基础上，连续5次向右凭空分线盒+铁轨加速。
+        这是一个人类由于反应力和手指灵活限制，不是很能执行的一个帅气操作。但是是代码的甜点。可以试试。
+        给与：9999分线盒，9999矿车轨道，9999羽落药水。
+        环境：平地，上方无任何遮挡。
+        """;
+    static TaskCompletionSource<bool> recordingStart;
     static RailRun active;
+    public static bool Recording => Environment.GetEnvironmentVariable("TB_RAIL_SKILL") == "record";
 
     static Projectile Hook(Player p)
     {
@@ -547,7 +563,16 @@ public sealed class RailSkillTrial : ModSystem
         return hook.active && hook.owner == p.whoAmI && hook.type == ProjectileID.TrackHook ? hook : null;
     }
 
-    public override void PreUpdatePlayers() => active?.Before(Main.LocalPlayer);
+    public override void PreUpdatePlayers()
+    {
+        if (recordingStart != null && !Main.drawingPlayerChat && Keyboard.GetState().IsKeyDown(Keys.L))
+        {
+            foreach (string line in Objective.Split('\n')) AgentChat.Display(line, 120, 200, 255);
+            recordingStart.TrySetResult(true);
+            recordingStart = null;
+        }
+        active?.Before(Main.LocalPlayer);
+    }
     public override void PostUpdatePlayers() => active?.After(Main.LocalPlayer);
 
     static void Prepare(Player p, int startX)
@@ -735,7 +760,8 @@ public sealed class RailSkillTrial : ModSystem
         Directory.CreateDirectory(folder);
         var report = new JsonObject { ["experiment"] = "rail_skill", ["ok"] = false };
         void Flush() => File.WriteAllText(Path.Combine(folder, "report.json"), report.ToJsonString());
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(mode == "live" ? 360 : 60));
+        using var limit = new CancellationTokenSource();
+        if (!Recording) limit.CancelAfter(TimeSpan.FromSeconds(mode == "live" ? 360 : 60));
         var token = limit.Token;
         await CrossingDiscovery.OnGame(() =>
         {
@@ -746,6 +772,30 @@ public sealed class RailSkillTrial : ModSystem
         });
         try
         {
+            if (Recording)
+            {
+                report["phase"] = "waiting_for_l";
+                report["spawn_disabled"] = true;
+                Flush();
+                var start = await CrossingDiscovery.OnGame(() =>
+                {
+                    Prepare(Main.LocalPlayer, StartX);
+                    AgentChat.Display("铁轨加速录制已就绪，开始录屏后按 L。", 255, 215, 130);
+                    Console.WriteLine("AGENT_RAIL_RECORD_READY");
+                    recordingStart = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    return recordingStart.Task;
+                });
+                await start;
+                limit.CancelAfter(TimeSpan.FromSeconds(360));
+                report["phase"] = "running";
+                Flush();
+                Console.WriteLine("AGENT_RAIL_RECORD_STARTED");
+                await Learn(folder, report, Flush, token);
+                report["ok"] = report["skill"] != null;
+                report["phase"] = "finished";
+                Flush();
+                return report.ToJsonString();
+            }
             if (mode == "replay")
             {
                 string path = Environment.GetEnvironmentVariable("TB_RAIL_POLICY_FILE");
@@ -770,18 +820,9 @@ public sealed class RailSkillTrial : ModSystem
 
     static async Task Learn(string folder, JsonObject report, Action flush, CancellationToken token)
     {
-        const string objective = """
-            前置知识：泰拉瑞亚无法凭空放置物块，但是可以凭空放置一些东西再放，比如分线盒。
-            铁轨加速：右键铁轨，默认的轨道钩会把玩家拉上铁轨。被拉上铁轨之前按跳可以取消上车，保留钩子带来的初速度。
-            1. 在可交互范围内，向上放置分线盒后放置铁轨，进行一次铁轨加速。
-            2. 在空中连续执行5次1而0次失败。
-            3. 使用羽落药水，执行1的同时全程按住W，直到达到最高点。
-            4. 在3的基础上，向右凭空分线盒+铁轨加速。
-            5. 在4的基础上，连续5次向右凭空分线盒+铁轨加速。
-            装备：分线盒、矿车轨道、羽落药水各9999。环境：平地，上方无遮挡。
-            """;
         const string system = """
             Implement the requested single continuous sequence as a synchronous JavaScript function tick(s) with native game inputs. Submit it to run_policy, inspect real trace on failure, revise and retry. The tool resets to an empty flat arena each attempt. It saves the exact JS only after all stages pass. Use only the supplied tool. Up to eight real attempts.
+            Rail boost as the player previously described: right-click the track and let the native track hook pull you. Jump before boarding to preserve the velocity. Briefly tell the player in Simplified Chinese what you are testing and what the observed results changed.
             s.player:{x,y,width,height,vx,vy,item_animation,item_time,release_use,selected_slot}; x,y are top-left pixels. s.tiles contains nearby existing tiles {x,y,type,solid,reachable}, in 16px tile coordinates. s.inventory contains {slot,type,stack,create_tile}; slots 0/1/2 are junction box/track/potion. s.tick is the world frame. s.memory is previously returned memory (use for phases and locked target cells). s.data has floor_y (tile row), boosts (host-counted verified cancels), featherfall, apex_reached, release_jump, track_tile, box_tile, hook (null or {x,y,touching} in pixels).
             Return {keys:string[],use:boolean,slot:number,aim:{x,y},memory:{...}}. Keys are pressed names only, e.g. ['up','jump']. Aim x/y and click x/y are integer TILE coordinates, in the same units as s.tiles. Use places/consumes the selected native item; changing slots waits until animations end. One right click: return memory.click={x,y,tick:s.tick} only on the desired frame. Jump is native input. The engine supplies all physics; you specify placements and timing. World y grows down. The host requires each click's own newly placed adjacent box and track, fresh upward or rightward boost with the requested buff, no grounding mid-chain and W continuously from the seventh box placement to apex. It finishes after 13 verified boosts. Do not return done until success.
             """;
@@ -790,7 +831,7 @@ public sealed class RailSkillTrial : ModSystem
             """).AsArray();
         var attempts = new JsonArray(); var replies = new JsonArray();
         report["model"] = "gpt-6.2-sol"; report["attempts"] = attempts; report["replies"] = replies;
-        report["objective"] = objective;
+        report["objective"] = Objective;
         async Task<string> Execute(string tool, JsonObject args, CancellationToken caller)
         {
             if (report["skill"] != null) return """{"status":"already_verified"}""";
@@ -798,6 +839,7 @@ public sealed class RailSkillTrial : ModSystem
             string code = args["code"].GetValue<string>();
             var attempt = new JsonObject { ["code"] = code };
             attempts.Add(attempt); flush();
+            if (Recording) AgentChat.Say($"实测第 {attempts.Count} 版脚本。", bot: true);
             JsonObject result;
             try { result = await RunProgram(code, false, caller); }
             catch (ArgumentException error) { result = new JsonObject { ["ok"] = false, ["failure"] = error.Message }; }
@@ -819,9 +861,17 @@ public sealed class RailSkillTrial : ModSystem
         using var agent = new CodexAgent();
         try
         {
-            await agent.RunAsync(objective, "", sandbox, report["model"].ToString(), system, tools, Execute,
-                text => { replies.Add(text); flush(); }, token);
+            await agent.RunAsync(Objective, "", sandbox, report["model"].ToString(), system, tools, Execute,
+                text => { replies.Add(text); if (Recording) AgentChat.Say(text); flush(); }, token);
         }
         finally { report["token_usage"] = agent.TokenUsage; flush(); }
+    }
+}
+
+public sealed class RailSkillTrialNpcs : GlobalNPC
+{
+    public override void EditSpawnRate(Player player, ref int spawnRate, ref int maxSpawns)
+    {
+        if (RailSkillTrial.Recording) { spawnRate = int.MaxValue; maxSpawns = 0; }
     }
 }
