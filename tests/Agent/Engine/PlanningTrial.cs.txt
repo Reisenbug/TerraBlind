@@ -101,6 +101,8 @@ public sealed class CrossingDiscovery : ModSystem
     sealed record Step(string[] Keys, int Frames, string UntilSignal);
     static readonly Layout Practice = new(230, 210, 1, 13, 7);
     static readonly Layout Transfer = new(320, 252, -1, 15, 25);
+    const string SkillName = "learned_crossing";
+    const int RepairBudget = 8;
     static readonly ConcurrentQueue<Action> Queue = new();
     static CrossingTrial active;
 
@@ -283,7 +285,6 @@ public sealed class CrossingDiscovery : ModSystem
             ]
             """).AsArray();
         var library = new ScriptLibrary(Path.Combine(directory, "programs"));
-        const string name = "learned_crossing";
         var trials = report["trials"].AsArray();
         var replies = new JsonArray();
         report["prompt"] = prompt; report["replies"] = replies;
@@ -305,7 +306,7 @@ public sealed class CrossingDiscovery : ModSystem
                     if (evidence.Count == 0 || !evidence.All(id => trials.Any(t => t["id"].ToString() == id.ToString()))
                         || !trials.Any(t => t["reached"].GetValue<bool>() && evidence.Any(id => id.ToString() == t["id"].ToString())))
                         return """{"error":"cite_a_successful_practice_trial"}""";
-                    var saved = library.Save(name, args["code"].GetValue<string>(), library.Get(name)["revision"].GetValue<int>());
+                    var saved = library.Save(SkillName, args["code"].GetValue<string>(), library.Get(SkillName)["revision"].GetValue<int>());
                     if (saved["error"] == null)
                     {
                         report["skill"] = saved.DeepClone();
@@ -329,49 +330,151 @@ public sealed class CrossingDiscovery : ModSystem
         }
         finally { report["token_usage"] = agent.TokenUsage; flush(); }
 
-        var savedSkill = library.Get(name);
+        var savedSkill = library.Get(SkillName);
         if (savedSkill["found"]?.GetValue<bool>() != true || trials.Count < 2)
             throw new InvalidOperationException("discovery requires a saved program and multiple actual trials");
-        int revision = savedSkill["revision"].GetValue<int>();
-        string source = savedSkill["code"].ToString();
-        report["source_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(source)));
+        report["source_sha256"] = SourceHash(savedSkill["code"].ToString());
         report["transfer_model_calls"] = 0;
-        async Task Replay(Layout layout, string phase)
-        {
-            var scene = await OnGame(() => { Reset(layout); return Describe(layout); });
-            JsonObject observed = null;
-            async Task<string> RunTool(string tool, JsonObject args, CancellationToken caller)
-            {
-                if (tool != "trial" || observed != null) throw new InvalidOperationException("only one physical replay is permitted");
-                observed = await Attempt(layout, ParseSteps(args), phase, caller);
-                observed["steps"] = args["steps"].DeepClone();
-                report[phase] = observed;
-                flush();
-                return observed.ToJsonString();
-            }
-            string Invoke(string mode) => $"return skill('{name}',{revision},"
-                + new JsonObject { ["mode"] = mode, ["scene"] = scene.DeepClone() }.ToJsonString() + ");";
-            var applicability = await AgentScript.Run(Invoke("probe"), 10,
-                (_, _) => throw new InvalidOperationException("applicability must be read-only"), RunTool,
-                _ => Task.CompletedTask, token, programs: library.Callable());
-            if (applicability["value"]?["applicable"]?.GetValue<bool>() != true || observed != null)
-                throw new InvalidOperationException("saved skill did not self-identify as applicable: " + applicability);
-            var execution = await AgentScript.Run(Invoke("execute"), 10, (tool, _) =>
-                { if (tool != "trial") throw new InvalidOperationException("only trial is permitted"); }, RunTool,
-                _ => Task.CompletedTask, token, programs: library.Callable(),
-                onResult: result => library.RecordCalls(result["skill_calls"].AsArray(), phase));
-            report[phase + "_script"] = execution;
-            flush();
-            if (observed?["reached"]?.GetValue<bool>() != true
-                || !execution["skill_calls"].AsArray().Any(call => call["name"].ToString() == name
-                    && call["revision"].GetValue<int>() == revision))
-                throw new InvalidOperationException("saved skill did not reach the landing on " + phase + ": " + execution);
-        }
-        await Replay(Practice, "practice_replay");
+        if (!await Replay(Practice, "practice_replay", library, report, flush, token))
+            throw new InvalidOperationException("saved skill did not reach the practice landing");
         var transferBaseline = await Attempt(Transfer, new[] { new Step(new[] { "left", "jump" }, 120, null) }, "transfer-walk-jump", token);
         report["transfer_baseline"] = transferBaseline; flush();
         if (transferBaseline["reached"].GetValue<bool>()) throw new InvalidOperationException("transfer gap accepts ordinary jump");
-        await Replay(Transfer, "transfer");
+        if (!await Replay(Transfer, "transfer", library, report, flush, token))
+            throw new InvalidOperationException("saved skill did not reach the transfer landing");
+    }
+
+    static string SourceHash(string source) => Convert.ToHexString(
+        System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(source)));
+
+    static async Task<bool> Replay(Layout layout, string phase, ScriptLibrary library, JsonObject report,
+        Action flush, CancellationToken token, JsonObject candidate = null)
+    {
+        var entry = candidate ?? library.Get(SkillName);
+        int revision = entry["revision"].GetValue<int>();
+        var programs = candidate == null ? library.Callable() : new JsonArray(candidate.DeepClone());
+        var scene = await OnGame(() => { Reset(layout); return Describe(layout); });
+        JsonObject observed = null;
+        async Task<string> RunTool(string tool, JsonObject args, CancellationToken caller)
+        {
+            if (tool != "trial" || observed != null) throw new InvalidOperationException("only one physical replay is permitted");
+            observed = await Attempt(layout, ParseSteps(args), phase, caller);
+            observed["steps"] = args["steps"].DeepClone();
+            report[phase] = observed;
+            return observed.ToJsonString();
+        }
+        string Invoke(string mode) => $"return skill('{SkillName}',{revision},"
+            + new JsonObject { ["mode"] = mode, ["scene"] = scene.DeepClone() }.ToJsonString() + ");";
+        var applicability = await AgentScript.Run(Invoke("probe"), 10,
+            (_, _) => throw new InvalidOperationException("applicability must be read-only"), RunTool,
+            _ => Task.CompletedTask, token, programs: programs);
+        if (applicability["value"] is not JsonObject probe || probe["applicable"] is not JsonValue applicable
+            || !applicable.TryGetValue<bool>(out bool applies) || !applies || observed != null)
+        {
+            report[phase + "_script"] = applicability;
+            flush();
+            return false;
+        }
+        var execution = await AgentScript.Run(Invoke("execute"), 10, (tool, _) =>
+            { if (tool != "trial") throw new InvalidOperationException("only trial is permitted"); }, RunTool,
+            _ => Task.CompletedTask, token, programs: programs);
+        if (candidate == null) library.RecordCalls(execution["skill_calls"].AsArray(), phase);
+        report[phase + "_script"] = execution;
+        flush();
+        return observed?["reached"]?.GetValue<bool>() == true && execution["ok"]?.GetValue<bool>() == true
+            && execution["skill_calls"].AsArray().Any(call => call["name"].ToString() == SkillName
+                && call["revision"].GetValue<int>() == revision);
+    }
+
+    static JsonObject ReplayEvidence(JsonObject result, string phase)
+    {
+        var evidence = new JsonObject { ["scene"] = phase };
+        foreach (string field in new[] { "steps", "signal_changes", "impulse_frame", "frames", "reached", "end" })
+            evidence[field] = result[phase]?[field]?.DeepClone();
+        var script = result[phase + "_script"];
+        if (evidence["reached"] == null || script?["ok"]?.GetValue<bool>() != true)
+            evidence["script"] = new JsonObject { ["error"] = script?["error"]?.DeepClone(),
+                ["detail"] = script?["detail"]?.DeepClone(), ["value"] = script?["value"]?.DeepClone() };
+        return evidence;
+    }
+
+    static async Task Repair(string from, string directory, JsonObject report, Action flush, CancellationToken token)
+    {
+        var previous = new ScriptLibrary(Path.Combine(from, "programs")).Get(SkillName, includeRuntime: false);
+        var library = new ScriptLibrary(Path.Combine(directory, "programs"));
+        if (previous["revision"]?.GetValue<int>() != 1 || library.Get(SkillName)["found"].GetValue<bool>())
+            throw new InvalidOperationException("repair requires an existing revision 1 and a fresh output directory");
+        var seed = library.Save(SkillName, previous["code"].ToString(), 0);
+        if (seed["revision"]?.GetValue<int>() != 1) throw new InvalidOperationException("unable to import skill: " + seed);
+        report["original_source_sha256"] = SourceHash(seed["code"].ToString());
+        report["repair_from"] = from;
+        if (!await Replay(Practice, "original_practice", library, report, flush, token)
+            || await Replay(Transfer, "original_transfer", library, report, flush, token))
+            throw new InvalidOperationException("original skill must pass practice and fail transfer");
+
+        var known = new List<(Layout Layout, string Name)> { (Practice, "practice"), (Transfer, "transfer") };
+        var repairAttempts = new JsonArray();
+        var replies = new JsonArray();
+        report["repairs"] = repairAttempts;
+        report["replies"] = replies;
+        var input = new JsonObject { ["skill"] = seed.DeepClone(),
+            ["practice"] = ReplayEvidence(report, "original_practice"), ["failure"] = ReplayEvidence(report, "original_transfer") };
+        var tools = JsonNode.Parse("""
+            [{"type":"function","function":{"name":"revise_crossing","description":"Evaluate a replacement JavaScript function body with the real engine. Returns failed replay evidence for the next revision. A passing revision is saved.","parameters":{"type":"object","properties":{"code":{"type":"string"}},"required":["code"]}}}]
+            """).AsArray();
+        async Task<string> Execute(string tool, JsonObject args, CancellationToken caller)
+        {
+            if (tool != "revise_crossing") return """{"error":"unknown_tool"}""";
+            if (report["skill"] != null) return """{"status":"already_verified"}""";
+            if (repairAttempts.Count >= RepairBudget) return """{"error":"repair_budget_exhausted"}""";
+            string code = args["code"].GetValue<string>();
+            var candidate = new JsonObject { ["name"] = SkillName, ["revision"] = 2, ["code"] = code };
+            var run = new JsonObject { ["candidate"] = candidate.DeepClone(), ["source_sha256"] = SourceHash(code) };
+            repairAttempts.Add(run);
+            foreach (var check in known)
+            {
+                if (!await Replay(check.Layout, check.Name, library, run, flush, caller, candidate))
+                    return ReplayEvidence(run, check.Name).ToJsonString();
+            }
+            int index = known.Count - 2;
+            var unseen = new Layout(460 + index * 70, 280, index % 2 == 0 ? 1 : -1, 16, 41 + index * 5);
+            string phase = $"holdout-{index + 1}";
+            if (!await Replay(unseen, phase, library, run, flush, caller, candidate))
+            {
+                known.Add((unseen, phase));
+                return ReplayEvidence(run, phase).ToJsonString();
+            }
+            var saved = library.Save(SkillName, code, 1);
+            if (saved["revision"]?.GetValue<int>() != 2) return saved.ToJsonString();
+            if (!await Replay(unseen, "saved_holdout", library, report, flush, caller))
+                throw new InvalidOperationException("persisted skill did not reproduce the candidate landing");
+            report["skill"] = saved.DeepClone();
+            report["source_sha256"] = SourceHash(code);
+            report["holdout_model_calls"] = 0;
+            flush();
+            return new JsonObject { ["status"] = "verified", ["revision"] = 2,
+                ["holdout"] = ReplayEvidence(report, "saved_holdout") }.ToJsonString();
+        }
+
+        const string system = """
+            Repair your saved crossing skill using the provided successful and failed real engine traces.
+            Submit the revised synchronous JavaScript function body through revise_crossing. If it fails, use its feedback and revise again.
+            The script input is {mode,scene}. For probe return {applicable:boolean} without actions. For execute make one synchronous tool('trial',{steps:[...]}) call.
+            Each step takes keys and a frames limit (1–150). If until_signal is used, the step ends on that signal or when the frame limit expires.
+            A run has at most 150 frames. Use only the supplied tools and observations. Continue until the host reports verified.
+            """;
+        string sandbox = Path.Combine(directory, "agent-workspace");
+        Directory.CreateDirectory(sandbox);
+        const string model = "gpt-6.1-sol";
+        report["model"] = model;
+        using var agent = new CodexAgent();
+        try
+        {
+            await agent.RunAsync(input.ToJsonString(), "", sandbox, model, system, tools, Execute,
+                text => { replies.Add(text); flush(); }, token);
+        }
+        finally { report["token_usage"] = agent.TokenUsage; flush(); }
+        if (report["skill"] == null) throw new InvalidOperationException("no skill revision passed the repair and holdout layouts");
     }
 
     internal static async Task<string> Run()
@@ -381,7 +484,8 @@ public sealed class CrossingDiscovery : ModSystem
         var report = new JsonObject { ["ok"] = false, ["experiment"] = "crossing_discovery", ["trials"] = new JsonArray() };
         string path = Path.Combine(directory, "report.json");
         void Flush() => File.WriteAllText(path, report.ToJsonString());
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(160));
+        string repairFrom = Environment.GetEnvironmentVariable("TB_CROSSING_REPAIR_FROM");
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(repairFrom == null ? 160 : 240));
         CancellationToken token = limit.Token;
         await OnGame(() =>
         {
@@ -412,7 +516,8 @@ public sealed class CrossingDiscovery : ModSystem
             }
             if (Environment.GetEnvironmentVariable("TB_CROSSING_MODEL") != "1")
                 throw new InvalidOperationException("Set TB_CROSSING_MODEL=1 to run the bounded live discovery turn.");
-            await Learn(directory, report, Flush, token);
+            if (repairFrom == null) await Learn(directory, report, Flush, token);
+            else await Repair(repairFrom, directory, report, Flush, token);
             report["ok"] = true; Flush();
             Console.WriteLine("CROSSING_DISCOVERY_PASS " + path);
             return report.ToJsonString();
