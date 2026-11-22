@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Xna.Framework;
 using Terraria;
+using Terraria.DataStructures;
 using Terraria.ID;
 using Terraria.ModLoader;
 using TerraBlind;
@@ -22,6 +23,7 @@ static class PlanningTrial
 
     public static async Task<string> Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_RAIL_SKILL") != null) return await RailSkillTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_CROSSING_DISCOVERY") == "1") return await CrossingDiscovery.Run();
         if (!ModLoader.TryGetMod("TerraBlind", out var mod)) throw new InvalidOperationException("production_mod_missing");
         var schemas = JsonNode.Parse(Encoding.UTF8.GetString(mod.GetFileBytes("Agent/Tools.json"))).AsArray();
@@ -113,7 +115,7 @@ public sealed class CrossingDiscovery : ModSystem
 
     public override void PostUpdatePlayers() => active?.Sample(Main.LocalPlayer);
 
-    static Task<T> OnGame<T>(Func<T> action)
+    internal static Task<T> OnGame<T>(Func<T> action)
     {
         var result = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         Queue.Enqueue(() =>
@@ -527,5 +529,299 @@ public sealed class CrossingDiscovery : ModSystem
             report["error"] = error.ToString(); Flush();
             throw;
         }
+    }
+}
+
+public sealed class RailSkillTrial : ModSystem
+{
+    const int Floor = 220;
+    const int StartX = 520;
+    const int Stock = 9999;
+    static RailRun active;
+
+    static Projectile Hook(Player p)
+    {
+        int index = p.grappling[0];
+        if (index < 0 || index >= Main.projectile.Length) return null;
+        var hook = Main.projectile[index];
+        return hook.active && hook.owner == p.whoAmI && hook.type == ProjectileID.TrackHook ? hook : null;
+    }
+
+    public override void PreUpdatePlayers() => active?.Before(Main.LocalPlayer);
+    public override void PostUpdatePlayers() => active?.After(Main.LocalPlayer);
+
+    static void Prepare(Player p, int startX)
+    {
+        Halt.All(); FrameProgram.Clear();
+        for (int x = 300; x < 820; x++)
+        for (int y = 25; y <= Floor + 4; y++)
+        {
+            var tile = Main.tile[x, y];
+            tile.ClearEverything();
+            if (y < Floor) continue;
+            tile.HasTile = true; tile.TileType = TileID.GrayBrick;
+        }
+        foreach (var npc in Main.npc) npc.active = false;
+        foreach (var item in p.inventory) item.TurnToAir();
+        foreach (var item in p.armor) item.TurnToAir();
+        foreach (var item in p.miscEquips) item.TurnToAir();
+        p.inventory[0].SetDefaults(ItemID.WirePipe);
+        p.inventory[1].SetDefaults(ItemID.MinecartTrack);
+        p.inventory[2].SetDefaults(ItemID.FeatherfallPotion);
+        for (int slot = 0; slot < 3; slot++) p.inventory[slot].stack = Stock;
+        p.ClearBuff(BuffID.Featherfall);
+        p.RemoveAllGrapplingHooks();
+        p.mount.Dismount(p);
+        p.Teleport(new Vector2(startX * 16 + 8 - p.width / 2f, Floor * 16 - p.height), 0);
+        p.velocity = Vector2.Zero;
+        p.fallStart = p.fallStart2 = Floor;
+        p.statLife = p.statLifeMax2;
+        p.itemAnimation = p.itemTime = p.jump = 0;
+        p.selectedItem = 0; p.releaseJump = p.releaseUseItem = true;
+        p.controlJump = p.controlUp = p.controlUseItem = p.controlUseTile = false;
+        Main.playerInventory = Main.mapFullscreen = Main.autoPause = false;
+        Main.mouseItem.TurnToAir();
+    }
+
+    sealed class RailRun(bool calibration)
+    {
+        readonly TaskCompletionSource<JsonObject> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly JsonArray clicks = new(), boosts = new(), frames = new();
+        int frame, pendingFrame, boxFrame, jumpFrame = -1, featherApex = -1, upMissing, groundTouches;
+        int boxes, tracks, lastBoxFrame;
+        bool seventhBoxStarted;
+        float previousVy, peakY = float.MaxValue;
+        JsonObject pending;
+        public Task<JsonObject> Result => done.Task;
+
+        public void Before(Player p)
+        {
+            var hook = Hook(p);
+            FrameProgram.Set(new JsonObject { ["data"] = new JsonObject
+            {
+                ["floor_y"] = Floor, ["boosts"] = boosts.Count, ["apex_reached"] = featherApex >= 0,
+                ["featherfall"] = p.HasBuff(BuffID.Featherfall), ["release_jump"] = p.releaseJump,
+                ["hook"] = hook == null ? null : new JsonObject { ["x"] = hook.Center.X, ["y"] = hook.Center.Y,
+                    ["touching"] = p.Hitbox.Intersects(hook.Hitbox) },
+                ["track_tile"] = TileID.MinecartTrack, ["box_tile"] = TileID.WirePipe
+            } });
+        }
+
+        public void ApplyClick(Player p)
+        {
+            if (p.controlJump && Hook(p) != null && pending != null && jumpFrame < 0) jumpFrame = frame;
+            var click = FrameProgram.Snapshot()["memory"]?["click"] as JsonObject;
+            if (click?["tick"]?.GetValue<ulong>() != Main.GameUpdateCount) return;
+            if (pending != null) { Finish(p, "right_click_while_hook_pending"); return; }
+            int x = click["x"].GetValue<int>(), y = click["y"].GetValue<int>();
+            bool track = WorldGen.InWorld(x, y) && Main.tile[x, y].HasUnactuatedTile && Main.tile[x, y].TileType == TileID.MinecartTrack;
+            bool box = track && new[] { (x-1,y), (x+1,y), (x,y-1), (x,y+1) }.Any(c =>
+                Main.tile[c.Item1, c.Item2].HasUnactuatedTile && Main.tile[c.Item1, c.Item2].TileType == TileID.WirePipe);
+            bool reach = p.IsInTileInteractionRange(x, y, TileReachCheckSettings.Simple);
+            pending = new JsonObject { ["frame"] = frame, ["x"] = x, ["y"] = y, ["track"] = track,
+                ["adjacent_box"] = box, ["reach"] = reach, ["vx_before"] = p.velocity.X, ["vy_before"] = p.velocity.Y,
+                ["delta_x"] = x * 16 + 8 - p.Center.X, ["delta_y"] = y * 16 + 8 - p.Center.Y,
+                ["boxes_used"] = Stock - p.inventory[0].stack, ["tracks_used"] = Stock - p.inventory[1].stack };
+            clicks.Add(pending);
+            if (!track || !box || !reach || y >= Floor - 1) { Finish(p, "invalid_track_target"); return; }
+            if (clicks.Take(clicks.Count - 1).Any(c => c["x"].GetValue<int>() == x && c["y"].GetValue<int>() == y)
+                || Stock - p.inventory[0].stack < clicks.Count || Stock - p.inventory[1].stack < clicks.Count)
+            { Finish(p, "track_or_junction_box_not_new"); return; }
+            var before = (p.tileInteractAttempted, p.releaseUseTile, p.tileInteractionHappened, Main.mouseRightRelease);
+            try
+            {
+                p.tileInteractAttempted = p.releaseUseTile = Main.mouseRightRelease = true;
+                p.tileInteractionHappened = false;
+                p.TileInteractionsCheck(x, y);
+                pending["native_handled"] = p.tileInteractionHappened;
+            }
+            finally { (p.tileInteractAttempted, p.releaseUseTile, p.tileInteractionHappened, Main.mouseRightRelease) = before; }
+            pendingFrame = frame; jumpFrame = -1; boxFrame = lastBoxFrame;
+        }
+
+        public void After(Player p)
+        {
+            bool feather = p.HasBuff(BuffID.Featherfall), grounded = p.Bottom.Y >= Floor * 16 - 1;
+            int newBoxes = Stock - p.inventory[0].stack, newTracks = Stock - p.inventory[1].stack;
+            bool placedBox = newBoxes != boxes, placedTrack = newTracks != tracks;
+            if (placedBox)
+            {
+                lastBoxFrame = frame;
+                if (boosts.Count == 6) seventhBoxStarted = true;
+            }
+            boxes = newBoxes; tracks = newTracks;
+            if (seventhBoxStarted && featherApex < 0 && !p.controlUp) upMissing++;
+            if (boosts.Count > 0 && grounded) groundTouches++;
+            peakY = Math.Min(peakY, p.Center.Y);
+            if (boosts.Count == 7 && featherApex < 0 && previousVy < 0 && p.velocity.Y >= 0) featherApex = frame;
+            previousVy = p.velocity.Y;
+            if (frame % 4 == 0 || pending != null || placedBox || placedTrack)
+                frames.Add(new JsonObject { ["f"] = frame, ["x"] = p.Center.X, ["y"] = p.Center.Y, ["vx"] = p.velocity.X,
+                    ["vy"] = p.velocity.Y, ["hook"] = Hook(p) != null, ["up"] = p.controlUp, ["cart"] = p.mount.Active,
+                    ["feather"] = feather, ["ground"] = grounded, ["boxes"] = boxes, ["tracks"] = tracks,
+                    ["slot"] = p.selectedItem, ["item_time"] = p.itemTime });
+            if (p.dead || p.mount.Active) { Finish(p, p.dead ? "died" : "boarded_cart"); return; }
+            if (groundTouches > 0) { Finish(p, "landed_mid_chain"); return; }
+            if (pending != null && jumpFrame >= 0 && Hook(p) == null)
+            {
+                bool right = boosts.Count >= 7;
+                float speed = right ? p.velocity.X : -p.velocity.Y;
+                var boost = new JsonObject { ["jump_frame"] = jumpFrame, ["click_frame"] = pendingFrame, ["box_frame"] = boxFrame,
+                    ["direction"] = right ? "right" : "up", ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y,
+                    ["x"] = p.Center.X, ["y"] = p.Center.Y, ["feather"] = feather, ["up"] = p.controlUp,
+                    ["speed_along_target"] = speed, ["after_apex"] = featherApex >= 0,
+                    ["track_x"] = pending["x"].DeepClone(), ["track_y"] = pending["y"].DeepClone() };
+                bool supportAhead = right ? pending["delta_x"].GetValue<float>() > 0 : pending["delta_y"].GetValue<float>() < 0;
+                if (!supportAhead || speed < 4 || boosts.Count < 6 && feather || boosts.Count >= 6 && !feather
+                    || right && featherApex < 0)
+                { pending["failed_boost"] = boost; Finish(p, "boost_conditions_failed"); return; }
+                boosts.Add(boost); pending = null;
+                if (calibration || boosts.Count == 13)
+                {
+                    bool continuous = calibration || groundTouches == 0 && upMissing == 0 && featherApex >= 0;
+                    Finish(p, continuous ? null : "sequence_continuity_failed"); return;
+                }
+            }
+            if (pending != null && frame - pendingFrame > 24) { Finish(p, "hook_not_cancelled"); return; }
+            if (frame++ >= (calibration ? 180 : 1500) || !FrameProgram.Active)
+                Finish(p, FrameProgram.Active ? "frame_limit" : "program_ended_early");
+        }
+
+        void Finish(Player p, string failure)
+        {
+            var result = new JsonObject { ["ok"] = failure == null, ["failure"] = failure, ["frame"] = frame,
+                ["inputs"] = FrameProgram.Snapshot(), ["boosts"] = boosts, ["clicks"] = clicks, ["trace"] = frames,
+                ["ground_touches"] = groundTouches, ["up_missing_frames"] = upMissing, ["apex_frame"] = featherApex,
+                ["peak_height_px"] = Floor * 16 - p.height / 2f - peakY, ["boxes_remaining"] = p.inventory[0].stack,
+                ["tracks_remaining"] = p.inventory[1].stack, ["potions_remaining"] = p.inventory[2].stack };
+            active = null; BoundaryInputPlayer.Drive = null; FrameProgram.Clear();
+            done.TrySetResult(result);
+        }
+    }
+
+    static async Task<JsonObject> RunProgram(string code, bool calibration, CancellationToken token, int startX = StartX)
+    {
+        var trial = await CrossingDiscovery.OnGame(() =>
+        {
+            var p = Main.LocalPlayer;
+            Prepare(p, startX);
+            var run = new RailRun(calibration);
+            FrameProgram.Set(new JsonObject { ["code"] = code });
+            active = run; BoundaryInputPlayer.Drive = run.ApplyClick;
+            return run;
+        });
+        return await trial.Result.WaitAsync(token);
+    }
+
+    const string Calibration = """
+        function tick(s) {
+          const p=s.player, d=s.data, m=s.memory;
+          m.target ??= {x:Math.floor((p.x+p.width/2)/16), y:Math.floor((p.y+p.height/2)/16)-4};
+          const t=m.target, b={x:t.x+1,y:t.y};
+          const has=(c,type)=>s.tiles.some(a=>a.x===c.x&&a.y===c.y&&a.type===type);
+          delete m.click;
+          if(d.hook && d.release_jump && !d.hook.touching) return {keys:['jump'],memory:m};
+          if (!has(b,d.box_tile)) return {slot:0,use:true,aim:b,memory:m};
+          if (!has(t,d.track_tile)) return {slot:1,use:true,aim:t,memory:m};
+          if(!m.clicked) { m.clicked=true; m.click={...t,tick:s.tick}; }
+          return {memory:m};
+        }
+        """;
+
+    internal static async Task<string> Run()
+    {
+        string mode = Environment.GetEnvironmentVariable("TB_RAIL_SKILL");
+        string folder = Path.Combine(Main.SavePath, "rail-skill");
+        Directory.CreateDirectory(folder);
+        var report = new JsonObject { ["experiment"] = "rail_skill", ["ok"] = false };
+        void Flush() => File.WriteAllText(Path.Combine(folder, "report.json"), report.ToJsonString());
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(mode == "live" ? 360 : 60));
+        var token = limit.Token;
+        await CrossingDiscovery.OnGame(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false;
+            Main.dayTime = true;
+            return true;
+        });
+        try
+        {
+            if (mode == "replay")
+            {
+                string path = Environment.GetEnvironmentVariable("TB_RAIL_POLICY_FILE");
+                string code = File.ReadAllText(path);
+                report["replay_start_x"] = StartX + 37;
+                report["policy_file"] = path;
+                report["replay"] = await RunProgram(code, false, token, StartX + 37);
+                report["ok"] = report["replay"]["ok"].GetValue<bool>();
+                report["model_calls"] = 0;
+                Flush();
+                return report.ToJsonString();
+            }
+            var calibration = await RunProgram(Calibration, true, token);
+            report["calibration"] = calibration; Flush();
+            if (calibration["ok"].GetValue<bool>() && mode == "live") await Learn(folder, report, Flush, token);
+            report["ok"] = mode == "calibrate" ? calibration["ok"].GetValue<bool>() : report["skill"] != null;
+            Flush();
+            return report.ToJsonString();
+        }
+        catch (Exception error) { report["error"] = error.Message; Flush(); throw; }
+    }
+
+    static async Task Learn(string folder, JsonObject report, Action flush, CancellationToken token)
+    {
+        const string objective = """
+            前置知识：泰拉瑞亚无法凭空放置物块，但是可以凭空放置一些东西再放，比如分线盒。
+            铁轨加速：右键铁轨，默认的轨道钩会把玩家拉上铁轨。被拉上铁轨之前按跳可以取消上车，保留钩子带来的初速度。
+            1. 在可交互范围内，向上放置分线盒后放置铁轨，进行一次铁轨加速。
+            2. 在空中连续执行5次1而0次失败。
+            3. 使用羽落药水，执行1的同时全程按住W，直到达到最高点。
+            4. 在3的基础上，向右凭空分线盒+铁轨加速。
+            5. 在4的基础上，连续5次向右凭空分线盒+铁轨加速。
+            装备：分线盒、矿车轨道、羽落药水各9999。环境：平地，上方无遮挡。
+            """;
+        const string system = """
+            Implement the requested single continuous sequence as a synchronous JavaScript function tick(s) with native game inputs. Submit it to run_policy, inspect real trace on failure, revise and retry. The tool resets to an empty flat arena each attempt. It saves the exact JS only after all stages pass. Use only the supplied tool. Up to eight real attempts.
+            s.player:{x,y,width,height,vx,vy,item_animation,item_time,release_use,selected_slot}; x,y are top-left pixels. s.tiles contains nearby existing tiles {x,y,type,solid,reachable}, in 16px tile coordinates. s.inventory contains {slot,type,stack,create_tile}; slots 0/1/2 are junction box/track/potion. s.tick is the world frame. s.memory is previously returned memory (use for phases and locked target cells). s.data has floor_y (tile row), boosts (host-counted verified cancels), featherfall, apex_reached, release_jump, track_tile, box_tile, hook (null or {x,y,touching} in pixels).
+            Return {keys:string[],use:boolean,slot:number,aim:{x,y},memory:{...}}. Keys are pressed names only, e.g. ['up','jump']. Aim x/y and click x/y are integer TILE coordinates, in the same units as s.tiles. Use places/consumes the selected native item; changing slots waits until animations end. One right click: return memory.click={x,y,tick:s.tick} only on the desired frame. Jump is native input. The engine supplies all physics; you specify placements and timing. World y grows down. The host requires each click's own newly placed adjacent box and track, fresh upward or rightward boost with the requested buff, no grounding mid-chain and W continuously from the seventh box placement to apex. It finishes after 13 verified boosts. Do not return done until success.
+            """;
+        var tools = JsonNode.Parse("""
+            [{"type":"function","function":{"name":"run_policy","description":"Execute your tick function in real Terraria and return the host's observed placements, launches, and tail trace.","parameters":{"type":"object","properties":{"code":{"type":"string"}},"required":["code"]}}}]
+            """).AsArray();
+        var attempts = new JsonArray(); var replies = new JsonArray();
+        report["model"] = "gpt-6.2-sol"; report["attempts"] = attempts; report["replies"] = replies;
+        report["objective"] = objective;
+        async Task<string> Execute(string tool, JsonObject args, CancellationToken caller)
+        {
+            if (report["skill"] != null) return """{"status":"already_verified"}""";
+            if (attempts.Count >= 8) return """{"error":"attempt_budget_exhausted"}""";
+            string code = args["code"].GetValue<string>();
+            var attempt = new JsonObject { ["code"] = code };
+            attempts.Add(attempt); flush();
+            JsonObject result;
+            try { result = await RunProgram(code, false, caller); }
+            catch (ArgumentException error) { result = new JsonObject { ["ok"] = false, ["failure"] = error.Message }; }
+            attempt["result"] = result; flush();
+            if (result["ok"].GetValue<bool>())
+            {
+                string path = Path.Combine(folder, "learned_rail_policy.js");
+                File.WriteAllText(path, code);
+                report["skill"] = path;
+                flush();
+            }
+            var feedback = result.DeepClone().AsObject();
+            if (feedback["trace"] is JsonArray trace)
+                feedback["trace"] = new JsonArray(trace.TakeLast(12).Select(entry => entry.DeepClone()).ToArray());
+            return feedback.ToJsonString();
+        }
+        string sandbox = Path.Combine(folder, "agent-workspace");
+        Directory.CreateDirectory(sandbox);
+        using var agent = new CodexAgent();
+        try
+        {
+            await agent.RunAsync(objective, "", sandbox, report["model"].ToString(), system, tools, Execute,
+                text => { replies.Add(text); flush(); }, token);
+        }
+        finally { report["token_usage"] = agent.TokenUsage; flush(); }
     }
 }

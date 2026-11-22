@@ -2228,6 +2228,11 @@ public sealed class Driver : ModSystem
                     phase = 30; Call("equip_item", EquipRequest(1, 0));
                     break;
                 case 28:
+                    if (result["experiment"]?.ToString() == "rail_skill")
+                    {
+                        Finish(result["ok"]?.GetValue<bool>() == true, "AGENT_RAIL_SKILL_COMPLETE");
+                        break;
+                    }
                     if (result["experiment"]?.ToString() == "crossing_discovery")
                     {
                         Finish(result["ok"]?.GetValue<bool>() == true, "AGENT_CROSSING_TRIAL_COMPLETE");
