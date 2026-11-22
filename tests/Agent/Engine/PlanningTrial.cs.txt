@@ -107,6 +107,7 @@ public sealed class AsciiTerrainTrial : ModSystem
     const string Legend = "Each character is one tile, left to right and top to bottom. # solid, . air, P player's feet, E opponent, G destination, A/B candidate cells. Coordinates are zero-based [column,row] relative to this window.";
     static readonly string[] Options = { "A", "B" };
     static NativeTrial active;
+    static DetourRun detour;
     internal static bool Enabled => Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII") != null;
 
     sealed record Scene(string Id, bool Cover, string Opening)
@@ -117,7 +118,11 @@ public sealed class AsciiTerrainTrial : ModSystem
             : new(option == "A" ? 8 : 20, Floor - 1);
     }
 
-    public override void PostUpdateEverything() => active?.Advance(Main.LocalPlayer);
+    public override void PostUpdateEverything()
+    {
+        active?.Advance(Main.LocalPlayer);
+        detour?.Advance(Main.LocalPlayer);
+    }
 
     static void Reset(Scene scene)
     {
@@ -283,10 +288,9 @@ public sealed class AsciiTerrainTrial : ModSystem
         return numbered;
     }
 
-    static async Task<JsonObject> Judge(string engine, Scene scene, JsonObject state, string sandbox, CancellationToken token)
+    static async Task<JsonObject> Judge(string engine, JsonObject criteria, JsonObject state, string sandbox, CancellationToken token)
     {
         const string instructions = "Choose A or B for the immediate action most likely to complete the stated goal. Choose one even if terrain is unknown.";
-        var criteria = Criteria(scene);
         var clock = Stopwatch.StartNew();
         if (engine == "Jev")
         {
@@ -316,6 +320,7 @@ public sealed class AsciiTerrainTrial : ModSystem
     internal static async Task<string> Run()
     {
         string mode = Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII");
+        if (mode is "detour-live" or "detour-calibrate") return await RunDetours(mode == "detour-live");
         if (mode is not ("calibrate" or "live" or "jev-rows")) throw new ArgumentException("Unknown ASCII trial mode: " + mode);
         string path = Path.Combine(Main.SavePath, "terrain-ascii.json");
         var results = new JsonArray(); var cases = new JsonArray();
@@ -370,7 +375,7 @@ public sealed class AsciiTerrainTrial : ModSystem
                 await Parallel.ForEachAsync(jobs, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = token }, async (job, ct) =>
                 {
                     JsonObject decision;
-                    try { decision = await Judge(job.Engine, job.Scene, job.State, sandbox, ct); }
+                    try { decision = await Judge(job.Engine, Criteria(job.Scene), job.State, sandbox, ct); }
                     catch (Exception error) when (!ct.IsCancellationRequested) { decision = new JsonObject { ["error"] = error.Message }; }
                     string picked = decision["choice"]?.ToString();
                     decision["id"] = job.Scene.Id; decision["model_family"] = job.Engine;
@@ -384,6 +389,225 @@ public sealed class AsciiTerrainTrial : ModSystem
             return report.ToJsonString();
         }
         catch (Exception error) { report["error"] = error.Message; Flush(); throw; }
+    }
+
+    const int DetourWidth = 37, DetourHeight = 22, UpperFloor = 8, LowerFloor = 19, PlayerColumn = 17, GoalColumn = 20;
+    static int Entrance(string side) => side == "A" ? 8 : 25;
+
+    static void ResetDetour(Point origin, string connected)
+    {
+        Halt.All(); MazeWand.InvalidateField(); StateSpacePlanner.PreserveTerrain = true;
+        var p = Main.LocalPlayer;
+        foreach (var npc in Main.npc) npc.active = false;
+        foreach (var projectile in Main.projectile) projectile.active = false;
+        foreach (var slot in p.inventory.Concat(p.armor).Concat(p.miscEquips)) slot.TurnToAir();
+        p.RemoveAllGrapplingHooks(); p.mount.Dismount(p);
+        p.ClearBuff(BuffID.Featherfall); p.ClearBuff(BuffID.Gravitation);
+        for (int x = -3; x < DetourWidth + 3; x++)
+        for (int y = -3; y < DetourHeight + 3; y++)
+        {
+            var tile = Main.tile[origin.X + x, origin.Y + y];
+            tile.ClearEverything(); tile.LiquidAmount = 0;
+            bool shaft = x is >= 6 and <= 10 or >= 23 and <= 27;
+            bool closedDivider = y >= UpperFloor && (x == 12 && (connected != "A" || y < 15)
+                || x == 22 && (connected != "B" || y < 15));
+            if (y == 0 || y >= LowerFloor || x == 0 || x == DetourWidth - 1 || y == UpperFloor && !shaft || closedDivider)
+            { tile.HasTile = true; tile.TileType = TileID.GrayBrick; }
+        }
+        p.position = new Vector2((origin.X + PlayerColumn) * 16 + 8 - p.width / 2f, (origin.Y + UpperFloor) * 16 - p.height);
+        p.velocity = Vector2.Zero; p.jump = 0; p.releaseJump = true;
+        p.controlLeft = p.controlRight = p.controlJump = false;
+        p.fallStart = p.fallStart2 = origin.Y + UpperFloor;
+        p.statLife = p.statLifeMax2;
+        Main.playerInventory = Main.mapFullscreen = Main.autoPause = false;
+    }
+
+    static JsonObject DetourState(Point origin, bool map)
+    {
+        var p = Main.LocalPlayer;
+        var coarse = new JsonObject { ["goal"] = "Reach G by walking and falling without changing blocks. Both entrance landings A and B can be reached from P. Choose the one with a continuous passable route onward to G.",
+            ["player_feet"] = new JsonArray(PlayerColumn, UpperFloor - 1), ["destination_feet"] = new JsonArray(GoalColumn, LowerFloor - 1),
+            ["body_pixels"] = new JsonArray(p.width, p.height), ["velocity"] = new JsonArray(0, 0),
+            ["A"] = new JsonArray(Entrance("A"), LowerFloor - 1), ["B"] = new JsonArray(Entrance("B"), LowerFloor - 1) };
+        if (!map) return coarse;
+        var rows = new JsonArray();
+        for (int y = 0; y < DetourHeight; y++)
+        {
+            var row = new StringBuilder(DetourWidth);
+            for (int x = 0; x < DetourWidth; x++)
+            {
+                var tile = Main.tile[origin.X + x, origin.Y + y];
+                char cell = tile.HasUnactuatedTile && Main.tileSolid[tile.TileType] ? '#' : '.';
+                if (x == PlayerColumn && y == UpperFloor - 1) cell = 'P';
+                if (y == LowerFloor - 1)
+                    cell = x == Entrance("A") ? 'A' : x == Entrance("B") ? 'B' : x == GoalColumn ? 'G' : cell;
+                row.Append(cell);
+            }
+            rows.Add(row.ToString());
+        }
+        coarse["legend"] = Legend; coarse["ascii_rows"] = rows;
+        return coarse;
+    }
+
+    sealed class DetourRun(Point origin, string route, bool oracle)
+    {
+        readonly TaskCompletionSource<JsonObject> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly Stopwatch clock = Stopwatch.StartNew();
+        readonly JsonArray samples = new();
+        int ticks, idleFrames, idleRun, longestIdle, settled;
+        long? firstMove, entranceMs;
+        string firstEntrance;
+        Vector2 last = Main.LocalPlayer.position;
+        bool steering = route != null;
+        public Task<JsonObject> Result => done.Task;
+
+        public void Start()
+        {
+            if (steering) BoundaryInputPlayer.Drive = Drive;
+            else RecedingNav.Start(origin.X + GoalColumn, origin.Y + LowerFloor - 1, RecedingNav.Mode.Stand);
+        }
+
+        void Drive(Player p)
+        {
+            int target = steering ? Entrance(route) : GoalColumn;
+            float dx = (origin.X + target) * 16 + 8 - p.Center.X;
+            p.controlLeft = dx < -4; p.controlRight = dx > 4;
+            p.controlJump = p.controlUseTile = p.controlUseItem = false;
+        }
+
+        public void Advance(Player p)
+        {
+            ticks++;
+            if (Vector2.DistanceSquared(last, p.position) > .04f)
+            { firstMove ??= clock.ElapsedMilliseconds; idleRun = 0; }
+            else { idleFrames++; longestIdle = Math.Max(longestIdle, ++idleRun); }
+            last = p.position;
+            float col = p.Center.X / 16 - origin.X, row = p.Bottom.Y / 16 - origin.Y;
+            if (firstEntrance == null && row > UpperFloor + 2)
+                firstEntrance = col < PlayerColumn ? "A" : "B";
+            if (ticks % 8 == 0) samples.Add(new JsonArray(ticks, col, row));
+            bool onLowerFloor = Math.Abs(row - LowerFloor) < .05f;
+            bool arrived = onLowerFloor && Math.Abs(col - (GoalColumn + .5f)) <= .49f;
+            if (p.dead) { Finish(false, "died"); return; }
+            if (arrived && !steering) { Finish(true, "goal_reached"); return; }
+            if (steering)
+            {
+                bool atEntrance = onLowerFloor && Math.Abs(col - (Entrance(route) + .5f)) <= 1.5f;
+                settled = atEntrance ? settled + 1 : 0;
+                if (settled >= 2)
+                {
+                    entranceMs = clock.ElapsedMilliseconds;
+                    steering = false;
+                    if (!oracle)
+                    {
+                        BoundaryInputPlayer.Drive = null;
+                        RecedingNav.Start(origin.X + GoalColumn, origin.Y + LowerFloor - 1, RecedingNav.Mode.Stand);
+                    }
+                }
+            }
+            else if (!oracle && !RecedingNav.Active)
+            { Finish(false, RecedingNav.LastStop ?? "navigator_inactive"); return; }
+            if (ticks >= 600 || oracle && idleRun >= 30)
+                Finish(false, oracle && entranceMs.HasValue ? "lower_passage_blocked" : "route_time_limit");
+        }
+
+        void Finish(bool reached, string reason)
+        {
+            BoundaryInputPlayer.Drive = null; RecedingNav.Stop(); detour = null;
+            done.TrySetResult(new JsonObject { ["reached"] = reached, ["reason"] = reason, ["first_entrance"] = firstEntrance,
+                ["entrance_ms"] = entranceMs, ["first_move_ms"] = firstMove, ["elapsed_ms"] = clock.ElapsedMilliseconds,
+                ["frames"] = ticks, ["idle_frames"] = idleFrames, ["longest_idle_frames"] = longestIdle, ["trace"] = samples });
+        }
+    }
+
+    static async Task<JsonObject> RunDetour(Point origin, string connected, string route, bool oracle, CancellationToken token)
+    {
+        var run = await CrossingDiscovery.OnGame(() =>
+        {
+            ResetDetour(origin, connected);
+            detour = new DetourRun(origin, route, oracle);
+            detour.Start();
+            return detour;
+        });
+        return await run.Result.WaitAsync(token);
+    }
+
+    static async Task<string> RunDetours(bool live)
+    {
+        var cases = new JsonArray();
+        var result = new JsonObject { ["experiment"] = "terrain_ascii", ["study"] = "detour", ["cases"] = cases, ["ok"] = false };
+        string path = Path.Combine(Main.SavePath, "terrain-detour.json");
+        void Flush() => File.WriteAllText(path, result.ToJsonString());
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(200));
+        var token = timeout.Token;
+        await CrossingDiscovery.OnGame(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false; Main.dayTime = true; Main.musicVolume = 0f;
+            result["audio"] = new JsonObject { ["music"] = Main.musicVolume, ["sound"] = Main.soundVolume };
+            return true;
+        });
+        try
+        {
+            var specs = JsonNode.Parse(Encoding.UTF8.GetString(ModContent.GetInstance<AsciiTerrainTrial>().Mod
+                .GetFileBytes("Experiments/terrain-ascii/detours.json"))).AsArray();
+            var criteria = new JsonObject { ["A"] = "Go through the left entrance and continue toward G.",
+                ["B"] = "Go through the right entrance and continue toward G." };
+            string sandbox = Path.Combine(Main.SavePath, "detour-model-workspace");
+            Directory.CreateDirectory(sandbox);
+            JsonObject firstCoarse = null;
+            foreach (var spec in specs)
+            {
+                string open = spec["connected_entrance"].ToString();
+                int baseX = 580 + cases.Count * 480;
+                var origin = new Point(baseX, 240);
+                var (coarse, mapped) = await CrossingDiscovery.OnGame(() =>
+                {
+                    ResetDetour(origin, open);
+                    return (DetourState(origin, false), DetourState(origin, true));
+                });
+                firstCoarse ??= coarse.DeepClone().AsObject();
+                if (!JsonNode.DeepEquals(coarse, firstCoarse)) throw new InvalidOperationException("detour baseline state changed across paired cases");
+                var item = new JsonObject { ["id"] = spec["id"].DeepClone(), ["connected_entrance"] = open,
+                    ["coarse"] = coarse.DeepClone(), ["mapped"] = mapped.DeepClone() };
+                cases.Add(item);
+                var oracle = new JsonObject(); item["native_walk_check"] = oracle;
+                foreach (string side in Options)
+                {
+                    oracle[side] = await RunDetour(origin, open, side, true, token); Flush();
+                    if (oracle[side]["entrance_ms"] == null || oracle[side]["reached"].GetValue<bool>() != (side == open))
+                        throw new InvalidOperationException("detour does not distinguish connected and dead-end entrances: " + item["id"]);
+                }
+                item["direct_navigation"] = await RunDetour(new Point(baseX + 80, 240), open, null, false, token); Flush();
+                var routes = new JsonObject(); item["assisted_routes"] = routes;
+                for (int index = 0; index < Options.Length; index++)
+                {
+                    string side = Options[index];
+                    routes[side] = await RunDetour(new Point(baseX + 160 + 80 * index, 240), open, side, false, token); Flush();
+                }
+                if (!live) continue;
+                var jobs = from engine in new[] { "Agent", "Jev" } from withMap in new[] { false, true } select (engine, withMap);
+                var replies = await Task.WhenAll(jobs.Select(async job =>
+                {
+                    var answer = await Judge(job.engine, criteria.DeepClone().AsObject(), job.withMap ? mapped : coarse, sandbox, token);
+                    string choice = answer["choice"]?.ToString();
+                    answer["engine"] = job.engine; answer["ascii"] = job.withMap;
+                    answer["correct_entrance"] = choice == open;
+                    if (choice != null && routes[choice] is JsonObject played)
+                    {
+                        answer["reached"] = played["reached"].DeepClone();
+                        answer["physical_ms"] = played["elapsed_ms"].DeepClone();
+                        answer["decision_plus_route_ms"] = answer["elapsed_ms"].GetValue<long>() + played["elapsed_ms"].GetValue<long>();
+                    }
+                    return (JsonNode)answer;
+                }));
+                item["decisions"] = new JsonArray(replies); Flush();
+            }
+            result["ok"] = cases.Count == specs.Count && (!live || cases.All(item => item["decisions"].AsArray().All(answer => answer["choice"] != null)));
+            Flush(); return result.ToJsonString();
+        }
+        catch (Exception error) { result["error"] = error.Message; Flush(); throw; }
+        finally { await CrossingDiscovery.OnGame(() => { StateSpacePlanner.PreserveTerrain = false; return true; }); }
     }
 }
 

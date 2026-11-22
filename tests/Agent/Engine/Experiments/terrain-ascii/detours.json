@@ -1,0 +1,4 @@
+[
+  {"id":"detour-left","connected_entrance":"A"},
+  {"id":"detour-right","connected_entrance":"B"}
+]
