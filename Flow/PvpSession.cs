@@ -17,6 +17,8 @@ public static partial class PvpDuel
     static long actionCounter, actionLease, actionSession;
     public static bool ExternalAction => actionLease != 0;
     static JsonObject latestScene;
+    static JsonObject loadout;
+    static long loadoutRevision, supervisedLoadoutRevision;
     static readonly PvpHistory history = new();
     static int obstructedFrames;
     public static long Session { get; private set; }
@@ -65,7 +67,74 @@ public static partial class PvpDuel
     {
         Session++; sessionTarget = target;
         events.Clear(); recentEvents.Clear(); eventSequence = 0; latestScene = null; history.Reset(); obstructedFrames = 0;
+        loadout = ReadLoadout(Main.LocalPlayer); loadoutRevision = 1; supervisedLoadoutRevision = 0;
         Event("started", "running");
+    }
+
+    static JsonObject ReadLoadout(Player self)
+    {
+        JsonObject ItemFacts(Item item, string kind, int slot) => new()
+        {
+            ["type"] = item.type, ["name"] = item.Name, ["prefix"] = item.prefix, ["kind"] = kind, ["slot"] = slot
+        };
+        var equipment = new JsonArray();
+        for (int slot = 0; slot < 10; slot++)
+            if (!self.armor[slot].IsAir && self.IsItemSlotUnlockedAndUsable(slot))
+                equipment.Add(ItemFacts(self.armor[slot], slot < 3 ? "armor" : "accessory", slot));
+        if (!self.miscEquips[3].IsAir) equipment.Add(ItemFacts(self.miscEquips[3], "mount", 3));
+        if (!self.miscEquips[4].IsAir) equipment.Add(ItemFacts(self.miscEquips[4], "hook", 4));
+
+        var weapons = new JsonArray();
+        for (int slot = 0; slot < 10; slot++)
+        {
+            Item item = self.inventory[slot];
+            if (!IsCombatWeapon(item)) continue;
+            var fact = ItemFacts(item, "hotbar", slot);
+            var shot = item.shoot > 0 || item.useAmmo > 0 ? ReadShot(self, item) : null;
+            fact["contact_attack"] = !item.noMelee;
+            fact["projectile_type"] = shot?.Projectile;
+            fact["through_tiles"] = shot?.ThroughTiles;
+            if (item.useAmmo > 0)
+            {
+                fact["compatible_ammo"] = shot.HasValue;
+                fact["selected_ammo_type"] = shot?.Ammo;
+            }
+            weapons.Add(fact);
+        }
+        return new JsonObject { ["equipment"] = equipment, ["hotbar_weapons"] = weapons };
+    }
+
+    static void RefreshLoadout(Player self)
+    {
+        var current = ReadLoadout(self);
+        if (JsonNode.DeepEquals(loadout, current)) return;
+        loadout = current;
+        loadoutRevision++;
+        Directive.InvalidateLoadoutAdvice();
+        Event("loadout_changed", "revision=" + loadoutRevision);
+    }
+
+    internal static bool TakeLoadoutReview()
+    {
+        if (!Active || waitingForRespawn || ExternalAction || Main.LocalPlayer.dead || Main.player[Target].dead) return false;
+        RefreshLoadout(Main.LocalPlayer);
+        if (Directive.HasLoadoutAdvice || supervisedLoadoutRevision == loadoutRevision) return false;
+        supervisedLoadoutRevision = loadoutRevision;
+        return true;
+    }
+
+    static JsonObject LoadoutReport()
+    {
+        var weapons = (JsonArray)loadout["hotbar_weapons"].DeepClone();
+        foreach (var weapon in weapons)
+            weapon["allowed"] = Directive.AllowsWeapon(weapon["type"].GetValue<int>());
+        return new JsonObject
+        {
+            ["revision"] = loadoutRevision,
+            ["advice_ready"] = Directive.HasLoadoutAdvice,
+            ["equipment"] = loadout["equipment"].DeepClone(),
+            ["hotbar_weapons"] = weapons
+        };
     }
 
     static void Event(string kind, string detail)
@@ -139,6 +208,7 @@ public static partial class PvpDuel
     {
         ["session"] = Session, ["tick"] = Main.GameUpdateCount, ["active"] = Active, ["outcome"] = Outcome,
         ["directive"] = Directive?.ToJson(), ["remaining_active_frames"] = UntilStopped ? (int?)null : frames,
+        ["loadout"] = Active ? LoadoutReport() : null,
         ["until_stopped"] = UntilStopped, ["jev_decisions"] = Decisions,
         ["self"] = Body(Main.LocalPlayer),
         ["perception"] = Active ? Perception(Main.LocalPlayer, Main.player[sessionTarget], detailed) : null,
@@ -159,6 +229,7 @@ public static partial class PvpDuel
     public static JsonObject UpdateDirective(JsonObject patch, bool fromPlayer = false)
     {
         if (!Active || patch["session"]?.GetValue<long>() != Session) return new JsonObject { ["error"] = "session_mismatch" };
+        RefreshLoadout(Main.LocalPlayer);
         var result = Directive.Update(patch, fromPlayer);
         if (result["error"] != null) return result;
         lifetime.Cancel(); lifetime.Dispose(); lifetime = new CancellationTokenSource();
@@ -166,6 +237,9 @@ public static partial class PvpDuel
         pending = null;
         if (!Directive.AllowsWeapon(Main.LocalPlayer.HeldItem.type)) Main.LocalPlayer.controlUseItem = false;
         Event("directive_updated", "revision=" + Directive.Revision);
+        if (patch["instructions"] is JsonObject changes && changes.ContainsKey("loadout") && Directive.HasLoadoutAdvice)
+            DiagLog.Write($"[pvp-loadout] session={Session} loadout_revision={loadoutRevision} directive_revision={Directive.Revision} " +
+                result["directive"]["instructions"]["loadout"].ToJsonString());
         result["session"] = Session;
         return result;
     }

@@ -6,11 +6,18 @@ namespace TerraBlind;
 
 public sealed class PvpDirective
 {
-    static readonly string[] Sections = { "general", "movement", "weapon", "aim", "terrain", "inventory" };
+    static readonly string[] Sections = { "general", "movement", "weapon", "aim", "terrain", "inventory", "loadout" };
     JsonObject player = new(), agent = new(), instructions = new();
     public long Revision { get; private set; }
     public string Goal { get; }
     public PvpDirective(string goal) => Goal = goal ?? "";
+    internal bool HasLoadoutAdvice => !string.IsNullOrWhiteSpace(instructions["loadout"]?.GetValue<string>());
+
+    internal void InvalidateLoadoutAdvice()
+    {
+        instructions.Remove("loadout");
+        Revision++;
+    }
 
     static bool Allows(JsonObject rules, int type)
         => (rules["allowed_types"] is not JsonArray allowed || allowed.Any(value => value.GetValue<int>() == type))
@@ -40,7 +47,7 @@ public sealed class PvpDirective
                 {
                     if (!Sections.Contains(change.Key)) throw new ArgumentException("unknown_instruction_section");
                     string value = change.Value?.GetValue<string>();
-                    if (value?.Length > 2000) throw new ArgumentException("instruction_too_long");
+                    if (value?.Length > (change.Key == "loadout" ? 700 : 2000)) throw new ArgumentException("instruction_too_long");
                     text[change.Key] = value;
                 }
             if (text.Sum(entry => entry.Value?.GetValue<string>()?.Length ?? 0) > 6000)

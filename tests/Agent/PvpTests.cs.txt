@@ -268,6 +268,7 @@ static class PvpTests
         Console.WriteLine("PASS: production duel revalidates displacement, dispatches without a 24-frame delay, retains valid movement, switches weapons and cancels stale instructions; movement adapter stubbed");
         Console.WriteLine("PASS: external action leases preserve tool input and activity budget, resume once and reject old-session cleanup");
         CheckCoverFight();
+        await CheckLoadoutAdvice();
     }
 
     static bool JevariaCombatExtraJump() => TerraBlind.JevariaCombat.GameMovement.ExtraJumpObserved;
@@ -277,14 +278,103 @@ static class PvpTests
         public JsonObject Request;
         public string Choice = "retreat";
         public string Mode = "ranged";
+        public Func<JsonObject, string> ModeForState;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             Check(request.Headers.Authorization?.Parameter == "fake-key", "Jev authentication missing");
             Request = JsonNode.Parse(await request.Content.ReadAsStringAsync(token)).AsObject();
+            string mode = ModeForState?.Invoke(Request["state"].AsObject()) ?? Mode;
             string selected = Request["state"]["plans"].AsObject().FirstOrDefault(pair => pair.Value["move"].ToString() == Choice
-                && pair.Value["weapon"].ToString() == Mode).Key ?? "invalid";
+                && pair.Value["weapon"].ToString() == mode).Key ?? "invalid";
             return new HttpResponseMessage(HttpStatusCode.OK)
             { Content = new StringContent(new JsonObject { ["answers"] = new JsonObject { ["plan"] = new JsonObject { ["choice"] = selected } } }.ToJsonString()) };
+        }
+    }
+
+    static async Task CheckLoadoutAdvice()
+    {
+        const string tactic = "Use the Death Sickle from cover. Save bow ammo for targets beyond sickle reach.";
+        var self = Game.LocalPlayer;
+        var target = Game.player[1];
+        var armor = self.armor[3];
+        var hook = self.miscEquips[4];
+        Game.netMode = Terraria.ID.NetmodeID.MultiplayerClient;
+        Config.I.AiClient = true;
+        self.active = target.active = self.hostile = target.hostile = true;
+        self.dead = target.dead = false;
+        self.position = new(200, 300);
+        target.position = new(380, 300);
+        self.velocity = target.velocity = Microsoft.Xna.Framework.Vector2.Zero;
+        self.HasAmmunition = true;
+        self.itemAnimation = self.itemTime = 0;
+        foreach (var item in self.inventory) item.stack = 0;
+        self.inventory[0] = new Terraria.Item { type = 99, stack = 50, Name = "Bow", damage = 24,
+            useStyle = 1, useAmmo = Terraria.ID.AmmoID.Arrow, noMelee = true, shoot = 1, shootSpeed = 10 };
+        self.inventory[1] = new Terraria.Item { type = Terraria.ID.ItemID.DeathSickle, stack = 1, Name = "Death Sickle",
+            damage = 30, useStyle = 1, shoot = Terraria.ID.ProjectileID.DeathSickle, shootSpeed = 10 };
+        self.armor[3] = new Terraria.Item { type = 987, stack = 1, Name = "Fixture accessory" };
+        self.miscEquips[4] = new Terraria.Item { type = 988, stack = 1, Name = "Fixture hook" };
+        Terraria.ID.ContentSamples.ProjectilesByType[Terraria.ID.ProjectileID.DeathSickle] = new()
+            { tileCollide = false, aiStyle = 18, width = 42, height = 42 };
+        using var handler = new DecisionHandler { Choice = "m1", ModeForState = state =>
+        {
+            if (state["directive"]["instructions"]["loadout"]?.GetValue<string>() != tactic) return "ranged";
+            return state["weapon_modes"].AsObject().First(pair => pair.Key.StartsWith("ranged")
+                && pair.Value["type"].GetValue<int>() == Terraria.ID.ItemID.DeathSickle).Key;
+        } };
+        using var http = new HttpClient(handler);
+        var pump = new NativeAgent();
+        async Task<JsonObject> Publish(JsonObject patch)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            Task<string> response = AgentTools.Execute("combat_update", patch, timeout.Token);
+            while (!response.IsCompleted) { pump.PostUpdateEverything(); await Task.Delay(1); }
+            return JsonNode.Parse(await response).AsObject();
+        }
+        void Tick() { Game.GameUpdateCount++; PvpDuel.Tick(self); }
+        try
+        {
+            Check(PvpDuel.Start(1, 30, 0, 120, "keep distance", out _,
+                (scene, token) => PvpTactics.Choose(http, "fake-key", scene, token)), "loadout duel failed to start");
+            var report = PvpDuel.Report();
+            long session = report["session"].GetValue<long>();
+            long revision = report["directive"]["revision"].GetValue<long>();
+            Check(report["loadout"]["equipment"].AsArray().Count >= 2
+                && report["loadout"]["hotbar_weapons"][0]["compatible_ammo"].GetValue<bool>()
+                && report["loadout"]["hotbar_weapons"][1]["through_tiles"].GetValue<bool>(),
+                "Agent's report lost the current equipment, ammunition or through-wall weapon");
+            Check(PvpDuel.TakeLoadoutReview() && !PvpDuel.TakeLoadoutReview(), "opening equipment review did not wake once");
+            Tick(); Tick();
+            Check(self.controlRight && self.controlUseItem && self.selectedItem == 0, "PvP did not run before Agent advice");
+            JsonObject advice = new() { ["session"] = session, ["expected_revision"] = revision,
+                ["instructions"] = new JsonObject { ["loadout"] = tactic, ["general"] = "Keep distance." } };
+            Check((await Publish(advice))["ok"].GetValue<bool>(), "combat_update did not accept equipment tactics");
+            Check(self.controlRight && self.controlUseItem, "publishing advice stopped the running combat inputs");
+            Tick(); Tick();
+            Check(handler.Request["state"]["directive"]["instructions"]["loadout"].GetValue<string>() == tactic
+                && self.selectedItem == 1 && self.controlUseItem, "Agent advice did not reach Jev and change the selected weapon");
+            self.inventory[0].stack--;
+            Check(!PvpDuel.TakeLoadoutReview() && PvpDuel.Directive.HasLoadoutAdvice, "ordinary stack consumption woke the Agent");
+            revision = PvpDuel.Directive.Revision;
+            self.HasAmmunition = false;
+            Check(PvpDuel.TakeLoadoutReview() && !PvpDuel.TakeLoadoutReview(), "ammo loss did not wake exactly once");
+            report = PvpDuel.Report();
+            Check(!report["loadout"]["advice_ready"].GetValue<bool>()
+                && report["directive"]["instructions"]["general"].GetValue<string>() == "Keep distance.",
+                "loadout refresh cleared other instructions or retained old equipment advice");
+            advice["expected_revision"] = revision;
+            Check((await Publish(advice))["error"]?.ToString() == "revision_conflict", "late advice was accepted for the wrong loadout");
+            Console.WriteLine("PASS: Agent equipment advice reaches the single live Jev request path, changes weapon selection and expires on ammo loss");
+        }
+        finally
+        {
+            PvpDuel.Stop();
+            Game.netMode = Terraria.ID.NetmodeID.SinglePlayer;
+            Config.I.AiClient = false;
+            self.HasAmmunition = true;
+            self.armor[3] = armor;
+            self.miscEquips[4] = hook;
+            Terraria.ID.ContentSamples.ProjectilesByType.Remove(Terraria.ID.ProjectileID.DeathSickle);
         }
     }
 

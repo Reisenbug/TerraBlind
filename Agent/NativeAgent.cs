@@ -1032,9 +1032,13 @@ public class NativeAgent : ModSystem
                             if (!PvpDuel.Active) return new JsonObject { ["ended"] = true };
                             Status = "waiting for combat instructions";
                             bool requested = CombatMessagesPending;
-                            if (!requested && (!PvpDuel.RecoveryRequired || recoverySession == PvpDuel.Session)) return null;
-                            if (!requested) recoverySession = PvpDuel.Session;
+                            bool loadoutReview = PvpDuel.TakeLoadoutReview();
+                            bool recovery = PvpDuel.RecoveryRequired && recoverySession != PvpDuel.Session;
+                            if (!requested && !recovery && !loadoutReview) return null;
+                            if (recovery) recoverySession = PvpDuel.Session;
                             var current = PvpDuel.Report();
+                            current["review_loadout"] = loadoutReview;
+                            current["review_recovery"] = recovery;
                             current["player_messages"] = TakeCombatMessages();
                             return current;
                         }, token);
@@ -1042,7 +1046,9 @@ public class NativeAgent : ModSystem
                         await Task.Delay(250, token);
                     }
                     if (report["ended"] != null) break;
-                    input = "PvP新要求或本会话一次受阻求助：处理后结束本轮，Jev继续控制。\n战况：" + report.ToJsonString();
+                    input = "PvP战术复核。先处理玩家新要求；review_loadout为true时，"
+                        + "根据loadout及当前地形，通过combat_update的instructions.loadout给Jev补2–4条短的条件式打法。"
+                        + "review_recovery为true时处理当前受阻。Jev继续控制，完成更新后结束本轮。\n战况：" + report.ToJsonString();
                 }
                 JsonObject final = null;
                 if (goalOptions != null)

@@ -50,6 +50,8 @@ public static partial class PvpDuel
     public static string Outcome { get; private set; } = "idle";
     public static int Decisions { get; private set; }
     static V N(Vector2 value) => new(value.X, value.Y);
+    static bool IsCombatWeapon(Item item) => !item.IsAir && item.damage > 0 && item.useStyle > 0
+        && item.ammo <= 0 && item.pick <= 0 && item.axe <= 0 && item.hammer <= 0;
 
     static Dictionary<string, int> Weapons(Player self)
     {
@@ -59,8 +61,7 @@ public static partial class PvpDuel
             int slot = (preferredSlot + index) % 10;
             var item = self.inventory[slot];
             if (Directive != null && !Directive.AllowsWeapon(item.type)) continue;
-            if (item.IsAir || item.damage <= 0 || item.useStyle <= 0 || item.ammo > 0
-                || item.pick > 0 || item.axe > 0 || item.hammer > 0
+            if (!IsCombatWeapon(item)
                 || item.useAmmo > 0 && !self.HasAmmo(item) || item.mana * self.manaCost > self.statMana) continue;
             void Add(string category)
             {
@@ -138,13 +139,14 @@ public static partial class PvpDuel
     static float MeleeReach(Player self, Player target, Item item)
         => Math.Max(32, Math.Max(item.width, item.height) * item.scale + self.width / 2f) + target.width / 2f;
 
-    readonly record struct ShotWeapon(int Projectile, PvpTactics.ShotFlight Flight, int Width, int Height, bool ThroughTiles);
+    readonly record struct ShotWeapon(int Projectile, PvpTactics.ShotFlight Flight, int Width, int Height, bool ThroughTiles, int Ammo);
 
     static ShotWeapon? ReadShot(Player self, Item item)
     {
         float shotSpeed = item.shootSpeed;
         int shotType = item.shoot;
-        if (item.useAmmo > 0 && !self.PickAmmo(item, out shotType, out shotSpeed, out _, out _, out _, true)) return null;
+        int ammo = 0;
+        if (item.useAmmo > 0 && !self.PickAmmo(item, out shotType, out shotSpeed, out _, out _, out ammo, true)) return null;
         if (shotType == ProjectileID.WoodenArrowFriendly && item.type == ItemID.MoltenFury)
             shotType = ProjectileID.FireArrow;
         if (shotType == ProjectileID.Bullet && item.type is ItemID.Uzi or ItemID.SniperRifle or ItemID.VenusMagnum)
@@ -169,7 +171,7 @@ public static partial class PvpDuel
         };
         bool through = !item.channel && defaults is { tileCollide: false, ownerHitCheck: false }
             && (shotType == ProjectileID.DeathSickle || defaults.aiStyle is 0 or 1);
-        return new(shotType, flight, defaults?.width ?? 4, defaults?.height ?? 4, through);
+        return new(shotType, flight, defaults?.width ?? 4, defaults?.height ?? 4, through, ammo);
     }
 
     static PvpTactics.ShotSolution? SolveShot(Player self, Player target, ShotWeapon shot, string kind)
@@ -390,6 +392,7 @@ public static partial class PvpDuel
         {
             Event("no_usable_weapon", "Check restrictions, ammunition and mana.");
         }
+        if (pending == null || pending.IsCompleted) RefreshLoadout(self);
         if (pending?.IsCompleted == true)
         {
             try
