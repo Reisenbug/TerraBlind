@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -6,7 +7,9 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Xna.Framework;
 using Terraria;
+using Terraria.ID;
 using Terraria.ModLoader;
 using TerraBlind;
 
@@ -19,6 +22,7 @@ static class PlanningTrial
 
     public static async Task<string> Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_CROSSING_DISCOVERY") == "1") return await CrossingDiscovery.Run();
         if (!ModLoader.TryGetMod("TerraBlind", out var mod)) throw new InvalidOperationException("production_mod_missing");
         var schemas = JsonNode.Parse(Encoding.UTF8.GetString(mod.GetFileBytes("Agent/Tools.json"))).AsArray();
         var entries = new JsonArray(schemas.Where(t => ReadTools.Contains(t["function"]["name"].ToString())
@@ -88,5 +92,335 @@ static class PlanningTrial
         File.WriteAllText(Path.Combine(Main.SavePath, "agent-planning-result.json"), report.ToJsonString());
         report["ok"] = failure == null && parseError == null && blocked == 0 && queries > 0 && queries <= 12;
         return report.ToJsonString();
+    }
+}
+
+public sealed class CrossingDiscovery : ModSystem
+{
+    readonly record struct Layout(int X, int Y, int Direction, int Gap, int Delay);
+    sealed record Step(string[] Keys, int Frames, string UntilSignal);
+    static readonly Layout Practice = new(230, 210, 1, 13, 7);
+    static readonly Layout Transfer = new(320, 252, -1, 15, 25);
+    static readonly ConcurrentQueue<Action> Queue = new();
+    static CrossingTrial active;
+
+    public override void PreUpdatePlayers()
+    {
+        while (Queue.TryDequeue(out var action)) action();
+    }
+
+    public override void PostUpdatePlayers() => active?.Sample(Main.LocalPlayer);
+
+    static Task<T> OnGame<T>(Func<T> action)
+    {
+        var result = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Queue.Enqueue(() =>
+        {
+            try { result.SetResult(action()); }
+            catch (Exception error) { result.SetException(error); }
+        });
+        return result.Task;
+    }
+
+    static JsonObject Describe(Layout layout)
+    {
+        var p = Main.LocalPlayer;
+        return new JsonObject { ["x"] = p.Center.X, ["bottom"] = p.Bottom.Y, ["vx"] = p.velocity.X,
+            ["device_x"] = layout.X * 16 + 8, ["signal"] = active?.Signal ?? "dark",
+            ["landing_x"] = (layout.X + layout.Direction * (layout.Gap + 1)) * 16 + 8,
+            ["landing_y"] = layout.Y * 16 };
+    }
+
+    static void Reset(Layout layout)
+    {
+        var p = Main.LocalPlayer;
+        for (int dx = -14; dx <= 48; dx++)
+        for (int dy = -14; dy <= 14; dy++)
+        {
+            var tile = Main.tile[layout.X + dx * layout.Direction, layout.Y + dy];
+            tile.ClearEverything();
+            if (dy >= 10 || dy >= 0 && (dx <= 0 || dx >= layout.Gap))
+            {
+                tile.HasTile = true;
+                tile.TileType = TileID.GrayBrick;
+            }
+        }
+        foreach (var npc in Main.npc) npc.active = false;
+        foreach (var shot in Main.projectile) shot.active = false;
+        foreach (var item in p.armor) item.TurnToAir();
+        foreach (var item in p.inventory) item.TurnToAir();
+        foreach (var item in p.miscEquips) item.TurnToAir();
+        p.ClearBuff(BuffID.Featherfall);
+        p.ClearBuff(BuffID.Gravitation);
+        p.position = new Vector2(layout.X * 16 + 8 - p.width * .5f, layout.Y * 16 - p.height);
+        p.velocity = Vector2.Zero;
+        p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+        p.jump = 0; p.releaseJump = true; p.controlJump = false;
+    }
+
+    sealed class CrossingTrial(Layout layout, Step[] steps, string id)
+    {
+        readonly TaskCompletionSource<JsonObject> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly JsonArray changes = new(), samples = new();
+        int frames, stage, stageFrames, interactionFrame = -1, impulseFrame = -1;
+        bool lastJump, lastInteract;
+        string previousSignal = "dark";
+        public Task<JsonObject> Result => done.Task;
+        public string Signal
+        {
+            get
+            {
+                if (impulseFrame >= 0) return "spent";
+                int age = frames - interactionFrame;
+                return interactionFrame < 0 || age >= layout.Delay + 5 ? "dark" : age >= layout.Delay ? "white" : "amber";
+            }
+        }
+
+        public void Drive(Player p)
+        {
+            while (stage < steps.Length && (stageFrames >= steps[stage].Frames
+                    || steps[stage].UntilSignal != null && steps[stage].UntilSignal == Signal))
+            { stage++; stageFrames = 0; }
+            string[] keys = stage < steps.Length ? steps[stage].Keys : Array.Empty<string>();
+            p.controlLeft = keys.Contains("left");
+            p.controlRight = keys.Contains("right");
+            p.controlJump = keys.Contains("jump");
+            p.controlUseTile = keys.Contains("interact");
+            p.controlUseItem = p.controlHook = p.controlUp = p.controlDown = false;
+            stageFrames++;
+        }
+
+        public void ObserveInput(Player p)
+        {
+            bool inReach = Math.Abs(p.Center.X - (layout.X * 16 + 8)) <= 26 && Math.Abs(p.Bottom.Y - layout.Y * 16) <= 44;
+            if (p.controlUseTile && !lastInteract && inReach && Signal == "dark")
+                interactionFrame = frames;
+            if (p.controlJump && !lastJump && inReach && Signal == "white" && p.controlLeft != p.controlRight)
+            {
+                impulseFrame = frames;
+                p.velocity = new Vector2(p.controlLeft ? -13 : 13, -10);
+                p.jump = 0;
+            }
+            if (Signal != previousSignal)
+            {
+                changes.Add(new JsonObject { ["frame"] = frames, ["signal"] = Signal });
+                previousSignal = Signal;
+            }
+            lastInteract = p.controlUseTile; lastJump = p.controlJump;
+        }
+
+        public void Sample(Player p)
+        {
+            if (frames % 4 == 0)
+                samples.Add(new JsonObject { ["frame"] = frames, ["x"] = p.Center.X, ["bottom"] = p.Bottom.Y,
+                    ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y });
+            frames++;
+            bool reached = (p.Center.X - (layout.X * 16 + 8)) * layout.Direction >= (layout.Gap + 1) * 16
+                && Math.Abs(p.Bottom.Y - layout.Y * 16) <= 2 && p.velocity.Y == 0;
+            if (!reached && frames < 150 && !p.dead) return;
+            active = null; BoundaryInputPlayer.Drive = BoundaryInputPlayer.ObserveInput = null;
+            p.controlLeft = p.controlRight = p.controlJump = p.controlUseTile = false;
+            done.SetResult(new JsonObject { ["id"] = id, ["reached"] = reached, ["frames"] = frames,
+                ["impulse_frame"] = impulseFrame < 0 ? null : JsonValue.Create(impulseFrame),
+                ["signal_changes"] = changes, ["samples"] = samples, ["end"] = Describe(layout) });
+        }
+    }
+
+    static readonly string[] ControlKeys = { "left", "right", "jump", "interact" };
+
+    static Step[] ParseSteps(JsonObject args)
+    {
+        var steps = args["steps"].AsArray();
+        if (steps.Count is < 1 or > 10) throw new ArgumentException("steps must contain 1–10 entries");
+        return steps.Select(step =>
+        {
+            int frames = step["frames"].GetValue<int>();
+            string signal = step["until_signal"]?.GetValue<string>();
+            var keys = step["keys"].AsArray().Select(key => key.GetValue<string>()).ToArray();
+            if (frames is < 1 or > 150 || keys.Any(key => !ControlKeys.Contains(key))
+                || signal is not (null or "dark" or "amber" or "white" or "spent"))
+                throw new ArgumentException("invalid trial frames, keys or signal selector");
+            return new Step(keys, frames, signal);
+        }).ToArray();
+    }
+
+    static async Task<JsonObject> Attempt(Layout layout, Step[] steps, string id, CancellationToken token)
+    {
+        var trial = await OnGame(() =>
+        {
+            if (active != null) throw new InvalidOperationException("another sequence is active");
+            Reset(layout);
+            var next = new CrossingTrial(layout, steps, id);
+            BoundaryInputPlayer.Drive = next.Drive;
+            BoundaryInputPlayer.ObserveInput = next.ObserveInput;
+            active = next;
+            return next;
+        });
+        return await trial.Result.WaitAsync(token);
+    }
+
+    static async Task Learn(string directory, JsonObject report, Action flush, CancellationToken token)
+    {
+        const string prompt = "Reach the far landing and save a reusable way to do it. A normal running jump has already failed.";
+        const string system = """
+            Use the supplied game tools. The device exposes a colored indicator and accepts nearby interactions.
+            Each trial starts the isolated avatar at the same position and advances the actual game.
+            Valid keys are left, right, jump, interact. An empty key list releases all keys.
+            A step runs for its frames limit or ends early when its optional until_signal is observed.
+            Read trial outcomes and test meaningful alternatives. Budget: 12 trials.
+            Save a reusable JavaScript function body with save_crossing after a verified success.
+            input is {mode,scene}. In mode='probe', return {applicable:boolean} with no actions.
+            In mode='execute', use scene to choose the direction, call tool('trial',{steps:[...]}) exactly once,
+            and return that result. The scene has x, bottom, device_x, landing_x, landing_y and signal.
+            Another layout will use the saved source without your help. Base it on observable state.
+            Use only the provided game tools and observations. Report the experimental evidence you used.
+            """;
+        var tools = JsonNode.Parse("""
+            [
+              {"type":"function","function":{"name":"observe","description":"Read the current practice scene and available input keys.","parameters":{"type":"object","properties":{}}}},
+              {"type":"function","function":{"name":"trial","description":"Reset to the starting position, apply an input sequence and report actual motion, indicator transitions and landing.","parameters":{"type":"object","properties":{"steps":{"type":"array","items":{"type":"object","properties":{"keys":{"type":"array","items":{"type":"string"}},"frames":{"type":"integer"},"until_signal":{"type":"string"}},"required":["keys","frames"]}}},"required":["steps"]}}},
+              {"type":"function","function":{"name":"save_crossing","description":"Save reusable JavaScript referencing successful trials.","parameters":{"type":"object","properties":{"code":{"type":"string"},"evidence":{"type":"array","items":{"type":"string"}}},"required":["code","evidence"]}}}
+            ]
+            """).AsArray();
+        var library = new ScriptLibrary(Path.Combine(directory, "programs"));
+        const string name = "learned_crossing";
+        var trials = report["trials"].AsArray();
+        var replies = new JsonArray();
+        report["prompt"] = prompt; report["replies"] = replies;
+        await OnGame(() => { Reset(Practice); return true; });
+        async Task<string> Execute(string tool, JsonObject args, CancellationToken caller)
+        {
+            switch (tool)
+            {
+                case "observe":
+                    return (await OnGame(() => Describe(Practice))).ToJsonString();
+                case "trial":
+                    if (trials.Count >= 12) return """{"error":"trial_budget_exhausted"}""";
+                    var trial = await Attempt(Practice, ParseSteps(args), $"trial-{trials.Count + 1}", caller);
+                    trial["steps"] = args["steps"].DeepClone();
+                    trials.Add(trial); flush();
+                    return trial.ToJsonString();
+                case "save_crossing":
+                    var evidence = args["evidence"].AsArray();
+                    if (evidence.Count == 0 || !evidence.All(id => trials.Any(t => t["id"].ToString() == id.ToString()))
+                        || !trials.Any(t => t["reached"].GetValue<bool>() && evidence.Any(id => id.ToString() == t["id"].ToString())))
+                        return """{"error":"cite_a_successful_practice_trial"}""";
+                    var saved = library.Save(name, args["code"].GetValue<string>(), library.Get(name)["revision"].GetValue<int>());
+                    if (saved["error"] == null)
+                    {
+                        report["skill"] = saved.DeepClone();
+                        report["skill_evidence"] = evidence.DeepClone();
+                        flush();
+                    }
+                    return saved.ToJsonString();
+                default:
+                    return """{"error":"unknown_tool"}""";
+            }
+        }
+        const string model = "gpt-6.1-sol";
+        using var agent = new CodexAgent();
+        string sandbox = Path.Combine(directory, "agent-workspace");
+        Directory.CreateDirectory(sandbox);
+        report["model"] = model;
+        try
+        {
+            await agent.RunAsync(prompt, "", sandbox, model, system, tools, Execute,
+                text => { replies.Add(text); flush(); }, token);
+        }
+        finally { report["token_usage"] = agent.TokenUsage; flush(); }
+
+        var savedSkill = library.Get(name);
+        if (savedSkill["found"]?.GetValue<bool>() != true || trials.Count < 2)
+            throw new InvalidOperationException("discovery requires a saved program and multiple actual trials");
+        int revision = savedSkill["revision"].GetValue<int>();
+        string source = savedSkill["code"].ToString();
+        report["source_sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(source)));
+        report["transfer_model_calls"] = 0;
+        async Task Replay(Layout layout, string phase)
+        {
+            var scene = await OnGame(() => { Reset(layout); return Describe(layout); });
+            JsonObject observed = null;
+            async Task<string> RunTool(string tool, JsonObject args, CancellationToken caller)
+            {
+                if (tool != "trial" || observed != null) throw new InvalidOperationException("only one physical replay is permitted");
+                observed = await Attempt(layout, ParseSteps(args), phase, caller);
+                observed["steps"] = args["steps"].DeepClone();
+                report[phase] = observed;
+                flush();
+                return observed.ToJsonString();
+            }
+            string Invoke(string mode) => $"return skill('{name}',{revision},"
+                + new JsonObject { ["mode"] = mode, ["scene"] = scene.DeepClone() }.ToJsonString() + ");";
+            var applicability = await AgentScript.Run(Invoke("probe"), 10,
+                (_, _) => throw new InvalidOperationException("applicability must be read-only"), RunTool,
+                _ => Task.CompletedTask, token, programs: library.Callable());
+            if (applicability["value"]?["applicable"]?.GetValue<bool>() != true || observed != null)
+                throw new InvalidOperationException("saved skill did not self-identify as applicable: " + applicability);
+            var execution = await AgentScript.Run(Invoke("execute"), 10, (tool, _) =>
+                { if (tool != "trial") throw new InvalidOperationException("only trial is permitted"); }, RunTool,
+                _ => Task.CompletedTask, token, programs: library.Callable(),
+                onResult: result => library.RecordCalls(result["skill_calls"].AsArray(), phase));
+            report[phase + "_script"] = execution;
+            flush();
+            if (observed?["reached"]?.GetValue<bool>() != true
+                || !execution["skill_calls"].AsArray().Any(call => call["name"].ToString() == name
+                    && call["revision"].GetValue<int>() == revision))
+                throw new InvalidOperationException("saved skill did not reach the landing on " + phase + ": " + execution);
+        }
+        await Replay(Practice, "practice_replay");
+        var transferBaseline = await Attempt(Transfer, new[] { new Step(new[] { "left", "jump" }, 120, null) }, "transfer-walk-jump", token);
+        report["transfer_baseline"] = transferBaseline; flush();
+        if (transferBaseline["reached"].GetValue<bool>()) throw new InvalidOperationException("transfer gap accepts ordinary jump");
+        await Replay(Transfer, "transfer");
+    }
+
+    internal static async Task<string> Run()
+    {
+        string directory = Path.Combine(Main.SavePath, "crossing-discovery");
+        Directory.CreateDirectory(directory);
+        var report = new JsonObject { ["ok"] = false, ["experiment"] = "crossing_discovery", ["trials"] = new JsonArray() };
+        string path = Path.Combine(directory, "report.json");
+        void Flush() => File.WriteAllText(path, report.ToJsonString());
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(160));
+        CancellationToken token = limit.Token;
+        await OnGame(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false;
+            Main.dayTime = true;
+            return true;
+        });
+        try
+        {
+            var baseline = await Attempt(Practice, new[] { new Step(new[] { "right", "jump" }, 120, null) }, "walk-jump", token);
+            report["baseline"] = baseline; Flush();
+            if (baseline["reached"].GetValue<bool>()) throw new InvalidOperationException("practice gap accepts ordinary jump");
+            if (Environment.GetEnvironmentVariable("TB_CROSSING_CALIBRATE") == "1")
+            {
+                foreach (var layout in new[] { Practice, Transfer })
+                {
+                    string side = layout.Direction > 0 ? "right" : "left";
+                    var check = await Attempt(layout, new[] { new Step(new[] { "interact" }, 1, null),
+                        new Step(Array.Empty<string>(), 60, "white"), new Step(new[] { side, "jump" }, 1, null),
+                        new Step(new[] { side }, 100, null) }, "calibration-" + side, token);
+                    report["trials"].AsArray().Add(check); Flush();
+                    if (!check["reached"].GetValue<bool>()) throw new InvalidOperationException("calibration did not cross " + side);
+                }
+                report["ok"] = true; Flush();
+                Console.WriteLine("CROSSING_CALIBRATION_PASS native_frames=true model_calls=0 " + path);
+                return report.ToJsonString();
+            }
+            if (Environment.GetEnvironmentVariable("TB_CROSSING_MODEL") != "1")
+                throw new InvalidOperationException("Set TB_CROSSING_MODEL=1 to run the bounded live discovery turn.");
+            await Learn(directory, report, Flush, token);
+            report["ok"] = true; Flush();
+            Console.WriteLine("CROSSING_DISCOVERY_PASS " + path);
+            return report.ToJsonString();
+        }
+        catch (Exception error)
+        {
+            report["error"] = error.ToString(); Flush();
+            throw;
+        }
     }
 }
