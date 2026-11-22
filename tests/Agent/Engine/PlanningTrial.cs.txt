@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -24,6 +25,7 @@ static class PlanningTrial
 
     public static async Task<string> Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII") != null) return await AsciiTerrainTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_RAIL_SKILL") != null) return await RailSkillTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_CROSSING_DISCOVERY") == "1") return await CrossingDiscovery.Run();
         if (!ModLoader.TryGetMod("TerraBlind", out var mod)) throw new InvalidOperationException("production_mod_missing");
@@ -95,6 +97,293 @@ static class PlanningTrial
         File.WriteAllText(Path.Combine(Main.SavePath, "agent-planning-result.json"), report.ToJsonString());
         report["ok"] = failure == null && parseError == null && blocked == 0 && queries > 0 && queries <= 12;
         return report.ToJsonString();
+    }
+}
+
+public sealed class AsciiTerrainTrial : ModSystem
+{
+    const int X = 440, Y = 240, Width = 29, Height = 20;
+    const string Model = "gpt-6.2-sol";
+    const string Legend = "Each character is one tile, left to right and top to bottom. # solid, . air, P player's feet, E opponent, G destination, A/B candidate cells. Coordinates are zero-based [column,row] relative to this window.";
+    static readonly string[] Options = { "A", "B" };
+    static NativeTrial active;
+    internal static bool Enabled => Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII") != null;
+
+    sealed record Scene(string Id, bool Cover, string Opening)
+    {
+        public int PlayerX => Cover ? 6 : 14;
+        public int Floor => Cover ? 11 : 9;
+        public Point Mark(string option) => Cover ? new(9, option == "A" ? 8 : 10)
+            : new(option == "A" ? 8 : 20, Floor - 1);
+    }
+
+    public override void PostUpdateEverything() => active?.Advance(Main.LocalPlayer);
+
+    static void Reset(Scene scene)
+    {
+        var p = Main.LocalPlayer;
+        foreach (var npc in Main.npc) npc.active = false;
+        foreach (var projectile in Main.projectile) projectile.active = false;
+        p.RemoveAllGrapplingHooks(); p.mount.Dismount(p);
+        foreach (var slot in p.inventory.Concat(p.armor).Concat(p.miscEquips)) slot.TurnToAir();
+        p.ClearBuff(BuffID.Featherfall);
+        p.ClearBuff(BuffID.Gravitation);
+        for (int dx = -4; dx < Width + 4; dx++)
+        for (int dy = -5; dy < Height + 5; dy++)
+        {
+            var tile = Main.tile[X + dx, Y + dy];
+            tile.ClearEverything();
+            tile.LiquidAmount = 0;
+            bool solid = scene.Cover
+                ? dy >= scene.Floor || (dy >= 0 && ((dx == 9 && dy != 8 && dy != 10)
+                    || (dx == 17 && dy != scene.Mark(scene.Opening).Y)))
+                : dy >= 18 || dy == scene.Floor && !(scene.Opening == "A" ? dx is >= 6 and <= 10 : dx is >= 18 and <= 22);
+            solid |= dx == 0 || dx == Width - 1 || dy == 0;
+            if (solid) { tile.HasTile = true; tile.TileType = TileID.GrayBrick; }
+        }
+        p.position = new Vector2((X + scene.PlayerX) * 16 + 8 - p.width / 2f, (Y + scene.Floor) * 16 - p.height);
+        p.velocity = Vector2.Zero;
+        p.fallStart = p.fallStart2 = Y + scene.Floor;
+        p.jump = 0; p.releaseJump = true; p.selectedItem = 0;
+        Main.playerInventory = Main.mapFullscreen = Main.autoPause = false;
+    }
+
+    static JsonObject SceneState(Scene scene, bool map)
+    {
+        var p = Main.LocalPlayer;
+        int rowAtCenter = (int)(p.Center.Y / 16) - Y;
+        int? Nearest(int dx, int dy)
+        {
+            for (int distance = 1; distance < Width; distance++)
+            {
+                int x = scene.PlayerX + dx * distance, y = rowAtCenter + dy * distance;
+                if (x < 0 || x >= Width || y < 0 || y >= Height) break;
+                var tile = Main.tile[X + x, Y + y];
+                if (tile.HasUnactuatedTile && Main.tileSolid[tile.TileType]) return distance;
+            }
+            return null;
+        }
+        var state = new JsonObject { ["player_feet"] = new JsonArray(scene.PlayerX, scene.Floor - 1),
+            ["body_pixels"] = new JsonArray(p.width, p.height), ["velocity"] = new JsonArray(0, 0),
+            ["nearest_solid_from_body_center_tiles"] = new JsonObject { ["left"] = Nearest(-1, 0),
+                ["right"] = Nearest(1, 0), ["up"] = Nearest(0, -1), ["down"] = Nearest(0, 1) },
+            ["A"] = new JsonArray(scene.Mark("A").X, scene.Mark("A").Y),
+            ["B"] = new JsonArray(scene.Mark("B").X, scene.Mark("B").Y) };
+        if (scene.Cover)
+        {
+            state["opponent_feet"] = new JsonArray(24, scene.Floor - 1);
+            state["goal"] = "Use one block to stop both incoming horizontal bullet lines at rows 8 and 10 before they reach P. Existing solid blocks can already stop one line.";
+        }
+        else
+        {
+            state["destination_feet"] = new JsonArray(14, 17);
+            state["goal"] = "Start descending to the lower chamber by walking toward A or B. Use an existing floor opening. No jumping, mining or placing blocks.";
+        }
+        if (!map) return state;
+        var rows = new JsonArray();
+        for (int row = 0; row < Height; row++)
+        {
+            var line = new StringBuilder(Width);
+            for (int col = 0; col < Width; col++)
+            {
+                var tile = Main.tile[X + col, Y + row];
+                char cell = tile.HasUnactuatedTile && Main.tileSolid[tile.TileType] ? '#' : '.';
+                if (new Point(col, row) == scene.Mark("A")) cell = 'A';
+                if (new Point(col, row) == scene.Mark("B")) cell = 'B';
+                if (row == scene.Floor - 1 && col == scene.PlayerX) cell = 'P';
+                if (scene.Cover && row == scene.Floor - 1 && col == 24) cell = 'E';
+                if (!scene.Cover && row == 17 && col == 14) cell = 'G';
+                line.Append(cell);
+            }
+            rows.Add(line.ToString());
+        }
+        state["legend"] = Legend;
+        state["ascii_rows"] = rows;
+        return state;
+    }
+
+    sealed class NativeTrial(Scene scene, string option, int[] bullets, bool placed)
+    {
+        readonly TaskCompletionSource<JsonObject> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly bool[] crossed = new bool[2];
+        int frames, lowerFloorFrames;
+        public Task<JsonObject> Result => done.Task;
+
+        public void Drive(Player p)
+        {
+            p.controlLeft = option == "A"; p.controlRight = option == "B";
+            p.controlJump = p.controlUseTile = p.controlUseItem = false;
+        }
+
+        public void Advance(Player p)
+        {
+            frames++;
+            if (scene.Cover)
+            {
+                for (int i = 0; i < bullets.Length; i++)
+                {
+                    var shot = Main.projectile[bullets[i]];
+                    if (shot.active && shot.Center.X <= p.Center.X) crossed[i] = true;
+                }
+                if (frames < 35 && bullets.Any(i => Main.projectile[i].active)) return;
+            }
+            else
+            {
+                lowerFloorFrames = Math.Abs(p.Bottom.Y - (Y + 18) * 16) < 1f ? lowerFloorFrames + 1 : 0;
+                if (frames < 90 && lowerFloorFrames < 2) return;
+            }
+            bool passed = scene.Cover ? placed && !crossed.Any(v => v) && bullets.All(i => !Main.projectile[i].active)
+                : !p.dead && lowerFloorFrames >= 2;
+            BoundaryInputPlayer.Drive = null;
+            p.controlLeft = p.controlRight = false;
+            active = null;
+            done.TrySetResult(new JsonObject { ["pass"] = passed, ["frames"] = frames, ["placed"] = placed,
+                ["bullet_upper_crossed"] = scene.Cover ? crossed[0] : null,
+                ["bullet_lower_crossed"] = scene.Cover ? crossed[1] : null,
+                ["end_column"] = (p.Center.X - X * 16) / 16, ["end_bottom_row"] = (p.Bottom.Y - Y * 16) / 16,
+                ["lower_floor_frames"] = lowerFloorFrames, ["end_vy"] = p.velocity.Y });
+        }
+    }
+
+    static async Task<JsonObject> Verify(Scene scene, string option, CancellationToken token)
+    {
+        var trial = await CrossingDiscovery.OnGame(() =>
+        {
+            Reset(scene);
+            var p = Main.LocalPlayer;
+            if (!scene.Cover)
+            {
+                var walk = new NativeTrial(scene, option, Array.Empty<int>(), false);
+                BoundaryInputPlayer.Drive = walk.Drive;
+                return active = walk;
+            }
+            var mark = scene.Mark(option);
+            int tx = X + mark.X, ty = Y + mark.Y;
+            bool placed = p.IsInTileInteractionRange(tx, ty, TileReachCheckSettings.Simple)
+                && WorldGen.PlaceTile(tx, ty, TileID.GrayBrick, mute: true, plr: p.whoAmI);
+            var shots = new[] { 8, 10 }.Select(row => Projectile.NewProjectile(p.GetSource_Misc("terrain-ascii"),
+                new Vector2((X + 24) * 16 + 8, (Y + row) * 16 + 8), new Vector2(-12, 0),
+                ProjectileID.Bullet, 1, 0, p.whoAmI)).ToArray();
+            if (shots.Any(i => i < 0 || i >= Main.projectile.Length)) throw new InvalidOperationException("native bullet spawn failed");
+            return active = new NativeTrial(scene, option, shots, placed);
+        });
+        return await trial.Result.WaitAsync(token);
+    }
+
+    static JsonObject Criteria(Scene scene) => new() {
+        ["A"] = scene.Cover ? "Place one block at A." : "Walk left toward A.",
+        ["B"] = scene.Cover ? "Place one block at B." : "Walk right toward B." };
+
+    static JsonObject WithRowNumbers(JsonObject map)
+    {
+        var numbered = map.DeepClone().AsObject();
+        numbered["legend"] = Legend + " A row's 'NN |' prefix gives the zero-based row number and is outside the map.";
+        numbered["ascii_rows"] = new JsonArray(map["ascii_rows"].AsArray().Select((line, row) =>
+            (JsonNode)JsonValue.Create($"{row:D2} |{line}")).ToArray());
+        return numbered;
+    }
+
+    static async Task<JsonObject> Judge(string engine, Scene scene, JsonObject state, string sandbox, CancellationToken token)
+    {
+        const string instructions = "Choose A or B for the immediate action most likely to complete the stated goal. Choose one even if terrain is unknown.";
+        var criteria = Criteria(scene);
+        var clock = Stopwatch.StartNew();
+        if (engine == "Jev")
+        {
+            var args = new JsonObject { ["state"] = state.DeepClone(), ["questions"] = new JsonObject {
+                ["pick"] = new JsonObject { ["type"] = "choice", ["instructions"] = instructions, ["criteria"] = criteria } } };
+            var receipt = JsonNode.Parse(await AgentTools.Execute("jev_judge", args, token));
+            return new JsonObject { ["choice"] = receipt["answers"]?["pick"]?["choice"]?.DeepClone(),
+                ["elapsed_ms"] = clock.ElapsedMilliseconds, ["receipt"] = receipt };
+        }
+        var tools = JsonNode.Parse("""
+            [{"type":"function","function":{"name":"choose","description":"Commit to the next movement or placement option.","parameters":{"type":"object","properties":{"option":{"type":"string","enum":["A","B"]}},"required":["option"]}}}]
+            """).AsArray();
+        var reply = new JsonArray();
+        string choice = null;
+        long? firstChoiceMs = null;
+        using var agent = new CodexAgent();
+        await agent.RunAsync(new JsonObject { ["state"] = state.DeepClone(), ["options"] = criteria }.ToJsonString(),
+            "", sandbox, Model, instructions + " Call choose exactly once, then give a short reason.", tools, (_, args, _) =>
+            {
+                if (choice == null) { choice = args["option"]?.ToString(); firstChoiceMs = clock.ElapsedMilliseconds; }
+                return Task.FromResult("{\"recorded\":true}");
+            }, text => reply.Add(text), token);
+        return new JsonObject { ["choice"] = choice, ["elapsed_ms"] = firstChoiceMs,
+            ["turn_ms"] = clock.ElapsedMilliseconds, ["replies"] = reply, ["usage"] = agent.TokenUsage };
+    }
+
+    internal static async Task<string> Run()
+    {
+        string mode = Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII");
+        if (mode is not ("calibrate" or "live" or "jev-rows")) throw new ArgumentException("Unknown ASCII trial mode: " + mode);
+        string path = Path.Combine(Main.SavePath, "terrain-ascii.json");
+        var results = new JsonArray(); var cases = new JsonArray();
+        var report = new JsonObject { ["experiment"] = "terrain_ascii", ["ok"] = false, ["cases"] = cases, ["decisions"] = results };
+        void Flush() => File.WriteAllText(path, report.ToJsonString());
+        using var time = new CancellationTokenSource(TimeSpan.FromSeconds(170));
+        var token = time.Token;
+        await CrossingDiscovery.OnGame(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false; Main.dayTime = true; Main.musicVolume = 0f;
+            report["audio"] = new JsonObject { ["music"] = Main.musicVolume, ["sound"] = Main.soundVolume };
+            return true;
+        });
+        try
+        {
+            var specs = JsonNode.Parse(Encoding.UTF8.GetString(ModContent.GetInstance<AsciiTerrainTrial>().Mod
+                .GetFileBytes("Experiments/terrain-ascii/cases.json"))).AsArray();
+            var jobs = new List<(Scene Scene, string Encoding, string Engine, JsonObject State, JsonObject Native)>();
+            foreach (var spec in specs)
+            {
+                var scene = new Scene(spec["id"].ToString(), spec["task"].ToString() == "cover", spec["opening"].ToString());
+                var (coarse, mapped) = await CrossingDiscovery.OnGame(() => { Reset(scene); return (SceneState(scene, false), SceneState(scene, true)); });
+                var native = new JsonObject();
+                var evidence = new JsonObject { ["id"] = scene.Id, ["coarse"] = coarse.DeepClone(), ["mapped"] = mapped.DeepClone(), ["native"] = native };
+                cases.Add(evidence);
+                foreach (string option in Options) { native[option] = await Verify(scene, option, token); Flush(); }
+                if (native[scene.Opening]["pass"].GetValue<bool>() != true || native[Options.Single(x => x != scene.Opening)]["pass"].GetValue<bool>())
+                    throw new InvalidOperationException("scene does not distinguish candidates in the real engine: " + scene.Id);
+                if (mode == "live")
+                    foreach (string engine in new[] { "Agent", "Jev" })
+                    {
+                        jobs.Add((scene, "coarse", engine, coarse, native));
+                        jobs.Add((scene, "raw", engine, mapped, native));
+                    }
+                if (mode == "jev-rows")
+                {
+                    var indexed = WithRowNumbers(mapped);
+                    evidence["indexed"] = indexed.DeepClone();
+                    jobs.Add((scene, "raw", "Jev", mapped, native));
+                    jobs.Add((scene, "indexed", "Jev", indexed, native));
+                }
+            }
+            foreach (var pair in cases.GroupBy(x => x["coarse"]["goal"].ToString()))
+                if (!pair.All(x => JsonNode.DeepEquals(x["coarse"], pair.First()["coarse"])))
+                    throw new InvalidOperationException("a paired layout changes the coarse input");
+            if (jobs.Count > 0)
+            {
+                string sandbox = Path.Combine(Main.SavePath, "ascii-model-workspace");
+                Directory.CreateDirectory(sandbox);
+                object gate = new();
+                await Parallel.ForEachAsync(jobs, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = token }, async (job, ct) =>
+                {
+                    JsonObject decision;
+                    try { decision = await Judge(job.Engine, job.Scene, job.State, sandbox, ct); }
+                    catch (Exception error) when (!ct.IsCancellationRequested) { decision = new JsonObject { ["error"] = error.Message }; }
+                    string picked = decision["choice"]?.ToString();
+                    decision["id"] = job.Scene.Id; decision["model_family"] = job.Engine;
+                    decision["ascii"] = job.Encoding != "coarse"; decision["encoding"] = job.Encoding;
+                    decision["native_pass"] = picked != null && (job.Native[picked]?["pass"]?.GetValue<bool>() ?? false);
+                    lock (gate) { results.Add(decision); Flush(); }
+                });
+            }
+            report["ok"] = results.Count == jobs.Count && results.All(x => x["choice"] != null);
+            Flush();
+            return report.ToJsonString();
+        }
+        catch (Exception error) { report["error"] = error.Message; Flush(); throw; }
     }
 }
 
@@ -868,10 +1157,10 @@ public sealed class RailSkillTrial : ModSystem
     }
 }
 
-public sealed class RailSkillTrialNpcs : GlobalNPC
+public sealed class ExperimentArenaNpcs : GlobalNPC
 {
     public override void EditSpawnRate(Player player, ref int spawnRate, ref int maxSpawns)
     {
-        if (RailSkillTrial.Recording) { spawnRate = int.MaxValue; maxSpawns = 0; }
+        if (AsciiTerrainTrial.Enabled || RailSkillTrial.Recording) { spawnRate = int.MaxValue; maxSpawns = 0; }
     }
 }

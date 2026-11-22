@@ -1,0 +1,6 @@
+[
+  {"id":"cover-upper","task":"cover","opening":"A"},
+  {"id":"cover-lower","task":"cover","opening":"B"},
+  {"id":"descent-left","task":"descent","opening":"A"},
+  {"id":"descent-right","task":"descent","opening":"B"}
+]

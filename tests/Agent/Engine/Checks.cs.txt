@@ -1511,6 +1511,8 @@ public sealed class Driver : ModSystem
         original(game, time);
         if (opened || Main.menuMode != 0) return;
         opened = true;
+        if (AsciiTerrainTrial.Enabled)
+            Console.WriteLine($"AGENT_ARENA_MENU_AUDIO music={Main.musicVolume} sound={Main.soundVolume}");
         if (Terraria.Social.SocialAPI.Cloud != null) Terraria.Social.SocialAPI.Cloud.EnabledByDefault = false;
         WorldGen.clearWorld();
         WorldFile.GetAllMetadata(Path.Combine(Main.SavePath, "Worlds", "Checks.wld"), false).SetAsActive();
@@ -2229,6 +2231,11 @@ public sealed class Driver : ModSystem
                     phase = 30; Call("equip_item", EquipRequest(1, 0));
                     break;
                 case 28:
+                    if (result["experiment"]?.ToString() == "terrain_ascii")
+                    {
+                        Finish(result["ok"]?.GetValue<bool>() == true, "AGENT_TERRAIN_ASCII_COMPLETE");
+                        break;
+                    }
                     if (result["experiment"]?.ToString() == "rail_skill")
                     {
                         Finish(result["ok"]?.GetValue<bool>() == true, "AGENT_RAIL_SKILL_COMPLETE");
