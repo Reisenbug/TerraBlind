@@ -1047,7 +1047,7 @@ public class NativeAgent : ModSystem
                     }
                     if (report["ended"] != null) break;
                     input = "PvP战术复核。先处理玩家新要求；review_loadout为true时，"
-                        + "根据loadout及当前地形，通过combat_update的instructions.loadout给Jev补2–4条短的条件式打法。"
+                        + "根据loadout及当前地形，用run_script({tool:'combat_update',args:{session,expected_revision,instructions:{loadout:'打法'}}})给Jev补2–4条条件式打法。"
                         + "review_recovery为true时处理当前受阻。Jev继续控制，完成更新后结束本轮。\n战况：" + report.ToJsonString();
                 }
                 JsonObject final = null;

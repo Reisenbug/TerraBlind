@@ -180,16 +180,42 @@ static class CodexTests
         }
         finally { native.Unload(); Config.I.AgentUseCodex = false; Config.I.AgentApiKey = "test-key"; }
         Console.WriteLine("PASS: NativeAgent routes through Codex without API key and closes connection on world unload");
-        native = new NativeAgent(); hosted = new Server();
+        await CombatSupervision();
+    }
+
+    internal static async Task CombatSupervision()
+    {
+        var native = new NativeAgent(); var hosted = new Server();
         var self = Terraria.Main.LocalPlayer; var opponent = Terraria.Main.player[1];
         self.dead = opponent.dead = false; self.active = opponent.active = self.hostile = opponent.hostile = true;
         self.team = opponent.team = 0;
         self.inventory[0] = new Terraria.Item { type = 99, stack = 1, damage = 20, useStyle = 1, noMelee = true, shoot = 1, shootSpeed = 10 };
+        var priorAccessory = self.armor[3];
+        const string openingAdvice = "Keep distance and fire from a clear line.";
+        const string changedAdvice = "Keep distance, retreat behind cover when fire is blocked.";
+        JsonObject latestJevScene = null;
         Config.I.AgentUseCodex = Config.I.AiClient = true;
         Terraria.Main.netMode = Terraria.ID.NetmodeID.MultiplayerClient;
         native.Load();
         typeof(NativeAgent).GetField("_codex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
             .SetValue(native, new CodexAgent((_, _) => hosted.Connect()));
+        hosted.ToolForInput = input =>
+        {
+            const string marker = "战况：";
+            int at = input.IndexOf(marker, StringComparison.Ordinal);
+            if (at < 0) return null;
+            var review = JsonNode.Parse(input[(at + marker.Length)..]);
+            if (review["review_loadout"]?.GetValue<bool>() != true) return null;
+            string advice = review["loadout"]["revision"].GetValue<long>() == 1 ? openingAdvice : changedAdvice;
+            return ("run_script", new JsonObject
+            {
+                ["tool"] = "combat_update", ["args"] = new JsonObject
+                {
+                    ["session"] = review["session"].DeepClone(), ["expected_revision"] = review["directive"]["revision"].DeepClone(),
+                    ["instructions"] = new JsonObject { ["loadout"] = advice }
+                }
+            });
+        };
         hosted.AfterTool = count =>
         {
             _ = NativeAgent.OnMain(() =>
@@ -197,7 +223,8 @@ static class CodexTests
                 if (count == 1)
                 {
                     if (!PvpDuel.Start(1, 30, 0, 600, "持续交战", out string why,
-                        (_, _) => Task.FromResult(new PvpTactics.Decision("m1", "ranged")))) throw new Exception(why);
+                        (scene, _) => { latestJevScene = scene; return Task.FromResult(new PvpTactics.Decision("m1", "ranged")); }))
+                        throw new Exception(why);
                 }
                 return true;
             }, default);
@@ -205,31 +232,45 @@ static class CodexTests
         try
         {
             NativeAgent.Submit("持续交战并复盘");
+            void CombatFrame()
+            {
+                native.PostUpdateEverything();
+                if (PvpDuel.Active) PvpDuel.ApplyInputs(self);
+                Terraria.Main.GameUpdateCount++;
+            }
             async Task WaitParked(int turns)
             {
                 var until = DateTime.UtcNow.AddSeconds(5);
                 while (hosted.ToolResponses.Count < turns || NativeAgent.Status != "waiting for combat instructions")
                 {
                     Check(DateTime.UtcNow < until, "combat Agent failed to park after turn " + turns);
-                    native.PostUpdateEverything(); Terraria.Main.GameUpdateCount++;
+                    CombatFrame();
                     await Task.Delay(5);
                 }
             }
-            await WaitParked(1);
-            Terraria.Main.GameUpdateCount += 60 * 60 * 60;
-            for (int i = 0; i < 70; i++) { native.PostUpdateEverything(); await Task.Delay(5); }
-            Check(hosted.ToolResponses.Count == 1 && PvpDuel.Active, "elapsed game time caused a periodic model request");
-            NativeAgent.Submit("别追近战");
             await WaitParked(2);
-            Terraria.Collision.Clear = false;
-            for (int i = 0; i < 181; i++) native.PostUpdateEverything();
+            CombatFrame();
+            Check(latestJevScene?["directive"]["instructions"]["loadout"]?.GetValue<string>() == openingAdvice,
+                "opening Codex loadout review did not send advice into the existing Jev duel: " + hosted.ToolResponses[1]);
+            Terraria.Main.GameUpdateCount += 60 * 60 * 60;
+            for (int i = 0; i < 70; i++) { CombatFrame(); await Task.Delay(5); }
+            Check(hosted.ToolResponses.Count == 2 && PvpDuel.Active, "elapsed game time caused a periodic model request");
+            NativeAgent.Submit("别追近战");
             await WaitParked(3);
-            for (int i = 0; i < 100; i++) { native.PostUpdateEverything(); await Task.Delay(5); }
-            Check(hosted.ToolResponses.Count == 3, "persistent obstruction repeatedly requested automatic Agent help");
+            self.armor[3] = new Terraria.Item { type = 987, stack = 1, Name = "Fixture accessory" };
+            await WaitParked(4);
+            CombatFrame();
+            Check(latestJevScene?["directive"]["instructions"]["loadout"]?.GetValue<string>() == changedAdvice,
+                "changed equipment did not refresh the advice in Jev");
+            Terraria.Collision.Clear = false;
+            for (int i = 0; i < 181; i++) CombatFrame();
+            await WaitParked(5);
+            for (int i = 0; i < 100; i++) { CombatFrame(); await Task.Delay(5); }
+            Check(hosted.ToolResponses.Count == 5, "persistent obstruction repeatedly requested automatic Agent help");
             Terraria.Collision.Clear = true;
             PvpDuel.Stop();
             var deadline = DateTime.UtcNow.AddSeconds(8);
-            while (hosted.ToolResponses.Count < 2 || NativeAgent.Status != "idle")
+            while (NativeAgent.Status != "idle")
             {
                 Check(DateTime.UtcNow < deadline, "supervised combat timeout status=" + NativeAgent.Status + " responses=" + hosted.ToolResponses.Count
                     + " active=" + PvpDuel.Active + " outcome=" + PvpDuel.Outcome + " messages=" + string.Join(";", AgentChat.Messages.TakeLast(5)));
@@ -239,16 +280,17 @@ static class CodexTests
                 await Task.Delay(5);
             }
             Check(hosted.Threads == 1 && !PvpDuel.Active, "combat supervision created a second Codex thread or ignored stop");
-            var review = JsonNode.Parse(hosted.Inputs[1].Split("战况：")[1]);
+            var review = JsonNode.Parse(hosted.Inputs[2].Split("战况：")[1]);
             Check(review["player_messages"][0].GetValue<string>() == "别追近战", "queued player follow-up was lost before combat review");
         }
         finally
         {
             native.OnWorldUnload(); native.Unload();
+            self.armor[3] = priorAccessory;
             Config.I.AgentUseCodex = Config.I.AiClient = false;
             Terraria.Main.netMode = Terraria.ID.NetmodeID.SinglePlayer;
         }
-        Console.WriteLine("PASS: combat makes no periodic model calls, handles player follow-ups, permits one recovery and respects stop on the same Codex thread");
+        Console.WriteLine("PASS: combat sends opening and changed-loadout advice to Jev, with no periodic model calls, on the same Codex thread");
     }
 
     public static async Task InputOptimizations()
@@ -1447,6 +1489,7 @@ static class CodexTests
         int _turn;
         public bool Stopped, LoggedIn = true, FailTurn, EmitCompaction, HoldFinalReply, RejectSteer, RejectIdleInterrupt;
         public string ToolName = "get_state";
+        public Func<string, (string Name, JsonObject Args)?> ToolForInput;
         public Action<int> AfterTool;
         public JsonObject ThreadArgs;
         public JsonObject Goal;
@@ -1522,14 +1565,17 @@ static class CodexTests
             else if (method == "turn/start")
             {
                 Efforts.Add(message["params"]["effort"].ToString());
-                Inputs.Add(message["params"]["input"][0]["text"].ToString());
+                string input = message["params"]["input"][0]["text"].ToString();
+                Inputs.Add(input);
                 _turn++;
                 Reply(message["id"], new JsonObject { ["turn"] = new JsonObject { ["id"] = "turn" + _turn } });
                 if (FailTurn) { Completed("failed"); return; }
                 if (EmitCompaction) Send(new JsonObject { ["method"] = "item/completed", ["params"] = new JsonObject
                     { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["item"] = new JsonObject { ["type"] = "contextCompaction" } } });
+                var tool = ToolForInput?.Invoke(input);
                 Send(new JsonObject { ["method"] = "item/tool/call", ["id"] = "tool" + _turn, ["params"] = new JsonObject
-                { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["callId"] = "call" + _turn, ["tool"] = ToolName, ["arguments"] = new JsonObject() } });
+                { ["threadId"] = "thread", ["turnId"] = "turn" + _turn, ["callId"] = "call" + _turn,
+                    ["tool"] = tool?.Name ?? ToolName, ["arguments"] = tool?.Args ?? new JsonObject() } });
             }
             else if (method == "turn/interrupt")
             {
