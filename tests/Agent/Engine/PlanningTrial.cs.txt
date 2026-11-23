@@ -114,6 +114,7 @@ public sealed class AsciiTerrainTrial : ModSystem
     static DetourRun detour;
     static ScreenCapture screenCapture;
     static RecoveryRun recovery;
+    static PitPlayback pitPlayback;
     internal static bool Enabled => Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII") != null;
 
     sealed record Scene(string Id, bool Cover, string Opening)
@@ -129,6 +130,7 @@ public sealed class AsciiTerrainTrial : ModSystem
         active?.Advance(Main.LocalPlayer);
         detour?.Advance(Main.LocalPlayer);
         recovery?.Advance(Main.LocalPlayer);
+        pitPlayback?.Advance(Main.LocalPlayer);
         if (screenCapture is { } capture)
             for (int x = 1; x < capture.Width; x += 3)
             for (int y = 1; y < capture.Height; y += 3)
@@ -346,6 +348,7 @@ public sealed class AsciiTerrainTrial : ModSystem
     internal static async Task<string> Run()
     {
         string mode = Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII");
+        if (mode is "pit-inputs" or "pit-inputs-live") return await RunPitInputs(mode == "pit-inputs-live");
         if (mode is "recovery-calibrate" or "recovery-live") return await RunRecovery(mode == "recovery-live");
         if (mode is "vision-calibrate" or "vision-live" or "vision-deep") return await RunVision(mode);
         if (mode is "detour-live" or "detour-calibrate") return await RunDetours(mode == "detour-live");
@@ -820,11 +823,11 @@ public sealed class AsciiTerrainTrial : ModSystem
     static readonly HttpClient VisionHttp = new() { Timeout = TimeSpan.FromSeconds(15) };
 
     static async Task<JsonObject> JudgeVision(string model, JsonObject facts, JsonObject criteria, byte[] image,
-        string sandbox, string jevKey, CancellationToken token, bool waypoint = false)
+        string sandbox, string jevKey, CancellationToken token, bool waypoint = false, string prompt = null)
     {
-        string question = waypoint
+        string question = prompt ?? (waypoint
             ? "Use this terrain to name one intermediate standing cell that makes useful progress toward G. Return its zero-based column x and row y (the empty tile at the player's feet just above its supporting block). The navigator will travel to that cell first and then to G. Terrain edits are disabled. Send G itself if best."
-            : "Use the supplied terrain representation to select A or B, the action most likely to achieve the stated goal. Reply with one choice.";
+            : "Use the supplied terrain representation to select A or B, the action most likely to achieve the stated goal. Reply with one choice.");
         var clock = Stopwatch.StartNew();
         if (model == "Jev")
         {
@@ -859,6 +862,11 @@ public sealed class AsciiTerrainTrial : ModSystem
             tools[1]["function"]["parameters"] = JsonNode.Parse("""
                 {"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},"required":["x","y"]}
                 """);
+        }
+        else if (prompt != null)
+        {
+            tools[1]["function"]["description"] = "Submit one supplied action ID.";
+            tools[1]["function"]["parameters"]["properties"]["option"]["enum"] = new JsonArray(criteria.Select(pair => JsonValue.Create(pair.Key)).ToArray());
         }
         JsonNode choice = null;
         long? observedAt = null, pickedAt = null;
@@ -1102,6 +1110,240 @@ public sealed class AsciiTerrainTrial : ModSystem
         }
         catch (Exception error) { report["error"] = error.Message; Save(); throw; }
         finally { await CrossingDiscovery.OnGame(() => { Halt.All(); recovery = null; StateSpacePlanner.PreserveTerrain = false; return true; }); }
+    }
+
+    static readonly MethodInfo ObserveWorker = typeof(VanillaNavigationDemo).GetMethod("Observe", BindingFlags.Instance | BindingFlags.NonPublic);
+    static Task<JsonObject> PitForecast(JsonObject request, CancellationToken token) =>
+        (Task<JsonObject>)ObserveWorker.Invoke(VanillaNavigationDemo.Instance, new object[] { request, token });
+
+    static JsonArray PitKeys(IEnumerable<int> keys) => new(keys.Select(key => JsonValue.Create(key)).ToArray());
+    static float Sample(JsonNode frame, string key) => frame[key].GetValue<float>();
+    static int[] ReadPitKeys(JsonNode keys) => keys.AsArray().Select(key => key.GetValue<int>()).ToArray();
+
+    static Task<JsonObject> ForecastPitInput(JsonObject snapshot, int[] keys, CancellationToken token) => PitForecast(
+        new JsonObject { ["command"] = "native_replay", ["snapshot"] = snapshot.DeepClone(), ["controls"] = PitKeys(keys),
+            ["capture_end"] = true, ["detailed"] = false, ["stop_on_damage"] = true }, token);
+
+    static int[] PitPrefix(int direction, int run, int jump)
+        => Enumerable.Repeat(direction, run).Concat(Enumerable.Repeat(direction | 4, jump))
+            .Concat(Enumerable.Repeat(0, 52 - run - jump)).ToArray();
+
+    sealed record PitOption(string Id, string Action, int[] Keys, float X, float Y);
+
+    static async Task<(PitOption[] Options, JsonObject Evidence)> PitOptions(JsonObject snapshot, Point origin, int width, int height,
+        CancellationToken token)
+    {
+        var proposals = (from dir in new[] { 1, 2 }
+            from moves in new[] { (run: 24, jump: 0), (run: 0, jump: 18), (run: 8, jump: 18), (run: 16, jump: 18) }
+            select (name: dir == 1 ? "left" : "right", keys: PitPrefix(dir, moves.run, moves.jump), moves)).ToArray();
+        var clock = Stopwatch.StartNew();
+        var batch = await PitForecast(new JsonObject { ["command"] = "combat_replays", ["snapshot"] = snapshot.DeepClone(),
+            ["branches"] = new JsonArray(proposals.Select((option, i) => (JsonNode)new JsonObject {
+                ["id"] = $"move{i + 1}", ["controls"] = PitKeys(option.keys) }).ToArray()) }, token);
+        var evidence = new JsonArray();
+        var options = new List<PitOption>();
+        foreach (var branch in batch["branches"].AsArray())
+        {
+            string id = branch["id"].ToString();
+            var proposal = proposals[int.Parse(id[4..]) - 1];
+            var frames = branch["frames"].AsArray();
+            var end = frames.Last();
+            float x = (Sample(end, "x") + width / 2f) / 16 - origin.X;
+            float y = (Sample(end, "y") + height) / 16 - origin.Y;
+            bool safe = branch["outcome"].ToString() == "complete" && frames.Count == proposal.keys.Length;
+            bool grounded = end["grounded"].GetValue<bool>() && Sample(end, "vy") == 0;
+            float travel = MathF.Abs(Sample(end, "x") - Sample(frames.First(), "x"))
+                + MathF.Abs(Sample(end, "y") - Sample(frames.First(), "y"));
+            string action = $"Walk {proposal.name} for {proposal.moves.run} frames, then hold {proposal.name}+jump for {proposal.moves.jump} frames, then release both.";
+            evidence.Add(new JsonObject { ["id"] = id, ["action"] = action, ["controls"] = PitKeys(proposal.keys),
+                ["foot_x"] = x, ["foot_floor_y"] = y, ["grounded"] = grounded, ["safe"] = safe, ["travel_px"] = travel });
+            if (safe && grounded && travel >= 16 && !options.Any(p => Math.Abs(p.X - x) < .25f && Math.Abs(p.Y - y) < .01f))
+                options.Add(new PitOption(id, action, proposal.keys, x, y));
+        }
+        return (options.ToArray(), new JsonObject { ["wall_ms"] = clock.ElapsedMilliseconds,
+            ["worker_ms"] = batch["total_ms"].DeepClone(), ["trials"] = evidence,
+            ["eligible"] = new JsonArray(options.Select(option => JsonValue.Create(option.Id)).ToArray()) });
+    }
+
+    sealed class PitPlayback(Point origin, RecoveryScene scene, int[] keys, JsonArray predicted)
+    {
+        readonly Stopwatch clock = Stopwatch.StartNew();
+        readonly TaskCompletionSource<JsonObject> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly JsonArray trace = new();
+        readonly int hp = Main.LocalPlayer.statLife;
+        readonly Vector2 start = Main.LocalPlayer.position;
+        int frame, inputFrames;
+        bool escaped;
+        float error;
+        long? firstTile;
+        public Task<JsonObject> Result => done.Task;
+        public void Drive(Player p)
+        {
+            VanillaPrediction.ApplyInput(p, new VanillaPrediction.Input((VanillaKeys)keys[frame]));
+            inputFrames++;
+        }
+        public void Advance(Player p)
+        {
+            if (inputFrames == frame) return;
+            var expected = predicted[frame];
+            error = Math.Max(error, Vector2.Distance(p.position, new Vector2(Sample(expected, "x"), Sample(expected, "y"))));
+            frame++;
+            if (Vector2.DistanceSquared(start, p.position) >= 256) firstTile ??= clock.ElapsedMilliseconds;
+            float x = p.Bottom.X / 16 - origin.X, y = p.Bottom.Y / 16 - origin.Y;
+            if (frame % 4 == 0) trace.Add(new JsonArray(frame, x, y, p.velocity.X, p.velocity.Y));
+            bool support = p.velocity.Y == 0 && Collision.SolidCollision(p.position + Vector2.UnitY, p.width, p.height);
+            float forwardX = scene.Mirror ? RecoveryWidth - x : x;
+            escaped |= support && forwardX is >= 14 and <= 34 && Math.Abs(y - 11) < .1f;
+            bool reached = support && Math.Abs(x - (scene.G.X + .5f)) < .75f && Math.Abs(y - (scene.G.Y + 1)) < .1f;
+            if (frame < keys.Length && !p.dead && p.statLife >= hp && !reached) return;
+            pitPlayback = null; BoundaryInputPlayer.Drive = null;
+            VanillaPrediction.ApplyInput(p, new VanillaPrediction.Input(VanillaKeys.None));
+            done.SetResult(new JsonObject { ["escaped"] = escaped && p.statLife >= hp, ["reached"] = reached && p.statLife >= hp,
+                ["frames"] = frame, ["first_tile_ms"] = firstTile, ["elapsed_ms"] = clock.ElapsedMilliseconds,
+                ["damage"] = hp - p.statLife, ["max_prediction_error_px"] = error, ["trace"] = trace });
+        }
+    }
+
+    static Rectangle PitRegion(Point origin, RecoveryScene scene, int left, int right, int y)
+    {
+        if (scene.Mirror) (left, right) = (RecoveryWidth * 16 - right, RecoveryWidth * 16 - left);
+        return new Rectangle(origin.X * 16 + left, (origin.Y + y) * 16, right - left, 0);
+    }
+
+    static async Task<JsonObject> RunPitRoute(Point origin, RecoveryScene scene, JsonObject snapshot, PitOption option,
+        CancellationToken token)
+    {
+        var clock = Stopwatch.StartNew();
+        var segments = new JsonArray();
+        var controls = new List<int>();
+        var result = new JsonObject { ["option"] = option?.Id, ["segments"] = segments };
+        var next = snapshot;
+        if (option != null)
+        {
+            var forecast = await ForecastPitInput(next, option.Keys, token);
+            if (forecast["end_snapshot"] is not JsonObject end) throw new InvalidOperationException("confirmed pit input failed to replay");
+            controls.AddRange(option.Keys);
+            next = end;
+        }
+        foreach (var region in new[] {
+            PitRegion(origin, scene, 12 * 16 + 10, 13 * 16 + 4, 17),
+            PitRegion(origin, scene, 10 * 16, 11 * 16 + 6, 14),
+            PitRegion(origin, scene, 15 * 16, 18 * 16, 11),
+            PitRegion(origin, scene, 29 * 16, 30 * 16, 11) })
+        {
+            var part = await PitForecast(new JsonObject { ["command"] = "region_search", ["snapshot"] = next.DeepClone(),
+                ["region"] = new JsonArray(region.X, region.Y, region.Width, region.Height), ["horizon"] = 84,
+                ["beam"] = 12, ["quantum"] = 6, ["trace_layers"] = false }, token);
+            string status = part["status"].ToString();
+            var keys = ReadPitKeys(part["controls"]);
+            segments.Add(new JsonObject { ["status"] = status, ["frames"] = keys.Length,
+                ["remaining_px"] = part["distance"]?.DeepClone(), ["worker_ms"] = part["elapsed_ms"]?.DeepClone() });
+            controls.AddRange(keys);
+            if (status != "reached") break;
+            next = part["end_snapshot"].AsObject();
+        }
+        result["planning_ms"] = clock.ElapsedMilliseconds;
+        result["controls"] = PitKeys(controls);
+        if (controls.Count == 0) return result;
+        var combined = await ForecastPitInput(snapshot, controls.ToArray(), token);
+        var predicted = combined["frames"].AsArray();
+        result["predicted_outcome"] = combined["outcome"].DeepClone();
+        if (predicted.Count != controls.Count) return result;
+        var playback = await CrossingDiscovery.OnGame(() =>
+        {
+            ResetRecovery(origin, scene);
+            pitPlayback = new PitPlayback(origin, scene, controls.ToArray(), predicted);
+            BoundaryInputPlayer.Drive = pitPlayback.Drive;
+            return pitPlayback;
+        });
+        result["physical"] = await playback.Result.WaitAsync(token);
+        return result;
+    }
+
+    static async Task<string> RunPitInputs(bool live)
+    {
+        const string question = "Pick one of the tested input sequences as the first move to get out of the pit and reach G. The coordinates in the options are measured endpoints: foot_floor_y is the top surface of the block the player landed on. Choose a useful first landing using the terrain and ordinary jumping physics.";
+        string root = Path.Combine(Main.SavePath, "pit-inputs");
+        Directory.CreateDirectory(root);
+        string workspace = Path.Combine(root, "model-workspace");
+        Directory.CreateDirectory(workspace);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(8));
+        var token = timeout.Token;
+        var cases = new JsonArray();
+        var report = new JsonObject { ["experiment"] = "terrain_ascii", ["study"] = "pit_inputs", ["ok"] = false, ["cases"] = cases };
+        void Save() => File.WriteAllText(Path.Combine(root, "report.json"), report.ToJsonString());
+        await CrossingDiscovery.OnGame(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false; Main.dayTime = true; Main.musicVolume = 0;
+            report["audio"] = new JsonArray(Main.musicVolume, Main.soundVolume);
+            return true;
+        });
+        try
+        {
+            foreach (bool mirror in new[] { false, true })
+            {
+                var template = RecoveryScenes.Single(s => s.Name == "pit-backtrack");
+                var blocks = template.Blocks.Select(block => block.X == 13 && block.Y == 11
+                    ? new Rectangle(block.X + 1, block.Y, block.Width - 1, block.Height) : block).ToArray();
+                var scene = template with { Blocks = blocks, Mirror = mirror };
+                var origin = new Point(mirror ? 2160 : 1740, 240);
+                var entry = new JsonObject { ["id"] = scene.Id }; cases.Add(entry);
+                var marks = new Dictionary<char, Point> { ['P'] = scene.P, ['G'] = scene.G };
+                await CrossingDiscovery.OnGame(() => { ResetRecovery(origin, scene); return true; });
+                var (_, image) = await CaptureVision(origin, RecoveryWidth, RecoveryHeight, marks, token);
+                File.WriteAllBytes(Path.Combine(root, $"{scene.Id}.png"), image);
+                var sample = await CrossingDiscovery.OnGame(() =>
+                {
+                    ResetRecovery(origin, scene);
+                    var p = Main.LocalPlayer;
+                    return (Snapshot: VanillaFrame.Capture(p, new Rectangle(origin.X - 18, origin.Y - 18, 72, 62), true),
+                        p.width, p.height);
+                });
+                entry["direct"] = await PlayRecovery(origin, scene, scene.G, token); Save();
+                var (options, evidence) = await PitOptions(sample.Snapshot, origin, sample.width, sample.height, token);
+                entry["options"] = evidence; Save();
+                if (options.Length < 2) throw new InvalidOperationException("pit needs at least two distinct physical landings");
+                entry["geometry_reference"] = await RunPitRoute(origin, scene, sample.Snapshot, null, token); Save();
+                if (entry["geometry_reference"]["physical"]?["reached"]?.GetValue<bool>() != true)
+                    throw new InvalidOperationException("pit reference could not reach G with native inputs");
+                var greedy = options.MinBy(option => Vector2.DistanceSquared(new Vector2(option.X, option.Y),
+                    new Vector2(scene.G.X + .5f, scene.G.Y + 1)));
+                entry["code"] = await RunPitRoute(origin, scene, sample.Snapshot, greedy, token); Save();
+                if (!live) continue;
+                var criteria = new JsonObject();
+                foreach (var option in options) criteria[option.Id] = FormattableString.Invariant($"{option.Action} Lands at x={option.X:0.00}, foot_floor_y={option.Y:0.00}.");
+                var facts = new JsonObject { ["player_feet"] = new JsonArray(scene.P.X, scene.P.Y),
+                    ["goal_feet"] = new JsonArray(scene.G.X, scene.G.Y), ["window_tiles"] = new JsonArray(RecoveryWidth, RecoveryHeight),
+                    ["movement"] = "Vanilla walk and jump, no accessories or block changes. x increases right, y increases down." };
+                var mapped = facts.DeepClone().AsObject();
+                mapped["legend"] = Legend;
+                mapped["ascii_rows"] = new JsonArray(Enumerable.Range(0, RecoveryHeight).Select(y => JsonValue.Create(new string(
+                    Enumerable.Range(0, RecoveryWidth).Select(x =>
+                    { var p = new Point(x, y); return p == scene.P ? 'P' : p == scene.G ? 'G' : scene.Solid(x, y) ? '#' : '.'; }).ToArray()))).ToArray());
+                var responses = await Task.WhenAll(new[] { "ascii", "game" }.Select(async format =>
+                {
+                    try
+                    {
+                        return (format, await JudgeVision("Agent", format == "ascii" ? mapped : facts, criteria,
+                            format == "game" ? image : null, workspace, null, token, prompt: question));
+                    }
+                    catch (Exception error) when (!token.IsCancellationRequested) { return (format, new JsonObject { ["error"] = error.Message }); }
+                }));
+                foreach (var (format, answer) in responses)
+                {
+                    entry[format] = answer; Save();
+                    var selected = options.FirstOrDefault(option => option.Id == answer["choice"]?.ToString());
+                    if (selected == null) continue;
+                    answer["route"] = await RunPitRoute(origin, scene, sample.Snapshot, selected, token); Save();
+                }
+            }
+            report["ok"] = cases.Count == 2 && (!live || cases.All(e => e["ascii"]?["route"] != null && e["game"]?["route"] != null));
+            Save(); return report.ToJsonString();
+        }
+        catch (Exception error) { report["error"] = error.Message; Save(); throw; }
+        finally { await CrossingDiscovery.OnGame(() =>
+            { BoundaryInputPlayer.Drive = null; Halt.All(); pitPlayback = null; StateSpacePlanner.PreserveTerrain = false; return true; }); }
     }
 
     static async Task<string> RunVision(string mode)

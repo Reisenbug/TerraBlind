@@ -20,6 +20,7 @@ Build `tests/Agent/Engine/AgentChecks.csproj` into an isolated tModLoader save c
 - `TB_TERRAIN_ASCII=vision-calibrate` verifies the physical actions and captures the input images. `vision-live` additionally tests all three input formats with both models.
 - `TB_TERRAIN_ASCII=vision-deep` compares the three formats on two four-block enclosure layouts. It also measures Jev on the tile maps from the four simpler layouts.
 - `TB_TERRAIN_ASCII=recovery-calibrate` runs direct navigation and a reference waypoint on six layouts. `recovery-live` then asks the Agent for a waypoint from ASCII and from the game frame and runs both choices.
+- `TB_TERRAIN_ASCII=pit-inputs` compares existing navigation with engine-tested input sequences in the pit. `pit-inputs-live` adds the Agent's first input choice with ASCII and with a game frame.
 
 `terrain-ascii.json` contains the exact inputs, measured game outcomes, model selections, and time to the first choice. A model selection is scored against its own scene's physical trial. Agent latency includes opening its isolated session. Jev latency measures the existing `jev_judge` call. Treat this as a small paired trial.
 
@@ -72,3 +73,21 @@ Each arm starts with the same terrain, position and vanilla movement. Direct nav
 | Reference route | 2/6 | — | — |
 
 All three comparison arms reached the same right-side firing position. On that layout, direct navigation took 4.11 s. The Agent routes took 2.71 s and 3.57 s to execute, and 12.93 s and 11.87 s including the cold session. Only the reference waypoint reached the mirrored firing position. In the right-side pit, the ASCII choice reached its first rung in 0.90 s, then the final leg hit the limit. Each layout has one run per arm.
+
+## Native input sequences / 原版按键序列
+
+The original pit fixture left 16 px between the raised step and the overhang. The 20 px wide player stopped against that corner in both directions. This trial trims the overhang by one tile for 32 px of clearance and requires a successful native reference playback before asking the model.
+
+The worker tries eight walk and jump prefixes from the same snapshot. Only distinct, damage-free landings at least one tile from the start become options. The code-only selector minimizes straight-line distance from the landing to G. Each selector uses the same engine search to continue through four fixed standing bands on the staircase and rim. The geometry reference starts that search with no prefix. Its bands are specified in this fixture. The Agent sees candidate inputs and measured endpoints, plus either ASCII or the native frame, before choosing a single input sequence.
+
+`pit-inputs/report.json` includes every candidate, the options selected, segment search times and the real client playback. The playback checks for damage, a supported landing on the rim, and arrival at G. It also measures position error against the worker's prediction.
+
+| Arm | Arrivals | Playback frames on right / left |
+| --- | ---: | ---: |
+| Existing navigation | 1/2 | 54 (stopped) / 244 |
+| Nearest-to-G landing | 2/2 | 279 / 279 |
+| GPT-6.2 Sol with ASCII | 2/2 | 219 / 219 |
+| GPT-6.2 Sol with game frame | 2/2 | 219 / 219 |
+| Geometry reference | 2/2 | 204 / 204 |
+
+Both model inputs picked the same run and jump on each layout. The code-only selector spent its first move heading toward the wall. The model saved 60 playback frames on both layouts. It took 1.36–1.69 s from observation to choice, and 7.25–10.16 s from cold session launch to choice. Even using the shorter decision time, adding search time and playback yielded 5.73–6.00 s for the model arms and 5.62–5.65 s for the nearest-to-G arm. Candidate generation was shared. Every completed native playback was damage-free and matched the worker's positions with zero measured pixel error.
