@@ -209,7 +209,7 @@ public sealed class UiInteractionTrial : ModSystem
         }, InterfaceScaleType.UI));
     }
 
-    static async Task<JsonObject> Mirror(Func<string, JsonObject, Task<JsonObject>> tool, CancellationToken token)
+    static async Task<JsonObject> Mirror(Func<string, JsonObject, Task<JsonObject>> tool, bool random, CancellationToken token)
     {
         var start = await CrossingDiscovery.OnGame(() =>
         {
@@ -235,7 +235,8 @@ public sealed class UiInteractionTrial : ModSystem
         var use = await tool("use_item", new JsonObject { ["slot"] = 0, ["x"] = start.X, ["y"] = start.Y, ["duration_ticks"] = 1 });
         var snapshot = await tool("ui_snapshot", new());
         var panel = snapshot["panels"]?.AsArray().SingleOrDefault(p => p["type"]?.ToString() == "UISpawnState");
-        var button = panel?["controls"]?.AsArray().SingleOrDefault(c => c["type"]?.ToString() == "UIWorldSpawnPanel");
+        string control = random ? "UIRandomTeleportPanel" : "UIWorldSpawnPanel";
+        var button = panel?["controls"]?.AsArray().SingleOrDefault(c => c["type"]?.ToString() == control);
         if (button == null) throw new InvalidOperationException($"mirror_menu_missing use={use} snapshot={snapshot}");
         var bounds = button["bounds"].AsArray().Select(n => n.GetValue<int>()).ToArray();
         var click = await tool("ui_click", new JsonObject { ["snapshot_id"] = snapshot["snapshot_id"].DeepClone(),
@@ -245,9 +246,12 @@ public sealed class UiInteractionTrial : ModSystem
         while (limit.Elapsed < TimeSpan.FromSeconds(8))
         {
             var position = await CrossingDiscovery.OnGame(() => Main.LocalPlayer.Center.ToTileCoordinates());
-            if (Math.Abs(position.X - Main.spawnTileX) <= 2)
-                return new JsonObject { ["item"] = "AdventureMirror", ["control"] = "UIWorldSpawnPanel",
-                    ["before_x"] = start.X, ["after_x"] = position.X, ["spawn_x"] = Main.spawnTileX };
+            bool arrived = random
+                ? Math.Abs(position.X - start.X) > 16 && Math.Abs(position.X - Main.spawnTileX) > 2
+                : Math.Abs(position.X - Main.spawnTileX) <= 2;
+            if (arrived)
+                return new JsonObject { ["item"] = "AdventureMirror", ["control"] = control, ["destination"] = random ? "random" : "world_spawn",
+                    ["before_x"] = start.X, ["before_y"] = start.Y, ["after_x"] = position.X, ["after_y"] = position.Y, ["spawn_x"] = Main.spawnTileX };
             await Task.Delay(25, token);
         }
         throw new InvalidOperationException("mirror_selected_but_did_not_teleport");
@@ -262,8 +266,10 @@ public sealed class UiInteractionTrial : ModSystem
 
         try
         {
+            string mirror = Environment.GetEnvironmentVariable("TB_MIRROR_TEST");
             foreach (var (width, height, scale, detached) in new[] { (800, 720, 1f, false), (1920, 1080, 1.25f, true) })
             {
+                if (mirror == "random" && detached) continue;
                 await CrossingDiscovery.OnGame(() =>
                 {
                     Main.SetDisplayMode(width, height, fullscreen: false);
@@ -330,7 +336,7 @@ public sealed class UiInteractionTrial : ModSystem
                 && conversation.Any(msg => !msg["sent"].GetValue<bool>()), "chat_send_or_reply_missing_from_panel");
             Check(chatMessages == before, "chat_messages_leaked_to_game_chat");
             report["chat"] = new JsonObject { ["entries"] = new JsonArray(conversation), ["game_chat_messages"] = chatMessages - before };
-            if (Environment.GetEnvironmentVariable("TB_MIRROR_TEST") == "1") report["mirror"] = await Mirror(Tool, timeout.Token);
+            if (mirror is "1" or "random") report["mirror"] = await Mirror(Tool, mirror == "random", timeout.Token);
             report["ok"] = true;
         }
         catch (Exception error) { report["failure"] = error.ToString(); }
