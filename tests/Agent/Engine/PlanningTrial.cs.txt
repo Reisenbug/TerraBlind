@@ -351,7 +351,8 @@ public sealed class AsciiTerrainTrial : ModSystem
     {
         string mode = Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII");
         if (mode is "combat-map" or "combat-map-live") return await RunCombatMap(mode == "combat-map-live");
-        if (mode is "pit-inputs" or "pit-inputs-live") return await RunPitInputs(mode == "pit-inputs-live");
+        if (mode is "combat-cave" or "combat-cave-live") return await RunCombatMap(mode == "combat-cave-live", cave: true);
+        if (mode is "pit-inputs" or "pit-inputs-live" or "pit-inputs-jev") return await RunPitInputs(mode);
         if (mode is "recovery-calibrate" or "recovery-live") return await RunRecovery(mode == "recovery-live");
         if (mode is "vision-calibrate" or "vision-live" or "vision-deep") return await RunVision(mode);
         if (mode is "detour-live" or "detour-calibrate") return await RunDetours(mode == "detour-live");
@@ -901,7 +902,8 @@ public sealed class AsciiTerrainTrial : ModSystem
     }
 
     const int RecoveryWidth = 36, RecoveryHeight = 22;
-    sealed record RecoveryScene(string Name, Point Start, Point Goal, Point Waypoint, Rectangle[] Blocks, Point? Opponent = null, bool Mirror = false)
+    sealed record RecoveryScene(string Name, Point Start, Point Goal, Point Waypoint, Rectangle[] Blocks, Point? Opponent = null,
+        bool Mirror = false, bool Equipped = false)
     {
         public string Id => Name + (Mirror ? "-left" : "-right");
         public Point Map(Point p) => Mirror ? new Point(RecoveryWidth - 1 - p.X, p.Y) : p;
@@ -927,6 +929,11 @@ public sealed class AsciiTerrainTrial : ModSystem
         Halt.All(); MazeWand.InvalidateField(); StateSpacePlanner.PreserveTerrain = true;
         var p = Main.LocalPlayer;
         foreach (var item in p.inventory.Concat(p.armor).Concat(p.miscEquips)) item.TurnToAir();
+        if (scene.Equipped)
+        {
+            p.armor[3].SetDefaults(ItemID.HermesBoots);
+            p.armor[4].SetDefaults(ItemID.SandstorminaBottle);
+        }
         foreach (var npc in Main.npc) npc.active = false;
         foreach (var projectile in Main.projectile) projectile.active = false;
         p.RemoveAllGrapplingHooks(); p.mount.Dismount(p);
@@ -1136,11 +1143,19 @@ public sealed class AsciiTerrainTrial : ModSystem
     sealed record PitOption(string Id, string Action, int[] Keys, float X, float Y);
 
     static async Task<(PitOption[] Options, JsonObject Evidence)> PitOptions(JsonObject snapshot, Point origin, int width, int height,
-        CancellationToken token)
+        CancellationToken token, bool equipped)
     {
         var proposals = (from dir in new[] { 1, 2 }
             from moves in new[] { (run: 24, jump: 0), (run: 0, jump: 18), (run: 8, jump: 18), (run: 16, jump: 18) }
-            select (name: dir == 1 ? "left" : "right", keys: PitPrefix(dir, moves.run, moves.jump), moves)).ToArray();
+            let direction = dir == 1 ? "left" : "right"
+            let boost = equipped && moves.run == 0
+            let keys = boost
+                ? Enumerable.Repeat(dir | 4, 18).Concat(Enumerable.Repeat(dir, 6)).Concat(Enumerable.Repeat(dir | 4, 12))
+                    .Concat(Enumerable.Repeat(0, 32)).ToArray()
+                : PitPrefix(dir, moves.run, moves.jump)
+            select (keys, action: boost
+                ? $"Hold {direction}+jump for 18 frames, release jump for 6 frames while moving, then press jump again for 12 frames and release both."
+                : $"Walk {direction} for {moves.run} frames, then hold {direction}+jump for {moves.jump} frames, then release both.")).ToArray();
         var clock = Stopwatch.StartNew();
         var batch = await PitForecast(new JsonObject { ["command"] = "combat_replays", ["snapshot"] = snapshot.DeepClone(),
             ["branches"] = new JsonArray(proposals.Select((option, i) => (JsonNode)new JsonObject {
@@ -1159,9 +1174,11 @@ public sealed class AsciiTerrainTrial : ModSystem
             bool grounded = end["grounded"].GetValue<bool>() && Sample(end, "vy") == 0;
             float travel = MathF.Abs(Sample(end, "x") - Sample(frames.First(), "x"))
                 + MathF.Abs(Sample(end, "y") - Sample(frames.First(), "y"));
-            string action = $"Walk {proposal.name} for {proposal.moves.run} frames, then hold {proposal.name}+jump for {proposal.moves.jump} frames, then release both.";
+            string action = proposal.action;
+            var jumpCounts = frames.Select(frame => frame["available_jumps"].GetValue<int>()).ToArray();
             evidence.Add(new JsonObject { ["id"] = id, ["action"] = action, ["controls"] = PitKeys(proposal.keys),
-                ["foot_x"] = x, ["foot_floor_y"] = y, ["grounded"] = grounded, ["safe"] = safe, ["travel_px"] = travel });
+                ["foot_x"] = x, ["foot_floor_y"] = y, ["grounded"] = grounded, ["safe"] = safe, ["travel_px"] = travel,
+                ["used_extra_jump"] = jumpCounts.Zip(jumpCounts.Skip(1)).Any(pair => pair.First > pair.Second) });
             if (safe && grounded && travel >= 16 && !options.Any(p => Math.Abs(p.X - x) < .25f && Math.Abs(p.Y - y) < .01f))
                 options.Add(new PitOption(id, action, proposal.keys, x, y));
         }
@@ -1265,10 +1282,12 @@ public sealed class AsciiTerrainTrial : ModSystem
         return result;
     }
 
-    static async Task<string> RunPitInputs(bool live)
+    static async Task<string> RunPitInputs(string mode)
     {
+        bool live = mode != "pit-inputs";
+        bool jev = mode == "pit-inputs-jev";
         const string question = "Pick one of the tested input sequences as the first move to get out of the pit and reach G. The coordinates in the options are measured endpoints: foot_floor_y is the top surface of the block the player landed on. Choose a useful first landing using the terrain and ordinary jumping physics.";
-        string root = Path.Combine(Main.SavePath, "pit-inputs");
+        string root = Path.Combine(Main.SavePath, jev ? "pit-inputs-jev" : "pit-inputs");
         Directory.CreateDirectory(root);
         string workspace = Path.Combine(root, "model-workspace");
         Directory.CreateDirectory(workspace);
@@ -1277,27 +1296,31 @@ public sealed class AsciiTerrainTrial : ModSystem
         var cases = new JsonArray();
         var report = new JsonObject { ["experiment"] = "terrain_ascii", ["study"] = "pit_inputs", ["ok"] = false, ["cases"] = cases };
         void Save() => File.WriteAllText(Path.Combine(root, "report.json"), report.ToJsonString());
-        await CrossingDiscovery.OnGame(() =>
+        string key = await CrossingDiscovery.OnGame(() =>
         {
             NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
             Combat.Enabled = Dodge.Enabled = false; Main.dayTime = true; Main.musicVolume = 0;
             report["audio"] = new JsonArray(Main.musicVolume, Main.soundVolume);
-            return true;
+            return jev ? JevCombat.Key() : null;
         });
         try
         {
+            if (jev && string.IsNullOrEmpty(key)) throw new InvalidOperationException("TypeSafe key unavailable");
+            foreach (bool equipped in jev ? new[] { false, true } : new[] { false })
             foreach (bool mirror in new[] { false, true })
             {
                 var template = RecoveryScenes.Single(s => s.Name == "pit-backtrack");
                 var blocks = template.Blocks.Select(block => block.X == 13 && block.Y == 11
                     ? new Rectangle(block.X + 1, block.Y, block.Width - 1, block.Height) : block).ToArray();
-                var scene = template with { Blocks = blocks, Mirror = mirror };
+                var scene = template with { Blocks = blocks, Mirror = mirror, Equipped = equipped };
                 var origin = new Point(mirror ? 2160 : 1740, 240);
-                var entry = new JsonObject { ["id"] = scene.Id }; cases.Add(entry);
+                string id = equipped ? scene.Id + "-equipped" : scene.Id;
+                var entry = new JsonObject { ["id"] = id,
+                    ["equipment"] = equipped ? new JsonArray("Hermes Boots", "Sandstorm in a Bottle") : new JsonArray() }; cases.Add(entry);
                 var marks = new Dictionary<char, Point> { ['P'] = scene.P, ['G'] = scene.G };
                 await CrossingDiscovery.OnGame(() => { ResetRecovery(origin, scene); return true; });
                 var (_, image) = await CaptureVision(origin, RecoveryWidth, RecoveryHeight, marks, token);
-                File.WriteAllBytes(Path.Combine(root, $"{scene.Id}.png"), image);
+                File.WriteAllBytes(Path.Combine(root, $"{id}.png"), image);
                 var sample = await CrossingDiscovery.OnGame(() =>
                 {
                     ResetRecovery(origin, scene);
@@ -1306,7 +1329,7 @@ public sealed class AsciiTerrainTrial : ModSystem
                         p.width, p.height);
                 });
                 entry["direct"] = await PlayRecovery(origin, scene, scene.G, token); Save();
-                var (options, evidence) = await PitOptions(sample.Snapshot, origin, sample.width, sample.height, token);
+                var (options, evidence) = await PitOptions(sample.Snapshot, origin, sample.width, sample.height, token, equipped);
                 entry["options"] = evidence; Save();
                 if (options.Length < 2) throw new InvalidOperationException("pit needs at least two distinct physical landings");
                 entry["geometry_reference"] = await RunPitRoute(origin, scene, sample.Snapshot, null, token); Save();
@@ -1320,18 +1343,21 @@ public sealed class AsciiTerrainTrial : ModSystem
                 foreach (var option in options) criteria[option.Id] = FormattableString.Invariant($"{option.Action} Lands at x={option.X:0.00}, foot_floor_y={option.Y:0.00}.");
                 var facts = new JsonObject { ["player_feet"] = new JsonArray(scene.P.X, scene.P.Y),
                     ["goal_feet"] = new JsonArray(scene.G.X, scene.G.Y), ["window_tiles"] = new JsonArray(RecoveryWidth, RecoveryHeight),
-                    ["movement"] = "Vanilla walk and jump, no accessories or block changes. x increases right, y increases down." };
+                    ["equipment"] = entry["equipment"].DeepClone(),
+                    ["movement"] = "Vanilla player movement without block changes. x increases right, y increases down." };
                 var mapped = facts.DeepClone().AsObject();
                 mapped["legend"] = Legend;
                 mapped["ascii_rows"] = new JsonArray(Enumerable.Range(0, RecoveryHeight).Select(y => JsonValue.Create(new string(
                     Enumerable.Range(0, RecoveryWidth).Select(x =>
                     { var p = new Point(x, y); return p == scene.P ? 'P' : p == scene.G ? 'G' : scene.Solid(x, y) ? '#' : '.'; }).ToArray()))).ToArray());
-                var responses = await Task.WhenAll(new[] { "ascii", "game" }.Select(async format =>
+                var responses = await Task.WhenAll(new[] { "ascii", jev ? "coarse" : "game" }.Select(async format =>
                 {
                     try
                     {
-                        return (format, await JudgeVision("Agent", format == "ascii" ? mapped : facts, criteria,
-                            format == "game" ? image : null, workspace, null, token, prompt: question));
+                        var answer = await JudgeVision(jev ? "Jev" : "Agent", format == "ascii" ? mapped : facts, criteria,
+                            format == "game" ? image : null, workspace, key, token, prompt: question);
+                        if (jev) answer["choice"] = answer["receipt"]?["answers"]?["pick"]?["choice"]?.DeepClone();
+                        return (format, answer);
                     }
                     catch (Exception error) when (!token.IsCancellationRequested) { return (format, new JsonObject { ["error"] = error.Message }); }
                 }));
@@ -1343,7 +1369,8 @@ public sealed class AsciiTerrainTrial : ModSystem
                     answer["route"] = await RunPitRoute(origin, scene, sample.Snapshot, selected, token); Save();
                 }
             }
-            report["ok"] = cases.Count == 2 && (!live || cases.All(e => e["ascii"]?["route"] != null && e["game"]?["route"] != null));
+            report["ok"] = cases.Count == (jev ? 4 : 2) &&
+                (!live || cases.All(e => e["ascii"]?["route"] != null && e[jev ? "coarse" : "game"]?["route"] != null));
             Save(); return report.ToJsonString();
         }
         catch (Exception error) { report["error"] = error.Message; Save(); throw; }
@@ -1357,14 +1384,23 @@ public sealed class AsciiTerrainTrial : ModSystem
 
     static readonly MethodInfo PvpShotClear = typeof(PvpTerrain).GetMethod("DirectShotClear", BindingFlags.Static | BindingFlags.NonPublic);
 
-    sealed record ArenaCase(string Id, bool Boss, int Obstacle, string Placement = null)
+    sealed record ArenaCase(string Id, bool Boss, int Obstacle, string Placement = null, Point? Cave = null, int BuildColumn = 9)
     {
+        public Point Origin => Cave ?? ArenaOrigin;
+        public Vector2 Target => Cave != null && Placement != null ? new Vector2(18.5f * 16, TargetCenter.Y) : TargetCenter;
         public int PlayerX => Boss ? ArenaPlayerX : 6;
-        public Point Marker => Boss ? new(ArenaPlayerX, 1) : new(25, 14);
-        public bool Solid(int x, int y) => x == 0 || x == Width - 1 || y == 0 || y >= ArenaFloor
+        public Point Marker => Boss ? new(ArenaPlayerX, 1) : new((int)(Target.X / 16), 14);
+        public bool Solid(int x, int y) => Cave is Point region ? CaveSolid(region.X + x, region.Y + y)
+            : x == 0 || x == Width - 1 || y == 0 || y >= ArenaFloor
             || Placement != null && x == 9 && y == 15
             || (Boss ? x is 10 or 18 || x == Obstacle && y is >= 4 and <= 13
                 : Obstacle >= 0 && x == ShotGateX && y != Obstacle);
+    }
+
+    static bool CaveSolid(int x, int y)
+    {
+        var tile = Main.tile[x, y];
+        return tile.HasUnactuatedTile && Main.tileSolid[tile.TileType] && !Main.tileSolidTop[tile.TileType];
     }
 
     static void ResetArena(ArenaCase scene)
@@ -1378,27 +1414,35 @@ public sealed class AsciiTerrainTrial : ModSystem
             if (p.buffType[i] != 0) p.DelBuff(i);
         p.RemoveAllGrapplingHooks(); p.mount.Dismount(p);
         p.creativeGodMode = false; p.immune = false; p.immuneTime = 0; Array.Clear(p.hurtCooldowns);
-        for (int x = -3; x < Width + 3; x++)
-        for (int y = -3; y < Height + 3; y++)
+        if (scene.Cave is Point cave)
         {
-            var tile = Main.tile[ArenaOrigin.X + x, ArenaOrigin.Y + y];
-            tile.ClearEverything();
-            if (x >= 0 && x < Width && y >= 0 && y < Height && scene.Solid(x, y)) tile.ResetToType(TileID.GrayBrick);
+            if (scene.Placement != null) Main.tile[cave.X + scene.BuildColumn, cave.Y + 14].ClearTile();
+        }
+        else
+        {
+            for (int x = -3; x < Width + 3; x++)
+            for (int y = -3; y < Height + 3; y++)
+            {
+                var tile = Main.tile[ArenaOrigin.X + x, ArenaOrigin.Y + y];
+                tile.ClearEverything();
+                if (x >= 0 && x < Width && y >= 0 && y < Height && scene.Solid(x, y)) tile.ResetToType(TileID.GrayBrick);
+            }
         }
         p.statLife = p.statLifeMax2;
-        p.position = ArenaOrigin.ToVector2() * 16 + new Vector2(scene.PlayerX * 16 + 8 - p.width / 2f, ArenaFloor * 16 - p.height);
+        p.position = scene.Origin.ToVector2() * 16 + new Vector2(scene.PlayerX * 16 + 8 - p.width / 2f, ArenaFloor * 16 - p.height);
         p.velocity = Vector2.Zero; p.jump = 0; p.releaseJump = true;
-        p.fallStart = p.fallStart2 = ArenaOrigin.Y + ArenaFloor;
+        p.fallStart = p.fallStart2 = scene.Origin.Y + ArenaFloor;
         Main.playerInventory = Main.mapFullscreen = Main.autoPause = false;
     }
 
     sealed class ArenaProbe(ArenaCase scene, string option)
     {
         readonly TaskCompletionSource<JsonObject> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        readonly Vector2 origin = ArenaOrigin.ToVector2() * 16;
+        readonly Vector2 origin = scene.Origin.ToVector2() * 16;
         int tick, projectile = -1, startingHp = Main.LocalPlayer.statLife;
         int? contactFrame;
         float gateY, lateral;
+        Vector2 muzzleAtShot;
         bool clear, placed, support;
         public Task<JsonObject> Result => done.Task;
 
@@ -1410,7 +1454,7 @@ public sealed class AsciiTerrainTrial : ModSystem
                 return;
             }
             if (scene.Placement == null || option == "C") return;
-            Point cell = ArenaOrigin + new Point(9, 14);
+            Point cell = scene.Origin + new Point(scene.BuildColumn, 14);
             ushort type = option == "A" ? TileID.GrayBrick : TileID.Platforms;
             placed = p.IsInTileInteractionRange(cell.X, cell.Y, TileReachCheckSettings.Simple)
                 && WorldGen.PlaceTile(cell.X, cell.Y, type, mute: true, plr: p.whoAmI);
@@ -1451,12 +1495,13 @@ public sealed class AsciiTerrainTrial : ModSystem
                 Finish(p, contactFrame == null && p.statLife == startingHp && !p.dead);
                 return;
             }
-            var enemy = origin + TargetCenter;
+            var enemy = origin + scene.Target;
             bool takingCover = scene.Placement == "cover";
             var muzzle = takingCover ? enemy : p.Center;
             var target = takingCover ? p.Center : enemy;
             if (tick == 19)
             {
+                muzzleAtShot = muzzle - origin;
                 float gateX = origin.X + (ShotGateX + .5f) * 16;
                 gateY = (MathHelper.Lerp(muzzle.Y, target.Y, (gateX - muzzle.X) / (target.X - muzzle.X)) - origin.Y) / 16;
                 clear = (bool)PvpShotClear.Invoke(null, new object[] { muzzle, target });
@@ -1477,6 +1522,7 @@ public sealed class AsciiTerrainTrial : ModSystem
             done.SetResult(new JsonObject { ["pass"] = pass, ["frames"] = tick, ["damage"] = startingHp - p.statLife,
                 ["contact_frame"] = contactFrame, ["placed"] = scene.Placement == null ? null : JsonValue.Create(placed),
                 ["supports_landing"] = scene.Placement == null ? null : JsonValue.Create(support),
+                ["muzzle_local_px"] = scene.Boss ? null : new JsonArray(muzzleAtShot.X, muzzleAtShot.Y),
                 ["line_clear"] = scene.Boss ? null : JsonValue.Create(clear),
                 ["gate_y"] = scene.Boss ? null : JsonValue.Create(gateY),
                 ["lateral_at_23_frames_px"] = scene.Boss ? JsonValue.Create(lateral) : null });
@@ -1515,8 +1561,8 @@ public sealed class AsciiTerrainTrial : ModSystem
         facts[scene.Boss ? "hostile_projectile" : "target_center_tiles"] = scene.Boss
             ? new JsonObject { ["center_tiles"] = new JsonArray(14.5, 1.5), ["velocity_pixels_per_frame"] = new JsonArray(0, 4),
                 ["hitbox_pixels"] = new JsonArray(24, 8), ["passes_through_tiles"] = true }
-            : new JsonArray(TargetCenter.X / 16, TargetCenter.Y / 16);
-        if (scene.Placement != null) facts["placement_tile"] = new JsonArray(9, 14);
+            : new JsonArray(scene.Target.X / 16, scene.Target.Y / 16);
+        if (scene.Placement != null) facts["placement_tile"] = new JsonArray(scene.BuildColumn, 14);
         var mapped = facts.DeepClone().AsObject();
         mapped["legend"] = "One character per tile. # solid, . air, P feet of player, E target or incoming projectile. x right and y down, zero-based.";
         mapped["ascii_rows"] = new JsonArray(Enumerable.Range(0, Height).Select(y => JsonValue.Create(new string(
@@ -1525,9 +1571,50 @@ public sealed class AsciiTerrainTrial : ModSystem
         return (facts, mapped);
     }
 
-    static async Task<string> RunCombatMap(bool live)
+    static ArenaCase[] FindCaveTrials(JsonObject flat, JsonObject jump)
     {
-        string root = Path.Combine(Main.SavePath, "combat-map");
+        Vector2 Muzzle(JsonObject sample) => new(sample["muzzle_local_px"][0].GetValue<float>(), sample["muzzle_local_px"][1].GetValue<float>());
+        bool Clear(Vector2 from, Vector2 to) => (bool)PvpShotClear.Invoke(null, new object[] { from, to });
+        Vector2 flatMuzzle = Muzzle(flat), jumpMuzzle = Muzzle(jump);
+        var found = new List<ArenaCase>();
+        (Point Origin, int Column)? placement = null;
+        var p = Main.LocalPlayer;
+        for (int x = 120; x < Main.maxTilesX - 140 && (found.Count < 12 || placement == null); x += 9)
+        for (int y = (int)Main.rockLayer + 12; y < Main.maxTilesY - 230 && (found.Count < 12 || placement == null); y += 2)
+        {
+            if (!CaveSolid(x + 6, y + ArenaFloor) || CaveSolid(x + 6, y + 13)
+                || CaveSolid(x + 6, y + 14) || CaveSolid(x + 6, y + 15)) continue;
+            var point = new Point(x, y);
+            var origin = point.ToVector2() * 16;
+            var shooter = origin + new Vector2(6 * 16 + 8, ArenaFloor * 16 - p.height / 2f);
+            var target = origin + TargetCenter;
+            if (Collision.SolidCollision(shooter - new Vector2(p.width / 2f, p.height / 2f), p.width, p.height)) continue;
+            int buildColumn = placement == null && Clear(shooter, origin + new Vector2(18.5f * 16, TargetCenter.Y))
+                ? Enumerable.Range(8, 3).FirstOrDefault(column => !Main.tile[x + column, y + 14].HasTile
+                    && CaveSolid(x + column, y + 15)) : 0;
+            bool shots = found.Count < 12 && CaveSolid(x + 25, y + ArenaFloor)
+                && !CaveSolid(x + 25, y + 13) && !CaveSolid(x + 25, y + 14) && !CaveSolid(x + 25, y + 15)
+                && Clear(origin + flatMuzzle, target) != Clear(origin + jumpMuzzle, target)
+                && found.All(scene => (scene.Origin - point).ToVector2().LengthSquared() > 1024);
+            if (buildColumn == 0 && !shots) continue;
+            bool dry = true;
+            for (int tx = x; tx < x + Width && dry; tx++)
+            for (int ty = y; ty < y + Height && dry; ty++) dry = Main.tile[tx, ty].LiquidAmount == 0;
+            if (!dry) continue;
+            if (buildColumn != 0) placement = (point, buildColumn);
+            if (shots) found.Add(new ArenaCase("cave-shot-" + found.Count, false, -1, Cave: point));
+        }
+        if (placement is { } at)
+        {
+            found.Add(new ArenaCase("cave-place-cover", false, -1, "cover", at.Origin, at.Column));
+            found.Add(new ArenaCase("cave-place-platform", false, -1, "platform", at.Origin, at.Column));
+        }
+        return found.ToArray();
+    }
+
+    static async Task<string> RunCombatMap(bool live, bool cave = false)
+    {
+        string root = Path.Combine(Main.SavePath, cave ? "combat-cave" : "combat-map");
         Directory.CreateDirectory(root);
         var cases = new JsonArray(); var responses = new JsonArray();
         var report = new JsonObject { ["experiment"] = "terrain_ascii", ["study"] = "combat_map", ["ok"] = false,
@@ -1552,17 +1639,23 @@ public sealed class AsciiTerrainTrial : ModSystem
             Save();
             int flatRow = (int)flat["gate_y"].GetValue<float>(), jumpRow = (int)jump["gate_y"].GetValue<float>();
             if (flatRow == jumpRow) throw new InvalidOperationException("the two native shots crossed the same gate tile");
-            var scenes = new[] { new ArenaCase("pvp-ground-slit", false, flatRow), new ArenaCase("pvp-high-slit", false, jumpRow),
+            var scenes = cave ? await CrossingDiscovery.OnGame(() => FindCaveTrials(flat, jump)) : new[] {
+                new ArenaCase("pvp-ground-slit", false, flatRow), new ArenaCase("pvp-high-slit", false, jumpRow),
                 new ArenaCase("boss-ceiling-left", true, 12), new ArenaCase("boss-ceiling-right", true, 16),
                 new ArenaCase("pvp-place-cover", false, -1, "cover"), new ArenaCase("pvp-place-platform", false, -1, "platform") };
+            var excluded = new JsonArray();
+            report["excluded"] = excluded;
             foreach (var scene in scenes)
             {
+                if (cave && scene.Placement == null && cases.Count(entry => entry["id"].ToString().StartsWith("cave-shot-")) >= 4) continue;
                 var (coarse, ascii) = await CrossingDiscovery.OnGame(() => ArenaFacts(scene));
                 var native = new JsonObject();
                 var actions = scene.Placement == null ? Options : new[] { "A", "B", "C" };
                 foreach (string action in actions) native[action] = await PlayArena(scene, action, token);
                 var picks = actions.Where(action => native[action]["pass"].GetValue<bool>()).ToArray();
-                var entry = new JsonObject { ["id"] = scene.Id, ["native"] = native, ["coarse"] = coarse, ["ascii"] = ascii };
+                var entry = new JsonObject { ["id"] = scene.Id, ["native"] = native, ["coarse"] = coarse, ["ascii"] = ascii,
+                    ["world_origin"] = new JsonArray(scene.Origin.X, scene.Origin.Y) };
+                if (cave && picks.Length != 1) { excluded.Add(entry); Save(); continue; }
                 cases.Add(entry); Save();
                 if (picks.Length != 1) throw new InvalidOperationException("combat fixture needs one winning action: " + scene.Id);
                 entry["correct"] = picks[0];
@@ -1579,7 +1672,7 @@ public sealed class AsciiTerrainTrial : ModSystem
                     ? "Choose one placement that adds a place to land from above while keeping the current horizontal bullet path from player to target open. Both requirements apply."
                     : scene.Boss
                     ? "Choose the jump that moves the player outside the falling projectile's hitbox in the first 46 frames. It travels vertically downward through blocks. A wall or a low overhang may constrain the jump."
-                    : "Choose the approach from which the straight bullet will reach the fixed opponent through the divider. The shot is aimed from the player's body center at the target after exactly 19 frames of movement. A bullet stops on touching a solid tile.";
+                    : "Choose the approach from which the straight bullet will reach the fixed opponent. The shot is aimed from the player's body center at the target after exactly 19 frames of movement. A bullet stops on touching a solid tile.";
                 entry["criteria"] = scene.Placement != null
                     ? new JsonObject { ["A"] = "Place a full solid gray brick at placement_tile.", ["B"] = "Place a wooden one-way platform at placement_tile.",
                         ["C"] = "Leave the tile empty." }
@@ -1609,7 +1702,8 @@ public sealed class AsciiTerrainTrial : ModSystem
                     responses.Add(answer); Save();
                 }
             }
-            report["ok"] = cases.Count == 6 && (!live || responses.Count == 36 && responses.All(answer => answer["choice"] != null));
+            report["ok"] = (cave ? cases.Count >= 5 && cases.Count(e => e["id"].ToString().StartsWith("cave-place-")) == 2 : cases.Count == 6)
+                && (!live || responses.Count == cases.Count * 6 && responses.All(answer => answer["choice"] != null));
             Save(); return report.ToJsonString();
         }
         catch (Exception error) { report["error"] = error.Message; Save(); throw; }

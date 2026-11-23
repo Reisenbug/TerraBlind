@@ -21,7 +21,9 @@ Build `tests/Agent/Engine/AgentChecks.csproj` into an isolated tModLoader save c
 - `TB_TERRAIN_ASCII=vision-deep` compares the three formats on two four-block enclosure layouts. It also measures Jev on the tile maps from the four simpler layouts.
 - `TB_TERRAIN_ASCII=recovery-calibrate` runs direct navigation and a reference waypoint on six layouts. `recovery-live` then asks the Agent for a waypoint from ASCII and from the game frame and runs both choices.
 - `TB_TERRAIN_ASCII=pit-inputs` compares existing navigation with engine-tested input sequences in the pit. `pit-inputs-live` adds the Agent's first input choice with ASCII and with a game frame.
+- `TB_TERRAIN_ASCII=pit-inputs-jev` compares Jev's first input choice with and without ASCII, in both pit directions with a vanilla loadout or with Hermes Boots and Sandstorm in a Bottle equipped.
 - `TB_TERRAIN_ASCII=combat-map` calibrates movement and projectile outcomes for the PvP and boss-dodge fixtures. `combat-map-live` compares Jev with coarse distances, those distances plus ASCII, and those distances plus extracted geometry.
+- `TB_TERRAIN_ASCII=combat-cave` finds dry underground sections in the test world and verifies the shot and placement candidates. `combat-cave-live` adds the same three Jev inputs.
 
 `terrain-ascii.json` contains the exact inputs, measured game outcomes, model selections, and time to the first choice. A model selection is scored against its own scene's physical trial. Agent latency includes opening its isolated session. Jev latency measures the existing `jev_judge` call. Treat this as a small paired trial.
 
@@ -93,6 +95,17 @@ The worker tries eight walk and jump prefixes from the same snapshot. Only disti
 
 Both model inputs picked the same run and jump on each layout. The code-only selector spent its first move heading toward the wall. The model saved 60 playback frames on both layouts. It took 1.36–1.69 s from observation to choice, and 7.25–10.16 s from cold session launch to choice. Even using the shorter decision time, adding search time and playback yielded 5.73–6.00 s for the model arms and 5.62–5.65 s for the nearest-to-G arm. Candidate generation was shared. Every completed native playback was damage-free and matched the worker's positions with zero measured pixel error.
 
+Jev's choices were also replayed with and without ASCII. The equipped fixtures verified that the double-jump candidates consumed an extra jump. All candidate-selection arms reached the goal in each of these four runs. Times below are movement frames after the decision.
+
+| Layout | Existing nav | Nearest to G | Jev, endpoints | Jev, ASCII |
+| --- | ---: | ---: | ---: | ---: |
+| Right | stopped at 53 | 279 | 279 | 219 |
+| Left | 243 | 279 | 275 | 219 |
+| Right, boots and bottle | stopped at 78 | 269 | 269 | 199 |
+| Left, boots and bottle | 230 | 269 | 222 | 222 |
+
+The four ASCII choices returned in 223–749 ms. In the equipped left layout Jev chose an observed double-jump candidate in both formats. The continuation through the stair and rim remains the fixture's fixed engine search.
+
 **Open navigation bug / 待查寻路缺陷.** Run `pit-inputs` and inspect `pit-backtrack-right.direct`. In the 32 px clearance fixture, `RecedingNav` stopped after 54 frames with `no_progress_preserving_terrain`. From the same start, holding left for 16 frames, then left and jump for 18 frames reached the lower stair. The input sequence followed by the staged continuation reached G in 219 frames, damage-free. The mirror reached G with existing navigation. Trace where the feasible backward jump is lost in the planner or executor. The root cause remains open.
 
 ## Combat decisions / 战斗地形判断
@@ -107,4 +120,12 @@ The three input formats share the same player, threat, and action definitions. T
 | Add ASCII | 2/4 | 2/4 | 4/4 | 220 ms | 709 |
 | Add engine probes | 4/4 | 3/4 | 4/4 | 219 ms | 548 |
 
-Jev answered two requests per scene and format in this sequential run. The solid tile blocked the horizontal bullet. The platform supported a landing and let the bullet through. Selecting the material required no additional map context in these two fixtures. The moving target and irregular cave geometry of a live underground duel still need their own trial.
+Jev answered two requests per scene and format in this sequential run. The solid tile blocked the horizontal bullet. The platform supported a landing and let the bullet through. Selecting the material required no additional map context in these two fixtures.
+
+The cave run kept world-generated terrain and found three valid shot comparisons at world-tile origins `(921,813)`, `(2010,841)`, and `(2055,839)`. Two placement objectives shared a chamber at `(192,605)`. Nine scanned shot candidates were excluded before model calls because real player movement and projectile replay did not yield a single successful action. The opposing position is fixed during a replay.
+
+| Jev input on natural cave fixtures | PvP shot | PvP placement | All | Mean input tokens |
+| --- | ---: | ---: | ---: | ---: |
+| Coarse distances | 2/6 | 4/4 | 6/10 | 479 |
+| Add ASCII | 2/6 | 4/4 | 6/10 | 674 |
+| Add engine probes | 6/6 | 4/4 | 10/10 | 535 |
