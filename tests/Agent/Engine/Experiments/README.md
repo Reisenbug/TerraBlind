@@ -4,6 +4,6 @@
 
 Arena experiments clear liquids in the test area, suppress natural spawns, clear existing hostile NPCs, and close the perimeter. Document any liquids, enemies, or open boundaries required by the experiment. Mute music and keep game sound effects audible during execution and recording.
 
-启动独立客户端前，将 `arena.config.json` 复制到测试保存目录并命名为 `config.json`。保留 `LastLaunchedVersion`，游戏依赖它判断是否读取音量。录制若使用自己的配置，保留音效音量并在启动前将测试副本的 `VolumeMusic` 设为 `0`。
+启动独立客户端前，将 `arena.config.json` 复制到测试保存目录并命名为 `config.json`。`LastLaunchedVersion` 让游戏读取音量，`LastLaunchedTModLoaderVersion` 跳过新目录的首次启动欢迎窗口。录制若使用自己的配置，保留音效音量并在启动前将测试副本的 `VolumeMusic` 设为 `0`。
 
-Copy `arena.config.json` to the isolated save as `config.json` before launching. Retain `LastLaunchedVersion` so Terraria reads the audio values. For recordings with custom settings, set `VolumeMusic` to `0` in the test copy and retain the chosen sound effects volume.
+Copy `arena.config.json` to the isolated save as `config.json` before launching. `LastLaunchedVersion` enables the saved audio values and `LastLaunchedTModLoaderVersion` skips the first-launch welcome dialog. For recordings with custom settings, set `VolumeMusic` to `0` in the test copy and retain the chosen sound effects volume.
