@@ -24,6 +24,7 @@ Build `tests/Agent/Engine/AgentChecks.csproj` into an isolated tModLoader save c
 - `TB_TERRAIN_ASCII=pit-inputs-jev` compares Jev's first input choice with and without ASCII, in both pit directions with a vanilla loadout or with Hermes Boots and Sandstorm in a Bottle equipped.
 - `TB_TERRAIN_ASCII=combat-map` calibrates movement and projectile outcomes for the PvP and boss-dodge fixtures. `combat-map-live` compares Jev with coarse distances, those distances plus ASCII, and those distances plus extracted geometry.
 - `TB_TERRAIN_ASCII=combat-cave` finds dry underground sections in the test world and verifies the shot and placement candidates. `combat-cave-live` adds the same three Jev inputs.
+- `TB_TERRAIN_ASCII=cave-travel` measures walking, riding, boosting, and grappling at a naturally generated rail. This probe uses the built-in game skills without model calls.
 
 `terrain-ascii.json` contains the exact inputs, measured game outcomes, model selections, and time to the first choice. A model selection is scored against its own scene's physical trial. Agent latency includes opening its isolated session. Jev latency measures the existing `jev_judge` call. Treat this as a small paired trial.
 
@@ -129,3 +130,9 @@ The cave run kept world-generated terrain and found three valid shot comparisons
 | Coarse distances | 2/6 | 4/4 | 6/10 | 479 |
 | Add ASCII | 2/6 | 4/4 | 6/10 | 674 |
 | Add engine probes | 6/6 | 4/4 | 10/10 | 535 |
+
+## Travel on existing terrain / 天然地形赶路
+
+The isolated world had a dry rail starting at `(2439,488)`. Walking moved 237 px in 1.66 s and dropped 224 px to a lower floor. Boarding, riding for about 15 tiles, and dismounting took 2.48 s, including the initial pull. It kept the original height. `minecart_travel@0` in boost mode took 116 ms and verified a native rail-hook cancel with horizontal speed around 11 px/frame. The skill uses the existing track, waits for the native pull, and cancels it with jump before boarding.
+
+From the lower floor, `grapple_move@0` verified attachment to a current anchor after 433 ms, moving 64 px forward and 81 px upward. The first attempt from the falling start lost its candidate before the skill rechecked it. The grounded sample checked the candidate again immediately before use. `cave-travel/report.json` contains all movement and skill receipts.

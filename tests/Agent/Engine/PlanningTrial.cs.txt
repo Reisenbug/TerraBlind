@@ -352,6 +352,7 @@ public sealed class AsciiTerrainTrial : ModSystem
         string mode = Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII");
         if (mode is "combat-map" or "combat-map-live") return await RunCombatMap(mode == "combat-map-live");
         if (mode is "combat-cave" or "combat-cave-live") return await RunCombatMap(mode == "combat-cave-live", cave: true);
+        if (mode == "cave-travel") return await RunCaveTravel();
         if (mode is "pit-inputs" or "pit-inputs-live" or "pit-inputs-jev") return await RunPitInputs(mode);
         if (mode is "recovery-calibrate" or "recovery-live") return await RunRecovery(mode == "recovery-live");
         if (mode is "vision-calibrate" or "vision-live" or "vision-deep") return await RunVision(mode);
@@ -1708,6 +1709,120 @@ public sealed class AsciiTerrainTrial : ModSystem
         }
         catch (Exception error) { report["error"] = error.Message; Save(); throw; }
         finally { await CrossingDiscovery.OnGame(() => { arenaProbe = null; BoundaryInputPlayer.Drive = null; Halt.All(); return true; }); }
+    }
+
+    static async Task<string> RunCaveTravel()
+    {
+        string folder = Path.Combine(Main.SavePath, "cave-travel");
+        Directory.CreateDirectory(folder);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        var token = deadline.Token;
+        var report = new JsonObject { ["experiment"] = "terrain_ascii", ["study"] = "cave_travel", ["ok"] = false };
+        void Save() => File.WriteAllText(Path.Combine(folder, "report.json"), report.ToJsonString());
+        const int railDistance = 15;
+        bool Track(int x, int y)
+        {
+            var tile = Main.tile[x, y];
+            return tile.HasUnactuatedTile && tile.TileType == TileID.MinecartTrack;
+        }
+        var rail = await CrossingDiscovery.OnGame(() =>
+        {
+            for (int y = (int)Main.rockLayer; y < Main.maxTilesY - 220; y++)
+            for (int x = 80; x < Main.maxTilesX - railDistance - 80; x++)
+            {
+                if (!Track(x, y) || Track(x - 1, y)) continue;
+                int length = 1;
+                while (Track(x + length, y) && x + length < Main.maxTilesX - 30) length++;
+                if (length < railDistance + 9) continue;
+                bool clear = true;
+                for (int tx = x; tx < x + railDistance + 9 && clear; tx++)
+                for (int ty = y - 3; ty <= y && clear; ty++)
+                    clear = !CaveSolid(tx, ty) && Main.tile[tx, ty].LiquidAmount == 0;
+                if (clear) return new Point(x, y);
+            }
+            return Point.Zero;
+        });
+        report["track"] = new JsonArray(rail.X, rail.Y);
+        async Task<JsonObject> Tool(string name, JsonObject args)
+            => JsonNode.Parse(await AgentTools.Execute(name, args, token)).AsObject();
+        async Task<JsonObject> Skill(string name, JsonObject input) => await Tool("run_script", new JsonObject
+        {
+            ["code"] = "return skill('" + name + "',0," + input.ToJsonString() + ");",
+            ["timeout_ms"] = 15000
+        });
+        Task<JsonObject> Read() => CrossingDiscovery.OnGame(() =>
+        {
+            var p = Main.LocalPlayer;
+            return new JsonObject { ["x"] = p.Center.X, ["y"] = p.Center.Y, ["vx"] = p.velocity.X,
+                ["vy"] = p.velocity.Y, ["hp"] = p.statLife, ["minecart"] = p.mount is { Active: true, Cart: true },
+                ["grapple_count"] = p.grapCount };
+        });
+        async Task Measure(string name, Func<Task<JsonObject>> run)
+        {
+            var before = await Read();
+            var clock = Stopwatch.StartNew();
+            var receipt = await run();
+            report[name] = new JsonObject { ["before"] = before, ["receipt"] = receipt,
+                ["after"] = await Read(), ["wall_ms"] = clock.ElapsedMilliseconds };
+            Save();
+        }
+        Task<bool> Reset(bool grapple) => CrossingDiscovery.OnGame(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false; Main.musicVolume = 0;
+            var p = Main.LocalPlayer;
+            p.RemoveAllGrapplingHooks(); p.mount.Dismount(p);
+            foreach (var item in p.inventory.Concat(p.armor).Concat(p.miscEquips)) item.TurnToAir();
+            if (grapple) p.miscEquips[4].SetDefaults(ItemID.GrapplingHook);
+            foreach (var npc in Main.npc) npc.active = false;
+            foreach (var shot in Main.projectile) shot.active = false;
+            p.position = new Vector2((rail.X + 2.5f) * 16 - p.width / 2f, (rail.Y + 1) * 16 - p.height);
+            p.velocity = Vector2.Zero; p.jump = 0; p.releaseJump = true;
+            p.fallStart = p.fallStart2 = rail.Y + 1;
+            p.statLife = p.statLifeMax2;
+            return true;
+        });
+        try
+        {
+            if (rail == Point.Zero) throw new InvalidOperationException("no dry continuous natural rail found");
+            await Reset(false);
+            await Measure("walk", () => Tool("act", JsonNode.Parse("""
+                {"steps":[{"keys":["right"],"until":{"moved":{"dx":15,"dy":0}}}],"timeout_frames":160}
+                """).AsObject()));
+            await Reset(false);
+            await Measure("cart", () => Skill("minecart_travel", new JsonObject
+            { ["x"] = rail.X + 6, ["y"] = rail.Y, ["mode"] = "ride", ["direction"] = 1, ["ride_tiles"] = railDistance }));
+            await Reset(false);
+            await Measure("rail_boost", () => Skill("minecart_travel", new JsonObject
+            { ["x"] = rail.X + 6, ["y"] = rail.Y, ["mode"] = "boost" }));
+            await Reset(true);
+            for (int attempt = 0; attempt < 45; attempt++)
+            {
+                bool standing = await CrossingDiscovery.OnGame(() =>
+                {
+                    var p = Main.LocalPlayer;
+                    return p.velocity.Y == 0 && Collision.SolidCollision(p.position + Vector2.UnitY, p.width, p.height);
+                });
+                if (standing) break;
+                await Task.Delay(30, token);
+            }
+            var footing = await Read();
+            var state = await Tool("get_state", new JsonObject { ["fields"] = new JsonArray("movement_capabilities") });
+            var anchors = state["movement_capabilities"]?["grapple"]?["anchors"] as JsonArray ?? new JsonArray();
+            var anchor = anchors.Where(a => a["x"].GetValue<int>() >= rail.X + 5 && a["y"].GetValue<int>() < footing["y"].GetValue<float>() / 16f - 2)
+                .OrderBy(a => a["y"].GetValue<int>()).FirstOrDefault();
+            report["anchors"] = anchors.DeepClone(); Save();
+            if (anchor != null)
+                await Measure("grapple", () => Skill("grapple_move", new JsonObject
+                { ["x"] = anchor["x"].DeepClone(), ["y"] = anchor["y"].DeepClone() }));
+            report["ok"] = report["cart"]?["receipt"]?["value"]?["verified"]?.GetValue<bool>() == true
+                && report["rail_boost"]?["receipt"]?["value"]?["outcome"]?.ToString() == "rail_boost_observed"
+                && report["grapple"]?["receipt"]?["value"]?["verified"]?.GetValue<bool>() == true;
+            Save(); return report.ToJsonString();
+        }
+        catch (Exception error) { report["error"] = error.Message; Save(); throw; }
+        finally { await CrossingDiscovery.OnGame(() => { Halt.All(); return true; }); }
     }
 
     static async Task<string> RunVision(string mode)
