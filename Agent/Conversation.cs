@@ -82,12 +82,12 @@ public sealed class AgentConversation
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex) { result = new JsonObject { ["error"] = ex.Message }.ToJsonString(); }
                     _history.Add(ToolResult(id, result));
-                    if (name == "terrain_map" && AgentImages.Take(JsonNode.Parse(result)) is string image)
+                    if (AgentImages.ReturnsImage(name) && AgentImages.Take(JsonNode.Parse(result)) is string image)
                         mapImages.Add(new JsonObject { ["type"] = "image_url", ["image_url"] = new JsonObject { ["url"] = image } });
                 }
                 if (mapImages.Count > 0)
                 {
-                    mapImages.Insert(0, new JsonObject { ["type"] = "text", ["text"] = "地图图片对应本轮terrain_map结果，世界格坐标换算见工具返回。" });
+                    mapImages.Insert(0, new JsonObject { ["type"] = "text", ["text"] = "图片按本轮 terrain_map 和 ui_snapshot 的返回顺序排列，坐标换算见对应工具结果。" });
                     _history.Add(new JsonObject { ["role"] = "user", ["content"] = mapImages });
                 }
             }

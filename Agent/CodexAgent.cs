@@ -15,6 +15,7 @@ namespace TerraBlind;
 
 internal static class AgentImages
 {
+    internal static bool ReturnsImage(string name) => name is "terrain_map" or "ui_snapshot";
     static readonly ConcurrentDictionary<string, byte[]> images = new();
     static readonly ConcurrentQueue<string> order = new();
     internal static string Register(byte[] png)
@@ -390,8 +391,10 @@ public sealed class CodexAgent : IDisposable
                 string description = function["description"]?.ToString() ?? "";
                 if (function["name"]?.ToString() is "get_state" or "game_api" or "run_script" or "ask")
                     description = "返回JSON文本(string)；外层访问字段先JSON.parse。\n" + description;
-                if (function["name"]?.ToString() == "terrain_map")
-                    description = "Codex exec返回字符串：JSON元数据后换行接data:image/图片URI。显示方式：const r=await tools.terrain_map(参数); const i=r.indexOf('\\ndata:image/'); if(i>=0){text(r.slice(0,i));image(r.slice(i+1).trim());}else text(r);\n" + description;
+                string name = function["name"]?.ToString();
+                if (AgentImages.ReturnsImage(name))
+                    description = "Codex exec返回字符串：JSON元数据后换行接data:image/图片URI。显示方式：const r=await tools." + name
+                        + "(参数); const i=r.indexOf('\\ndata:image/'); if(i>=0){text(r.slice(0,i));image(r.slice(i+1).trim());}else text(r);\n" + description;
                 dynamicTools.Add(new JsonObject { ["type"] = "function", ["name"] = function["name"].DeepClone(),
                     ["description"] = description,
                     ["inputSchema"] = function["parameters"].DeepClone() });
@@ -630,7 +633,7 @@ public sealed class CodexAgent : IDisposable
             {
                 var result = JsonNode.Parse(output);
                 success = !AgentTools.Rejected(result as JsonObject);
-                if (success && name == "terrain_map") image = AgentImages.Take(result);
+                if (success && AgentImages.ReturnsImage(name)) image = AgentImages.Take(result);
                 output = AgentModelOutput.Project(name, result)?.ToJsonString(AgentTools.ModelJson) ?? "null";
             }
             catch (System.Text.Json.JsonException) { }

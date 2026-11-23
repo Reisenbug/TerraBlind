@@ -1946,7 +1946,7 @@ public static partial class AgentTools
     static bool ObservationTool(string name) => name is "get_state" or "game_api" or "game_catalog" or "find_tiles" or "inspect_terrain" or "block_region"
         or "pylon_list" or "fishing_status" or "shop_list"
         or "find_descent" or "find_biome" or "find_pyramids" or "early_descent" or "invasion_status"
-        or "terrain_map" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "jev_judge" or "item_info" or "wiki_search" or "wiki_page"
+        or "terrain_map" or "ui_snapshot" or "opportunity_assess" or "nearby_drops" or "combat_assess" or "jev_judge" or "item_info" or "wiki_search" or "wiki_page"
         or "recipe" or "script_program" or "script_report" or "gather_observe" or "equipment_list" or "inventory_review" or "boss_status" or "action_query"
         or "find_descent" or "descent_route" or "slot_state" or "craft_recipes" or "mod_input_list";
     public static async Task<string> Execute(string name, JsonObject args, CancellationToken token)
@@ -2010,7 +2010,7 @@ public static partial class AgentTools
         bool external = name is "nav_to" or "mine" or "mine_vein" or "chop_wood" or "use_item"
             or "place_at" or "build_bridge" or "act" or "interact" or "loot_all" or "craft_into_inventory" or "inventory_swap" or "combat_reposition"
             or "gather" or "collect_treasure" or "build_house" or "hell_run" or "equip_item" or "open_item" or "inventory_drop" or "inventory_trash" or "npc_chat"
-            or "slot_click" or "container_action" or "game_input" or "craft_recipe" or "mod_input"
+            or "slot_click" or "container_action" or "game_input" or "craft_recipe" or "mod_input" or "ui_click"
             or "pylon_use" or "reforge" or "fish" or "container_transfer" or "craft_to_slot" or "shop_buy" or "shop_sell" || name == "housing" && !readsHousing;
         bool action = external || name is "fight" or "fight_player";
         bool startsPrimary = name == "action_start" && Text(args, "tool") != "fight";
@@ -2460,6 +2460,11 @@ public static partial class AgentTools
                     Int(args, "width"), Int(args, "height")), token)).ToJsonString();
             case "terrain_map":
                 return (await NativeAgent.OnMain(() => TerrainMap.Read(args), token)).ToJsonString(ModelJson);
+            case "ui_snapshot":
+                return (await AgentUi.Capture(token)).ToJsonString(ModelJson);
+            case "ui_click":
+                result = await AgentUi.ClickAt(Text(args, "snapshot_id"), Int(args, "panel_id", -1), Int(args, "x", -1), Int(args, "y", -1), token);
+                break;
             case "opportunity_assess":
                 return (await NativeAgent.OnMain(() => TerrainInspection.Opportunity(Int(args, "x", -1), Int(args, "y", -1),
                     args["destination"] as JsonObject), token)).ToJsonString();

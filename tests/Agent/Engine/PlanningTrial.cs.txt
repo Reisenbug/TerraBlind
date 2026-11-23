@@ -16,8 +16,10 @@ using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
 using Terraria;
 using Terraria.DataStructures;
+using Terraria.GameContent.UI.Elements;
 using Terraria.ID;
 using Terraria.ModLoader;
+using Terraria.UI;
 using TerraBlind;
 
 namespace Engine;
@@ -29,6 +31,7 @@ static class PlanningTrial
 
     public static async Task<string> Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1") return await UiInteractionTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII") != null) return await AsciiTerrainTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_RAIL_SKILL") != null) return await RailSkillTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_CROSSING_DISCOVERY") == "1") return await CrossingDiscovery.Run();
@@ -100,6 +103,240 @@ static class PlanningTrial
             ["replies"] = new JsonArray(replies.Select(r => (JsonNode)JsonValue.Create(r)).ToArray()), ["token_usage"] = agent.TokenUsage };
         File.WriteAllText(Path.Combine(Main.SavePath, "agent-planning-result.json"), report.ToJsonString());
         report["ok"] = failure == null && parseError == null && blocked == 0 && queries > 0 && queries <= 12;
+        return report.ToJsonString();
+    }
+}
+
+public sealed class UiInteractionTrial : ModSystem
+{
+    sealed class Menu : UIState { }
+    static UserInterface ui;
+    static bool background;
+    static int choices;
+    static int chatMessages;
+    static bool NetworkTrial => Environment.GetEnvironmentVariable("TB_AGENT_PANEL_NET_TEST") == "1";
+    bool networkStarted;
+    delegate void DisplayChat(string text, byte r, byte g, byte b);
+    delegate void DisplayChatHook(DisplayChat original, string text, byte r, byte g, byte b);
+
+    public override void Load()
+    {
+        if (NetworkTrial || Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1")
+            MonoModHooks.Add(typeof(AgentChat).GetMethod("Display"), (DisplayChatHook)((original, text, r, g, b) =>
+            {
+                chatMessages++;
+                original(text, r, g, b);
+            }));
+    }
+
+    public override void PostUpdateEverything()
+    {
+        if (!NetworkTrial || networkStarted || Main.netMode != NetmodeID.MultiplayerClient || Main.gameMenu || !Main.LocalPlayer.active) return;
+        networkStarted = true;
+        _ = VerifyNetwork();
+    }
+
+    static async Task VerifyNetwork()
+    {
+        const BindingFlags Member = BindingFlags.Instance | BindingFlags.NonPublic;
+        const BindingFlags Static = BindingFlags.Static | BindingFlags.NonPublic;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        var report = new JsonObject { ["ok"] = false, ["model_calls"] = 0 };
+        async Task Wait(Func<bool> predicate, string issue)
+        {
+            while (!await CrossingDiscovery.OnGame(predicate))
+            {
+                if (timeout.IsCancellationRequested) throw new InvalidOperationException(issue);
+                await Task.Delay(50);
+            }
+        }
+        try
+        {
+            await Wait(() => Main.player.Any(player => player.active && player.whoAmI != Main.myPlayer), "bot_client_did_not_join");
+            await Task.Delay(500, timeout.Token);
+            var state = await CrossingDiscovery.OnGame(() => typeof(AgentPanel).GetField("state", Member).GetValue(ModContent.GetInstance<AgentPanel>()));
+            var type = state.GetType();
+            var current = type.GetProperty("Current", Member);
+            int? Owner()
+            {
+                var bot = current.GetValue(state);
+                return bot == null ? null : (int)bot.GetType().GetProperty("Owner").GetValue(bot);
+            }
+            Task<object> Button(string name) => CrossingDiscovery.OnGame(() => type.GetMethod(name, Member).Invoke(state, null));
+            int before = await CrossingDiscovery.OnGame(() => chatMessages);
+            await Button("Toggle");
+            await Wait(() => Owner() == -1, "roster_missing_unbound_ai");
+            await Button("Bind");
+            await Wait(() => Owner() == Main.myPlayer, "bind_did_not_update_owner");
+            await CrossingDiscovery.OnGame(() =>
+            {
+                var draft = type.GetField("draft", Member).GetValue(state);
+                draft.GetType().GetMethod("SetText", new[] { typeof(string) }).Invoke(draft, new object[] { "status" });
+                return type.GetMethod("Send", Member).Invoke(state, null);
+            });
+            var transcript = (System.Collections.IList)typeof(AgentPanel).GetField("messages", Static).GetValue(null);
+            await Wait(() => transcript.Cast<object>().Any(msg => !(bool)msg.GetType().GetProperty("Sent").GetValue(msg)), "ai_reply_missing");
+            await Button("Bind");
+            await Wait(() => Owner() == -1, "unbind_did_not_update_owner");
+            report["transcript_count"] = await CrossingDiscovery.OnGame(() => transcript.Count);
+            report["game_chat_messages"] = chatMessages - before;
+            report["ok"] = transcript.Count >= 2 && chatMessages == before;
+        }
+        catch (Exception error) { report["failure"] = error.ToString(); }
+        File.WriteAllText(Path.Combine(Main.SavePath, "agent-panel-net-result.json"), report.ToJsonString());
+        Console.WriteLine("AGENT_PANEL_NET_COMPLETE " + report.ToJsonString());
+    }
+
+    public override void UpdateUI(GameTime time)
+    {
+        if (ui == null) return;
+        bool focus = Main.hasFocus;
+        try
+        {
+            if (background) Main.hasFocus = false;
+            ui.Update(time);
+        }
+        finally { Main.hasFocus = focus; }
+    }
+
+    public override void ModifyInterfaceLayers(List<GameInterfaceLayer> layers)
+    {
+        int index = layers.FindIndex(layer => layer.Name == "Vanilla: Mouse Text");
+        if (index >= 0) layers.Insert(index, new LegacyGameInterfaceLayer("Engine: UI check", () =>
+        {
+            ui?.Draw(Main.spriteBatch, Main._drawInterfaceGameTime);
+            return true;
+        }, InterfaceScaleType.UI));
+    }
+
+    static async Task<JsonObject> Mirror(Func<string, JsonObject, Task<JsonObject>> tool, CancellationToken token)
+    {
+        var start = await CrossingDiscovery.OnGame(() =>
+        {
+            if (!ModLoader.TryGetMod("PvPAdventure", out var mod) || !mod.TryFind<ModItem>("AdventureMirror", out var mirror)
+                || !mod.TryFind<ModSystem>("GameManager", out var game)) throw new InvalidOperationException("mirror_fixture_mod_missing");
+            game.GetType().GetMethod("StartGame").Invoke(game, new object[] { 3600, 0 });
+            var player = Main.LocalPlayer;
+            int x = Main.spawnTileX + 80, y = Main.spawnTileY;
+            for (int dx = -5; dx <= 5; dx++)
+            for (int dy = -5; dy <= 0; dy++)
+            {
+                var tile = Main.tile[x + dx, y + dy];
+                tile.ClearEverything();
+                if (dy == 0) { tile.HasTile = true; tile.TileType = TileID.Stone; }
+            }
+            player.Teleport(new Vector2(x * 16, y * 16 - player.height));
+            player.velocity = Vector2.Zero;
+            player.inventory[0].SetDefaults(mirror.Type);
+            player.selectedItem = 0;
+            return new Point(x, y);
+        });
+        await Task.Delay(250, token);
+        var use = await tool("use_item", new JsonObject { ["slot"] = 0, ["x"] = start.X, ["y"] = start.Y, ["duration_ticks"] = 1 });
+        var snapshot = await tool("ui_snapshot", new());
+        var panel = snapshot["panels"]?.AsArray().SingleOrDefault(p => p["type"]?.ToString() == "UISpawnState");
+        var button = panel?["controls"]?.AsArray().SingleOrDefault(c => c["type"]?.ToString() == "UIWorldSpawnPanel");
+        if (button == null) throw new InvalidOperationException($"mirror_menu_missing use={use} snapshot={snapshot}");
+        var bounds = button["bounds"].AsArray().Select(n => n.GetValue<int>()).ToArray();
+        var click = await tool("ui_click", new JsonObject { ["snapshot_id"] = snapshot["snapshot_id"].DeepClone(),
+            ["panel_id"] = panel["id"].DeepClone(), ["x"] = bounds[0] + bounds[2] / 2, ["y"] = bounds[1] + bounds[3] / 2 });
+        if (click["outcome"]?.ToString() != "dispatched") throw new InvalidOperationException($"mirror_click_failed {click}");
+        var limit = Stopwatch.StartNew();
+        while (limit.Elapsed < TimeSpan.FromSeconds(8))
+        {
+            var position = await CrossingDiscovery.OnGame(() => Main.LocalPlayer.Center.ToTileCoordinates());
+            if (Math.Abs(position.X - Main.spawnTileX) <= 2)
+                return new JsonObject { ["item"] = "AdventureMirror", ["control"] = "UIWorldSpawnPanel",
+                    ["before_x"] = start.X, ["after_x"] = position.X, ["spawn_x"] = Main.spawnTileX };
+            await Task.Delay(25, token);
+        }
+        throw new InvalidOperationException("mirror_selected_but_did_not_teleport");
+    }
+
+    internal static async Task<string> Run()
+    {
+        var report = new JsonObject { ["ok"] = false, ["cases"] = new JsonArray(), ["model_calls"] = 0 };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        async Task<JsonObject> Tool(string name, JsonObject args) => JsonNode.Parse(await AgentTools.Execute(name, args, timeout.Token)).AsObject();
+        static void Check(bool condition, string issue) { if (!condition) throw new InvalidOperationException(issue); }
+
+        try
+        {
+            foreach (var (width, height, scale, detached) in new[] { (800, 720, 1f, false), (1920, 1080, 1.25f, true) })
+            {
+                await CrossingDiscovery.OnGame(() =>
+                {
+                    Main.SetDisplayMode(width, height, fullscreen: false);
+                    Main.UIScale = scale;
+                    Main.musicVolume = 0;
+                    foreach (var npc in Main.npc) npc.active = false;
+                    background = detached; choices = 0;
+                    var menu = new Menu();
+                    var button = new UITextPanel<string>("Confirm destination") { HAlign = .63f, VAlign = .46f };
+                    button.Width.Set(240, 0); button.Height.Set(42, 0);
+                    button.OnLeftClick += (_, _) => choices++;
+                    menu.Append(button);
+                    ui = new UserInterface(); ui.SetState(menu);
+                    return true;
+                });
+                await Task.Delay(500, timeout.Token);
+                var snapshot = await Tool("ui_snapshot", new());
+                Check(snapshot["error"] == null, snapshot.ToJsonString());
+                var panel = snapshot["panels"].AsArray().Single(p => p["type"].GetValue<string>() == nameof(Menu));
+                var control = panel["controls"].AsArray().Single(c => c["text"]?.ToString() == "Confirm destination");
+                var bounds = control["bounds"].AsArray().Select(n => n.GetValue<int>()).ToArray();
+                var imageTools = typeof(CodexAgent).Assembly.GetType("TerraBlind.AgentImages");
+                string data = (string)imageTools.GetMethod("Take", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new object[] { snapshot });
+                var png = Convert.FromBase64String(data[(data.IndexOf(',') + 1)..]);
+                int imageWidth = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(16, 4));
+                int imageHeight = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(20, 4));
+                Check(imageWidth == snapshot["width"].GetValue<int>() && imageHeight == snapshot["height"].GetValue<int>(), "image_size_mismatch");
+                File.WriteAllBytes(Path.Combine(Main.SavePath, $"ui-{width}.png"), png);
+                var args = new JsonObject { ["snapshot_id"] = snapshot["snapshot_id"].DeepClone(), ["panel_id"] = panel["id"].DeepClone(),
+                    ["x"] = bounds[0] + bounds[2] / 2, ["y"] = bounds[1] + bounds[3] / 2 };
+                var result = await Tool("ui_click", args);
+                int effects = await CrossingDiscovery.OnGame(() => choices);
+                Check(result["outcome"]?.ToString() == "dispatched" && effects == 1, $"click_failed width={width} effects={effects} result={result}");
+                await CrossingDiscovery.OnGame(() => { ui.SetState(null); return true; });
+                var stale = await Tool("ui_click", args);
+                Check(stale["error"]?.ToString() == "ui_panel_changed", "closed_panel_click_accepted");
+                var actual = await CrossingDiscovery.OnGame(() => $"{Main.screenWidth}x{Main.screenHeight} @ {Main.UIScale:F2}");
+                report["cases"].AsArray().Add(new JsonObject { ["viewport"] = actual, ["unfocused_ui_update"] = detached,
+                    ["image_width"] = imageWidth, ["image_height"] = imageHeight, ["click_effects"] = effects, ["closed_panel"] = stale["error"].DeepClone() });
+            }
+            const BindingFlags Member = BindingFlags.Instance | BindingFlags.NonPublic;
+            const BindingFlags Static = BindingFlags.Static | BindingFlags.NonPublic;
+            int before = await CrossingDiscovery.OnGame(() =>
+            {
+                Config.I.AgentEnabled = true;
+                object state = typeof(AgentPanel).GetField("state", Member).GetValue(ModContent.GetInstance<AgentPanel>());
+                state.GetType().GetMethod("Toggle", Member).Invoke(state, null);
+                var draft = state.GetType().GetField("draft", Member).GetValue(state);
+                draft.GetType().GetMethod("SetText", new[] { typeof(string) }).Invoke(draft, new object[] { "status" });
+                state.GetType().GetMethod("Send", Member).Invoke(state, null);
+                return chatMessages;
+            });
+            await Task.Delay(100, timeout.Token);
+            var conversation = await CrossingDiscovery.OnGame(() =>
+            {
+                var entries = (System.Collections.IEnumerable)typeof(AgentPanel).GetField("messages", Static).GetValue(null);
+                return entries.Cast<object>().Select(entry => new JsonObject
+                {
+                    ["sent"] = (bool)entry.GetType().GetProperty("Sent").GetValue(entry),
+                    ["text"] = (string)entry.GetType().GetProperty("Text").GetValue(entry)
+                }).ToArray();
+            });
+            Check(conversation.Any(msg => msg["sent"].GetValue<bool>() && msg["text"].ToString() == "status")
+                && conversation.Any(msg => !msg["sent"].GetValue<bool>()), "chat_send_or_reply_missing_from_panel");
+            Check(chatMessages == before, "chat_messages_leaked_to_game_chat");
+            report["chat"] = new JsonObject { ["entries"] = new JsonArray(conversation), ["game_chat_messages"] = chatMessages - before };
+            if (Environment.GetEnvironmentVariable("TB_MIRROR_TEST") == "1") report["mirror"] = await Mirror(Tool, timeout.Token);
+            report["ok"] = true;
+        }
+        catch (Exception error) { report["failure"] = error.ToString(); }
+        finally { await CrossingDiscovery.OnGame(() => { ui = null; return true; }); }
+        File.WriteAllText(Path.Combine(Main.SavePath, "agent-ui-result.json"), report.ToJsonString());
+        Console.WriteLine("AGENT_UI_COMPLETE " + report.ToJsonString());
         return report.ToJsonString();
     }
 }
@@ -2786,7 +3023,8 @@ public sealed class ExperimentArenaNpcs : GlobalNPC
 {
     public override void EditSpawnRate(Player player, ref int spawnRate, ref int maxSpawns)
     {
-        if (AsciiTerrainTrial.Enabled && !AsciiTerrainTrial.LiveOpening || RailSkillTrial.Recording)
+        if (AsciiTerrainTrial.Enabled && !AsciiTerrainTrial.LiveOpening || RailSkillTrial.Recording
+            || Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1")
         { spawnRate = int.MaxValue; maxSpawns = 0; }
     }
 }

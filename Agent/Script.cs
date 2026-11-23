@@ -402,7 +402,8 @@ public static class AgentScript
     }
 
     public static JsonArray EntryTools(JsonArray tools) => new(tools.Where(t =>
-        t["function"]?["name"]?.ToString() is "run_script" or "task_plan" or "get_state" or "say" or "ask" or "game_api" or "terrain_map" or "action_query" or "script_program")
+        t["function"]?["name"]?.ToString() is "run_script" or "task_plan" or "get_state" or "say" or "ask" or "game_api" or "terrain_map"
+            or "ui_snapshot" or "ui_click" or "action_query" or "script_program")
         .Select(t => t.DeepClone()).ToArray());
 
     public static string Instructions(string system, JsonArray tools) =>
