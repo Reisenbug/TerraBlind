@@ -175,6 +175,7 @@ namespace Terraria
         public static bool[] tileAxe = new bool[1000], tileHammer = new bool[1000];
         public static readonly List<string> Chat = new();
         public static void NewText(string text) => Chat.Add(text);
+        public static void QueueMainThreadAction(Action action) => action();
     }
     public class Recipe
     {
@@ -603,6 +604,20 @@ namespace TerraBlind
         public static readonly List<string> Messages = new();
         public static void Say(string text) => Messages.Add(text);
         public static void Display(string text) => Terraria.Main.NewText(text);
+    }
+    public static class AgentPanel
+    {
+        public static void Record(int bot, bool sent, string text) { }
+        public static bool MatchesReply(string text, string request, int bot) => true;
+        public static bool Receive(string text, string request) => false;
+        public static void RequestTimeout() { }
+        public static void Notice(string text) { }
+    }
+    public static class AgentUi
+    {
+        public static Task<JsonObject> Capture(CancellationToken token)
+            => Task.FromResult(new JsonObject { ["error"] = "ui_unavailable" });
+        public static Task<JsonObject> ClickAt(string id, int panel, int x, int y, CancellationToken token) => Capture(token);
     }
     public static class DiagLog { public static bool Trace => false; public static void Write(string text) { } public static void Trc(string text) { } }
     public class ItemUseRequest { public int Slot, TargetWx, TargetWy, DurationTicks; public bool Strict; }

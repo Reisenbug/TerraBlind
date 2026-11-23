@@ -16,13 +16,7 @@ namespace TerraBlind
 		{
 			string text = string.Join(" ", args);
 			if (string.IsNullOrWhiteSpace(text)) { caller.Reply("usage: /tb <instruction>"); return; }
-			AgentChat.Display($"<you → TB> {text}", 120, 200, 255);
-			DiagLog.Write($"[agent] instruction: {text}");
-			if (Config.I.AgentEnabled) { NativeAgent.Submit(text); return; }
-			AgentChat.Instructions.Enqueue(text);
-			DiagLog.Write($"[agent] instruction queued: {text}");
-			// push it as an event too, so the agent reacts instantly instead of polling /instruction
-			HttpServerSystem.PushEvent("instruction", "{\"text\":\"" + HttpServerSystem.JsonEscPublic(text) + "\"}");
+			AgentChat.SubmitLocal(text);
 		}
 	}
 
@@ -33,6 +27,20 @@ namespace TerraBlind
 
 		// bot=true 是脚本硬编的进度播报,false 是 LLM 自己写的话。颜色分开,不然分不清哪句是"想"出来的
 		public static void Say(string text, bool bot = false) => _say.Enqueue((text, bot));
+
+		internal static void SubmitLocal(string text)
+		{
+			DiagLog.Write($"[agent] instruction: {text}");
+			if (Config.I.AgentEnabled)
+			{
+				AgentPanel.Record(-1, true, text);
+				NativeAgent.Submit(text);
+				return;
+			}
+			Display($"<you → TB> {text}", 120, 200, 255);
+			Instructions.Enqueue(text);
+			HttpServerSystem.PushEvent("instruction", "{\"text\":\"" + HttpServerSystem.JsonEscPublic(text) + "\"}");
+		}
 
 		public static void Display(string text, byte r = 255, byte g = 255, byte b = 255)
 		{
@@ -47,7 +55,8 @@ namespace TerraBlind
 			while (_say.TryDequeue(out var t))
 			{
 				if (AgentNetwork.RelayAgentReply(t.text)) continue;
-				if (t.bot) Display($"<TB> {t.text}", 140, 170, 200);
+				if (Config.I.AgentEnabled) AgentPanel.Record(-1, false, t.text);
+				else if (t.bot) Display($"<TB> {t.text}", 140, 170, 200);
 				else Display($"<TB> {t.text}", 90, 230, 120);
 			}
 		}

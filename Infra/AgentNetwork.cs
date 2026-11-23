@@ -20,6 +20,9 @@ namespace TerraBlind
 		static uint _lastSent;
 		static bool _awaitingReply;
 		static uint _requestTick;
+		static string _requestAction = "";
+		static int _requestBot = -1;
+		static bool _fromPanel;
 
 		static void Log(string text)
 		{
@@ -47,6 +50,7 @@ namespace TerraBlind
 			Owners.Clear(); PendingDefaultOwners.Clear(); _registered = false; _owner = -1;
 			_lastStatus = ""; _lastSent = 0;
 			_awaitingReply = false;
+			_requestAction = ""; _requestBot = -1; _fromPanel = false;
 		}
 		public static void Disconnect(int player)
 		{
@@ -83,7 +87,8 @@ namespace TerraBlind
 			{
 				_awaitingReply = false;
 				Log("reply timeout");
-				AgentChat.Display("AI 请求已发出，但10秒内未收到服务器回复。请检查双方日志中的 [ai-net]。");
+				if (_fromPanel) AgentPanel.RequestTimeout();
+				else AgentChat.Display("AI 请求已发出，但10秒内未收到服务器回复。请检查双方日志中的 [ai-net]。");
 			}
 			if (!Config.I.AiClient)
 			{
@@ -124,13 +129,18 @@ namespace TerraBlind
 
 		static string Status() => $"流程={StartRun.Phase}/{StartRun.Outcome} {StartRun.Reason}; 寻路={RecedingNav.Active}/{RecedingNav.LastStop}; 战斗={Combat.Enabled}; 闪避={Dodge.Enabled}; PvP={PvpDuel.Outcome} session={PvpDuel.Session} revision={PvpDuel.Directive?.Revision ?? 0}";
 
-		public static void Request(int bot, string command)
+		public static bool Request(int bot, string command, bool fromPanel = false)
 		{
-			Log($"request player={Main.myPlayer} bot={bot} action={command.Split(' ')[0]}");
+			if (fromPanel && _awaitingReply) return false;
+			string action = command.Split(' ')[0];
+			Log($"request player={Main.myPlayer} bot={bot} action={action}");
 			var packet = Packet(Message.Request);
 			packet.Write(bot); packet.Write(command); packet.Send();
 			_requestTick = Main.GameUpdateCount; _awaitingReply = true;
-			AgentChat.Display(command == "list" ? "正在向服务器查询 AI 玩家……" : "AI 请求已发往服务器。");
+			_requestAction = action; _requestBot = bot; _fromPanel = fromPanel;
+			if (action == "task" && command.Length > 5) AgentPanel.Record(bot, true, command[5..]);
+			else if (!fromPanel) AgentChat.Display(command == "list" ? "正在向服务器查询 AI 玩家……" : "AI 请求已发往服务器。");
+			return true;
 		}
 		static void Execute(int bot, int owner, string command)
 		{
@@ -220,8 +230,8 @@ namespace TerraBlind
 			if (Main.netMode != NetmodeID.MultiplayerClient) return;
 			if (type == Message.Reply)
 			{
-				_awaitingReply = false;
-				AgentChat.Display(reader.ReadString());
+				string text = reader.ReadString();
+				Main.QueueMainThreadAction(() => ReceiveReply(text));
 			}
 			if (type == Message.Execute && Config.I.AiClient)
 			{
@@ -229,6 +239,21 @@ namespace TerraBlind
 				string command = reader.ReadString();
 				Report(Run(command));
 			}
+		}
+
+		static void ReceiveReply(string text)
+		{
+			if (Main.netMode != NetmodeID.MultiplayerClient || Main.gameMenu) return;
+			string request = "";
+			bool fromPanel = false;
+			if (_awaitingReply && AgentPanel.MatchesReply(text, _requestAction, _requestBot))
+			{
+				_awaitingReply = false;
+				request = _requestAction; fromPanel = _fromPanel;
+			}
+			bool handled = AgentPanel.Receive(text, request);
+			if (!handled && fromPanel) AgentPanel.Notice(text);
+			else if (!handled || request == "list" && !fromPanel) AgentChat.Display(text);
 		}
 
 		static string Run(string command)
