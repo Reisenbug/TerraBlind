@@ -21,6 +21,7 @@ Build `tests/Agent/Engine/AgentChecks.csproj` into an isolated tModLoader save c
 - `TB_TERRAIN_ASCII=vision-deep` compares the three formats on two four-block enclosure layouts. It also measures Jev on the tile maps from the four simpler layouts.
 - `TB_TERRAIN_ASCII=recovery-calibrate` runs direct navigation and a reference waypoint on six layouts. `recovery-live` then asks the Agent for a waypoint from ASCII and from the game frame and runs both choices.
 - `TB_TERRAIN_ASCII=pit-inputs` compares existing navigation with engine-tested input sequences in the pit. `pit-inputs-live` adds the Agent's first input choice with ASCII and with a game frame.
+- `TB_TERRAIN_ASCII=combat-map` calibrates movement and projectile outcomes for the PvP and boss-dodge fixtures. `combat-map-live` compares Jev with coarse distances, those distances plus ASCII, and those distances plus extracted geometry.
 
 `terrain-ascii.json` contains the exact inputs, measured game outcomes, model selections, and time to the first choice. A model selection is scored against its own scene's physical trial. Agent latency includes opening its isolated session. Jev latency measures the existing `jev_judge` call. Treat this as a small paired trial.
 
@@ -91,3 +92,19 @@ The worker tries eight walk and jump prefixes from the same snapshot. Only disti
 | Geometry reference | 2/2 | 204 / 204 |
 
 Both model inputs picked the same run and jump on each layout. The code-only selector spent its first move heading toward the wall. The model saved 60 playback frames on both layouts. It took 1.36–1.69 s from observation to choice, and 7.25–10.16 s from cold session launch to choice. Even using the shorter decision time, adding search time and playback yielded 5.73–6.00 s for the model arms and 5.62–5.65 s for the nearest-to-G arm. Candidate generation was shared. Every completed native playback was damage-free and matched the worker's positions with zero measured pixel error.
+
+**Open navigation bug / 待查寻路缺陷.** Run `pit-inputs` and inspect `pit-backtrack-right.direct`. In the 32 px clearance fixture, `RecedingNav` stopped after 54 frames with `no_progress_preserving_terrain`. From the same start, holding left for 16 frames, then left and jump for 18 frames reached the lower stair. The input sequence followed by the staged continuation reached G in 219 frames, damage-free. The mirror reached G with existing navigation. Trace where the feasible backward jump is lost in the planner or executor. The root cause remains open.
+
+## Combat decisions / 战斗地形判断
+
+The PvP proxy uses a fixed target and a real tile-colliding projectile. A running shot and a jumping shot cross a divider at different heights. The boss-dodge proxy uses real projectile damage. A low obstruction limits how far the player can jump before an incoming projectile reaches their lane. The placement fixtures compare a solid brick, a wooden platform, and leaving the cell empty. They check placement within reach, engine support, and whether a live shot crosses the cell. All action outcomes are verified in the isolated client before the Jev calls.
+
+The three input formats share the same player, threat, and action definitions. The extracted geometry gives per-action muzzle clearance or horizontal displacement before impact. `combat-map/report.json` includes the exact state, native outcomes, and Jev choices, request bytes and reported token usage.
+
+| Jev 1.14.0 input | PvP shot | Boss dodge | PvP placement | Median latency | Mean input tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Coarse distances | 2/4 | 2/4 | 4/4 | 224 ms | 492 |
+| Add ASCII | 2/4 | 2/4 | 4/4 | 220 ms | 709 |
+| Add engine probes | 4/4 | 3/4 | 4/4 | 219 ms | 548 |
+
+Jev answered two requests per scene and format in this sequential run. The solid tile blocked the horizontal bullet. The platform supported a landing and let the bullet through. Selecting the material required no additional map context in these two fixtures. The moving target and irregular cave geometry of a live underground duel still need their own trial.

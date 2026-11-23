@@ -115,6 +115,7 @@ public sealed class AsciiTerrainTrial : ModSystem
     static ScreenCapture screenCapture;
     static RecoveryRun recovery;
     static PitPlayback pitPlayback;
+    static ArenaProbe arenaProbe;
     internal static bool Enabled => Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII") != null;
 
     sealed record Scene(string Id, bool Cover, string Opening)
@@ -131,6 +132,7 @@ public sealed class AsciiTerrainTrial : ModSystem
         detour?.Advance(Main.LocalPlayer);
         recovery?.Advance(Main.LocalPlayer);
         pitPlayback?.Advance(Main.LocalPlayer);
+        arenaProbe?.Advance(Main.LocalPlayer);
         if (screenCapture is { } capture)
             for (int x = 1; x < capture.Width; x += 3)
             for (int y = 1; y < capture.Height; y += 3)
@@ -348,6 +350,7 @@ public sealed class AsciiTerrainTrial : ModSystem
     internal static async Task<string> Run()
     {
         string mode = Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII");
+        if (mode is "combat-map" or "combat-map-live") return await RunCombatMap(mode == "combat-map-live");
         if (mode is "pit-inputs" or "pit-inputs-live") return await RunPitInputs(mode == "pit-inputs-live");
         if (mode is "recovery-calibrate" or "recovery-live") return await RunRecovery(mode == "recovery-live");
         if (mode is "vision-calibrate" or "vision-live" or "vision-deep") return await RunVision(mode);
@@ -844,11 +847,13 @@ public sealed class AsciiTerrainTrial : ModSystem
                 request.Headers.Add("TypeSafe-Danger-Zone-Images", "true");
             }
             request.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            long? requestBytes = request.Content.Headers.ContentLength;
             using var response = await VisionHttp.SendAsync(request, token);
             string content = await response.Content.ReadAsStringAsync(token);
             return response.IsSuccessStatusCode
-                ? new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["receipt"] = JsonNode.Parse(content) }
-                : new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["error"] = $"Jev HTTP {(int)response.StatusCode}: {content[..Math.Min(content.Length, 350)]}" };
+                ? new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["request_bytes"] = requestBytes, ["receipt"] = JsonNode.Parse(content) }
+                : new JsonObject { ["elapsed_ms"] = clock.ElapsedMilliseconds, ["request_bytes"] = requestBytes,
+                    ["error"] = $"Jev HTTP {(int)response.StatusCode}: {content[..Math.Min(content.Length, 350)]}" };
         }
         var tools = JsonNode.Parse("""
             [
@@ -1344,6 +1349,271 @@ public sealed class AsciiTerrainTrial : ModSystem
         catch (Exception error) { report["error"] = error.Message; Save(); throw; }
         finally { await CrossingDiscovery.OnGame(() =>
             { BoundaryInputPlayer.Drive = null; Halt.All(); pitPlayback = null; StateSpacePlanner.PreserveTerrain = false; return true; }); }
+    }
+
+    const int ArenaFloor = 16, ShotGateX = 17, ArenaPlayerX = 14;
+    static readonly Point ArenaOrigin = new(1240, 240);
+    static readonly Vector2 TargetCenter = new(25.5f * 16, ArenaFloor * 16 - 21);
+
+    static readonly MethodInfo PvpShotClear = typeof(PvpTerrain).GetMethod("DirectShotClear", BindingFlags.Static | BindingFlags.NonPublic);
+
+    sealed record ArenaCase(string Id, bool Boss, int Obstacle, string Placement = null)
+    {
+        public int PlayerX => Boss ? ArenaPlayerX : 6;
+        public Point Marker => Boss ? new(ArenaPlayerX, 1) : new(25, 14);
+        public bool Solid(int x, int y) => x == 0 || x == Width - 1 || y == 0 || y >= ArenaFloor
+            || Placement != null && x == 9 && y == 15
+            || (Boss ? x is 10 or 18 || x == Obstacle && y is >= 4 and <= 13
+                : Obstacle >= 0 && x == ShotGateX && y != Obstacle);
+    }
+
+    static void ResetArena(ArenaCase scene)
+    {
+        Halt.All();
+        var p = Main.LocalPlayer;
+        foreach (var npc in Main.npc) npc.active = false;
+        foreach (var projectile in Main.projectile) projectile.active = false;
+        foreach (var item in p.inventory.Concat(p.armor).Concat(p.miscEquips)) item.TurnToAir();
+        for (int i = p.buffType.Length - 1; i >= 0; i--)
+            if (p.buffType[i] != 0) p.DelBuff(i);
+        p.RemoveAllGrapplingHooks(); p.mount.Dismount(p);
+        p.creativeGodMode = false; p.immune = false; p.immuneTime = 0; Array.Clear(p.hurtCooldowns);
+        for (int x = -3; x < Width + 3; x++)
+        for (int y = -3; y < Height + 3; y++)
+        {
+            var tile = Main.tile[ArenaOrigin.X + x, ArenaOrigin.Y + y];
+            tile.ClearEverything();
+            if (x >= 0 && x < Width && y >= 0 && y < Height && scene.Solid(x, y)) tile.ResetToType(TileID.GrayBrick);
+        }
+        p.statLife = p.statLifeMax2;
+        p.position = ArenaOrigin.ToVector2() * 16 + new Vector2(scene.PlayerX * 16 + 8 - p.width / 2f, ArenaFloor * 16 - p.height);
+        p.velocity = Vector2.Zero; p.jump = 0; p.releaseJump = true;
+        p.fallStart = p.fallStart2 = ArenaOrigin.Y + ArenaFloor;
+        Main.playerInventory = Main.mapFullscreen = Main.autoPause = false;
+    }
+
+    sealed class ArenaProbe(ArenaCase scene, string option)
+    {
+        readonly TaskCompletionSource<JsonObject> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly Vector2 origin = ArenaOrigin.ToVector2() * 16;
+        int tick, projectile = -1, startingHp = Main.LocalPlayer.statLife;
+        int? contactFrame;
+        float gateY, lateral;
+        bool clear, placed, support;
+        public Task<JsonObject> Result => done.Task;
+
+        public void Start(Player p)
+        {
+            if (scene.Boss)
+            {
+                Spawn(p, origin + new Vector2((ArenaPlayerX + .5f) * 16, 1.5f * 16), new Vector2(0, 4f), hostile: true);
+                return;
+            }
+            if (scene.Placement == null || option == "C") return;
+            Point cell = ArenaOrigin + new Point(9, 14);
+            ushort type = option == "A" ? TileID.GrayBrick : TileID.Platforms;
+            placed = p.IsInTileInteractionRange(cell.X, cell.Y, TileReachCheckSettings.Simple)
+                && WorldGen.PlaceTile(cell.X, cell.Y, type, mute: true, plr: p.whoAmI);
+            var landing = new Vector2(cell.X * 16 + 8 - p.width / 2f, cell.Y * 16 - p.height - 2);
+            support = Collision.TileCollision(landing, new Vector2(0, 8), p.width, p.height, false, false).Y < 8;
+        }
+
+        void Spawn(Player p, Vector2 start, Vector2 speed, bool hostile)
+        {
+            projectile = Projectile.NewProjectile(p.GetSource_Misc("combat_map"), start, speed,
+                hostile ? ProjectileID.DeathLaser : ProjectileID.Bullet, 16, 0, hostile ? Main.maxPlayers : p.whoAmI);
+            var shot = Main.projectile[projectile];
+            shot.friendly = !hostile; shot.hostile = hostile; shot.extraUpdates = 0; shot.aiStyle = 0;
+            shot.tileCollide = !hostile; shot.width = hostile ? 24 : 4; shot.height = hostile ? 8 : 4;
+            shot.Center = start;
+        }
+
+        public void Drive(Player p)
+        {
+            if (scene.Boss && contactFrame == null && p.statLife == startingHp)
+            { p.immune = false; p.immuneTime = 0; }
+            bool moving = scene.Placement == null && tick < (scene.Boss ? 46 : 19);
+            p.controlLeft = moving && scene.Boss && option == "A";
+            p.controlRight = moving && (!scene.Boss || option == "B");
+            p.controlJump = moving && (scene.Boss || option == "B");
+            p.controlUseTile = p.controlUseItem = false;
+        }
+
+        public void Advance(Player p)
+        {
+            tick++;
+            if (scene.Boss)
+            {
+                var incoming = Main.projectile[projectile];
+                if (incoming.active && incoming.Hitbox.Intersects(p.Hitbox)) contactFrame ??= tick;
+                if (tick <= 23) lateral = Math.Max(lateral, Math.Abs(p.Center.X - origin.X - (ArenaPlayerX + .5f) * 16));
+                if (tick < 56) return;
+                Finish(p, contactFrame == null && p.statLife == startingHp && !p.dead);
+                return;
+            }
+            var enemy = origin + TargetCenter;
+            bool takingCover = scene.Placement == "cover";
+            var muzzle = takingCover ? enemy : p.Center;
+            var target = takingCover ? p.Center : enemy;
+            if (tick == 19)
+            {
+                float gateX = origin.X + (ShotGateX + .5f) * 16;
+                gateY = (MathHelper.Lerp(muzzle.Y, target.Y, (gateX - muzzle.X) / (target.X - muzzle.X)) - origin.Y) / 16;
+                clear = (bool)PvpShotClear.Invoke(null, new object[] { muzzle, target });
+                Spawn(p, muzzle, Vector2.Normalize(target - muzzle) * 10, hostile: false);
+                return;
+            }
+            if (tick < 19) return;
+            var shot = Main.projectile[projectile];
+            bool hit = shot.active && shot.Hitbox.Intersects(new Rectangle((int)target.X - 8, (int)target.Y - 16, 16, 32));
+            if (hit || !shot.active || tick >= 75)
+                Finish(p, scene.Placement == null ? hit : placed && (takingCover ? !hit && !shot.active : support && hit));
+        }
+
+        void Finish(Player p, bool pass)
+        {
+            arenaProbe = null; BoundaryInputPlayer.Drive = null;
+            p.controlLeft = p.controlRight = p.controlJump = false;
+            done.SetResult(new JsonObject { ["pass"] = pass, ["frames"] = tick, ["damage"] = startingHp - p.statLife,
+                ["contact_frame"] = contactFrame, ["placed"] = scene.Placement == null ? null : JsonValue.Create(placed),
+                ["supports_landing"] = scene.Placement == null ? null : JsonValue.Create(support),
+                ["line_clear"] = scene.Boss ? null : JsonValue.Create(clear),
+                ["gate_y"] = scene.Boss ? null : JsonValue.Create(gateY),
+                ["lateral_at_23_frames_px"] = scene.Boss ? JsonValue.Create(lateral) : null });
+        }
+    }
+
+    static async Task<JsonObject> PlayArena(ArenaCase scene, string option, CancellationToken token)
+    {
+        var probe = await CrossingDiscovery.OnGame(() =>
+        {
+            ResetArena(scene);
+            arenaProbe = new ArenaProbe(scene, option); arenaProbe.Start(Main.LocalPlayer);
+            BoundaryInputPlayer.Drive = arenaProbe.Drive;
+            return arenaProbe;
+        });
+        return await probe.Result.WaitAsync(token);
+    }
+
+    static (JsonObject Coarse, JsonObject Ascii) ArenaFacts(ArenaCase scene)
+    {
+        int? Distance(int dx, int dy)
+        {
+            for (int i = 1; i < Width; i++)
+            {
+                int x = scene.PlayerX + dx * i, y = 14 + dy * i;
+                if (x < 0 || x >= Width || y < 0 || y >= Height) break;
+                if (scene.Solid(x, y)) return i;
+            }
+            return null;
+        }
+        var facts = new JsonObject { ["player_feet"] = new JsonArray(scene.PlayerX, ArenaFloor - 1),
+            ["body_pixels"] = new JsonArray(Main.LocalPlayer.width, Main.LocalPlayer.height),
+            ["map_size_tiles"] = new JsonArray(Width, Height), ["nearest_solid_from_body_center_tiles"] = new JsonObject
+            { ["left"] = Distance(-1, 0), ["right"] = Distance(1, 0), ["up"] = Distance(0, -1), ["down"] = Distance(0, 1) },
+            ["initial_velocity"] = new JsonArray(0, 0) };
+        facts[scene.Boss ? "hostile_projectile" : "target_center_tiles"] = scene.Boss
+            ? new JsonObject { ["center_tiles"] = new JsonArray(14.5, 1.5), ["velocity_pixels_per_frame"] = new JsonArray(0, 4),
+                ["hitbox_pixels"] = new JsonArray(24, 8), ["passes_through_tiles"] = true }
+            : new JsonArray(TargetCenter.X / 16, TargetCenter.Y / 16);
+        if (scene.Placement != null) facts["placement_tile"] = new JsonArray(9, 14);
+        var mapped = facts.DeepClone().AsObject();
+        mapped["legend"] = "One character per tile. # solid, . air, P feet of player, E target or incoming projectile. x right and y down, zero-based.";
+        mapped["ascii_rows"] = new JsonArray(Enumerable.Range(0, Height).Select(y => JsonValue.Create(new string(
+            Enumerable.Range(0, Width).Select(x => new Point(x, y) == scene.Marker ? 'E'
+                : x == scene.PlayerX && y == ArenaFloor - 1 ? 'P' : scene.Solid(x, y) ? '#' : '.').ToArray()))).ToArray());
+        return (facts, mapped);
+    }
+
+    static async Task<string> RunCombatMap(bool live)
+    {
+        string root = Path.Combine(Main.SavePath, "combat-map");
+        Directory.CreateDirectory(root);
+        var cases = new JsonArray(); var responses = new JsonArray();
+        var report = new JsonObject { ["experiment"] = "terrain_ascii", ["study"] = "combat_map", ["ok"] = false,
+            ["cases"] = cases, ["responses"] = responses };
+        void Save() => File.WriteAllText(Path.Combine(root, "report.json"), report.ToJsonString());
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        var token = deadline.Token;
+        string key = await CrossingDiscovery.OnGame(() =>
+        {
+            NativeAgent.Stop(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            Combat.Enabled = Dodge.Enabled = false; Main.dayTime = true; Main.musicVolume = 0;
+            report["audio"] = new JsonArray(Main.musicVolume, Main.soundVolume);
+            return live ? JevCombat.Key() : null;
+        });
+        try
+        {
+            if (live && string.IsNullOrEmpty(key)) throw new InvalidOperationException("TypeSafe key unavailable");
+            var open = new ArenaCase("open", false, -1);
+            var flat = await PlayArena(open, "A", token);
+            var jump = await PlayArena(open, "B", token);
+            report["open_reference"] = new JsonArray(flat, jump);
+            Save();
+            int flatRow = (int)flat["gate_y"].GetValue<float>(), jumpRow = (int)jump["gate_y"].GetValue<float>();
+            if (flatRow == jumpRow) throw new InvalidOperationException("the two native shots crossed the same gate tile");
+            var scenes = new[] { new ArenaCase("pvp-ground-slit", false, flatRow), new ArenaCase("pvp-high-slit", false, jumpRow),
+                new ArenaCase("boss-ceiling-left", true, 12), new ArenaCase("boss-ceiling-right", true, 16),
+                new ArenaCase("pvp-place-cover", false, -1, "cover"), new ArenaCase("pvp-place-platform", false, -1, "platform") };
+            foreach (var scene in scenes)
+            {
+                var (coarse, ascii) = await CrossingDiscovery.OnGame(() => ArenaFacts(scene));
+                var native = new JsonObject();
+                var actions = scene.Placement == null ? Options : new[] { "A", "B", "C" };
+                foreach (string action in actions) native[action] = await PlayArena(scene, action, token);
+                var picks = actions.Where(action => native[action]["pass"].GetValue<bool>()).ToArray();
+                var entry = new JsonObject { ["id"] = scene.Id, ["native"] = native, ["coarse"] = coarse, ["ascii"] = ascii };
+                cases.Add(entry); Save();
+                if (picks.Length != 1) throw new InvalidOperationException("combat fixture needs one winning action: " + scene.Id);
+                entry["correct"] = picks[0];
+                var derived = coarse.DeepClone().AsObject();
+                derived["action_probe"] = new JsonObject(actions.Select(action => new KeyValuePair<string, JsonNode>(action,
+                    scene.Boss ? new JsonObject { ["range_before_impact_pixels"] = native[action]["lateral_at_23_frames_px"].DeepClone() }
+                        : scene.Placement != null ? new JsonObject { ["line_clear_after_placement"] = native[action]["line_clear"].DeepClone(),
+                            ["landing_supported"] = native[action]["supports_landing"].DeepClone() }
+                        : new JsonObject { ["muzzle_to_target_clear"] = native[action]["line_clear"].DeepClone() })));
+                entry["derived"] = derived;
+                entry["instructions"] = scene.Placement == "cover"
+                    ? "Choose one placement to block the opponent's incoming horizontal bullet. The enemy shoots from its current center at the player. Use the offered tile only."
+                    : scene.Placement == "platform"
+                    ? "Choose one placement that adds a place to land from above while keeping the current horizontal bullet path from player to target open. Both requirements apply."
+                    : scene.Boss
+                    ? "Choose the jump that moves the player outside the falling projectile's hitbox in the first 46 frames. It travels vertically downward through blocks. A wall or a low overhang may constrain the jump."
+                    : "Choose the approach from which the straight bullet will reach the fixed opponent through the divider. The shot is aimed from the player's body center at the target after exactly 19 frames of movement. A bullet stops on touching a solid tile.";
+                entry["criteria"] = scene.Placement != null
+                    ? new JsonObject { ["A"] = "Place a full solid gray brick at placement_tile.", ["B"] = "Place a wooden one-way platform at placement_tile.",
+                        ["C"] = "Leave the tile empty." }
+                    : scene.Boss
+                    ? new JsonObject { ["A"] = "Hold left and jump together for 46 frames.", ["B"] = "Hold right and jump together for 46 frames." }
+                    : new JsonObject { ["A"] = "Run right for 19 frames, then fire.", ["B"] = "Run right while holding jump for 19 frames, then fire." };
+                Save();
+            }
+            if (live)
+            {
+                string[] formats = { "coarse", "ascii", "derived" };
+                for (int round = 0; round < 2; round++)
+                foreach (var entry in cases)
+                for (int offset = 0; offset < formats.Length; offset++)
+                {
+                    string format = formats[(round + offset) % formats.Length];
+                    JsonObject answer;
+                    var clock = Stopwatch.StartNew();
+                    try { answer = await JudgeVision("Jev", entry[format].AsObject(), entry["criteria"].AsObject(), null,
+                        null, key, token, prompt: entry["instructions"].ToString()); }
+                    catch (Exception error) when (!token.IsCancellationRequested)
+                    { answer = new JsonObject { ["error"] = error.Message, ["elapsed_ms"] = clock.ElapsedMilliseconds }; }
+                    string choice = answer["receipt"]?["answers"]?["pick"]?["choice"]?.ToString();
+                    answer["id"] = entry["id"].DeepClone(); answer["round"] = round; answer["format"] = format;
+                    answer["choice"] = choice;
+                    answer["native_pass"] = choice == null ? null : JsonValue.Create(choice == entry["correct"].ToString());
+                    responses.Add(answer); Save();
+                }
+            }
+            report["ok"] = cases.Count == 6 && (!live || responses.Count == 36 && responses.All(answer => answer["choice"] != null));
+            Save(); return report.ToJsonString();
+        }
+        catch (Exception error) { report["error"] = error.Message; Save(); throw; }
+        finally { await CrossingDiscovery.OnGame(() => { arenaProbe = null; BoundaryInputPlayer.Drive = null; Halt.All(); return true; }); }
     }
 
     static async Task<string> RunVision(string mode)
