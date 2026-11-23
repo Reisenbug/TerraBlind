@@ -1655,7 +1655,8 @@ public sealed class Driver : ModSystem
             }
             if (++ticks > (PlanningReadOnly ? 18000 : 7200) && !RailSkillTrial.Recording)
                 throw new TimeoutException("engine_check_frame_limit");
-            if (!TeleportCheck && !EarlyFallCheck) { Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60; }
+            if (!TeleportCheck && !EarlyFallCheck && !AsciiTerrainTrial.LiveOpening)
+            { Main.LocalPlayer.immune = true; Main.LocalPlayer.immuneTime = 60; }
             if (pending != null && !pending.IsCompleted) return;
             JsonObject result = pending == null ? null : JsonNode.Parse(pending.GetAwaiter().GetResult()).AsObject();
             pending = null;

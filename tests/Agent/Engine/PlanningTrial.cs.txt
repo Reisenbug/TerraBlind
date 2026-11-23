@@ -117,6 +117,7 @@ public sealed class AsciiTerrainTrial : ModSystem
     static PitPlayback pitPlayback;
     static ArenaProbe arenaProbe;
     internal static bool Enabled => Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII") != null;
+    internal static bool LiveOpening => Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII") == "cave-opening-live";
 
     sealed record Scene(string Id, bool Cover, string Opening)
     {
@@ -353,6 +354,7 @@ public sealed class AsciiTerrainTrial : ModSystem
         if (mode is "combat-map" or "combat-map-live") return await RunCombatMap(mode == "combat-map-live");
         if (mode is "combat-cave" or "combat-cave-live") return await RunCombatMap(mode == "combat-cave-live", cave: true);
         if (mode == "cave-travel") return await RunCaveTravel();
+        if (mode == "cave-opening-live") return await RunCaveOpening();
         if (mode is "pit-inputs" or "pit-inputs-live" or "pit-inputs-jev") return await RunPitInputs(mode);
         if (mode is "recovery-calibrate" or "recovery-live") return await RunRecovery(mode == "recovery-live");
         if (mode is "vision-calibrate" or "vision-live" or "vision-deep") return await RunVision(mode);
@@ -1825,6 +1827,79 @@ public sealed class AsciiTerrainTrial : ModSystem
         finally { await CrossingDiscovery.OnGame(() => { Halt.All(); return true; }); }
     }
 
+    static async Task<string> RunCaveOpening()
+    {
+        string folder = Path.Combine(Main.SavePath, "cave-opening");
+        Directory.CreateDirectory(folder);
+        var samples = new JsonArray();
+        var report = new JsonObject { ["experiment"] = "terrain_ascii", ["study"] = "cave_opening", ["ok"] = false,
+            ["natural_encounters"] = true, ["samples"] = samples };
+        void Save() => File.WriteAllText(Path.Combine(folder, "report.json"), report.ToJsonString());
+        string programs = Path.Combine(Main.SavePath, "TerraBlindAgent", "programs");
+        var library = new ScriptLibrary(programs);
+        const string skill = "minecart_travel";
+        var saved = library.Save(skill, ScriptLibrary.Example(skill)["code"].ToString(), 0);
+        if (saved["revision"]?.GetValue<int>() != 1) throw new InvalidOperationException("travel skill registration failed");
+        report["skill"] = new JsonObject { ["name"] = skill, ["revision"] = 1 };
+        string receipts = Path.Combine(programs, "runtime", skill + ".json");
+        const string prompt = "/goal 从出生点开始正常探索地下，用初始人物的能力。找到一段天然矿车轨道并到达其可交互范围。"
+            + "看当前地形，选可以安全离轨继续往前的轨道格，用已保存的 minecart_travel@1 技能以 boost 模式做一次原版铁轨加速。"
+            + "以 rail_boost_observed 和实际速度验证，然后顺着这条洞穴继续探索。途中自然看到的好箱子可以开。";
+        report["prompt"] = prompt;
+        var clock = Stopwatch.StartNew();
+        Task<JsonObject> Observe() => CrossingDiscovery.OnGame(() =>
+        {
+            var p = Main.LocalPlayer;
+            return new JsonObject { ["ms"] = clock.ElapsedMilliseconds, ["tick"] = Main.GameUpdateCount,
+                ["x"] = p.Center.X, ["y"] = p.Bottom.Y, ["hp"] = p.statLife, ["dead"] = p.dead,
+                ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y, ["status"] = NativeAgent.Status,
+                ["nav"] = RecedingNav.Active, ["nav_stop"] = RecedingNav.LastStop };
+        });
+        try
+        {
+            await CrossingDiscovery.OnGame(() =>
+            {
+                Config.I.AgentEnabled = true; Config.I.AiClient = false; Config.I.AgentUseCodex = true; Config.I.AgentCodexModel = Model;
+                NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false;
+                Main.musicVolume = 0; Main.autoPause = Main.mapFullscreen = Main.playerInventory = false;
+                var p = Main.LocalPlayer;
+                if (p.statLifeMax != 100 || Math.Abs(p.Center.X / 16 - Main.spawnTileX) > 4)
+                    throw new InvalidOperationException("opening needs a fresh 100 HP spawn");
+                report["starting_items"] = new JsonArray(p.inventory.Where(item => !item.IsAir)
+                    .Select(item => (JsonNode)new JsonObject { ["type"] = item.type, ["stack"] = item.stack }).ToArray());
+                report["world_seed"] = Main.ActiveWorldFileData.SeedText;
+                report["audio"] = new JsonArray(Main.musicVolume, Main.soundVolume);
+                return true;
+            });
+            report["start"] = await Observe(); Save();
+            await CrossingDiscovery.OnGame(() => { NativeAgent.Submit(prompt); return true; });
+            while (clock.Elapsed < TimeSpan.FromMinutes(4))
+            {
+                await Task.Delay(2000);
+                var sample = await Observe(); samples.Add(sample);
+                if (File.Exists(receipts))
+                {
+                    var history = JsonNode.Parse(File.ReadAllText(receipts)).AsArray();
+                    var observed = history.SelectMany(v => v["recent"].AsArray())
+                        .FirstOrDefault(s => s["result"]?["outcome"]?.ToString() == "rail_boost_observed");
+                    if (observed != null)
+                    {
+                        report["observed_boost"] = observed.DeepClone();
+                        report["ok"] = true; Save(); break;
+                    }
+                }
+                Save();
+                if (sample["status"].ToString() == "failed" || sample["dead"].GetValue<bool>()) break;
+            }
+            report["end"] = await Observe();
+            report["reason"] = report["ok"].GetValue<bool>() ? "boost_verified" : "boost_not_observed";
+            Save();
+            return report.ToJsonString();
+        }
+        catch (Exception error) { report["error"] = error.Message; Save(); throw; }
+        finally { await CrossingDiscovery.OnGame(() => { NativeAgent.Stop(); Halt.All(); return true; }); }
+    }
+
     static async Task<string> RunVision(string mode)
     {
         bool live = mode != "vision-calibrate", deep = mode == "vision-deep";
@@ -2711,6 +2786,7 @@ public sealed class ExperimentArenaNpcs : GlobalNPC
 {
     public override void EditSpawnRate(Player player, ref int spawnRate, ref int maxSpawns)
     {
-        if (AsciiTerrainTrial.Enabled || RailSkillTrial.Recording) { spawnRate = int.MaxValue; maxSpawns = 0; }
+        if (AsciiTerrainTrial.Enabled && !AsciiTerrainTrial.LiveOpening || RailSkillTrial.Recording)
+        { spawnRate = int.MaxValue; maxSpawns = 0; }
     }
 }
