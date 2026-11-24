@@ -31,6 +31,8 @@ static class PlanningTrial
 
     public static async Task<string> Run()
     {
+        if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "ascent") return await JungleRailAscent.Run();
+        if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "baseline" or "jev") return await JungleReactionTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1") return await UiInteractionTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII") != null) return await AsciiTerrainTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_RAIL_SKILL") != null) return await RailSkillTrial.Run();
@@ -105,6 +107,411 @@ static class PlanningTrial
         report["ok"] = failure == null && parseError == null && blocked == 0 && queries > 0 && queries <= 12;
         return report.ToJsonString();
     }
+}
+
+public sealed class JungleRailAscent : ModSystem
+{
+    sealed record Site(Point Floor, Point Track, int Clearance, ushort Wall, int Jungle);
+    static Site site;
+    static ulong? clickTick, hookTick, jumpTick;
+    static JsonArray trace;
+
+    static Vector2 Stand(Player p, Point floor) => new(floor.X * 16 + 8 - p.width / 2f, floor.Y * 16 - p.height);
+
+    static Site FindSite(Player p)
+    {
+        Site best = null;
+        for (int x = 100; x < Main.maxTilesX - 100; x += 2)
+        for (int y = (int)Main.rockLayer + 10; y < Main.maxTilesY - 220; y++)
+        {
+            var floor = new Point(x, y);
+            var beneath = Main.tile[x, y];
+            var target = Main.tile[x, y - 5];
+            if (!beneath.HasUnactuatedTile || !Main.tileSolid[beneath.TileType] || target.HasTile || target.WallType == 0) continue;
+            Vector2 start = Stand(p, floor);
+            if (Collision.SolidCollision(start, p.width, p.height)
+                || !Collision.SolidCollision(start + Vector2.UnitY, p.width, p.height)
+                || Collision.WetCollision(start, p.width, p.height)) continue;
+            int clear = 1;
+            for (; clear <= 16; clear++)
+                if (Collision.SolidCollision(start - new Vector2(0, clear * 16), p.width, p.height)) break;
+            if (clear < 9 || best != null && clear <= best.Clearance) continue;
+            int jungle = 0;
+            for (int dx = -34; dx <= 34; dx++)
+            for (int dy = -22; dy <= 22; dy++)
+            {
+                var tile = Main.tile[x + dx, y + dy];
+                if (tile.HasUnactuatedTile) jungle += TileID.Sets.JungleBiome[tile.TileType];
+            }
+            if (jungle < 200) continue;
+            best = new Site(floor, new Point(x, y - 5), clear, target.WallType, jungle);
+            if (clear >= 17) return best;
+        }
+        return best ?? throw new InvalidOperationException("no_natural_jungle_shaft_with_wall_anchor");
+    }
+
+    static Projectile TrackHook(Player p)
+    {
+        int i = p.grappling[0];
+        if (i < 0 || i >= Main.projectile.Length) return null;
+        var hook = Main.projectile[i];
+        return hook.active && hook.owner == p.whoAmI && hook.type == ProjectileID.TrackHook ? hook : null;
+    }
+
+    public override void PreUpdatePlayers()
+    {
+        if (site == null) return;
+        var p = Main.LocalPlayer;
+        var hook = TrackHook(p);
+        if (hook != null) hookTick ??= Main.GameUpdateCount;
+        FrameProgram.Set(new JsonObject { ["data"] = new JsonObject { ["x"] = site.Track.X, ["y"] = site.Track.Y,
+            ["feather"] = p.HasBuff(BuffID.Featherfall), ["release"] = p.releaseJump,
+            ["pulling"] = hook != null && !p.Hitbox.Intersects(hook.Hitbox), ["launched"] = jumpTick != null } });
+    }
+
+    public override void PostUpdatePlayers()
+    {
+        if (site == null) return;
+        var p = Main.LocalPlayer;
+        trace.Add(new JsonObject { ["tick"] = (ulong)Main.GameUpdateCount, ["y"] = p.Center.Y, ["vy"] = p.velocity.Y,
+            ["hp"] = p.statLife, ["up"] = p.controlUp, ["hook"] = TrackHook(p) != null, ["cart"] = p.mount.Active });
+    }
+
+    static void ApplyClick(Player p)
+    {
+        if (p.controlJump && TrackHook(p) != null) jumpTick ??= Main.GameUpdateCount;
+        var click = FrameProgram.Snapshot()["memory"]?["click"];
+        if (clickTick != null || click?.GetValue<ulong>() != Main.GameUpdateCount) return;
+        var track = Main.tile[site.Track.X, site.Track.Y];
+        if (!track.HasUnactuatedTile || track.TileType != TileID.MinecartTrack
+            || !p.IsInTileInteractionRange(site.Track.X, site.Track.Y, TileReachCheckSettings.Simple)) return;
+        var old = (p.tileInteractAttempted, p.releaseUseTile, p.tileInteractionHappened, Main.mouseRightRelease);
+        try
+        {
+            p.tileInteractAttempted = p.releaseUseTile = Main.mouseRightRelease = true;
+            p.tileInteractionHappened = false;
+            p.TileInteractionsCheck(site.Track.X, site.Track.Y);
+            if (p.tileInteractionHappened) clickTick = Main.GameUpdateCount;
+        }
+        finally { (p.tileInteractAttempted, p.releaseUseTile, p.tileInteractionHappened, Main.mouseRightRelease) = old; }
+    }
+
+    internal static async Task<string> Run()
+    {
+        string path = Path.Combine(Main.SavePath, "jungle-rail-ascent.json");
+        var report = new JsonObject { ["experiment"] = "terrain_ascii", ["study"] = "jungle_rail_ascent", ["ok"] = false,
+            ["seed"] = Main.ActiveWorldFileData.SeedText, ["natural_terrain"] = true };
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var token = limit.Token;
+        async Task<JsonObject> Tool(string name, JsonObject args) => JsonNode.Parse(await AgentTools.Execute(name, args, token)).AsObject();
+        try
+        {
+            var chosen = await CrossingDiscovery.OnGame(() =>
+            {
+                var p = Main.LocalPlayer;
+                var point = FindSite(p);
+                NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Concessions.Enabled = false;
+                Combat.Enabled = Dodge.Enabled = false; Manual.On = false; FrameProgram.Clear();
+                p.position = Stand(p, point.Floor); p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = point.Floor.Y;
+                p.inventory[3].SetDefaults(ItemID.MinecartTrack); p.inventory[3].stack = 5;
+                p.inventory[4].SetDefaults(ItemID.FeatherfallPotion);
+                return point;
+            });
+            await Task.Delay(600, token);
+            var facts = await CrossingDiscovery.OnGame(() =>
+            {
+                var p = Main.LocalPlayer;
+                return new JsonObject { ["zone_jungle"] = p.ZoneJungle, ["hp"] = p.statLife,
+                    ["floor"] = new JsonArray(chosen.Floor.X, chosen.Floor.Y), ["track_target"] = new JsonArray(chosen.Track.X, chosen.Track.Y),
+                    ["natural_back_wall"] = (int)chosen.Wall, ["vertical_clearance_tiles_lower_bound"] = chosen.Clearance - 1,
+                    ["track_in_interact_range"] = p.IsInTileInteractionRange(chosen.Track.X, chosen.Track.Y, TileReachCheckSettings.Simple),
+                    ["empty_target"] = !Main.tile[chosen.Track.X, chosen.Track.Y].HasTile,
+                    ["track_inventory"] = p.inventory[3].stack, ["featherfall_inventory"] = p.inventory[4].stack };
+            });
+            report["scene"] = facts;
+            if (!facts["zone_jungle"].GetValue<bool>() || !facts["track_in_interact_range"].GetValue<bool>() || !facts["empty_target"].GetValue<bool>())
+                throw new InvalidOperationException("natural_placement_not_ready");
+            report["combat"] = await Tool("combat_assess", new JsonObject { ["radius"] = 18 });
+            var choice = await Tool("jev_judge", new JsonObject { ["state"] = facts.DeepClone(), ["questions"] = new JsonObject
+            {
+                ["move"] = new JsonObject { ["type"] = "choice",
+                    ["instructions"] = "Choose a single maneuver to get at least eight tiles above this underground jungle floor quickly. Use the shown stock, reachable overhead cell and natural passage. An ordinary unassisted jump from the starter loadout rises less than eight tiles.",
+                    ["criteria"] = new JsonObject { ["jump"] = "Jump with the starter movement abilities.",
+                        ["wait"] = "Stay on this floor to preserve all items.",
+                        ["rail_ascent"] = "Drink Featherfall, place one inventory minecart track on the reachable empty cell with natural wall support, right-click it, jump as the native track hook pulls, and hold up to the apex." } }
+            } });
+            report["jev"] = choice;
+            File.WriteAllText(path, report.ToJsonString());
+            if (choice["answers"]?["move"]?["choice"]?.ToString() != "rail_ascent")
+                throw new InvalidOperationException("jev_did_not_select_rail_ascent");
+            float startY = await CrossingDiscovery.OnGame(() =>
+            {
+                site = chosen; trace = new JsonArray(); clickTick = hookTick = jumpTick = null;
+                BoundaryInputPlayer.Drive = ApplyClick;
+                FrameProgram.Set(new JsonObject { ["code"] = AscentProgram });
+                return Main.LocalPlayer.Center.Y;
+            });
+            await Task.Delay(2000, token);
+            await CrossingDiscovery.OnGame(() =>
+            {
+                var p = Main.LocalPlayer;
+                var peak = trace.Min(f => f["y"].GetValue<float>());
+                var tile = Main.tile[chosen.Track.X, chosen.Track.Y];
+                report["trace"] = trace;
+                report["placement_verified"] = tile.HasUnactuatedTile && tile.TileType == TileID.MinecartTrack && p.inventory[3].stack == 4;
+                report["featherfall_verified"] = p.HasBuff(BuffID.Featherfall) && p.inventory[4].IsAir;
+                report["right_click_tick"] = clickTick; report["hook_tick"] = hookTick; report["jump_tick"] = jumpTick;
+                report["gain_tiles"] = (startY - peak) / 16;
+                report["peak_upward_speed"] = -trace.Min(f => f["vy"].GetValue<float>());
+                report["hook_cancelled"] = jumpTick != null && trace.Any(f => f["tick"].GetValue<ulong>() >= jumpTick
+                    && f["tick"].GetValue<ulong>() <= jumpTick + 1 && !f["hook"].GetValue<bool>());
+                report["boarded_cart"] = trace.Any(f => f["cart"].GetValue<bool>());
+                report["up_held_through_ascent"] = jumpTick != null && trace.Where(f => f["tick"].GetValue<ulong>() >= jumpTick
+                    && f["vy"].GetValue<float>() < 0).All(f => f["up"].GetValue<bool>());
+                report["program"] = FrameProgram.Snapshot();
+                report["ok"] = report["placement_verified"].GetValue<bool>() && report["featherfall_verified"].GetValue<bool>()
+                    && clickTick < hookTick && hookTick <= jumpTick && report["hook_cancelled"].GetValue<bool>()
+                    && !report["boarded_cart"].GetValue<bool>() && !p.dead
+                    && report["up_held_through_ascent"].GetValue<bool>() && (startY - peak) >= 8 * 16;
+                return true;
+            });
+        }
+        catch (Exception error) { report["error"] = error.Message; }
+        finally
+        {
+            await CrossingDiscovery.OnGame(() => { site = null; BoundaryInputPlayer.Drive = null; FrameProgram.Clear(); return true; });
+            File.WriteAllText(path, report.ToJsonString());
+            Console.WriteLine($"JUNGLE_RAIL_ASCENT_COMPLETE ok={report["ok"]} gain={report["gain_tiles"]} path={path}");
+        }
+        return report.ToJsonString();
+    }
+
+    const string AscentProgram = """
+        function tick(s) {
+          const d=s.data,m=s.memory,p=s.player,aim={x:d.x,y:d.y};
+          if(d.launched)return {keys:['up'],memory:m};
+          if(!d.feather)return {slot:4,use:true,keys:['up'],memory:m};
+          if(!s.tiles.some(t=>t.x===d.x&&t.y===d.y&&t.type===314))
+            return {slot:3,use:true,aim,keys:['up'],memory:m};
+          if(m.click==null&&p.item_animation===0)m.click=s.tick;
+          const jump=d.pulling&&d.release&&s.tick>m.click;
+          return {slot:3,aim,keys:jump?['up','jump']:['up'],memory:m};
+        }
+        """;
+}
+
+public sealed class JungleReactionTrial : ModSystem
+{
+    sealed record Site(Point Crystal, Point NextCrystal, Vector2 Start, int JungleTiles, int RailDistance);
+    static JsonArray frames;
+    static int previousHp;
+    static Point startTile;
+
+    public override void PostUpdatePlayers()
+    {
+        if (frames == null || Main.gameMenu || !Main.LocalPlayer.active) return;
+        var p = Main.LocalPlayer;
+        int crystals = p.CountItem(ItemID.LifeCrystal);
+        if (crystals != 9 && Main.GameUpdateCount % 6 != 0 && previousHp == p.statLife) return;
+        previousHp = p.statLife;
+        var enemies = Main.npc.Where(n => n.active && !n.friendly && n.damage > 0 && Vector2.Distance(n.Center, p.Center) < 16 * 24)
+            .OrderBy(n => Vector2.Distance(n.Center, p.Center)).Take(8);
+        frames.Add(new JsonObject { ["tick"] = Main.GameUpdateCount, ["x"] = p.Center.X, ["y"] = p.Bottom.Y,
+            ["hp"] = p.statLife, ["dead"] = p.dead, ["crystals"] = crystals,
+            ["nav"] = RecedingNav.Active, ["inputs"] = (p.controlLeft ? 1 : 0) | (p.controlRight ? 2 : 0) | (p.controlJump ? 4 : 0)
+                | (p.controlUp ? 8 : 0) | (p.controlDown ? 16 : 0) | (p.controlUseItem ? 32 : 0),
+            ["enemies"] = new JsonArray(enemies.Select(n => (JsonNode)new JsonObject { ["type"] = n.type,
+                ["id"] = n.whoAmI, ["distance"] = Vector2.Distance(n.Center, p.Center) / 16,
+                ["x"] = n.Center.X, ["y"] = n.Center.Y, ["wall_pass"] = n.noTileCollide }).ToArray()) });
+    }
+
+    static Site FindSite(Player player)
+    {
+        var hearts = new List<Point>();
+        var rails = new List<Point>();
+        int top = (int)Main.rockLayer;
+        for (int x = 80; x < Main.maxTilesX - 80; x++)
+        for (int y = top; y < Main.maxTilesY - 210; y++)
+        {
+            var tile = Main.tile[x, y];
+            if (!tile.HasUnactuatedTile) continue;
+            if (tile.TileType == TileID.Heart && tile.TileFrameX == 0 && tile.TileFrameY == 0) hearts.Add(new Point(x, y));
+            if (tile.TileType == TileID.MinecartTrack) rails.Add(new Point(x, y));
+        }
+        var sites = new List<Site>();
+        foreach (Point heart in hearts)
+        {
+            int jungle = 0;
+            for (int x = heart.X - 35; x <= heart.X + 35; x++)
+            for (int y = heart.Y - 23; y <= heart.Y + 23; y++)
+            {
+                var tile = Main.tile[x, y];
+                if (tile.HasUnactuatedTile) jungle += TileID.Sets.JungleBiome[tile.TileType];
+            }
+            if (jungle < 150) continue;
+            var second = hearts.Where(p => p != heart && Math.Abs(p.X - heart.X) < 52 && Math.Abs(p.Y - heart.Y) < 52
+                && Distance(p, heart) >= 12).OrderBy(p => Distance(p, heart)).FirstOrDefault();
+            if (second == Point.Zero) continue;
+            foreach (int dx in new[] { -2, 2, -3, 3, -4, 4 })
+            for (int dy = 0; dy <= 4; dy++)
+            {
+                var footing = new Point(heart.X + dx, heart.Y + dy + 2);
+                var start = new Vector2(footing.X * 16 + 8 - player.width / 2f, footing.Y * 16 - player.height);
+                if (Collision.SolidCollision(start, player.width, player.height)
+                    || !Collision.SolidCollision(start + Vector2.UnitY, player.width, player.height)
+                    || Collision.WetCollision(start, player.width, player.height)) continue;
+                int railDistance = rails.Count == 0 ? int.MaxValue : rails.Min(p => Distance(p, footing));
+                sites.Add(new Site(heart, second, start, jungle, railDistance));
+            }
+        }
+        return sites.OrderBy(s => s.RailDistance).ThenBy(s => Distance(s.Crystal, s.NextCrystal)).FirstOrDefault();
+    }
+
+    static int Distance(Point a, Point b) => Math.Abs(a.X - b.X) + Math.Abs(a.Y - b.Y);
+    static JsonArray Coordinates(Point p) => new(p.X, p.Y);
+
+    internal static async Task<string> Run()
+    {
+        string mode = Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION");
+        string path = Path.Combine(Main.SavePath, "jungle-reaction.json");
+        var report = new JsonObject { ["ok"] = false, ["experiment"] = "terrain_ascii", ["study"] = "natural_jungle_reaction",
+            ["mode"] = mode, ["natural_terrain"] = true, ["natural_spawns"] = true };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(100));
+        var token = timeout.Token;
+        async Task<JsonObject> Tool(string name, JsonObject args) => JsonNode.Parse(await AgentTools.Execute(name, args, token)).AsObject();
+        void Save() => File.WriteAllText(path, report.ToJsonString());
+        try
+        {
+            Site site = await CrossingDiscovery.OnGame(() =>
+            {
+                var player = Main.LocalPlayer;
+                var chosen = FindSite(player) ?? throw new InvalidOperationException("no_natural_jungle_crystal_pair");
+                NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Concessions.Enabled = false;
+                Combat.Enabled = Dodge.Enabled = false; Manual.On = false; Config.I.AgentEnabled = true;
+                player.inventory[3].SetDefaults(ItemID.WoodenBow);
+                player.inventory[4].SetDefaults(ItemID.WoodenArrow); player.inventory[4].stack = 50;
+                player.inventory[5].SetDefaults(ItemID.FeatherfallPotion);
+                player.inventory[6].SetDefaults(ItemID.RecallPotion);
+                player.inventory[7].SetDefaults(ItemID.Wood); player.inventory[7].stack = 25;
+                player.inventory[8].SetDefaults(ItemID.LifeCrystal); player.inventory[8].stack = 8;
+                player.position = chosen.Start; player.velocity = Vector2.Zero;
+                player.fallStart = player.fallStart2 = (int)(player.position.Y / 16);
+                startTile = player.Center.ToTileCoordinates();
+                frames = new JsonArray(); previousHp = player.statLife;
+                return chosen;
+            });
+            report["seed"] = Main.ActiveWorldFileData.SeedText;
+            report["start"] = Coordinates(startTile);
+            report["ninth"] = Coordinates(site.Crystal);
+            report["tenth"] = Coordinates(site.NextCrystal);
+            report["jungle_tiles"] = site.JungleTiles;
+            report["initial_rail_distance"] = site.RailDistance;
+            Save();
+            await Task.Delay(600, token);
+            report["zone_jungle"] = await CrossingDiscovery.OnGame(() => Main.LocalPlayer.ZoneJungle);
+            if (report["zone_jungle"]?.GetValue<bool>() != true) throw new InvalidOperationException("native_player_not_in_jungle");
+            report["policy"] = await Tool("task_policy", new JsonObject { ["operation"] = "set", ["expected_revision"] = 0,
+                ["code"] = mode == "jev" ? LocalRetreat : "skill('safety_reactions',0);" });
+            JsonObject Gather(Point point, int count) => new()
+            {
+                ["targets"] = new JsonArray(new JsonObject { ["item_type"] = (int)ItemID.LifeCrystal, ["count"] = count, ["tile_names"] = new JsonArray("Heart") }),
+                ["source_area"] = new JsonObject { ["x"] = point.X - 2, ["y"] = point.Y - 2, ["width"] = 6, ["height"] = 6 }
+            };
+            report["collect_ninth"] = await Tool("gather", Gather(site.Crystal, 9)); Save();
+            if (await CrossingDiscovery.OnGame(() => Main.LocalPlayer.CountItem(ItemID.LifeCrystal)) == 9)
+            {
+                var encounter = Stopwatch.StartNew();
+                while (encounter.Elapsed < TimeSpan.FromSeconds(30))
+                {
+                    var pressure = await CrossingDiscovery.OnGame(() =>
+                    {
+                        var p = Main.LocalPlayer;
+                        int enemies = Main.npc.Count(n => n.active && !n.friendly && n.damage > 0
+                            && Vector2.Distance(n.Center, p.Center) <= 12 * 16);
+                        int shots = Main.projectile.Count(shot => shot.active && shot.hostile && shot.damage > 0
+                            && Vector2.Distance(shot.Center, p.Center) <= 18 * 16);
+                        return new JsonObject { ["tick"] = Main.GameUpdateCount, ["hp"] = p.statLife,
+                            ["enemies"] = enemies, ["projectiles"] = shots, ["triggered"] = enemies + shots > 0 };
+                    });
+                    report["pressure"] = pressure;
+                    if (pressure["triggered"].GetValue<bool>()) break;
+                    await Task.Delay(75, token);
+                }
+                report["encounter_warmup_ms"] = encounter.ElapsedMilliseconds;
+                Save();
+                report["collect_tenth"] = await Tool("gather", Gather(site.NextCrystal, 10));
+            }
+            report["final_stock"] = await CrossingDiscovery.OnGame(() => Main.LocalPlayer.CountItem(ItemID.LifeCrystal));
+            report["ok"] = report["final_stock"].GetValue<int>() >= 10;
+        }
+        catch (Exception error) { report["error"] = error.Message; }
+        finally
+        {
+            await CrossingDiscovery.OnGame(() =>
+            {
+                report["frames"] = frames; frames = null;
+                AgentTools.Stop(); return true;
+            });
+            Save();
+            Console.WriteLine($"JUNGLE_REACTION_COMPLETE mode={mode} ok={report["ok"]} stock={report["final_stock"]} path={path}");
+        }
+        return report.ToJsonString();
+    }
+
+    const string LocalRetreat = """
+        let request=null,lastApplied=0,previousOptions='',pending=null;
+        on('tick', event=>{
+          const s=tool('get_state',{fields:['inventory_slots']});
+          const stock=s.inventory_slots.filter(i=>i.type===29).reduce((sum,i)=>sum+i.stack,0);
+          if(stock!==9) return {handled:true};
+          const args=event.execution?.args;
+          if(!Number.isInteger(args?.x)||!Number.isInteger(args?.y))return {handled:true};
+          const c=tool('combat_assess',{radius:18,forecast:true,terrain_radius:8,
+            context:'jungle-retreat',destination:{x:args.x,y:args.y}});
+          if(c.error)return {handled:true};
+          const close=c.targets.filter(n=>n.contact_damage>0&&n.distance_tiles<=12).map(({weapons,...n})=>n);
+          if(close.length===0&&!c.projectiles.length || Date.now()-lastApplied<900) return {handled:true};
+          const f=c.forecast, choices={continue:{operation:'keep the current route'}};
+          const plans=[];
+          for(const p of f.plans??[]){
+            const m=f.movements.find(m=>m.id===p.movement);
+            if(p.movement==='follow_route'||!p.movement_available||!m?.safe_landing||!m.comparison_complete||plans.some(q=>q.movement===p.movement))continue;
+            plans.push(p); choices[p.id]={operation:'move',movement:p.movement,damage:m.damage,
+              landing_frame:m.landing_frame,route_progress_tiles:m.route_progress_tiles,exposure:m.linear_threat_overlap,
+              end:m.end?{x:m.end.x,y:m.end.y}:null};
+          }
+          const rail=c.rail_routes?.[0];
+          if(rail)choices.rail={operation:'cancel the native rail pull with jump',track:rail};
+          const offered=Object.keys(choices).join(',');
+          if(offered!==previousOptions){
+            previousOptions=offered;
+            print({trial:'natural_jungle_options',tick:c.tick,options:choices,forecast_status:f.status,close:close.length});
+          }
+          if(Object.keys(choices).length<2)return {handled:true};
+          const baseline=f.movements?.find(m=>m.id==='follow_route');
+          const r=tool('jev_judge',{channel:'natural_jungle_retreat',context:'same-crystal-route',interval_ms:700,max_age_ms:1200,
+            state:{player:c.player,enemies:close,projectiles:c.projectiles,recent_damage:c.recent_damage,
+              baseline:baseline?{damage:baseline.damage,overlap:baseline.linear_threat_overlap,
+                route_progress_tiles:baseline.route_progress_tiles}:null,terrain:c.terrain},
+            questions:{response:{type:'choice',instructions:'Continue gathering the last crystal while staying alive. Select the immediate legal action. Prefer measured safe movement away from pursuing enemies. Enemies may pass through tiles only when ignores_tiles is true.',criteria:choices}}});
+          if(r.status==='ready'&&r.request_id!==request){
+            request=r.request_id;
+            const picked=r.result.answers.response.choice;
+            print({trial:'natural_jungle_retreat',tick:c.tick,options:Object.keys(choices),selected:picked,model_ms:r.result.elapsed_ms});
+            pending=picked==='continue'?null:{selected:picked,expires:Date.now()+1200-r.request_age_ms};
+          }
+          if(!pending||Date.now()>=pending.expires)return {handled:true};
+          const selected=pending.selected;
+          const plan=plans.find(p=>p.id===selected);
+          if(!plan&&selected!=='rail')return {handled:true};
+          const receipt=plan?tool('act',{steps:[{keys:['right'],until:{frames:1}}],combat_candidate:{context:'jungle-retreat',forecast_id:f.id,plan_id:plan.id}})
+            : rail?tool('interact',{x:rail.x,y:rail.y,track_mode:'boost'}):{error:'rail_changed'};
+          print({trial:'natural_jungle_retreat_applied',tick:c.tick,selected,receipt});
+          if(receipt.status!=='combat_preparing'){lastApplied=Date.now();pending=null;}
+          return {handled:true};
+        });
+        """;
 }
 
 public sealed class UiInteractionTrial : ModSystem
