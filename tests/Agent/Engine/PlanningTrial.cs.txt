@@ -243,7 +243,7 @@ public sealed class JungleRailAscent : ModSystem
         return tile.HasTile || tile.WallType == WallID.None || tile.LiquidAmount != 0 ? null : new Site(feet, track, clear, tile.WallType, 0);
     }
 
-    static (Site Site, Point Heart) FindEncounter(Player p)
+    static (Site Site, Point Heart, int LaunchCoverage) FindEncounter(Player p)
     {
         var hearts = new List<Point>();
         for (int x = 100; x < Main.maxTilesX - 100; x++)
@@ -253,7 +253,7 @@ public sealed class JungleRailAscent : ModSystem
             if (tile.HasUnactuatedTile && tile.TileType == TileID.Heart && tile.TileFrameX == 0 && tile.TileFrameY == 0)
                 hearts.Add(new Point(x, y));
         }
-        var sites = new List<(Site Site, Point Heart, int Distance)>();
+        var sites = new List<(Site Site, Point Heart, int Distance, int LaunchCoverage)>();
         foreach (Point heart in hearts)
         {
             int jungle = 0;
@@ -277,11 +277,25 @@ public sealed class JungleRailAscent : ModSystem
                     || !Collision.SolidCollision(start + Vector2.UnitY, p.width, p.height)
                     || Collision.WetCollision(start, p.width, p.height)) continue;
                 var candidate = OverheadTrack(p, start);
-                if (candidate != null) sites.Add((candidate with { Jungle = jungle }, heart, distance));
+                if (candidate == null) continue;
+                int direction = Math.Sign(heart.X - floor.X);
+                int coverage = 1;
+                while (direction != 0 && coverage <= 7)
+                {
+                    var along = start + new Vector2(direction * coverage * 16, 0);
+                    if (Collision.SolidCollision(along, p.width, p.height)
+                        || !Collision.SolidCollision(along + Vector2.UnitY, p.width, p.height)
+                        || Collision.WetCollision(along, p.width, p.height)
+                        || OverheadTrack(p, along) == null) break;
+                    coverage++;
+                }
+                sites.Add((candidate with { Jungle = jungle }, heart, distance, coverage));
             }
         }
-        var best = sites.OrderByDescending(s => s.Site.Clearance).ThenBy(s => s.Distance).FirstOrDefault();
-        return best.Site == null ? throw new InvalidOperationException("no_natural_crystal_near_rail_launch") : (best.Site, best.Heart);
+        var best = sites.OrderByDescending(s => s.LaunchCoverage).ThenByDescending(s => s.Site.Clearance)
+            .ThenBy(s => s.Distance).FirstOrDefault();
+        return best.Site == null ? throw new InvalidOperationException("no_natural_crystal_near_rail_launch")
+            : (best.Site, best.Heart, best.LaunchCoverage);
     }
 
     static JsonObject ReadEncounter()
@@ -293,19 +307,39 @@ public sealed class JungleRailAscent : ModSystem
             ["vx"] = velocity.X, ["vy"] = velocity.Y, ["damage"] = damage, ["ignores_tiles"] = ignoresTiles,
             ["line_clear"] = Collision.CanHitLine(p.Center, 1, 1, center, 1, 1)
         };
-        var enemies = Main.npc.Where(n => n.active && !n.friendly && n.damage > 0 && Vector2.Distance(n.Center, p.Center) < 192)
+        var enemies = Main.npc.Where(n => n.active && !n.friendly && n.damage > 0 && Vector2.Distance(n.Center, p.Center) < 20 * 16)
             .OrderBy(n => Vector2.Distance(n.Center, p.Center)).Take(5)
             .Select(n => (JsonNode)Threat(n.Center, n.velocity, n.TypeName, n.noTileCollide, n.damage)).ToArray();
-        var shots = Main.projectile.Where(s => s.active && s.hostile && s.damage > 0 && Vector2.Distance(s.Center, p.Center) < 256)
+        var shots = Main.projectile.Where(s => s.active && s.hostile && s.damage > 0 && Vector2.Distance(s.Center, p.Center) < 16 * 16)
             .OrderBy(s => Vector2.Distance(s.Center, p.Center)).Take(5)
             .Select(s => (JsonNode)Threat(s.Center, s.velocity, s.Name, !s.tileCollide, s.damage)).ToArray();
         return new JsonObject { ["tick"] = (ulong)Main.GameUpdateCount, ["hp"] = p.statLife, ["dead"] = p.dead,
+            ["max_hp"] = p.statLifeMax2, ["crystals_in_inventory"] = p.CountItem(ItemID.LifeCrystal),
             ["x"] = p.Center.X / 16, ["y"] = p.Center.Y / 16, ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y,
             ["nav_active"] = RecedingNav.Active, ["enemies"] = new JsonArray(enemies), ["shots"] = new JsonArray(shots) };
     }
 
-    static bool UnderPressure(JsonObject scene) => scene["shots"].AsArray().Concat(scene["enemies"].AsArray())
-        .Any(t => t["ignores_tiles"].GetValue<bool>() || t["line_clear"].GetValue<bool>());
+    static bool PressureSource(JsonNode threat) =>
+        threat["ignores_tiles"].GetValue<bool>() || threat["line_clear"].GetValue<bool>();
+
+    static bool UnderPressure(JsonObject scene, int shots = 1) =>
+        scene["enemies"].AsArray().Any(PressureSource) || scene["shots"].AsArray().Count(PressureSource) >= shots;
+
+    static JsonObject EscapeQuestions() => new()
+    {
+        ["move"] = new JsonObject { ["type"] = "choice",
+            ["instructions"] = "You choose the player's tactic for the next 2 to 4 seconds during a Life Crystal run. The crystal can wait. Compare continuing toward the destination with making space upward now and resuming later. Prefer rail_ascent when the current route keeps a reachable enemy or recurring fire near the player, especially if another one or two hits are dangerous and the overhead lane leads away from the threat. Prefer continue when movement is already opening distance, danger is separated by tiles, or the only hazard is one projectile passing through. A projectile already in flight can arrive before the decision takes effect. Use enemy locations and tile obstruction for the sustained risk. Positive y is downward. Velocities are pixels per game frame.",
+            ["criteria"] = new JsonObject {
+                ["continue"] = "Keep the current collection route and make progress toward the crystal.",
+                ["rail_ascent"] = "Break contact and gain vertical separation. Drink the available Featherfall potion, place one carried rail in the clear overhead lane, use the native track pull and cancel it with a jump while holding up. Resume the same collection action after the ascent." } },
+        ["risk"] = new JsonObject { ["type"] = "choice",
+            ["instructions"] = "Classify the dominant risk in the next 2 to 4 seconds from the observed enemies, shots, route direction, terrain and HP.",
+            ["criteria"] = new JsonObject {
+                ["sustained_contact"] = "Enemy can remain close or intercept the route.",
+                ["sustained_fire"] = "Ranged enemy or repeated fire covers the route.",
+                ["passing_hazard"] = "Individual projectile or threat is passing or being left behind.",
+                ["separated"] = "Terrain separates the threat or visible danger is low." } }
+    };
 
     static Site AvailableTrack()
     {
@@ -317,20 +351,23 @@ public sealed class JungleRailAscent : ModSystem
         return launch != null && p.IsInTileInteractionRange(launch.Track.X, launch.Track.Y, TileReachCheckSettings.Simple) ? launch : null;
     }
 
+    static bool SameEscapeArea(Site original, Site current) => current != null
+        && Math.Abs(original.Floor.X - current.Floor.X) <= 8 && Math.Abs(original.Floor.Y - current.Floor.Y) <= 6;
+
     internal static async Task<string> RunEncounter()
     {
         bool injured = Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "encounter-injured";
         string path = Path.Combine(Main.SavePath, "jungle-rail-encounter.json");
         var report = new JsonObject { ["ok"] = false, ["objective"] = "Collect 10 Life Crystals",
             ["seed"] = Main.ActiveWorldFileData.SeedText, ["natural_terrain"] = true, ["natural_spawns"] = true,
-            ["initial_stock"] = 9, ["start_injured"] = injured, ["model_calls"] = 0 };
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(100));
+            ["initial_stock"] = 9, ["start_injured"] = injured, ["model_calls"] = 0, ["questions"] = EscapeQuestions() };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(125));
         var token = timeout.Token;
         async Task<JsonObject> Tool(string name, JsonObject args) => JsonNode.Parse(await AgentTools.Execute(name, args, token)).AsObject();
         void Save() => File.WriteAllText(path, report.ToJsonString());
         try
         {
-            var (start, heart) = await CrossingDiscovery.OnGame(() =>
+            var (start, heart, coverage) = await CrossingDiscovery.OnGame(() =>
             {
                 var p = Main.LocalPlayer;
                 var chosen = FindEncounter(p);
@@ -339,29 +376,36 @@ public sealed class JungleRailAscent : ModSystem
                 Main.musicVolume = 0;
                 p.position = Stand(p, chosen.Site.Floor); p.velocity = Vector2.Zero;
                 p.fallStart = p.fallStart2 = chosen.Site.Floor.Y;
-                if (injured) p.statLife = 25;
                 p.inventory[3].SetDefaults(ItemID.MinecartTrack); p.inventory[3].stack = 5;
                 p.inventory[4].SetDefaults(ItemID.FeatherfallPotion);
                 p.inventory[5].SetDefaults(ItemID.WoodenBow);
                 p.inventory[6].SetDefaults(ItemID.WoodenArrow); p.inventory[6].stack = 50;
-                p.inventory[8].SetDefaults(ItemID.LifeCrystal); p.inventory[8].stack = 9;
                 return chosen;
             });
             report["start"] = new JsonArray(start.Floor.X, start.Floor.Y);
             report["heart"] = new JsonArray(heart.X, heart.Y);
+            report["launch_coverage_tiles"] = coverage;
             Save();
             var warmup = Stopwatch.StartNew();
             await Task.Delay(600, token);
             if (!await CrossingDiscovery.OnGame(() => Main.LocalPlayer.ZoneJungle))
                 throw new InvalidOperationException("native_player_not_in_jungle");
-            while (warmup.ElapsedMilliseconds < 24000)
+            while (warmup.ElapsedMilliseconds < 48000)
             {
                 var sample = await CrossingDiscovery.OnGame(ReadEncounter);
-                if (UnderPressure(sample) || sample["dead"].GetValue<bool>()) break;
+                if (UnderPressure(sample, shots: 2) || sample["dead"].GetValue<bool>()) break;
                 await Task.Delay(50, token);
             }
             report["warmup_ms"] = warmup.ElapsedMilliseconds;
-            report["gather_initial_scene"] = await CrossingDiscovery.OnGame(ReadEncounter);
+            report["gather_initial_scene"] = await CrossingDiscovery.OnGame(() =>
+            {
+                var p = Main.LocalPlayer;
+                if (p.dead) throw new InvalidOperationException("died_during_natural_spawn_warmup");
+                if (injured) p.statLife = Math.Min(25, p.statLife);
+                p.inventory[8].SetDefaults(ItemID.LifeCrystal); p.inventory[8].stack = 9;
+                return ReadEncounter();
+            });
+            int initialHp = report["gather_initial_scene"]["hp"].GetValue<int>();
             var elapsed = Stopwatch.StartNew();
             var started = await Tool("action_start", new JsonObject { ["tool"] = "gather", ["args"] = new JsonObject
             {
@@ -381,31 +425,29 @@ public sealed class JungleRailAscent : ModSystem
                 if (scene["dead"].GetValue<bool>()) break;
                 bool pressure = UnderPressure(scene);
                 if (pressure) pressuredSamples++;
-                if (pressure && rail != null && report["model_calls"].GetValue<int>() == 0)
+                if (rail != null && UnderPressure(scene, shots: 2) && report["model_calls"].GetValue<int>() == 0)
                 {
                     scene["crystal_destination"] = new JsonArray(heart.X, heart.Y);
                     scene["rail_target"] = new JsonArray(rail.Track.X, rail.Track.Y);
                     scene["clear_upward_tiles"] = rail.Clearance;
+                    scene["hp_at_gather_start"] = initialHp;
                     report["decision_scene"] = scene;
                     report["model_calls"] = 1;
                     Save();
-                    var decision = await Tool("jev_judge", new JsonObject { ["state"] = scene.DeepClone(), ["questions"] = new JsonObject
-                    {
-                        ["move"] = new JsonObject { ["type"] = "choice",
-                            ["instructions"] = "Choose the next useful action while gathering one more Life Crystal. Consider whether the current enemies or shots threaten the player, which way they are moving, and whether the crystal is in the same direction. Use a temporary escape only if its benefit justifies the detour and it is safer than continuing.",
-                            ["criteria"] = new JsonObject {
-                                ["continue"] = "Keep the existing navigation and gather the crystal.",
-                                ["rail_ascent"] = "Temporarily ascend through the clear shaft. Drink Featherfall and place one inventory rail on the reachable empty tile with a natural background wall. Right-click the rail, jump before boarding and hold up. Return to gathering after the escape." } }
-                    } });
+                    var decision = await Tool("jev_judge", new JsonObject { ["state"] = scene.DeepClone(),
+                        ["questions"] = report["questions"].DeepClone() });
                     report["jev"] = decision;
                     outcome = await Query();
                     var live = await CrossingDiscovery.OnGame(() => (Scene: ReadEncounter(), Track: AvailableTrack()));
                     report["reply_scene"] = live.Scene;
+                    if (live.Track != null) report["reply_track"] = new JsonArray(live.Track.Track.X, live.Track.Track.Y);
                     if (decision["answers"]?["move"]?["choice"]?.ToString() == "rail_ascent"
                         && outcome["status"]?.ToString() == "running")
                     {
-                        if (live.Track == null || live.Track.Track != rail.Track || !UnderPressure(live.Scene))
-                            report["switch_skipped"] = "placement_or_pressure_changed";
+                        if (!SameEscapeArea(rail, live.Track))
+                            report["switch_skipped"] = "no_reachable_upward_lane_at_reply";
+                        else if (!UnderPressure(live.Scene))
+                            report["switch_skipped"] = "pressure_changed";
                         else
                         {
                             var paused = await Control("pause");
@@ -415,15 +457,16 @@ public sealed class JungleRailAscent : ModSystem
                                 var launch = await CrossingDiscovery.OnGame(() =>
                                 {
                                     var current = AvailableTrack();
-                                    return current?.Track == rail.Track && !RecedingNav.Active
-                                        ? (float?)StartAscent(current) : null;
+                                    return (Track: current, StartY: SameEscapeArea(rail, current) && !RecedingNav.Active
+                                        ? (float?)StartAscent(current) : null);
                                 });
-                                if (launch is float startY)
+                                if (launch.StartY is float startY)
                                 {
+                                    report["executed_track"] = new JsonArray(launch.Track.Track.X, launch.Track.Track.Y);
                                     await Task.Delay(1800, token);
                                     report["ascent"] = await CrossingDiscovery.OnGame(() =>
                                     {
-                                        var result = AscentResult(rail, startY, 5);
+                                        var result = AscentResult(launch.Track, startY, 5);
                                         StopAscent();
                                         return result;
                                     });
