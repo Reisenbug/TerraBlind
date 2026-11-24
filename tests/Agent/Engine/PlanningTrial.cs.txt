@@ -32,6 +32,7 @@ static class PlanningTrial
     public static async Task<string> Run()
     {
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "ascent") return await JungleRailAscent.Run();
+        if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "encounter" or "encounter-injured") return await JungleRailAscent.RunEncounter();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "baseline" or "jev") return await JungleReactionTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1") return await UiInteractionTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_TERRAIN_ASCII") != null) return await AsciiTerrainTrial.Run();
@@ -196,6 +197,266 @@ public sealed class JungleRailAscent : ModSystem
         finally { (p.tileInteractAttempted, p.releaseUseTile, p.tileInteractionHappened, Main.mouseRightRelease) = old; }
     }
 
+    static float StartAscent(Site chosen)
+    {
+        site = chosen; trace = new JsonArray(); clickTick = hookTick = jumpTick = null;
+        BoundaryInputPlayer.Drive = ApplyClick;
+        FrameProgram.Set(new JsonObject { ["code"] = AscentProgram });
+        return Main.LocalPlayer.Center.Y;
+    }
+
+    static void StopAscent()
+    {
+        site = null; BoundaryInputPlayer.Drive = null; FrameProgram.Clear();
+    }
+
+    static JsonObject AscentResult(Site chosen, float startY, int initialTracks)
+    {
+        var p = Main.LocalPlayer;
+        var peak = trace.Min(f => f["y"].GetValue<float>());
+        var tile = Main.tile[chosen.Track.X, chosen.Track.Y];
+        bool placed = tile.HasUnactuatedTile && tile.TileType == TileID.MinecartTrack && p.inventory[3].stack == initialTracks - 1;
+        bool featherfall = p.HasBuff(BuffID.Featherfall) && p.inventory[4].IsAir;
+        bool cancelled = jumpTick != null && trace.Any(f => f["tick"].GetValue<ulong>() >= jumpTick
+            && f["tick"].GetValue<ulong>() <= jumpTick + 1 && !f["hook"].GetValue<bool>());
+        bool boarded = trace.Any(f => f["cart"].GetValue<bool>());
+        bool heldUp = jumpTick != null && trace.Where(f => f["tick"].GetValue<ulong>() >= jumpTick
+            && f["vy"].GetValue<float>() < 0).All(f => f["up"].GetValue<bool>());
+        return new JsonObject { ["ok"] = placed && featherfall && clickTick < hookTick && hookTick <= jumpTick
+                && cancelled && !boarded && !p.dead && heldUp && startY - peak >= 8 * 16,
+            ["trace"] = trace, ["placement_verified"] = placed, ["featherfall_verified"] = featherfall,
+            ["right_click_tick"] = clickTick, ["hook_tick"] = hookTick, ["jump_tick"] = jumpTick,
+            ["gain_tiles"] = (startY - peak) / 16, ["peak_upward_speed"] = -trace.Min(f => f["vy"].GetValue<float>()),
+            ["hook_cancelled"] = cancelled, ["boarded_cart"] = boarded, ["up_held_through_ascent"] = heldUp,
+            ["hp_after"] = p.statLife, ["lowest_hp"] = trace.Min(f => f["hp"].GetValue<int>()),
+            ["program"] = FrameProgram.Snapshot() };
+    }
+
+    static Site OverheadTrack(Player p, Vector2 position)
+    {
+        Point feet = (position + new Vector2(p.width / 2f, p.height)).ToTileCoordinates();
+        int clear = 0;
+        while (clear < 17 && !Collision.SolidCollision(position - new Vector2(0, (clear + 1) * 16), p.width, p.height)) clear++;
+        if (clear < 8) return null;
+        var track = new Point(feet.X, feet.Y - 5);
+        var tile = Main.tile[track.X, track.Y];
+        return tile.HasTile || tile.WallType == WallID.None || tile.LiquidAmount != 0 ? null : new Site(feet, track, clear, tile.WallType, 0);
+    }
+
+    static (Site Site, Point Heart) FindEncounter(Player p)
+    {
+        var hearts = new List<Point>();
+        for (int x = 100; x < Main.maxTilesX - 100; x++)
+        for (int y = (int)Main.rockLayer + 10; y < Main.maxTilesY - 220; y++)
+        {
+            var tile = Main.tile[x, y];
+            if (tile.HasUnactuatedTile && tile.TileType == TileID.Heart && tile.TileFrameX == 0 && tile.TileFrameY == 0)
+                hearts.Add(new Point(x, y));
+        }
+        var sites = new List<(Site Site, Point Heart, int Distance)>();
+        foreach (Point heart in hearts)
+        {
+            int jungle = 0;
+            for (int dx = -32; dx <= 32; dx++)
+            for (int dy = -32; dy <= 32; dy++)
+            {
+                var tile = Main.tile[heart.X + dx, heart.Y + dy];
+                if (tile.HasUnactuatedTile) jungle += TileID.Sets.JungleBiome[tile.TileType];
+            }
+            if (jungle < 320) continue;
+            for (int dx = -24; dx <= 24; dx++)
+            for (int dy = -12; dy <= 28; dy++)
+            {
+                int distance = Math.Abs(dx) + Math.Abs(dy);
+                if (distance < 14 || distance > 34) continue;
+                var floor = new Point(heart.X + dx, heart.Y + dy);
+                var beneath = Main.tile[floor.X, floor.Y];
+                if (!beneath.HasUnactuatedTile || !Main.tileSolid[beneath.TileType]) continue;
+                var start = Stand(p, floor);
+                if (Collision.SolidCollision(start, p.width, p.height)
+                    || !Collision.SolidCollision(start + Vector2.UnitY, p.width, p.height)
+                    || Collision.WetCollision(start, p.width, p.height)) continue;
+                var candidate = OverheadTrack(p, start);
+                if (candidate != null) sites.Add((candidate with { Jungle = jungle }, heart, distance));
+            }
+        }
+        var best = sites.OrderByDescending(s => s.Site.Clearance).ThenBy(s => s.Distance).FirstOrDefault();
+        return best.Site == null ? throw new InvalidOperationException("no_natural_crystal_near_rail_launch") : (best.Site, best.Heart);
+    }
+
+    static JsonObject ReadEncounter()
+    {
+        var p = Main.LocalPlayer;
+        JsonObject Threat(Vector2 center, Vector2 velocity, string name, bool ignoresTiles, int damage) => new()
+        {
+            ["name"] = name, ["dx_tiles"] = (center.X - p.Center.X) / 16, ["dy_tiles"] = (center.Y - p.Center.Y) / 16,
+            ["vx"] = velocity.X, ["vy"] = velocity.Y, ["damage"] = damage, ["ignores_tiles"] = ignoresTiles,
+            ["line_clear"] = Collision.CanHitLine(p.Center, 1, 1, center, 1, 1)
+        };
+        var enemies = Main.npc.Where(n => n.active && !n.friendly && n.damage > 0 && Vector2.Distance(n.Center, p.Center) < 192)
+            .OrderBy(n => Vector2.Distance(n.Center, p.Center)).Take(5)
+            .Select(n => (JsonNode)Threat(n.Center, n.velocity, n.TypeName, n.noTileCollide, n.damage)).ToArray();
+        var shots = Main.projectile.Where(s => s.active && s.hostile && s.damage > 0 && Vector2.Distance(s.Center, p.Center) < 256)
+            .OrderBy(s => Vector2.Distance(s.Center, p.Center)).Take(5)
+            .Select(s => (JsonNode)Threat(s.Center, s.velocity, s.Name, !s.tileCollide, s.damage)).ToArray();
+        return new JsonObject { ["tick"] = (ulong)Main.GameUpdateCount, ["hp"] = p.statLife, ["dead"] = p.dead,
+            ["x"] = p.Center.X / 16, ["y"] = p.Center.Y / 16, ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y,
+            ["nav_active"] = RecedingNav.Active, ["enemies"] = new JsonArray(enemies), ["shots"] = new JsonArray(shots) };
+    }
+
+    static bool UnderPressure(JsonObject scene) => scene["shots"].AsArray().Concat(scene["enemies"].AsArray())
+        .Any(t => t["ignores_tiles"].GetValue<bool>() || t["line_clear"].GetValue<bool>());
+
+    static Site AvailableTrack()
+    {
+        var p = Main.LocalPlayer;
+        if (p.dead || p.wet || p.mount.Active || p.HasBuff(BuffID.Featherfall)
+            || p.inventory[3].type != ItemID.MinecartTrack || p.inventory[4].type != ItemID.FeatherfallPotion) return null;
+        if (!Collision.SolidCollision(p.position + Vector2.UnitY, p.width, p.height)) return null;
+        var launch = OverheadTrack(p, p.position);
+        return launch != null && p.IsInTileInteractionRange(launch.Track.X, launch.Track.Y, TileReachCheckSettings.Simple) ? launch : null;
+    }
+
+    internal static async Task<string> RunEncounter()
+    {
+        bool injured = Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "encounter-injured";
+        string path = Path.Combine(Main.SavePath, "jungle-rail-encounter.json");
+        var report = new JsonObject { ["ok"] = false, ["objective"] = "Collect 10 Life Crystals",
+            ["seed"] = Main.ActiveWorldFileData.SeedText, ["natural_terrain"] = true, ["natural_spawns"] = true,
+            ["initial_stock"] = 9, ["start_injured"] = injured, ["model_calls"] = 0 };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(100));
+        var token = timeout.Token;
+        async Task<JsonObject> Tool(string name, JsonObject args) => JsonNode.Parse(await AgentTools.Execute(name, args, token)).AsObject();
+        void Save() => File.WriteAllText(path, report.ToJsonString());
+        try
+        {
+            var (start, heart) = await CrossingDiscovery.OnGame(() =>
+            {
+                var p = Main.LocalPlayer;
+                var chosen = FindEncounter(p);
+                NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Concessions.Enabled = false; FrameProgram.Clear();
+                Combat.Enabled = Dodge.Enabled = false; Manual.On = false; Config.I.AgentEnabled = true;
+                Main.musicVolume = 0;
+                p.position = Stand(p, chosen.Site.Floor); p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = chosen.Site.Floor.Y;
+                if (injured) p.statLife = 25;
+                p.inventory[3].SetDefaults(ItemID.MinecartTrack); p.inventory[3].stack = 5;
+                p.inventory[4].SetDefaults(ItemID.FeatherfallPotion);
+                p.inventory[5].SetDefaults(ItemID.WoodenBow);
+                p.inventory[6].SetDefaults(ItemID.WoodenArrow); p.inventory[6].stack = 50;
+                p.inventory[8].SetDefaults(ItemID.LifeCrystal); p.inventory[8].stack = 9;
+                return chosen;
+            });
+            report["start"] = new JsonArray(start.Floor.X, start.Floor.Y);
+            report["heart"] = new JsonArray(heart.X, heart.Y);
+            Save();
+            var warmup = Stopwatch.StartNew();
+            await Task.Delay(600, token);
+            if (!await CrossingDiscovery.OnGame(() => Main.LocalPlayer.ZoneJungle))
+                throw new InvalidOperationException("native_player_not_in_jungle");
+            while (warmup.ElapsedMilliseconds < 24000)
+            {
+                var sample = await CrossingDiscovery.OnGame(ReadEncounter);
+                if (UnderPressure(sample) || sample["dead"].GetValue<bool>()) break;
+                await Task.Delay(50, token);
+            }
+            report["warmup_ms"] = warmup.ElapsedMilliseconds;
+            report["gather_initial_scene"] = await CrossingDiscovery.OnGame(ReadEncounter);
+            var elapsed = Stopwatch.StartNew();
+            var started = await Tool("action_start", new JsonObject { ["tool"] = "gather", ["args"] = new JsonObject
+            {
+                ["targets"] = new JsonArray(new JsonObject { ["item_type"] = (int)ItemID.LifeCrystal,
+                    ["count"] = 10, ["tile_names"] = new JsonArray("Heart") }),
+                ["source_area"] = new JsonObject { ["x"] = heart.X - 2, ["y"] = heart.Y - 2, ["width"] = 6, ["height"] = 6 }
+            } });
+            report["gather_started"] = started;
+            string handle = started["handle"]?.ToString() ?? throw new InvalidOperationException("gather_handle_missing");
+            Task<JsonObject> Control(string command) => Tool("action_control", new JsonObject { ["handle"] = handle, ["command"] = command });
+            Task<JsonObject> Query() => Tool("action_query", new JsonObject { ["handle"] = handle, ["wait_ms"] = 0 });
+            var outcome = await Query();
+            int pressuredSamples = 0;
+            while (outcome["status"]?.ToString() == "running" && elapsed.ElapsedMilliseconds < 55000)
+            {
+                var (scene, rail) = await CrossingDiscovery.OnGame(() => (ReadEncounter(), AvailableTrack()));
+                if (scene["dead"].GetValue<bool>()) break;
+                bool pressure = UnderPressure(scene);
+                if (pressure) pressuredSamples++;
+                if (pressure && rail != null && report["model_calls"].GetValue<int>() == 0)
+                {
+                    scene["crystal_destination"] = new JsonArray(heart.X, heart.Y);
+                    scene["rail_target"] = new JsonArray(rail.Track.X, rail.Track.Y);
+                    scene["clear_upward_tiles"] = rail.Clearance;
+                    report["decision_scene"] = scene;
+                    report["model_calls"] = 1;
+                    Save();
+                    var decision = await Tool("jev_judge", new JsonObject { ["state"] = scene.DeepClone(), ["questions"] = new JsonObject
+                    {
+                        ["move"] = new JsonObject { ["type"] = "choice",
+                            ["instructions"] = "Choose the next useful action while gathering one more Life Crystal. Consider whether the current enemies or shots threaten the player, which way they are moving, and whether the crystal is in the same direction. Use a temporary escape only if its benefit justifies the detour and it is safer than continuing.",
+                            ["criteria"] = new JsonObject {
+                                ["continue"] = "Keep the existing navigation and gather the crystal.",
+                                ["rail_ascent"] = "Temporarily ascend through the clear shaft. Drink Featherfall and place one inventory rail on the reachable empty tile with a natural background wall. Right-click the rail, jump before boarding and hold up. Return to gathering after the escape." } }
+                    } });
+                    report["jev"] = decision;
+                    outcome = await Query();
+                    var live = await CrossingDiscovery.OnGame(() => (Scene: ReadEncounter(), Track: AvailableTrack()));
+                    report["reply_scene"] = live.Scene;
+                    if (decision["answers"]?["move"]?["choice"]?.ToString() == "rail_ascent"
+                        && outcome["status"]?.ToString() == "running")
+                    {
+                        if (live.Track == null || live.Track.Track != rail.Track || !UnderPressure(live.Scene))
+                            report["switch_skipped"] = "placement_or_pressure_changed";
+                        else
+                        {
+                            var paused = await Control("pause");
+                            report["gather_paused"] = paused;
+                            if (paused["status"]?.ToString() == "paused")
+                            {
+                                var launch = await CrossingDiscovery.OnGame(() =>
+                                {
+                                    var current = AvailableTrack();
+                                    return current?.Track == rail.Track && !RecedingNav.Active
+                                        ? (float?)StartAscent(current) : null;
+                                });
+                                if (launch is float startY)
+                                {
+                                    await Task.Delay(1800, token);
+                                    report["ascent"] = await CrossingDiscovery.OnGame(() =>
+                                    {
+                                        var result = AscentResult(rail, startY, 5);
+                                        StopAscent();
+                                        return result;
+                                    });
+                                }
+                                else report["switch_skipped"] = "placement_or_input_owner_changed_during_handoff";
+                                report["gather_resumed"] = await Control("resume");
+                            }
+                        }
+                    }
+                    Save();
+                }
+                await Task.Delay(60, token);
+                outcome = await Query();
+            }
+            report["pressure_samples"] = pressuredSamples;
+            report["gather_final"] = outcome;
+            report["final_scene"] = await CrossingDiscovery.OnGame(ReadEncounter);
+            report["final_stock"] = await CrossingDiscovery.OnGame(() => Main.LocalPlayer.CountItem(ItemID.LifeCrystal));
+            report["gather_elapsed_ms"] = elapsed.ElapsedMilliseconds;
+            report["ok"] = report["ascent"]?["ok"]?.GetValue<bool>() == true
+                && report["gather_resumed"]?["handle"]?.ToString() == handle && report["final_stock"].GetValue<int>() == 10
+                && !report["final_scene"]["dead"].GetValue<bool>();
+        }
+        catch (Exception error) { report["error"] = error.ToString(); }
+        finally
+        {
+            await CrossingDiscovery.OnGame(() => { StopAscent(); AgentTools.Stop(); return true; });
+            Save();
+            Console.WriteLine($"JUNGLE_RAIL_ENCOUNTER_COMPLETE ok={report["ok"]} stock={report["final_stock"]} path={path}");
+        }
+        return report.ToJsonString();
+    }
+
     internal static async Task<string> Run()
     {
         string path = Path.Combine(Main.SavePath, "jungle-rail-ascent.json");
@@ -245,42 +506,15 @@ public sealed class JungleRailAscent : ModSystem
             File.WriteAllText(path, report.ToJsonString());
             if (choice["answers"]?["move"]?["choice"]?.ToString() != "rail_ascent")
                 throw new InvalidOperationException("jev_did_not_select_rail_ascent");
-            float startY = await CrossingDiscovery.OnGame(() =>
-            {
-                site = chosen; trace = new JsonArray(); clickTick = hookTick = jumpTick = null;
-                BoundaryInputPlayer.Drive = ApplyClick;
-                FrameProgram.Set(new JsonObject { ["code"] = AscentProgram });
-                return Main.LocalPlayer.Center.Y;
-            });
+            float startY = await CrossingDiscovery.OnGame(() => StartAscent(chosen));
             await Task.Delay(2000, token);
-            await CrossingDiscovery.OnGame(() =>
-            {
-                var p = Main.LocalPlayer;
-                var peak = trace.Min(f => f["y"].GetValue<float>());
-                var tile = Main.tile[chosen.Track.X, chosen.Track.Y];
-                report["trace"] = trace;
-                report["placement_verified"] = tile.HasUnactuatedTile && tile.TileType == TileID.MinecartTrack && p.inventory[3].stack == 4;
-                report["featherfall_verified"] = p.HasBuff(BuffID.Featherfall) && p.inventory[4].IsAir;
-                report["right_click_tick"] = clickTick; report["hook_tick"] = hookTick; report["jump_tick"] = jumpTick;
-                report["gain_tiles"] = (startY - peak) / 16;
-                report["peak_upward_speed"] = -trace.Min(f => f["vy"].GetValue<float>());
-                report["hook_cancelled"] = jumpTick != null && trace.Any(f => f["tick"].GetValue<ulong>() >= jumpTick
-                    && f["tick"].GetValue<ulong>() <= jumpTick + 1 && !f["hook"].GetValue<bool>());
-                report["boarded_cart"] = trace.Any(f => f["cart"].GetValue<bool>());
-                report["up_held_through_ascent"] = jumpTick != null && trace.Where(f => f["tick"].GetValue<ulong>() >= jumpTick
-                    && f["vy"].GetValue<float>() < 0).All(f => f["up"].GetValue<bool>());
-                report["program"] = FrameProgram.Snapshot();
-                report["ok"] = report["placement_verified"].GetValue<bool>() && report["featherfall_verified"].GetValue<bool>()
-                    && clickTick < hookTick && hookTick <= jumpTick && report["hook_cancelled"].GetValue<bool>()
-                    && !report["boarded_cart"].GetValue<bool>() && !p.dead
-                    && report["up_held_through_ascent"].GetValue<bool>() && (startY - peak) >= 8 * 16;
-                return true;
-            });
+            foreach (var entry in await CrossingDiscovery.OnGame(() => AscentResult(chosen, startY, 5)))
+                report[entry.Key] = entry.Value?.DeepClone();
         }
         catch (Exception error) { report["error"] = error.Message; }
         finally
         {
-            await CrossingDiscovery.OnGame(() => { site = null; BoundaryInputPlayer.Drive = null; FrameProgram.Clear(); return true; });
+            await CrossingDiscovery.OnGame(() => { StopAscent(); return true; });
             File.WriteAllText(path, report.ToJsonString());
             Console.WriteLine($"JUNGLE_RAIL_ASCENT_COMPLETE ok={report["ok"]} gain={report["gain_tiles"]} path={path}");
         }
