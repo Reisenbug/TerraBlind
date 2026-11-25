@@ -34,6 +34,8 @@ static class PlanningTrial
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "ascent") return await JungleRailAscent.Run();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "encounter-data") return await JungleRailAscent.CheckEncounterData();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "escape-replay") return await JungleRailAscent.ReplayEscape();
+        if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "mobility-candidates" or "mobility-grapple")
+            return await MobilityCandidateTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "encounter" or "encounter-injured") return await JungleRailAscent.RunEncounter();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "baseline" or "jev") return await JungleReactionTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1") return await UiInteractionTrial.Run();
@@ -823,6 +825,301 @@ public sealed class JungleRailAscent : ModSystem
           return {slot:3,aim,keys:jump?['up','jump']:['up'],memory:m};
         }
         """;
+}
+
+public sealed class MobilityCandidateTrial : ModSystem
+{
+    sealed record Branch(string Id, int[] Keys, int ReleaseFrame);
+    sealed record Candidate(Branch Branch, JsonArray Trace, Point Landing, bool UsedAbility, float ClosestEnemy, JsonObject Evidence);
+    static Playback active;
+
+    public override void PostUpdatePlayers() => active?.After(Main.LocalPlayer);
+
+    static JsonArray Keys(IEnumerable<int> keys) => new(keys.Select(k => JsonValue.Create(k)).ToArray());
+    static float Number(JsonNode row, string key) => row[key].GetValue<float>();
+    static Vector2 Position(JsonNode row) => new(Number(row, "x"), Number(row, "y"));
+
+    static Branch[] Inputs(bool extraJump)
+    {
+        var branches = new List<Branch>();
+        foreach (int direction in new[] { (int)VanillaKeys.Left, (int)VanillaKeys.Right })
+        {
+            string side = direction == (int)VanillaKeys.Left ? "left" : "right";
+            int jump = direction | (int)VanillaKeys.Jump;
+            void Add(string id, int[] pressed) =>
+                branches.Add(new Branch(id, pressed.Concat(Enumerable.Repeat(0, 96)).ToArray(), pressed.Length));
+            Add("walk_" + side, Enumerable.Repeat(direction, 24).ToArray());
+            foreach (int hold in new[] { 12, 24, 36 })
+            {
+                var launch = extraJump
+                    ? Enumerable.Repeat(jump, 12).Concat(Enumerable.Repeat(direction, 6))
+                    : Enumerable.Empty<int>();
+                Add((extraJump ? "repress_jump_" : "hold_jump_") + side + "_" + hold,
+                    launch.Concat(Enumerable.Repeat(jump, hold)).ToArray());
+            }
+        }
+        return branches.ToArray();
+    }
+
+    sealed class Playback(Candidate chosen, JsonObject start)
+    {
+        readonly TaskCompletionSource<JsonObject> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int frame, inputs;
+        float maxError;
+        bool ability;
+        public Task<JsonObject> Result => done.Task;
+        public void Drive(Player p)
+        {
+            if (inputs == frame && frame < chosen.Trace.Count)
+            {
+                VanillaPrediction.ApplyInput(p, new VanillaPrediction.Input((VanillaKeys)chosen.Branch.Keys[frame]));
+                inputs++;
+            }
+        }
+        public void After(Player p)
+        {
+            if (inputs == frame) return;
+            maxError = Math.Max(maxError, Vector2.Distance(p.position, Position(chosen.Trace[frame])));
+            var actual = VanillaPrediction.Observe(p, false);
+            ability |= UsedAbility(start, actual);
+            frame++;
+            if (frame < chosen.Trace.Count && !p.dead && p.statLife >= start["hp"].GetValue<int>()) return;
+            active = null; BoundaryInputPlayer.Drive = null;
+            VanillaPrediction.ApplyInput(p, new VanillaPrediction.Input(VanillaKeys.None));
+            done.SetResult(new JsonObject { ["frames"] = frame, ["max_error_px"] = maxError,
+                ["actual_feet"] = new JsonArray(p.Bottom.X / 16, p.Bottom.Y / 16), ["hp"] = p.statLife,
+                ["grounded"] = actual["grounded"].GetValue<bool>() && p.velocity.Y == 0, ["used_ability"] = ability,
+                ["matches"] = frame == chosen.Trace.Count && maxError <= 16 && !p.dead
+                    && p.statLife >= start["hp"].GetValue<int>() && actual["grounded"].GetValue<bool>() && p.velocity.Y == 0
+                    && ability == chosen.UsedAbility });
+        }
+    }
+
+    static bool UsedAbility(JsonObject start, JsonNode frame) => Number(frame, "wing_time") < Number(start, "wing_time") - 0.5f
+        || frame["available_jumps"].GetValue<int>() < start["available_jumps"].GetValue<int>();
+
+    static Vector2? NearbyGrappleFooting(Player p)
+    {
+        var origin = p.position;
+        var tile = p.Bottom.ToTileCoordinates();
+        var read = typeof(TerraBlind.JevariaCombat.GameMovement).GetMethod("GrappleState", BindingFlags.Static | BindingFlags.NonPublic);
+        var nearby = from x in Enumerable.Range(-12, 25)
+                     from y in Enumerable.Range(-8, 17)
+                     orderby x * x + y * y
+                     select new Point(tile.X + x * 2, tile.Y + y * 2);
+        try
+        {
+            foreach (Point floor in nearby)
+            {
+                var position = new Vector2(floor.X * 16 + 8 - p.width / 2f, floor.Y * 16 - p.height);
+                if (!Collision.SolidCollision(position + Vector2.UnitY, p.width, p.height)
+                    || Collision.SolidCollision(position, p.width, p.height) || Collision.WetCollision(position, p.width, p.height))
+                    continue;
+                p.position = position;
+                var state = (JsonObject)read.Invoke(null, new object[] { p, true });
+                if (state["anchors"].AsArray().Count > 0) return position;
+            }
+        }
+        finally { p.position = origin; }
+        return null;
+    }
+
+    internal static async Task<string> Run()
+    {
+        string output = Path.Combine(Main.SavePath, "jungle-mobility-candidates.json");
+        var cases = new JsonArray();
+        bool grappleOnly = Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "mobility-grapple";
+        var report = new JsonObject { ["ok"] = false, ["world"] = Main.ActiveWorldFileData.SeedText, ["cases"] = cases,
+            ["terrain"] = "native cave", ["grapple_only"] = grappleOnly,
+            ["enemy_projection"] = "positions from the recorded encounter held fixed" };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+        var token = timeout.Token;
+        async Task<JsonObject> Tool(string name, JsonObject args) =>
+            JsonNode.Parse(await AgentTools.Execute(name, args, token)).AsObject();
+        void Save() => File.WriteAllText(output, report.ToJsonString());
+        try
+        {
+            var original = JsonNode.Parse(File.ReadAllText(Environment.GetEnvironmentVariable("TB_MOBILITY_SCENE")))["decision_scene"];
+            var center = Position(original) * 16;
+            var target = new Vector2(original["crystal_destination"][0].GetValue<int>() * 16 + 8,
+                original["crystal_destination"][1].GetValue<int>() * 16 + 8);
+            var enemies = original["enemies"].AsArray().Select(e => center + new Vector2(Number(e, "dx_tiles"), Number(e, "dy_tiles")) * 16).ToArray();
+            var worker = typeof(VanillaNavigationDemo).GetMethod("Observe", BindingFlags.Instance | BindingFlags.NonPublic);
+            Task<JsonObject> Batch(JsonObject snapshot, Branch[] branches) =>
+                (Task<JsonObject>)worker.Invoke(VanillaNavigationDemo.Instance, new object[] {
+                    new JsonObject { ["command"] = "combat_replays", ["snapshot"] = snapshot,
+                        ["branches"] = new JsonArray(branches.Select(b => (JsonNode)new JsonObject {
+                            ["id"] = b.Id, ["controls"] = Keys(b.Keys) }).ToArray()) }, token });
+            JsonObject Capture(Player p)
+            {
+                var at = p.Center.ToTileCoordinates();
+                return VanillaFrame.Capture(p, new Rectangle(at.X - 34, at.Y - 40, 69, 88), true);
+            }
+            await CrossingDiscovery.OnGame(() =>
+            {
+                NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; FrameProgram.Clear();
+                Config.I.AgentEnabled = true; Combat.Enabled = Dodge.Enabled = Concessions.Enabled = false;
+                Main.musicVolume = 0;
+                if (grappleOnly)
+                {
+                    var p = Main.LocalPlayer;
+                    p.miscEquips[4].SetDefaults(ItemID.AmethystHook);
+                    p.Center = center; p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                }
+                return true;
+            });
+            if (!grappleOnly)
+                await Batch(await CrossingDiscovery.OnGame(() => Capture(Main.LocalPlayer)), new[] { new Branch("warm", new int[2], 0) });
+            foreach (bool bottle in grappleOnly ? Array.Empty<bool>() : new[] { false, true })
+            {
+                int item = bottle ? ItemID.SandstorminaBottle : ItemID.AngelWings;
+                async Task<(JsonObject Start, JsonObject Snapshot, int Width, int Height)> Reset()
+                {
+                    await CrossingDiscovery.OnGame(() =>
+                    {
+                        var p = Main.LocalPlayer;
+                        p.armor[3].SetDefaults(item); p.miscEquips[4].SetDefaults(ItemID.AmethystHook);
+                        p.statLife = original["hp"].GetValue<int>();
+                        p.Center = center; p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                        return true;
+                    });
+                    await Task.Delay(120, token);
+                    return await CrossingDiscovery.OnGame(() =>
+                    {
+                        var p = Main.LocalPlayer;
+                        return (VanillaPrediction.Observe(p, false), Capture(p), p.width, p.height);
+                    });
+                }
+                var origin = await Reset();
+                var variants = Inputs(bottle);
+                var clock = Stopwatch.StartNew();
+                var batch = await Batch(origin.Snapshot, variants);
+                var evidence = new JsonArray();
+                var candidates = new List<Candidate>();
+                foreach (var row in batch["branches"].AsArray())
+                {
+                    var branch = variants.First(b => b.Id == row["id"].ToString());
+                    var frames = row["frames"].AsArray();
+                    if (frames.Count == 0) continue;
+                    int grounded = frames.Select((f, i) => (f, i)).Where(e => e.i >= branch.ReleaseFrame
+                        && e.f["grounded"].GetValue<bool>()).Select(e => e.i + 1).FirstOrDefault();
+                    int settled = frames.Select((f, i) => (f, i)).Where(e => e.i >= branch.ReleaseFrame
+                        && e.f["grounded"].GetValue<bool>() && Number(e.f, "vy") == 0).Select(e => e.i + 1).FirstOrDefault();
+                    var trace = new JsonArray(frames.Take(settled > 0 ? settled : frames.Count).Select(f => f.DeepClone()).ToArray());
+                    var end = trace.Last();
+                    Vector2 foot = Position(end) + new Vector2(origin.Width / 2f, origin.Height);
+                    float nearest = trace.Select(f => Position(f) + new Vector2(origin.Width / 2f, origin.Height / 2f))
+                        .Min(at => enemies.Min(enemy => Vector2.Distance(at, enemy))) / 16;
+                    bool used = trace.Any(frame => UsedAbility(origin.Start, frame));
+                    bool safe = settled > 0
+                        && trace.All(f => !f["dead"].GetValue<bool>() && f["hp"].GetValue<int>() >= origin.Start["hp"].GetValue<int>());
+                    var summary = new JsonObject { ["id"] = branch.Id, ["frames"] = trace.Count,
+                        ["held_input_frames"] = branch.ReleaseFrame, ["landing"] = new JsonArray(foot.X / 16, foot.Y / 16),
+                        ["closest_enemy_tiles"] = MathF.Round(nearest, 2), ["used_ability"] = used,
+                        ["goal_distance_tiles"] = MathF.Round(Vector2.Distance(foot, target) / 16, 2),
+                        ["first_grounded_frame"] = grounded > 0 ? grounded : null,
+                        ["settled_frame"] = settled > 0 ? settled : null,
+                        ["safe_landing"] = safe, ["outcome"] = row["outcome"].DeepClone() };
+                    evidence.Add(summary);
+                    if (safe && Vector2.Distance(Position(origin.Start), Position(end)) >= 16)
+                        candidates.Add(new Candidate(branch, trace, foot.ToTileCoordinates(), used, nearest, summary));
+                }
+                var options = candidates.GroupBy(c => c.Landing).Select(group => group
+                    .OrderByDescending(c => c.ClosestEnemy).ThenBy(c => c.Trace.Count).First()).ToArray();
+                var entry = new JsonObject { ["equipment"] = bottle ? "Sandstorm in a Bottle" : "Angel Wings",
+                    ["start"] = origin.Start.DeepClone(),
+                    ["roundtrip_ms"] = clock.ElapsedMilliseconds, ["worker_ms"] = batch["total_ms"]?.DeepClone(),
+                    ["trials"] = evidence, ["candidates"] = new JsonArray(options.Select(c => c.Evidence.DeepClone()).ToArray()) };
+                cases.Add(entry); Save();
+                if (options.Length < 2) { entry["error"] = "fewer_than_two_distinct_landings"; continue; }
+                var criteria = new JsonObject();
+                foreach (var option in options)
+                    criteria[option.Branch.Id] = $"Run the verified short input and land on tile {option.Landing.X},{option.Landing.Y}.";
+                var choice = await Tool("jev_judge", new JsonObject
+                {
+                    ["state"] = new JsonObject { ["hp"] = origin.Start["hp"].DeepClone(), ["equipment"] = entry["equipment"].DeepClone(),
+                        ["goal"] = new JsonArray(target.X / 16, target.Y / 16), ["candidates"] = entry["candidates"].DeepClone(),
+                        ["enemies"] = original["enemies"].DeepClone(),
+                        ["enemy_distances_basis"] = report["enemy_projection"].DeepClone() },
+                    ["questions"] = new JsonObject { ["move"] = new JsonObject { ["type"] = "choice",
+                        ["instructions"] = "Choose one already simulated maneuver. Prefer opening or maintaining distance from the nearby threat while making progress toward the crystal. Use the candidate's closest enemy distance along the path, landing position, and time in frames. Return the candidate ID.",
+                        ["criteria"] = criteria } }
+                });
+                entry["jev"] = choice;
+                var selected = options.FirstOrDefault(c => c.Branch.Id == choice["answers"]?["move"]?["choice"]?.ToString());
+                if (selected == null) { entry["error"] = "decision_unavailable"; continue; }
+                async Task<JsonObject> Play(Candidate candidate, JsonObject start)
+                {
+                    var playback = await CrossingDiscovery.OnGame(() =>
+                    {
+                        var p = Main.LocalPlayer;
+                        var now = VanillaPrediction.Observe(p, false);
+                        if (Vector2.Distance(Position(start), p.position) > 1 || p.velocity.LengthSquared() > 0.01f
+                            || !JsonNode.DeepEquals(now["wing_time"], start["wing_time"])
+                            || !JsonNode.DeepEquals(now["available_jumps"], start["available_jumps"])
+                            || p.dead || p.statLife < start["hp"].GetValue<int>()) return null;
+                        active = new Playback(candidate, start); BoundaryInputPlayer.Drive = active.Drive;
+                        return active;
+                    });
+                    return playback == null ? new JsonObject { ["error"] = "start_state_changed", ["matches"] = false }
+                        : await playback.Result.WaitAsync(token);
+                }
+                entry["selected"] = selected.Branch.Id;
+                entry["physical"] = await Play(selected, origin.Start);
+                if (!selected.UsedAbility && candidates.Where(candidate => candidate.UsedAbility).MinBy(c => c.Trace.Count) is Candidate ability)
+                {
+                    var reset = await Reset();
+                    entry["ability_proof"] = new JsonObject { ["id"] = ability.Branch.Id,
+                        ["physical"] = await Play(ability, reset.Start) };
+                }
+                Save();
+            }
+            async Task<JsonObject> ReadGrapple() => (await Tool("get_state",
+                new JsonObject { ["fields"] = new JsonArray("movement_capabilities") }))["movement_capabilities"]["grapple"].AsObject();
+            report["grapple"] = (await ReadGrapple()).DeepClone();
+            if (report["grapple"]["anchors"].AsArray().Count == 0)
+            {
+                var moved = await CrossingDiscovery.OnGame(() =>
+                {
+                    var p = Main.LocalPlayer;
+                    if (p.dead || NearbyGrappleFooting(p) is not Vector2 footing) return null;
+                    p.position = footing; p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(footing.Y / 16);
+                    return new JsonArray(p.Bottom.X / 16, p.Bottom.Y / 16);
+                });
+                if (moved != null)
+                {
+                    report["grapple_before_reposition"] = report["grapple"].DeepClone();
+                    report["grapple_start_feet"] = moved;
+                    await Task.Delay(100, token);
+                    report["grapple"] = (await ReadGrapple()).DeepClone();
+                }
+            }
+            if (report["grapple"]?["anchors"] is JsonArray anchors && anchors.FirstOrDefault() is JsonObject anchor)
+            {
+                var input = new JsonObject { ["x"] = anchor["x"].DeepClone(), ["y"] = anchor["y"].DeepClone() };
+                report["grapple_skill"] = await Tool("run_script", new JsonObject
+                { ["code"] = "return skill('grapple_move',0," + input.ToJsonString() + ");", ["timeout_ms"] = 15000 });
+            }
+            report["grapple_verified"] = report["grapple_skill"]?["value"]?["verified"]?.GetValue<bool>() == true;
+            report["ok"] = grappleOnly ? report["grapple_verified"].GetValue<bool>()
+                : cases.Count == 2 && cases.All(c => c["physical"]?["matches"]?.GetValue<bool>() == true
+                && (c["physical"]?["used_ability"]?.GetValue<bool>() == true
+                    || c["ability_proof"]?["physical"]?["matches"]?.GetValue<bool>() == true));
+        }
+        catch (Exception error) { report["error"] = error.ToString(); }
+        finally
+        {
+            await CrossingDiscovery.OnGame(() =>
+            {
+                active = null; BoundaryInputPlayer.Drive = null; Halt.All();
+                VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+                return true;
+            });
+            Save();
+            Console.WriteLine($"JUNGLE_MOBILITY_CANDIDATES_COMPLETE ok={report["ok"]} path={output}");
+        }
+        return report.ToJsonString();
+    }
 }
 
 public sealed class JungleReactionTrial : ModSystem
