@@ -224,7 +224,6 @@ public sealed class ControlTrial : ModSystem
                 Config.I.AgentUseCodex = true;
                 Config.I.AgentFreezeWhileThinking = false;
                 Lighting.Mode = Terraria.Graphics.Light.LightMode.Retro;
-                Main.SetDisplayMode(1920, 1080, fullscreen: false);
                 NativeAgent.Submit("/goal " + explorationObjective);
                 Console.WriteLine("EXPLORATION_OBJECTIVE_SUBMITTED");
             }
