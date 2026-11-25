@@ -38,6 +38,7 @@ static class PlanningTrial
             return await MobilityCandidateTrial.Run();
         if (MobilityCandidateTrial.BenchmarkEnabled) return await MobilityCandidateTrial.RunBenchmark();
         if (MobilityCandidateTrial.SandstormGapEnabled) return await MobilityCandidateTrial.RunSandstormGap();
+        if (MobilityCandidateTrial.HandoffEnabled) return await MobilityCandidateTrial.RunHandoff();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "encounter" or "encounter-injured") return await JungleRailAscent.RunEncounter();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "baseline" or "jev") return await JungleReactionTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1") return await UiInteractionTrial.Run();
@@ -837,6 +838,7 @@ public sealed class MobilityCandidateTrial : ModSystem
     static CollectionClock collection;
     internal static bool BenchmarkEnabled => Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "mobility-benchmark";
     internal static bool SandstormGapEnabled => Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "sandstorm-gap";
+    internal static bool HandoffEnabled => Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "mobility-handoff";
 
     public override void PostUpdatePlayers()
     {
@@ -978,12 +980,12 @@ public sealed class MobilityCandidateTrial : ModSystem
             .ThenBy(s => Math.Abs(s.Start.X - focus.X) + Math.Abs(s.Start.Y - focus.Y)).Take(24).ToArray();
     }
 
-    static Branch[] GapInputs(int direction)
+    static Branch[] GapInputs(int direction, int[] leadFrames = null)
     {
         int move = direction > 0 ? (int)VanillaKeys.Right : (int)VanillaKeys.Left;
         int jump = move | (int)VanillaKeys.Jump;
         var result = new List<Branch>();
-        foreach (int lead in new[] { 24, 34 })
+        foreach (int lead in leadFrames ?? new[] { 24, 34 })
         foreach (int style in new[] { 0, 1, 2, 3 })
         {
             var controls = Enumerable.Repeat(move, lead).Concat(Enumerable.Repeat(jump, style == 0 ? 12 : 18));
@@ -1102,6 +1104,217 @@ public sealed class MobilityCandidateTrial : ModSystem
             });
             Save();
             Console.WriteLine($"NATURAL_SANDSTORM_GAP_COMPLETE ok={report["ok"]} path={output}");
+        }
+        return report.ToJsonString();
+    }
+
+    internal static async Task<string> RunHandoff()
+    {
+        string output = Path.Combine(Main.SavePath, "jungle-mobility-handoff.json");
+        var report = new JsonObject { ["ok"] = false, ["seed"] = Main.ActiveWorldFileData.SeedText,
+            ["natural_terrain"] = true, ["spawns"] = false, ["model_calls"] = 0 };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        var token = deadline.Token;
+        async Task<JsonObject> Tool(string name, JsonObject args) => JsonNode.Parse(await AgentTools.Execute(name, args, token)).AsObject();
+        void Save() => File.WriteAllText(output, report.ToJsonString());
+        try
+        {
+            var trial = JsonNode.Parse(File.ReadAllText(Environment.GetEnvironmentVariable("TB_HANDOFF_GAP")))["chosen"];
+            Point PointAt(string name) => new(trial[name][0].GetValue<int>(), trial[name][1].GetValue<int>());
+            Point start = PointAt("start"), bank = PointAt("bank");
+            int direction = Math.Sign(bank.X - start.X);
+            var landing = trial["boost"]["physical"]["actual_feet"];
+            var measuredLanding = new Point((int)Math.Floor(landing[0].GetValue<float>()), (int)Math.Round(landing[1].GetValue<float>()));
+            var warm = await CrossingDiscovery.OnGame(() =>
+            {
+                NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; FrameProgram.Clear();
+                Combat.Enabled = Dodge.Enabled = Concessions.Enabled = false; Config.I.AgentEnabled = true;
+                StateSpacePlanner.PreserveTerrain = true; Main.musicVolume = 0;
+                return Capture(Main.LocalPlayer);
+            });
+            await Batch(warm, new[] { new Branch("warm", new int[2], 0) }, token);
+            var setup = await CrossingDiscovery.OnGame(() =>
+            {
+                var p = Main.LocalPlayer;
+                Vector2 Footing(Point floor) => new(floor.X * 16 + 8 - p.width / 2f, floor.Y * 16 - p.height);
+                bool Valid(Point floor)
+                {
+                    var pos = Footing(floor);
+                    return !Collision.SolidCollision(pos, p.width, p.height)
+                        && Collision.SolidCollision(pos + Vector2.UnitY, p.width, p.height)
+                        && !Collision.WetCollision(pos, p.width, p.height);
+                }
+                Point approach = start;
+                for (int i = 1; i <= 8 && Valid(new Point(start.X - i * direction, start.Y)); i++)
+                    approach = new Point(start.X - i * direction, start.Y);
+                Point finish = (from distance in Enumerable.Range(-Math.Abs(measuredLanding.X - bank.X), 15).Reverse()
+                                from height in new[] { 0, 1, -1, 2, -2, 3 }
+                                let cell = new Point(measuredLanding.X + distance * direction, measuredLanding.Y + height)
+                                where Valid(cell)
+                                select cell).FirstOrDefault();
+                if (finish == Point.Zero) throw new InvalidOperationException("no_natural_destination_beyond_gap");
+                p.armor[3].SetDefaults(ItemID.SandstorminaBottle);
+                p.statLife = p.statLifeMax2; p.position = Footing(approach); p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                var plates = new JsonArray();
+                for (int x = Math.Min(approach.X, finish.X) - 5; x <= Math.Max(approach.X, finish.X) + 5; x++)
+                for (int y = Math.Min(start.Y, finish.Y) - 6; y <= Math.Max(start.Y, finish.Y) + 2; y++)
+                {
+                    var tile = Main.tile[x, y];
+                    if (!tile.HasUnactuatedTile || tile.TileType != TileID.PressurePlates) continue;
+                    plates.Add(new JsonObject { ["x"] = x, ["y"] = y, ["type"] = (int)tile.TileType,
+                        ["frame_x"] = (int)tile.TileFrameX, ["frame_y"] = (int)tile.TileFrameY });
+                }
+                return (Approach: approach, Finish: finish, Plates: plates);
+            });
+            await Task.Delay(100, token);
+            var goal = new JsonObject { ["x"] = setup.Finish.X, ["y"] = setup.Finish.Y - 1, ["mode"] = "stand" };
+            report["goal"] = goal.DeepClone();
+            goal["accepted_traps"] = setup.Plates;
+            report["fixture_accepted_plates"] = setup.Plates.DeepClone();
+            report["approach"] = new JsonArray(setup.Approach.X, setup.Approach.Y);
+            Task<JsonObject> Sample() => CrossingDiscovery.OnGame(() =>
+            {
+                var p = Main.LocalPlayer;
+                var state = VanillaPrediction.Observe(p, false);
+                state["tick"] = (ulong)Main.GameUpdateCount; state["nav_active"] = RecedingNav.Active;
+                state["feet_tiles"] = new JsonArray(p.Bottom.X / 16, p.Bottom.Y / 16);
+                return state;
+            });
+            var spawn = await Sample();
+            var started = await Tool("action_start", new JsonObject { ["tool"] = "nav_to", ["args"] = goal });
+            report["start"] = started;
+            string handle = started["handle"]?.ToString() ?? throw new InvalidOperationException("no_navigation_handle");
+            Task<JsonObject> Control(string command) => Tool("action_control", new JsonObject { ["handle"] = handle, ["command"] = command });
+            Task<JsonObject> Query(int wait = 0) => Tool("action_query", new JsonObject { ["handle"] = handle, ["wait_ms"] = wait });
+            JsonObject before;
+            int attempts = 0;
+            do
+            {
+                await Task.Delay(17, token);
+                before = await Sample();
+            } while (attempts++ < 90 && (!before["nav_active"].GetValue<bool>() || Vector2.Distance(Position(spawn), Position(before)) < 2));
+            report["before_jev"] = before;
+            if (!before["nav_active"].GetValue<bool>()) throw new InvalidOperationException("navigation_never_started");
+            report["model_calls"] = 1;
+            Save();
+            var chosen = await Tool("jev_judge", new JsonObject
+            {
+                ["state"] = new JsonObject { ["goal"] = goal.DeepClone(), ["player"] = before.DeepClone(),
+                    ["bank"] = new JsonArray(bank.X, bank.Y), ["gap_width_tiles"] = trial["gap_tiles"].DeepClone(),
+                    ["verified_sandstorm_route"] = trial["boost"]["physical"].DeepClone(),
+                    ["matched_inputs_without_bottle"] = trial["control"]["physical"].DeepClone() },
+                ["questions"] = new JsonObject { ["move"] = new JsonObject
+                {
+                    ["type"] = "choice",
+                    ["instructions"] = "The player is navigating to a foothold beyond this gap. Select how to cross the gap as the next local maneuver. A native experiment on this same gap verified that the equipped Sandstorm extra jump can land on the far bank. Its matched control landed short using identical inputs. Select sandstorm_cross if the player is still approaching this gap and it is useful to attempt this known crossing, or continue if the player has already passed it or the crossing is no longer appropriate. The host will recompute the exact inputs and leave the same destination intact.",
+                    ["criteria"] = new JsonObject { ["continue"] = "Continue the current navigator across the cave.",
+                        ["sandstorm_cross"] = "Use the Sandstorm extra jump to land on the far bank, then hand movement back." }
+                } }
+            });
+            report["jev"] = chosen;
+            var reply = await Sample();
+            report["after_jev"] = reply;
+            report["moved_while_waiting_px"] = Vector2.Distance(Position(before), Position(reply));
+            var status = await Query();
+            if (status["status"]?.ToString() == "running" && chosen["answers"]?["move"]?["choice"]?.ToString() == "sandstorm_cross")
+            {
+                var clock = Stopwatch.StartNew();
+                var paused = await Control("pause");
+                report["paused"] = paused;
+                if (paused["status"]?.ToString() == "paused")
+                {
+                    try
+                    {
+                        for (int i = 0; i < 45; i++)
+                        {
+                            var p = await Sample();
+                            if (p["grounded"].GetValue<bool>() && Number(p, "vy") == 0 && Math.Abs(Number(p, "vx")) < .01f) break;
+                            await Task.Delay(15, token);
+                        }
+                        var anchor = await CrossingDiscovery.OnGame(() =>
+                        {
+                            var p = Main.LocalPlayer;
+                            return (State: VanillaPrediction.Observe(p, false), Snapshot: Capture(p), p.width, p.height);
+                        });
+                        report["refresh_anchor"] = anchor.State;
+                        report["settle_ms"] = clock.ElapsedMilliseconds;
+                        float anchorFeetX = (Position(anchor.State).X + anchor.width / 2f) / 16;
+                        float runPixels = Math.Max(0, (start.X + .5f - anchorFeetX) * direction * 16 + 24);
+                        int runFrames = (int)MathF.Round(MathF.Sqrt(runPixels / .04f));
+                        int[] runups = new[] { -10, 0, 10, 17 }.Select(offset => Math.Clamp(runFrames + offset, 0, 44)).Distinct().ToArray();
+                        var options = GapInputs(direction, runups)
+                            .Where(b => b.Id.StartsWith("sandstorm_")).ToArray();
+                        var rays = await Batch(anchor.Snapshot, options, token);
+                        report["forecast_engine_ms"] = rays["total_ms"].DeepClone();
+                        var landings = new JsonArray();
+                        report["fresh_landings"] = landings;
+                        Candidate selected = null;
+                        foreach (var ray in rays["branches"].AsArray())
+                        {
+                            var input = options.Single(o => o.Id == ray["id"].ToString());
+                            var frames = ray["frames"].AsArray();
+                            int end = SettledFrame(frames, input.ReleaseFrame);
+                            int count = end == 0 ? frames.Count : end;
+                            var last = frames[count - 1];
+                            var foot = Position(last) + new Vector2(anchor.width / 2f, anchor.height);
+                            bool used = frames.Take(count).Any(f => UsedAbility(anchor.State, f));
+                            landings.Add(new JsonObject { ["id"] = input.Id, ["feet"] = new JsonArray(foot.X / 16, foot.Y / 16),
+                                ["settled"] = end > 0, ["used_ability"] = used, ["hp"] = last["hp"].DeepClone() });
+                            if (end == 0 || !used || frames.Take(end).Any(f => f["dead"].GetValue<bool>()
+                                || f["hp"].GetValue<int>() < anchor.State["hp"].GetValue<int>())) continue;
+                            if ((foot.X / 16 - (bank.X + .5f)) * direction < 0 || Math.Abs(foot.Y / 16 - bank.Y) > .25f) continue;
+                            var trace = new JsonArray(frames.Take(end).Select(f => f.DeepClone()).ToArray());
+                            if (selected == null || trace.Count < selected.Trace.Count)
+                                selected = new Candidate(input, trace, foot.ToTileCoordinates(), true, 0,
+                                    new JsonObject { ["id"] = input.Id, ["feet"] = new JsonArray(foot.X / 16, foot.Y / 16), ["frames"] = end });
+                        }
+                        report["refresh_ms"] = clock.ElapsedMilliseconds;
+                        if (selected == null) report["skip"] = "no_safe_fresh_crossing";
+                        else
+                        {
+                            report["fresh_choice"] = selected.Evidence;
+                            var motion = await CrossingDiscovery.OnGame(() =>
+                            {
+                                var p = Main.LocalPlayer;
+                                if (Vector2.Distance(p.position, Position(anchor.State)) > 1 || p.velocity.LengthSquared() > .01f
+                                    || !p.AnyExtraJumpUsable() || RecedingNav.Active || p.dead) return null;
+                                active = new Playback(selected, anchor.State); BoundaryInputPlayer.Drive = active.Drive;
+                                return active;
+                            });
+                            if (motion == null) report["skip"] = "refresh_anchor_changed";
+                            else report["physical"] = await motion.Result.WaitAsync(token);
+                        }
+                    }
+                    finally { report["resumed"] = await Control("resume"); }
+                }
+            }
+            do { status = await Query(250); }
+            while (status["status"]?.ToString() is "running" or "queued");
+            report["final"] = status;
+            var arrival = await Sample();
+            report["final_player"] = arrival;
+            var feet = arrival["feet_tiles"];
+            report["ok"] = before["nav_active"].GetValue<bool>() && reply["nav_active"].GetValue<bool>()
+                && report["moved_while_waiting_px"].GetValue<float>() > 1
+                && report["physical"]?["matches"]?.GetValue<bool>() == true
+                && report["resumed"]?["handle"]?.ToString() == handle && status["status"]?.ToString() == "completed"
+                && Math.Abs(feet[0].GetValue<float>() - setup.Finish.X - .5f) <= .5f
+                && Math.Abs(feet[1].GetValue<float>() - setup.Finish.Y) <= .5f
+                && arrival["hp"].GetValue<int>() >= before["hp"].GetValue<int>() && arrival["grounded"].GetValue<bool>();
+        }
+        catch (Exception error) { report["error"] = error.ToString(); }
+        finally
+        {
+            await CrossingDiscovery.OnGame(() =>
+            {
+                active = null; BoundaryInputPlayer.Drive = null; AgentTools.Stop(); Halt.All();
+                StateSpacePlanner.PreserveTerrain = false;
+                VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+                return true;
+            });
+            Save();
+            Console.WriteLine($"JUNGLE_MOBILITY_HANDOFF_COMPLETE ok={report["ok"]} path={output}");
         }
         return report.ToJsonString();
     }
@@ -4636,7 +4849,7 @@ public sealed class ExperimentArenaNpcs : GlobalNPC
 {
     public override void EditSpawnRate(Player player, ref int spawnRate, ref int maxSpawns)
     {
-        if (MobilityCandidateTrial.BenchmarkEnabled || MobilityCandidateTrial.SandstormGapEnabled
+        if (MobilityCandidateTrial.BenchmarkEnabled || MobilityCandidateTrial.SandstormGapEnabled || MobilityCandidateTrial.HandoffEnabled
             || AsciiTerrainTrial.Enabled && !AsciiTerrainTrial.LiveOpening || RailSkillTrial.Recording
             || Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1")
         { spawnRate = int.MaxValue; maxSpawns = 0; }
