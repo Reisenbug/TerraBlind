@@ -33,6 +33,7 @@ static class PlanningTrial
     {
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "ascent") return await JungleRailAscent.Run();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "encounter-data") return await JungleRailAscent.CheckEncounterData();
+        if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "escape-replay") return await JungleRailAscent.ReplayEscape();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "encounter" or "encounter-injured") return await JungleRailAscent.RunEncounter();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "baseline" or "jev") return await JungleReactionTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1") return await UiInteractionTrial.Run();
@@ -396,13 +397,71 @@ public sealed class JungleRailAscent : ModSystem
     static bool UnderPressure(JsonObject scene, int shots = 1) =>
         scene["enemies"].AsArray().Any(PressureSource) || scene["shots"].AsArray().Count(PressureSource) >= shots;
 
+    static bool GroundedAt(Player p, Vector2 position) => Collision.SolidCollision(position + Vector2.UnitY, p.width, p.height);
+
+    static JsonObject Maneuvers(Player p, JsonObject scene, Point destination, Site rail)
+    {
+        const int horizon = 72;
+        Vector2 center = p.Center, offset = center - p.position;
+        var walk = new List<Vector2> { center };
+        Vector2 position = p.position;
+        int direction = Math.Sign(destination.X * 16 + 8 - center.X);
+        float speed = Math.Max(p.maxRunSpeed, Math.Abs(p.velocity.X));
+        float vx = p.velocity.X;
+        int? window = null;
+        string walkEnd = "horizon";
+        for (int frame = 1; frame <= horizon && direction != 0; frame++)
+        {
+            vx = MathHelper.Clamp(vx + direction * p.runAcceleration, -speed, speed);
+            var step = Collision.TileCollision(position, new Vector2(vx, 0), p.width, p.height);
+            if (step.X == 0) { walkEnd = "solid"; break; }
+            position += step;
+            if (!GroundedAt(p, position) || Collision.WetCollision(position, p.width, p.height))
+            {
+                window ??= frame;
+                walkEnd = "ends_grounded_path";
+                break;
+            }
+            walk.Add(position + offset);
+            if (window == null && !SameEscapeArea(rail, OverheadTrack(p, position))) window = frame;
+        }
+        var up = Enumerable.Range(0, rail.Clearance + 1).Select(d => center - new Vector2(0, d * 16)).ToArray();
+
+        JsonArray Distances(IReadOnlyList<Vector2> path) => new(scene["enemies"].AsArray().Select((enemy, i) =>
+        {
+            var enemyCenter = center + 16 * new Vector2(enemy["dx_tiles"].GetValue<float>(), enemy["dy_tiles"].GetValue<float>());
+            double Tiles(Vector2 point) => Math.Round(Vector2.Distance(point, enemyCenter) / 16, 2);
+            return (JsonNode)new JsonObject { ["enemy_index"] = i, ["start_tiles"] = Tiles(path[0]),
+                ["closest_tiles"] = path.Min(Tiles), ["end_tiles"] = Tiles(path[^1]),
+                ["clear_line_at_end"] = Collision.CanHitLine(path[^1], 1, 1, enemyCenter, 1, 1) };
+        }).ToArray());
+        var walkDistances = Distances(walk);
+        var ascentDistances = Distances(up);
+        var ascent = new JsonObject { ["basis"] = "vertical lane through verified clearance",
+            ["enemy_distances"] = ascentDistances, ["walk_only_first_unavailable_frame"] = window,
+            ["window_horizon_frames"] = horizon, ["prior_request_examples_frames"] = new JsonArray(48, 69),
+            ["prior_rail_start_to_jump_frames"] = 34 };
+        if (walkDistances.Count == 1 && scene["shots"].AsArray().Count == 0 && PressureSource(scene["enemies"][0])
+            && ascentDistances[0]["clear_line_at_end"].GetValue<bool>()
+            && ascentDistances[0]["end_tiles"].GetValue<double>() < ascentDistances[0]["start_tiles"].GetValue<double>()
+            && walkDistances[0]["end_tiles"].GetValue<double>() > walkDistances[0]["start_tiles"].GetValue<double>())
+            ascent["excluded_reason"] = "ascent_closes_on_visible_enemy_while_walk_opens_distance";
+        return new JsonObject
+        {
+            ["enemy_positions"] = "held fixed for this geometric comparison",
+            ["continue"] = new JsonObject { ["basis"] = "local grounded walk toward target before the next turn or jump",
+                ["walk_frames"] = walk.Count - 1, ["walk_end"] = walkEnd, ["enemy_distances"] = walkDistances },
+            ["rail_ascent"] = ascent
+        };
+    }
+
     static JsonObject EscapeQuestions() => new()
     {
         ["move"] = new JsonObject { ["type"] = "choice",
-            ["instructions"] = "Choose the player's tactic for the next 2 to 4 seconds while gathering a Life Crystal. Compare continuing toward the destination with making space upward and resuming later. Use hp_loss_range with the player's current HP to distinguish survivable hits from a plausible one-hit death. The estimate includes defense and endurance. Evaluate known on-hit status separately, including immunity and poison that keeps draining HP after reaching cover. Use the enemy's remaining HP and defense, the player's usable weapons, and line of sight to judge whether the enemy is likely to stay dangerous. Prefer rail_ascent if continuing exposes the player to lethal contact or recurring fire and the overhead lane leads away. Prefer continue when movement is opening distance, terrain separates the danger, or the hazard is passing without threatening the chosen route. A projectile already in flight can arrive before this decision takes effect. Positive y is downward. Velocities are pixels per game frame.",
+            ["instructions"] = "Choose the player's tactic for the next 2 to 4 seconds while gathering a Life Crystal. First compare each enemy's closest and end distances in the two maneuvers. If the upward lane closes distance to a visible enemy, leaves that enemy in clear line at its end, and the ground path opens distance, choose continue unless another observed threat makes the ground path more dangerous. These geometric distances hold enemy positions fixed. Use their observed velocities and terrain to refine the comparison. Choose rail_ascent when it opens separation or breaks exposure to a more dangerous enemy. The rail window estimates when a grounded walk loses access, in frames at 60 Hz. Compare it with prior request durations. When the window is marginal and the two maneuvers have similar risk, keep making progress on the current route. A null window means expiry was not observed in the sampled walk. Compare hp_loss_range with current HP and account for known poison, immunity, weapons and enemy health. Positive y is downward.",
             ["criteria"] = new JsonObject {
                 ["continue"] = "Keep the current collection route and make progress toward the crystal.",
-                ["rail_ascent"] = "Break contact and gain vertical separation. Drink the available Featherfall potion, place one carried rail in the clear overhead lane, use the native track pull and cancel it with a jump while holding up. Resume the same collection action after the ascent." } },
+                ["rail_ascent"] = "Move upward through the available lane. Drink Featherfall, place an overhead rail, use the native track pull and cancel it with a jump while holding up. Resume the collection after the ascent." } },
         ["risk"] = new JsonObject { ["type"] = "choice",
             ["instructions"] = "Classify the dominant risk in the next 2 to 4 seconds from the observed enemies, shots, route direction, terrain and HP.",
             ["criteria"] = new JsonObject {
@@ -458,13 +517,49 @@ public sealed class JungleRailAscent : ModSystem
         var p = Main.LocalPlayer;
         if (p.dead || p.wet || p.mount.Active || p.HasBuff(BuffID.Featherfall)
             || p.inventory[3].type != ItemID.MinecartTrack || p.inventory[4].type != ItemID.FeatherfallPotion) return null;
-        if (!Collision.SolidCollision(p.position + Vector2.UnitY, p.width, p.height)) return null;
+        if (!GroundedAt(p, p.position)) return null;
         var launch = OverheadTrack(p, p.position);
         return launch != null && p.IsInTileInteractionRange(launch.Track.X, launch.Track.Y, TileReachCheckSettings.Simple) ? launch : null;
     }
 
     static bool SameEscapeArea(Site original, Site current) => current != null
         && Math.Abs(original.Floor.X - current.Floor.X) <= 8 && Math.Abs(original.Floor.Y - current.Floor.Y) <= 6;
+
+    static string RailExclusion(JsonObject scene) => scene["maneuvers"]?["rail_ascent"]?["excluded_reason"]?.ToString();
+
+    internal static async Task<string> ReplayEscape()
+    {
+        var path = Environment.GetEnvironmentVariable("TB_RAIL_REPLAY_PATH");
+        var original = JsonNode.Parse(File.ReadAllText(path));
+        var scene = original["decision_scene"].DeepClone().AsObject();
+        var goal = scene["crystal_destination"].AsArray();
+        var target = new Point(goal[0].GetValue<int>(), goal[1].GetValue<int>());
+        scene["maneuvers"] = await CrossingDiscovery.OnGame(() =>
+        {
+            var p = Main.LocalPlayer;
+            var previous = (p.Center, p.velocity);
+            try
+            {
+                p.Center = new Vector2(scene["x"].GetValue<float>(), scene["y"].GetValue<float>()) * 16;
+                p.velocity = new Vector2(scene["vx"].GetValue<float>(), scene["vy"].GetValue<float>());
+                return Maneuvers(p, scene, target, OverheadTrack(p, p.position)
+                    ?? throw new InvalidOperationException("recorded_rail_lane_missing"));
+            }
+            finally { (p.Center, p.velocity) = previous; }
+        });
+        var questions = EscapeQuestions();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+        string excluded = RailExclusion(scene);
+        var answer = excluded == null ? JsonNode.Parse(await AgentTools.Execute("jev_judge",
+            new JsonObject { ["state"] = scene.DeepClone(), ["questions"] = questions.DeepClone() }, timeout.Token)) : null;
+        var result = new JsonObject { ["ok"] = excluded != null || answer?["answers"] != null, ["state"] = scene, ["questions"] = questions,
+            ["before"] = original["jev"].DeepClone(), ["after"] = answer, ["model_calls"] = excluded == null ? 1 : 0,
+            ["selected"] = excluded == null ? answer?["answers"]?["move"]?["choice"]?.ToString() : "continue" };
+        string output = Path.Combine(Main.SavePath, "jungle-escape-replay.json");
+        File.WriteAllText(output, result.ToJsonString());
+        Console.WriteLine($"JUNGLE_ESCAPE_REPLAY_COMPLETE ok={result["ok"]} path={output}");
+        return result.ToJsonString();
+    }
 
     internal static async Task<string> RunEncounter()
     {
@@ -533,34 +628,73 @@ public sealed class JungleRailAscent : ModSystem
             int pressuredSamples = 0;
             while (outcome["status"]?.ToString() == "running" && elapsed.ElapsedMilliseconds < 55000)
             {
-                var (scene, rail) = await CrossingDiscovery.OnGame(() => (ReadEncounter(), AvailableTrack()));
+                bool canAsk = report["model_calls"].GetValue<int>() == 0;
+                var (scene, rail) = await CrossingDiscovery.OnGame(() =>
+                {
+                    var state = ReadEncounter();
+                    var track = AvailableTrack();
+                    if (canAsk && track != null && UnderPressure(state, shots: 2))
+                    {
+                        state["equipment"] = EquipmentForDecision(Main.LocalPlayer);
+                        state["maneuvers"] = Maneuvers(Main.LocalPlayer, state, heart, track);
+                    }
+                    return (state, track);
+                });
                 if (scene["dead"].GetValue<bool>()) break;
                 bool pressure = UnderPressure(scene);
                 if (pressure) pressuredSamples++;
-                if (rail != null && UnderPressure(scene, shots: 2) && report["model_calls"].GetValue<int>() == 0)
+                var maneuvers = scene["maneuvers"];
+                if (RailExclusion(scene) != null)
+                    report["rail_filter_observation"] ??= scene.DeepClone();
+                else if (maneuvers != null)
                 {
                     scene["crystal_destination"] = new JsonArray(heart.X, heart.Y);
                     scene["rail_target"] = new JsonArray(rail.Track.X, rail.Track.Y);
                     scene["clear_upward_tiles"] = rail.Clearance;
                     scene["hp_at_gather_start"] = initialHp;
-                    scene["equipment"] = await CrossingDiscovery.OnGame(() => EquipmentForDecision(Main.LocalPlayer));
                     report["decision_scene"] = scene;
                     report["model_calls"] = 1;
                     Save();
-                    var decision = await Tool("jev_judge", new JsonObject { ["state"] = scene.DeepClone(),
+                    var pending = Tool("jev_judge", new JsonObject { ["state"] = scene.DeepClone(),
                         ["questions"] = report["questions"].DeepClone() });
+                    ulong requestedAt = scene["tick"].GetValue<ulong>();
+                    while (!pending.IsCompleted && report["observed_rail_window"] == null)
+                    {
+                        await Task.WhenAny(pending, Task.Delay(15, token));
+                        if (pending.IsCompleted) break;
+                        var unavailable = await CrossingDiscovery.OnGame(() =>
+                        {
+                            var p = Main.LocalPlayer;
+                            return SameEscapeArea(rail, AvailableTrack()) ? null : new JsonObject
+                            {
+                                ["frames_since_request"] = (ulong)Main.GameUpdateCount - requestedAt,
+                                ["grounded"] = GroundedAt(p, p.position), ["x"] = p.Center.X / 16, ["y"] = p.Center.Y / 16
+                            };
+                        });
+                        if (unavailable != null) report["observed_rail_window"] = unavailable;
+                    }
+                    var decision = await pending;
                     report["jev"] = decision;
                     outcome = await Query();
-                    var live = await CrossingDiscovery.OnGame(() => (Scene: ReadEncounter(), Track: AvailableTrack()));
+                    bool choseRail = decision["answers"]?["move"]?["choice"]?.ToString() == "rail_ascent";
+                    var live = await CrossingDiscovery.OnGame(() =>
+                    {
+                        var state = ReadEncounter();
+                        var track = AvailableTrack();
+                        if (choseRail && SameEscapeArea(rail, track))
+                            state["maneuvers"] = Maneuvers(Main.LocalPlayer, state, heart, track);
+                        return (Scene: state, Track: track);
+                    });
                     report["reply_scene"] = live.Scene;
                     if (live.Track != null) report["reply_track"] = new JsonArray(live.Track.Track.X, live.Track.Track.Y);
-                    if (decision["answers"]?["move"]?["choice"]?.ToString() == "rail_ascent"
-                        && outcome["status"]?.ToString() == "running")
+                    if (choseRail && outcome["status"]?.ToString() == "running")
                     {
                         if (!SameEscapeArea(rail, live.Track))
                             report["switch_skipped"] = "no_reachable_upward_lane_at_reply";
                         else if (!UnderPressure(live.Scene))
                             report["switch_skipped"] = "pressure_changed";
+                        else if (RailExclusion(live.Scene) is string excluded)
+                            report["switch_skipped"] = excluded;
                         else
                         {
                             var paused = await Control("pause");
