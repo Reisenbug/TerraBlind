@@ -37,6 +37,7 @@ static class PlanningTrial
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "mobility-candidates" or "mobility-grapple" or "mobility-progress")
             return await MobilityCandidateTrial.Run();
         if (MobilityCandidateTrial.BenchmarkEnabled) return await MobilityCandidateTrial.RunBenchmark();
+        if (MobilityCandidateTrial.SandstormGapEnabled) return await MobilityCandidateTrial.RunSandstormGap();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "encounter" or "encounter-injured") return await JungleRailAscent.RunEncounter();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "baseline" or "jev") return await JungleReactionTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1") return await UiInteractionTrial.Run();
@@ -835,6 +836,7 @@ public sealed class MobilityCandidateTrial : ModSystem
     static Playback active;
     static CollectionClock collection;
     internal static bool BenchmarkEnabled => Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "mobility-benchmark";
+    internal static bool SandstormGapEnabled => Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "sandstorm-gap";
 
     public override void PostUpdatePlayers()
     {
@@ -900,7 +902,7 @@ public sealed class MobilityCandidateTrial : ModSystem
     {
         readonly TaskCompletionSource<JsonObject> done = new(TaskCreationOptions.RunContinuationsAsynchronously);
         int frame, inputs;
-        float maxError;
+        float maxError, peakHorizontal;
         bool ability;
         public Task<JsonObject> Result => done.Task;
         public void Drive(Player p)
@@ -915,6 +917,7 @@ public sealed class MobilityCandidateTrial : ModSystem
         {
             if (inputs == frame) return;
             maxError = Math.Max(maxError, Vector2.Distance(p.position, Position(chosen.Trace[frame])));
+            peakHorizontal = Math.Max(peakHorizontal, MathF.Abs(p.velocity.X));
             var actual = VanillaPrediction.Observe(p, false);
             ability |= UsedAbility(start, actual);
             frame++;
@@ -922,6 +925,7 @@ public sealed class MobilityCandidateTrial : ModSystem
             active = null; BoundaryInputPlayer.Drive = null;
             VanillaPrediction.ApplyInput(p, new VanillaPrediction.Input(VanillaKeys.None));
             done.SetResult(new JsonObject { ["frames"] = frame, ["max_error_px"] = maxError,
+                ["peak_horizontal_px_per_frame"] = peakHorizontal,
                 ["actual_feet"] = new JsonArray(p.Bottom.X / 16, p.Bottom.Y / 16), ["hp"] = p.statLife,
                 ["grounded"] = actual["grounded"].GetValue<bool>() && p.velocity.Y == 0, ["used_ability"] = ability,
                 ["matches"] = frame == chosen.Trace.Count && maxError <= 16 && !p.dead
@@ -932,6 +936,175 @@ public sealed class MobilityCandidateTrial : ModSystem
 
     static bool UsedAbility(JsonObject start, JsonNode frame) => Number(frame, "wing_time") < Number(start, "wing_time") - 0.5f
         || frame["available_jumps"].GetValue<int>() < start["available_jumps"].GetValue<int>();
+
+    sealed record Gap(Point Start, Point Bank, int Direction, int Width);
+
+    static Gap[] NaturalGaps(Player p, Point focus)
+    {
+        bool Footing(int x, int y)
+        {
+            var tile = Main.tile[x, y];
+            if (!tile.HasUnactuatedTile || !Main.tileSolid[tile.TileType] || Main.tileSolidTop[tile.TileType]) return false;
+            var pos = new Vector2(x * 16 + 8 - p.width / 2f, y * 16 - p.height);
+            return Collision.SolidCollision(pos + Vector2.UnitY, p.width, p.height)
+                && !Collision.SolidCollision(pos, p.width, p.height) && !Collision.WetCollision(pos, p.width, p.height);
+        }
+        var gaps = new List<Gap>();
+        for (int x = Math.Max(60, focus.X - 195); x < Math.Min(Main.maxTilesX - 60, focus.X + 195); x++)
+        for (int y = Math.Max(60, focus.Y - 180); y < Math.Min(Main.maxTilesY - 95, focus.Y + 180); y++)
+        {
+            if (!Footing(x, y)) continue;
+            foreach (int dir in new[] { -1, 1 })
+            {
+                if (Footing(x + dir, y) || !Enumerable.Range(1, 3).All(i => Footing(x - i * dir, y))) continue;
+                int width = 1;
+                for (; width <= 15 && !Footing(x + width * dir, y); width++)
+                {
+                    if (width < 9) continue;
+                    int bankX = x + width * dir;
+                    for (int rise = 1; rise <= 4; rise++)
+                    {
+                        int bankY = y - rise;
+                        if (!Enumerable.Range(0, 4).All(i => Footing(bankX + i * dir, bankY))) continue;
+                        gaps.Add(new Gap(new Point(x - 3 * dir, y), new Point(bankX, bankY), dir, width - 1));
+                        break;
+                    }
+                }
+                if (width is >= 9 and <= 15 && Enumerable.Range(0, 4).All(i => Footing(x + (width + i) * dir, y)))
+                    gaps.Add(new Gap(new Point(x - 3 * dir, y), new Point(x + width * dir, y), dir, width - 1));
+            }
+        }
+        return gaps.OrderBy(s => Math.Abs(s.Width - 10)).ThenBy(s => s.Start.Y - s.Bank.Y)
+            .ThenBy(s => Math.Abs(s.Start.X - focus.X) + Math.Abs(s.Start.Y - focus.Y)).Take(24).ToArray();
+    }
+
+    static Branch[] GapInputs(int direction)
+    {
+        int move = direction > 0 ? (int)VanillaKeys.Right : (int)VanillaKeys.Left;
+        int jump = move | (int)VanillaKeys.Jump;
+        var result = new List<Branch>();
+        foreach (int lead in new[] { 24, 34 })
+        foreach (int style in new[] { 0, 1, 2, 3 })
+        {
+            var controls = Enumerable.Repeat(move, lead).Concat(Enumerable.Repeat(jump, style == 0 ? 12 : 18));
+            if (style >= 2) controls = controls.Concat(Enumerable.Repeat(move, style == 2 ? 2 : 8)).Concat(Enumerable.Repeat(jump, 40));
+            int release = controls.Count();
+            var tail = controls.Concat(Enumerable.Repeat(move, 24)).Concat(Enumerable.Repeat(0, 100)).ToArray();
+            result.Add(new Branch((style >= 2 ? "sandstorm_" : "single_") + lead + "_" + style, tail, release));
+        }
+        return result.ToArray();
+    }
+
+    internal static async Task<string> RunSandstormGap()
+    {
+        string output = Path.Combine(Main.SavePath, "natural-sandstorm-gap.json");
+        var tested = new JsonArray();
+        var report = new JsonObject { ["ok"] = false, ["seed"] = Main.ActiveWorldFileData.SeedText,
+            ["terrain"] = "unmodified", ["spawns"] = false, ["model_calls"] = 0, ["tested"] = tested };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(130));
+        var token = timeout.Token;
+        void Save() => File.WriteAllText(output, report.ToJsonString());
+        try
+        {
+            var reference = JsonNode.Parse(File.ReadAllText(Environment.GetEnvironmentVariable("TB_MOBILITY_SCENE")))["decision_scene"];
+            var focus = (Position(reference) * 16).ToTileCoordinates();
+            var sites = await CrossingDiscovery.OnGame(() =>
+            {
+                NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; FrameProgram.Clear();
+                Combat.Enabled = Dodge.Enabled = Concessions.Enabled = false; Main.musicVolume = 0;
+                return NaturalGaps(Main.LocalPlayer, focus);
+            });
+            report["geometry_candidates"] = sites.Length;
+            Save();
+            foreach (var site in sites)
+            {
+                async Task<(JsonObject State, JsonObject Snapshot, int Width, int Height)> Reset(bool equipped)
+                {
+                    await CrossingDiscovery.OnGame(() =>
+                    {
+                        var p = Main.LocalPlayer;
+                        p.armor[3].SetDefaults(equipped ? ItemID.SandstorminaBottle : ItemID.None);
+                        p.statLife = p.statLifeMax2; p.position = new Vector2(site.Start.X * 16 + 8 - p.width / 2f, site.Start.Y * 16 - p.height);
+                        p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                        return true;
+                    });
+                    await Task.Delay(90, token);
+                    return await CrossingDiscovery.OnGame(() =>
+                    {
+                        var p = Main.LocalPlayer;
+                        return (VanillaPrediction.Observe(p, false), Capture(p), p.width, p.height);
+                    });
+                }
+                bool Across(Vector2 feet) => MathF.Abs(feet.Y / 16 - site.Bank.Y) < 0.25f
+                    && (feet.X / 16 - (site.Bank.X + 0.5f)) * site.Direction is >= -0.25f and <= 10f;
+                var origin = await Reset(equipped: true);
+                var branches = GapInputs(site.Direction);
+                var results = await Batch(origin.Snapshot, branches, token);
+                var trials = new JsonArray();
+                Candidate ReadBranch(JsonNode row, (JsonObject State, JsonObject Snapshot, int Width, int Height) sample)
+                {
+                    var branch = branches.Single(b => b.Id == row["id"].ToString());
+                    var frames = row["frames"].AsArray();
+                    int end = SettledFrame(frames, branch.ReleaseFrame);
+                    var trace = new JsonArray(frames.Take(end > 0 ? end : frames.Count).Select(f => f.DeepClone()).ToArray());
+                    if (trace.Count == 0) return null;
+                    var foot = Position(trace[^1]) + new Vector2(sample.Width / 2f, sample.Height);
+                    bool used = trace.Any(f => UsedAbility(sample.State, f));
+                    bool safe = end > 0 && trace.All(f => !f["dead"].GetValue<bool>()
+                        && f["hp"].GetValue<int>() >= sample.State["hp"].GetValue<int>());
+                    var evidence = new JsonObject { ["id"] = branch.Id, ["frames"] = trace.Count, ["safe"] = safe,
+                        ["used_ability"] = used, ["landed_across"] = safe && Across(foot), ["feet"] = new JsonArray(foot.X / 16, foot.Y / 16),
+                        ["peak_horizontal_px_per_frame"] = trace.Max(f => MathF.Abs(Number(f, "vx"))),
+                        ["outcome"] = row["outcome"].DeepClone() };
+                    return new Candidate(branch, trace, foot.ToTileCoordinates(), used, 0, evidence);
+                }
+                var candidates = results["branches"].AsArray().Select(row => ReadBranch(row, origin)).Where(c => c != null).ToArray();
+                foreach (var candidate in candidates) trials.Add(candidate.Evidence);
+                var entry = new JsonObject { ["start"] = new JsonArray(site.Start.X, site.Start.Y),
+                    ["bank"] = new JsonArray(site.Bank.X, site.Bank.Y), ["gap_tiles"] = site.Width,
+                    ["engine_ms"] = results["total_ms"]?.DeepClone(), ["trials"] = trials };
+                tested.Add(entry); Save();
+                var boosts = candidates.Where(c => c.UsedAbility && c.Evidence["landed_across"].GetValue<bool>())
+                    .OrderByDescending(c => Number(c.Evidence, "peak_horizontal_px_per_frame")).ToArray();
+                if (boosts.Length == 0) continue;
+                var noBottle = await Reset(equipped: false);
+                var references = await Batch(noBottle.Snapshot, boosts.Select(c => c.Branch).ToArray(), token);
+                var controls = references["branches"].AsArray().Select(row => ReadBranch(row, noBottle)).Where(c => c != null).ToArray();
+                entry["same_inputs_without_bottle"] = new JsonArray(controls.Select(c => c.Evidence.DeepClone()).ToArray());
+                var control = controls.FirstOrDefault(c => c.Evidence["safe"].GetValue<bool>() && !c.Evidence["landed_across"].GetValue<bool>());
+                if (control == null) continue;
+                var boost = boosts.Single(c => c.Branch.Id == control.Branch.Id);
+                foreach (bool equipped in new[] { false, true })
+                {
+                    var choice = equipped ? boost : control;
+                    var current = await Reset(equipped);
+                    var playback = await CrossingDiscovery.OnGame(() =>
+                    {
+                        active = new Playback(choice, current.State); BoundaryInputPlayer.Drive = active.Drive;
+                        return active;
+                    });
+                    entry[equipped ? "boost" : "control"] = new JsonObject { ["prediction"] = choice.Evidence.DeepClone(),
+                        ["physical"] = await playback.Result.WaitAsync(token) };
+                }
+                report["chosen"] = entry.DeepClone();
+                report["ok"] = entry["boost"]["physical"]["matches"].GetValue<bool>() && entry["control"]["physical"]["matches"].GetValue<bool>();
+                break;
+            }
+        }
+        catch (Exception error) { report["error"] = error.ToString(); }
+        finally
+        {
+            await CrossingDiscovery.OnGame(() =>
+            {
+                active = null; BoundaryInputPlayer.Drive = null; Halt.All();
+                VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+                return true;
+            });
+            Save();
+            Console.WriteLine($"NATURAL_SANDSTORM_GAP_COMPLETE ok={report["ok"]} path={output}");
+        }
+        return report.ToJsonString();
+    }
 
     sealed class CollectionClock(Point goal)
     {
@@ -4463,7 +4636,8 @@ public sealed class ExperimentArenaNpcs : GlobalNPC
 {
     public override void EditSpawnRate(Player player, ref int spawnRate, ref int maxSpawns)
     {
-        if (MobilityCandidateTrial.BenchmarkEnabled || AsciiTerrainTrial.Enabled && !AsciiTerrainTrial.LiveOpening || RailSkillTrial.Recording
+        if (MobilityCandidateTrial.BenchmarkEnabled || MobilityCandidateTrial.SandstormGapEnabled
+            || AsciiTerrainTrial.Enabled && !AsciiTerrainTrial.LiveOpening || RailSkillTrial.Recording
             || Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1")
         { spawnRate = int.MaxValue; maxSpawns = 0; }
     }
