@@ -412,6 +412,11 @@ public sealed class ControlTrial : ModSystem
             await NativePrimitives();
             return;
         }
+        if (Environment.GetEnvironmentVariable("TB_CURSOR_INPUT_CHECK") == "1")
+        {
+            await CheckCursorInput();
+            return;
+        }
         await OnMain(() =>
         {
             Config.I.AgentEnabled = true; Config.I.AiClient = false;
@@ -2048,6 +2053,44 @@ public sealed class ControlTrial : ModSystem
             "primitive_mod_trigger_did_not_deliver_press_hold_release");
         Console.WriteLine("NATIVE_PRIMITIVES_COMPLETE native_engine=true model_calls=0");
     }
+
+    Task<bool> CheckCursorInput() => OnMain(() =>
+    {
+        var player = Main.LocalPlayer;
+        var controls = player.GetModPlayer<StateSnapshotPlayer>();
+        var input = PlayerInput.Triggers.Current.KeyStatus;
+        Config.I.AiClient = false;
+        Manual.On = false;
+        Main.playerInventory = true;
+        Main.mouseItem = new Item(ItemID.ShinePotion, 2);
+        Main.mouseLeft = input["MouseLeft"] = true;
+        FightCoordinator.Start(20);
+        try
+        {
+            player.mouseInterface = player.delayUseItem = true;
+            player.controlUseItem = player.controlUseTile = true;
+            controls.SetControls();
+            Check(!player.controlUseItem && !player.controlUseTile && Main.mouseLeft
+                && player.mouseInterface && player.delayUseItem, "inventory click reached the world");
+
+            player.mouseInterface = player.delayUseItem = false;
+            player.controlUseItem = player.releaseUseItem = true;
+            controls.SetControls();
+            Check(player.controlUseItem && !player.controlUseTile, "world use with an item on the cursor was swallowed");
+            player.dropItemCheck();
+            player.ItemCheck();
+            Check(Main.mouseItem.type == ItemID.ShinePotion && Main.mouseItem.stack == 1 && player.HasBuff(BuffID.Shine),
+                "native cursor use did not consume one potion and apply Shine");
+            Console.WriteLine("CURSOR_INPUT_PASS inventory_click_protected=true cursor_potion_consumed=1 shine=true");
+            return true;
+        }
+        finally
+        {
+            FightCoordinator.Stop();
+            Main.mouseLeft = input["MouseLeft"] = player.controlUseItem = false;
+            Main.mouseItem.TurnToAir();
+        }
+    });
 
     int CountSand()
     {

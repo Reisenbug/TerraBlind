@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Terraria;
+using Terraria.GameInput;
 using Terraria.ID;
 using Terraria.ModLoader;
 
@@ -549,7 +550,8 @@ namespace TerraBlind
 					|| Player.mouseInterface && (Main.mouseLeft || Main.mouseRight)))
 			{
 				FrameProgram.YieldToInterface();
-				Player.controlUseItem = Player.controlUseTile = false;
+				Player.controlUseItem &= !Player.mouseInterface && PlayerInput.Triggers.Current.MouseLeft;
+				Player.controlUseTile &= !Player.mouseInterface && PlayerInput.Triggers.Current.MouseRight;
 				return;
 			}
 			if (Player == Main.LocalPlayer && AgentNetwork.CanAutomate && !Manual.On
