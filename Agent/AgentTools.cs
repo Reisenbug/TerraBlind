@@ -3179,7 +3179,7 @@ public static partial class AgentTools
                         }
                     }
                     var weapons = player.inventory.Take(50).Where(item => CombatLoadout.Usable(item)
-                        && (CombatLoadout.PreferredType == 0 || item.type == CombatLoadout.PreferredType)
+                        && (CombatLoadout.PreferredType == 0 || CombatLoadout.ContextualPreference || item.type == CombatLoadout.PreferredType)
                         && (item.useAmmo == 0 || player.HasAmmo(item)) && item.mana * player.manaCost <= player.statMana).ToArray();
                     JsonArray HittingWeapons(Microsoft.Xna.Framework.Vector2 source) => new(weapons
                         .Where(item => FightCoordinator.CanHitTargetFrom(player, item, source, npc.Center, npc.width / 2f))
@@ -3239,6 +3239,7 @@ public static partial class AgentTools
                                 ["detail"] = "未修改战斗设置；补充匹配弹药或选择当前可用武器。" };
                         CombatLoadout.PreferredType = weaponType;
                         CombatLoadout.AmmoFallbackType = fallbackType;
+                        if (args["weapon_type"] != null) CombatLoadout.ContextualPreference = Bool(args, "contextual_weapon");
                     }
                     if (args["boss_control"] != null)
                     {
@@ -3264,6 +3265,7 @@ public static partial class AgentTools
                         ["movement_intent"] = FeedbackControl.Snapshot(),
                         ["weapon_type"] = CombatLoadout.PreferredType,
                         ["ammo_fallback_type"] = CombatLoadout.AmmoFallbackType,
+                        ["contextual_weapon"] = CombatLoadout.ContextualPreference,
                         ["boss_control"] = BossStatus(fresh: true) };
                 }, token);
                 break;
@@ -4588,6 +4590,7 @@ public static partial class AgentTools
             ["fall_forecast"] = NavigationSurvival.AssessFall(p),
             ["cover_candidates"] = CoverCandidates(p, radius),
             ["preferred_weapon_type"] = CombatLoadout.PreferredType,
+            ["contextual_weapon"] = CombatLoadout.ContextualPreference,
             ["navigation_options"] = AgentNavigationIntent.Options(),
             ["boss_present"] = Main.npc.Any(n => n != null && n.active && n.boss
                 && Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) < 3200),
@@ -4624,6 +4627,7 @@ public static partial class AgentTools
                         ["slot"] = entry.slot, ["type"] = entry.item.type, ["name"] = entry.item.Name,
                         ["prefix"] = entry.item.prefix, ["stack"] = entry.item.stack,
                         ["damage"] = p.GetWeaponDamage(entry.item), ["use_time_ticks"] = entry.item.useTime,
+                        ["nominal_damage_per_second"] = MathF.Round(CombatLoadout.DamageRate(p, entry.item), 1),
                         ["projectile_type"] = entry.item.shoot, ["shoot_speed"] = entry.item.shootSpeed,
                         ["self_blast_size_pixels"] = SelfBlast(entry.item),
                         ["consumable"] = entry.item.consumable, ["mana_cost"] = entry.item.mana,

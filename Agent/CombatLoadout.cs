@@ -10,6 +10,7 @@ public static class CombatLoadout
 {
     public static int PreferredType;
     public static int AmmoFallbackType;
+    internal static bool ContextualPreference;
     public static bool Usable(Item item) => item != null && !item.IsAir && item.damage > 0 && item.ammo == 0
         && item.pick == 0 && item.axe == 0 && item.hammer == 0;
     public static bool CanUse(Player player, Item item) => Usable(item)
@@ -20,8 +21,8 @@ public static class CombatLoadout
 
     internal static JsonObject AmmoSupply(Player player)
     {
-        Item weapon = PreferredType == 0 ? player.HeldItem : PreferredWeapon(player);
-        if (weapon == null && PreferredType > 0) ContentSamples.ItemsByType.TryGetValue(PreferredType, out weapon);
+        Item weapon = PreferredType == 0 || ContextualPreference ? player.HeldItem : PreferredWeapon(player);
+        if (weapon == null && PreferredType > 0 && !ContextualPreference) ContentSamples.ItemsByType.TryGetValue(PreferredType, out weapon);
         if (!Usable(weapon) || weapon.useAmmo <= 0 && !weapon.consumable) return null;
         var stocks = weapon.useAmmo > 0 ? player.inventory.Take(58)
             .Where(item => !item.IsAir && ItemLoader.CanChooseAmmo(weapon, item, player)).ToArray()
@@ -37,7 +38,8 @@ public static class CombatLoadout
 
     internal static int Select(Player player, NPC target, bool allowPickaxeFallback, bool allowAlternative)
     {
-        int preferred = PreferredType;
+        bool contextual = ContextualPreference && target != null;
+        int preferred = contextual ? 0 : PreferredType;
         if (preferred > 0 && AmmoFallbackType > 0)
         {
             var weapon = PreferredWeapon(player);
@@ -63,8 +65,10 @@ public static class CombatLoadout
             else
             {
                 var previous = player.inventory[best];
+                float previousScore = contextual ? DamageRate(player, previous) : player.GetWeaponDamage(previous);
+                float score = contextual ? DamageRate(player, item) : player.GetWeaponDamage(item);
                 if (previous.consumable && !item.consumable || previous.consumable == item.consumable
-                    && player.GetWeaponDamage(item) > player.GetWeaponDamage(previous)) best = slot;
+                    && (score > previousScore || contextual && score == previousScore && item.type == PreferredType)) best = slot;
             }
         }
         if (best >= 0 || !allowPickaxeFallback || hasWeapon || preferred > 0 || target == null) return best;
@@ -78,6 +82,9 @@ public static class CombatLoadout
         }
         return best;
     }
+
+    internal static float DamageRate(Player player, Item item) => 60f * player.GetWeaponDamage(item)
+        / System.Math.Max(1, System.Math.Max(item.useTime, item.useAnimation));
 
     public static int ReadySlot(Player player, int slot)
     {

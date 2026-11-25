@@ -1179,6 +1179,7 @@ public class NativeAgent : ModSystem
         AgentTools.ContactEscapeActive = false;
         CombatLoadout.PreferredType = 0;
         CombatLoadout.AmmoFallbackType = 0;
+        CombatLoadout.ContextualPreference = false;
         AgentTaskEvidence.Reset();
         PlayerCombat.Stop();
         PvpDuel.Stop();

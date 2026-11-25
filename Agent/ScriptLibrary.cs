@@ -488,7 +488,7 @@ public sealed class ScriptLibrary
               ...Object.fromEntries(usable.map(w=>['slot_'+w.slot,{weapon:w,action:w.slot<10?'select hotbar weapon':'swap this backpack weapon into a hotbar weapon or empty slot, then select it'}]))};
             const r=tool('jev_judge',{channel:'loadout',context:'task-loadout',interval_ms:1500,max_age_ms:1500,
               state:{instruction:input.instruction,combat:c,weapons:usable},questions:{response:{type:'choice',
-                instructions:'Which available weapon best supports the current task and nearby threats? Consider attack reach, firing lines, enemy movement, damage, ammo and mana. Moving a backpack weapon costs one inventory swap; keep a suitable existing loadout.',criteria}}});
+                instructions:'Which available weapon best supports the current task and nearby threats? Compare weapons that can hit the target now, using attack reach, nominal damage per second, ammo and mana. Favor an effective reusable weapon over throwing consumables at close range. Moving a backpack weapon costs one inventory swap.',criteria}}});
             if(r.status==='pending'||r.request_id===input.last_request) return {status:r.status};
             if(r.status==='failed') return {request_id:r.request_id,error:r.result.error};
             const choice=r.result.answers.response.choice;
@@ -513,7 +513,7 @@ public sealed class ScriptLibrary
               const moved=tool('inventory_swap',{src:from.slot,dst:to.slot,expected_src:identity(from),expected_dst:identity(to)});
               if(moved.error) return {request_id:r.request_id,error:moved.error};
             }
-            const applied=tool('set_combat',{weapon_type:current.type});
+            const applied=tool('set_combat',{weapon_type:current.type,contextual_weapon:true});
             print({decision:'loadout',request:r.request_id,choice,weapon_type:current.type,
               model_ms:r.result.elapsed_ms,swapped_from:current.slot>=10?current.slot:null,error:applied.error});
             return {request_id:r.request_id,status:applied.error?'needs_review':'selected',weapon_type:current.type,error:applied.error};
@@ -589,7 +589,7 @@ public sealed class ScriptLibrary
               const simpleFight=c.defense_permitted&&close.length===1&&close[0].distance_tiles<=4
                 &&p.hp>4*close[0].contact_damage&&!c.projectiles?.length&&(c.fall_forecast?.damage??0)<=0
                 &&close[0].weapons.some(w=>w.slot<10&&!w.consumable&&w.mana_available&&w.has_ammo&&w.line_or_reach_passed
-                  &&(!c.preferred_weapon_type||c.preferred_weapon_type===w.type)
+                  &&(!c.preferred_weapon_type||c.contextual_weapon||c.preferred_weapon_type===w.type)
                   &&Math.max(1,w.damage-Math.ceil((close[0].defense??0)/2))*2>=close[0].hp);
               if(!idle)idleDestination=null;
               if(!idle&&!destination)movementIntent=null;

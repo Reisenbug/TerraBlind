@@ -431,6 +431,11 @@ public sealed class ControlTrial : ModSystem
             await CheckFallingDestination();
             return;
         }
+        if (Environment.GetEnvironmentVariable("TB_CONTEXTUAL_WEAPON_CHECK") == "1")
+        {
+            await CheckContextualWeapon();
+            return;
+        }
         await OnMain(() =>
         {
             Config.I.AgentEnabled = true; Config.I.AiClient = false;
@@ -2101,6 +2106,39 @@ public sealed class ControlTrial : ModSystem
                 .All(x => Main.tile[x, row].HasTile && Main.tile[x, row].TileType == TileID.Platforms)),
             "clearing the tree did not finish the continuous span");
         Console.WriteLine("BRIDGE_CLEARANCE_PASS model_calls=0 preserved_prefix=true continuous_span=true");
+    }
+
+    async Task CheckContextualWeapon()
+    {
+        var enemy = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            Manual.On = false; NativeAgent.Stop(); AgentTools.NewTask();
+            var player = Main.LocalPlayer;
+            int x = ActExecutor.OriginCx(player), y = ActExecutor.OriginCy(player);
+            for (int i = x - 2; i <= x + 16; i++)
+            for (int j = y - 4; j <= y; j++) Main.tile[i, j].ClearEverything();
+            for (int slot = 0; slot < 50; slot++) player.inventory[slot].TurnToAir();
+            player.inventory[0].SetDefaults(ItemID.BreakerBlade);
+            player.inventory[1] = new Item(ItemID.Shuriken, 20);
+            var target = new NPC();
+            target.SetDefaults(NPCID.GreenSlime);
+            return target;
+        });
+        Task<int> Choose(int distance) => OnMain(() =>
+        {
+            var player = Main.LocalPlayer;
+            enemy.Center = player.Center + Vector2.UnitX * distance;
+            return CombatLoadout.Select(player, enemy);
+        });
+        var settings = new JsonObject { ["weapon_type"] = (int)ItemID.Shuriken };
+        await Call("set_combat", settings);
+        Check(await Choose(26) == 1, "explicit weapon lock did not retain shuriken");
+        settings["contextual_weapon"] = true;
+        await Call("set_combat", settings);
+        Check(await Choose(26) == 0 && await Choose(160) == 1,
+            "contextual selection did not switch between close sword and ranged throw");
+        Console.WriteLine("CONTEXTUAL_WEAPON_PASS close=breaker_blade far=shuriken explicit_lock=shuriken model_calls=0");
     }
 
     async Task CheckFallingDestination()
