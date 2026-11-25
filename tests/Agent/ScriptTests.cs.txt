@@ -384,7 +384,7 @@ static class ScriptTests
         {
             player.dead = ItemUseCoordinator.IsActive = PlaceAnywhere.IsRunning = false;
             player.itemAnimation = player.itemTime = 0;
-            foreach (string scenario in new[] { "swap", "observe", "empty_slot", "keep", "current_slot", "ammo_lost", "source_changed", "destination_changed", "no_slot" })
+            foreach (string scenario in new[] { "swap", "observe", "empty_slot", "keep", "current_slot", "ammo_lost", "source_changed", "destination_changed", "no_slot", "locked" })
             {
                 player.inventory = Enumerable.Range(0, 58).Select(_ => new Terraria.Item()).ToArray();
                 if (scenario != "empty_slot")
@@ -393,9 +393,11 @@ static class ScriptTests
                 player.inventory[29] = new Terraria.Item { type = 5011, prefix = 41, stack = 1, damage = 18 };
                 JsonObject Weapon(int slot) => new() { ["slot"] = slot, ["type"] = player.inventory[slot].type,
                     ["prefix"] = player.inventory[slot].prefix, ["stack"] = player.inventory[slot].stack,
-                    ["damage"] = player.inventory[slot].damage, ["has_ammo"] = true, ["mana_available"] = true };
-                var combat = new JsonObject { ["preferred_weapon_type"] = 24,
-                    ["targets"] = new JsonArray(new JsonObject { ["weapons"] = new JsonArray(Weapon(7), Weapon(29)) }) };
+                    ["damage"] = player.inventory[slot].damage, ["has_ammo"] = true, ["mana_available"] = true,
+                    ["projectile_type"] = slot == 7 ? 0 : 1, ["line_or_reach_passed"] = true,
+                    ["estimated_damage_per_second"] = player.inventory[slot].damage * 2 };
+                var combat = new JsonObject { ["preferred_weapon_type"] = 24, ["contextual_weapon"] = scenario != "locked",
+                    ["targets"] = new JsonArray(new JsonObject { ["attackable"] = true, ["weapons"] = new JsonArray(Weapon(7), Weapon(29)) }) };
                 int swaps = 0, selected = 0;
                 if (scenario == "observe") combat["observed_notes"] = new string('x', 9000);
                 var code = "const config=" + new JsonObject { ["combat"] = scenario == "observe" ? null : combat.DeepClone(), ["instruction"] = "gather materials while defending" }.ToJsonString()
@@ -427,7 +429,8 @@ static class ScriptTests
                     }
                     else
                     {
-                        Check(name == "set_combat" && player.inventory[scenario == "empty_slot" ? 0 : 7].type == 5011, "loadout selected a weapon before its verified swap");
+                        Check(name == "set_combat" && args["contextual_weapon"]?.GetValue<bool>() == true
+                            && player.inventory[scenario == "empty_slot" ? 0 : 7].type == 5011, "loadout must recommend after its verified swap");
                         selected++; response = new JsonObject();
                     }
                     return Task.FromResult(response.ToJsonString());
@@ -441,6 +444,8 @@ static class ScriptTests
                     "loadout removed an existing hotbar weapon despite available space");
                 if (scenario == "current_slot") Check(result["value"]?["status"]?.ToString() == "kept",
                     "loadout rewrote the weapon that was already selected");
+                if (scenario == "locked") Check(result["value"]?["status"]?.ToString() == "weapon_locked",
+                    "loadout touched an explicitly locked weapon");
             }
         }
         finally

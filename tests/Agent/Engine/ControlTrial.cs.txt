@@ -2160,8 +2160,30 @@ public sealed class ControlTrial : ModSystem
         Check(estimates[2] > estimates[1] && estimates[2] > estimates[3]
             && estimates[2] > estimates[4] && await Choose(160) == 2,
             "Molten Fury with arrows did not dominate the weak ranged options against armor");
+        await OnMain(() =>
+        {
+            enemy.lifeMax = enemy.life = 500;
+            enemy.noGravity = true;
+            enemy.velocity = Vector2.Zero;
+            return true;
+        });
+        var fight = await Call("fight", new JsonObject { ["npc_types"] = new JsonArray((int)NPCID.BlueSlime), ["seconds"] = 1d });
+        Check(fight["error"] == null, "native fight failed: " + fight);
+        int arrowShots = await OnMain(() =>
+        {
+            var player = Main.LocalPlayer;
+            Check(player.HeldItem.type == ItemID.MoltenFury && enemy.life < 500 && player.inventory[1].stack == 20
+                && player.inventory[4].stack == 20 && player.inventory[55].stack == 50,
+                "native fight did not fire and hit with Molten Fury");
+            int spent = 50 - player.inventory[54].stack;
+            player.inventory[54].TurnToAir();
+            Check(CombatLoadout.Select(player, enemy) is 1 or 3 or 4, "empty bow did not fall back to usable ranged weapon");
+            return spent;
+        });
+        Check(arrowShots > 0, "native fight consumed no arrows");
         Console.WriteLine("CONTEXTUAL_WEAPON_PASS close=breaker_blade far=shuriken explicit_lock=shuriken model_calls=0");
         Console.WriteLine("ARMORED_WEAPON_PASS defense=28 dps=" + string.Join(",", estimates.Select(x => $"{x:F1}")));
+        Console.WriteLine($"MOLTEN_FURY_FIRED arrows_spent={arrowShots} weaker_ammo_unchanged=true");
     }
 
     async Task CheckFallingDestination()

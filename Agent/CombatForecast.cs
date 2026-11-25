@@ -643,7 +643,11 @@ public sealed class CombatForecast : ModSystem
                 steps[^1]["until"]["frames"] = steps[^1]["until"]["frames"].GetValue<int>() + 1;
             else steps.Add(new JsonObject { ["keys"] = names, ["until"] = new JsonObject { ["frames"] = 1 } });
         }
-        if (type > 0) CombatLoadout.PreferredType = type;
+        if (type > 0 && (CombatLoadout.PreferredType == 0 || CombatLoadout.ContextualPreference))
+        {
+            CombatLoadout.PreferredType = type;
+            CombatLoadout.ContextualPreference = true;
+        }
         executing = forecast; executingMovement = movement.AsObject(); executionAbort = null;
         prepared = null;
         var payload = args.DeepClone().AsObject(); payload["steps"] = steps;

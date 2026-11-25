@@ -268,6 +268,7 @@ namespace Terraria
         public int GetItemGrabRange(Item item) => 38;
         public bool HasAmmo(Item item) => HasAmmunition;
         public int GetWeaponDamage(Item item) => item.damage;
+        public int GetWeaponArmorPenetration(Item item) => 0;
         public float MeleeAttackSpeed = 1;
         public float GetTotalAttackSpeed(Terraria.ModLoader.DamageClass damageClass) => MeleeAttackSpeed;
         public Item[] inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
@@ -292,6 +293,13 @@ namespace Terraria
         public Microsoft.Xna.Framework.Vector2 position;
         public Microsoft.Xna.Framework.Vector2 Center => position + new Microsoft.Xna.Framework.Vector2(width / 2f, height / 2f);
         public Microsoft.Xna.Framework.Rectangle Hitbox => new((int)position.X, (int)position.Y, width, height);
+        public HitModifiers GetIncomingStrikeModifiers(ModLoader.DamageClass damageType, int direction) => new() { Defense = defense };
+        public struct HitModifiers
+        {
+            public int Defense;
+            public int ArmorPenetration;
+            public int GetDamage(int damage, bool crit) => Math.Max(1, damage - Math.Max(0, Defense - ArmorPenetration) / 2);
+        }
     }
     public static class Lang
     {
@@ -328,7 +336,9 @@ namespace Terraria
         public void TurnToAir() { type = stack = prefix = 0; }
         public float shootSpeed;
         public int shoot, mana, width = 30, height = 30;
-        public int useTime, useAnimation;
+        public int useTime, useAnimation, reuseDelay, tileBoost;
+        public int? useLimitPerAnimation;
+        public ModLoader.DamageClass DamageType = ModLoader.DamageClass.Melee;
         public bool channel;
         public bool noMelee;
         public float scale = 1;
@@ -359,6 +369,7 @@ namespace Terraria
     }
     public static class WorldGen
     {
+        public static bool CanKillTile(int x, int y) => true;
         public static bool spawnEye;
         public static int spawnHardBoss;
         public static int prioritizedTownNPCType, roomX1, roomX2, roomY1, roomY2, hiScore = 1;
@@ -474,6 +485,7 @@ namespace Terraria.ID
         public static class Sets
         {
             public static bool[] Falling = new bool[1000], Suffocate = new bool[1000], CrackedBricks = new bool[1000];
+            public static bool[] IsATreeTrunk = new bool[1000];
             public static bool[] TouchDamageHot = new bool[1000];
             public static int[] TouchDamageImmediate = new int[1000];
         }
@@ -495,6 +507,8 @@ namespace Terraria.ModLoader
     public class DamageClass { public static readonly DamageClass Melee = new(); }
     public static class CombinedHooks
     {
+        public static int TotalUseTime(float useTime, Terraria.Player player, Terraria.Item item)
+            => Math.Max(1, (int)(useTime / player.MeleeAttackSpeed));
         public static int TotalAnimationTime(float animation, Terraria.Player player, Terraria.Item item)
             => Math.Max(1, (int)(animation / player.MeleeAttackSpeed));
     }
@@ -623,6 +637,7 @@ namespace TerraBlind
     public class ItemUseRequest { public int Slot, TargetWx, TargetWy, DurationTicks; public bool Strict; }
     public static class ItemUseCoordinator
     {
+        internal static bool TrySnapTree(ref int x, ref int y) => false;
         public static bool IsActive;
         public static ItemUseRequest LastRequest;
         public static void Start(ItemUseRequest request) { LastRequest = request; IsActive = true; }
@@ -646,6 +661,7 @@ namespace TerraBlind
         }
     }
     public static class PlaceCoordinator { public static bool IsActive; }
+    public static class LavaSafety { public static bool CanMine(int x, int y) => true; }
     public static class PlaceWalls { public static bool IsRunning; }
     public enum VanillaKeys { None = 0, Left = 1, Right = 2, Jump = 4, Up = 8, Down = 16 }
     public static class StateSpacePlanner
@@ -783,7 +799,8 @@ namespace TerraBlind
         internal static void InterruptForSurvival() => Interrupts++;
         public static int Starts;
         public static Mode LastMode;
-        public static void Start(int x, int y, Mode mode = Mode.Reach) { Active = true; Starts++; LastMode = mode; }
+        public static void Start(int x, int y, Mode mode = Mode.Reach, bool avoidPressurePlates = false, int? toolReachBoost = null)
+        { Active = true; Starts++; LastMode = mode; }
         public static void Stop() => Active = false;
     }
     public static class MazeWand
@@ -838,6 +855,7 @@ namespace TerraBlind
         public static bool CanInteract(Terraria.Player player, int x, int y) => InteractTest?.Invoke(player, x, y) ?? true;
         public static bool CanMine(Terraria.Player player, int x, int y) => MineTest?.Invoke(player, x, y) ?? true;
         public static bool CanMine(Terraria.Player player, int x, int y, Terraria.Item item) => CanMine(player, x, y);
+        public static bool CanMine(Terraria.Player player, int x, int y, int boost) => CanMine(player, x, y);
     }
     public static class TreasureGrab
     {

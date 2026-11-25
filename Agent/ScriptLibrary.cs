@@ -481,6 +481,7 @@ public sealed class ScriptLibrary
             "内置随身武器判断，可直接调用revision=0。input含combat_assess返回的combat、instruction及last_request；Jev从含弹药与射界事实的武器中选择。背包武器换入已有武器槽或空快捷栏槽，交换前刷新type/prefix/stack，保留原物品；无合适槽位返回needs_review。原动作在判断期间继续。",
             """
             const c=input.combat??tool('combat_assess',{radius:15});
+            if(c.preferred_weapon_type>0&&!c.contextual_weapon) return {status:'weapon_locked'};
             const recommend=scene=>(scene.targets??[]).filter(n=>n.attackable).flatMap(n=>{
               const hitting=(n.weapons??[]).filter(w=>w.has_ammo&&w.mana_available&&w.line_or_reach_passed);
               const best=weapons=>weapons.sort((a,b)=>b.estimated_damage_per_second-a.estimated_damage_per_second||
@@ -502,7 +503,8 @@ public sealed class ScriptLibrary
             const now=tool('combat_assess',{radius:15});
             const current=recommend(now).find(w=>w.slot===selected.slot&&w.type===selected.type
               &&w.prefix===selected.prefix&&w.stack===selected.stack&&w.has_ammo&&w.mana_available);
-            if(!current) return {request_id:r.request_id,status:'weapon_changed'};
+            if(!current||now.preferred_weapon_type>0&&!now.contextual_weapon)
+              return {request_id:r.request_id,status:'weapon_changed'};
             if(current.slot<10&&current.type===now.preferred_weapon_type)
               return {request_id:r.request_id,status:'kept',weapon_type:current.type};
             if(current.slot>=10){
@@ -1051,7 +1053,7 @@ public sealed class ScriptLibrary
             else if(!plan?.movement_available) applied={error:'landing_unresolved'};
             else if(!plans.some(p=>p.id===choice&&p.movement_available)) applied={error:'combat_candidate_changed'};
             else if(plan.movement==='follow_route') applied=plan.weapon_type>0&&plan.weapon_type!==c.preferred_weapon_type
-              ?tool('set_combat',{weapon_type:plan.weapon_type}):{};
+              &&(!c.preferred_weapon_type||c.contextual_weapon)?tool('set_combat',{weapon_type:plan.weapon_type,contextual_weapon:true}):{};
             else applied=move(plan,r.input_state.forecast_id);
             if(applied.status==='combat_preparing')return {status:applied.status,request_id:r.request_id,intent,applied:false,agent_review:agentReview};
             print({...record,choice:r.result.answers.response.choice,action:applied.error??applied.outcome??'follow_route',
