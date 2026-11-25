@@ -4622,19 +4622,22 @@ public static partial class AgentTools
                 ["distance_tiles"] = Microsoft.Xna.Framework.Vector2.Distance(n.Center, p.Center) / 16,
                 ["attackable"] = n.CanBeChasedBy(p) && FightCoordinator.TempleTargetAllowed(p, n),
                 ["weapons"] = new JsonArray(p.inventory.Take(50).Select((item, slot) => (item, slot))
-                    .Where(entry => CombatLoadout.Usable(entry.item)).Select(entry => (JsonNode)new JsonObject
+                    .Where(entry => CombatLoadout.Usable(entry.item)).Select(entry =>
                     {
+                        var damage = CombatLoadout.EstimateDamage(p, entry.item, n);
+                        return (JsonNode)new JsonObject {
                         ["slot"] = entry.slot, ["type"] = entry.item.type, ["name"] = entry.item.Name,
                         ["prefix"] = entry.item.prefix, ["stack"] = entry.item.stack,
                         ["damage"] = p.GetWeaponDamage(entry.item), ["use_time_ticks"] = entry.item.useTime,
-                        ["nominal_damage_per_second"] = MathF.Round(CombatLoadout.DamageRate(p, entry.item), 1),
+                        ["estimated_damage_after_defense"] = damage.PerHit,
+                        ["estimated_damage_per_second"] = MathF.Round(damage.PerSecond, 1),
                         ["projectile_type"] = entry.item.shoot, ["shoot_speed"] = entry.item.shootSpeed,
                         ["self_blast_size_pixels"] = SelfBlast(entry.item),
                         ["consumable"] = entry.item.consumable, ["mana_cost"] = entry.item.mana,
                         ["needs_clear_line"] = FightCoordinator.NeedsClearLine(entry.item),
                         ["has_ammo"] = entry.item.useAmmo <= 0 || p.HasAmmo(entry.item),
                         ["mana_available"] = entry.item.mana * p.manaCost <= p.statMana,
-                        ["line_or_reach_passed"] = FightCoordinator.CanHitTarget(p, entry.item, n.Center, n.width / 2f)
+                        ["line_or_reach_passed"] = FightCoordinator.CanHitTarget(p, entry.item, n.Center, n.width / 2f) };
                     }).ToArray())
             }).ToArray()) };
     }

@@ -38,7 +38,7 @@ public static class CombatLoadout
 
     internal static int Select(Player player, NPC target, bool allowPickaxeFallback, bool allowAlternative)
     {
-        bool contextual = ContextualPreference && target != null;
+        bool contextual = target != null && (PreferredType == 0 || ContextualPreference);
         int preferred = contextual ? 0 : PreferredType;
         if (preferred > 0 && AmmoFallbackType > 0)
         {
@@ -47,10 +47,11 @@ public static class CombatLoadout
                 || weapon?.useAmmo > 0 && !player.HasAmmo(weapon)) preferred = AmmoFallbackType;
         }
         int best = -1;
+        float bestScore = 0;
         bool hasWeapon = false;
         for (int slot = 0; slot < 50; slot++)
         {
-            if (slot == 10 && best >= 0 && (!allowAlternative || preferred == 0)) break;
+            if (slot == 10 && best >= 0 && !contextual && (!allowAlternative || preferred == 0)) break;
             var item = player.inventory[slot];
             if (!CanUse(player, item)) continue;
             hasWeapon = true;
@@ -61,14 +62,15 @@ public static class CombatLoadout
                 if (!allowAlternative) continue;
                 if (slot >= 10 && best is >= 0 and < 10) continue;
             }
-            if (best < 0) best = slot;
-            else
+            float score = contextual ? EstimateDamage(player, item, target).PerSecond : player.GetWeaponDamage(item);
+            var previous = best < 0 ? null : player.inventory[best];
+            if (previous == null || (contextual
+                ? score > bestScore || score == bestScore && (previous.consumable && !item.consumable
+                    || previous.consumable == item.consumable && item.type == PreferredType)
+                : previous.consumable && !item.consumable || previous.consumable == item.consumable && score > bestScore))
             {
-                var previous = player.inventory[best];
-                float previousScore = contextual ? DamageRate(player, previous) : player.GetWeaponDamage(previous);
-                float score = contextual ? DamageRate(player, item) : player.GetWeaponDamage(item);
-                if (previous.consumable && !item.consumable || previous.consumable == item.consumable
-                    && (score > previousScore || contextual && score == previousScore && item.type == PreferredType)) best = slot;
+                best = slot;
+                bestScore = score;
             }
         }
         if (best >= 0 || !allowPickaxeFallback || hasWeapon || preferred > 0 || target == null) return best;
@@ -83,8 +85,22 @@ public static class CombatLoadout
         return best;
     }
 
-    internal static float DamageRate(Player player, Item item) => 60f * player.GetWeaponDamage(item)
-        / System.Math.Max(1, System.Math.Max(item.useTime, item.useAnimation));
+    internal static (int PerHit, float PerSecond) EstimateDamage(Player player, Item item, NPC target)
+    {
+        int damage = player.GetWeaponDamage(item);
+        if (item.useAmmo > 0 && !player.PickAmmo(item, out _, out _, out damage, out _, out _, dontConsume: true))
+            return (0, 0);
+        var modifiers = target.GetIncomingStrikeModifiers(item.DamageType, System.Math.Sign(target.Center.X - player.Center.X));
+        modifiers.ArmorPenetration += player.GetWeaponArmorPenetration(item);
+        int hit = modifiers.GetDamage(damage, crit: false);
+        if (item.useTime <= 0 || item.useAnimation <= 0) return (hit, 0);
+        int use = CombinedHooks.TotalUseTime(item.useTime, player, item);
+        int animation = CombinedHooks.TotalAnimationTime(item.useAnimation, player, item);
+        int shots = (animation - 1) / use + 1;
+        if (item.useLimitPerAnimation is int limit) shots = System.Math.Min(shots, limit);
+        int duration = System.Math.Max(animation, shots * use) + item.reuseDelay;
+        return (hit, 60f * hit * shots / System.Math.Max(1, duration));
+    }
 
     public static int ReadySlot(Player player, int slot)
     {

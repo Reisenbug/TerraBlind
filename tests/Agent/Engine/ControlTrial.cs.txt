@@ -2121,8 +2121,11 @@ public sealed class ControlTrial : ModSystem
             for (int slot = 0; slot < 50; slot++) player.inventory[slot].TurnToAir();
             player.inventory[0].SetDefaults(ItemID.BreakerBlade);
             player.inventory[1] = new Item(ItemID.Shuriken, 20);
-            var target = new NPC();
-            target.SetDefaults(NPCID.GreenSlime);
+            int index = NPC.NewNPC(new EntitySource_Misc("ArmoredWeaponCheck"),
+                (int)player.Center.X + 80, (int)player.Center.Y, NPCID.BlueSlime);
+            soulMobs.Add(index);
+            var target = Main.npc[index];
+            target.aiStyle = -1;
             return target;
         });
         Task<int> Choose(int distance) => OnMain(() =>
@@ -2138,7 +2141,27 @@ public sealed class ControlTrial : ModSystem
         await Call("set_combat", settings);
         Check(await Choose(26) == 0 && await Choose(160) == 1,
             "contextual selection did not switch between close sword and ranged throw");
+        await OnMain(() =>
+        {
+            var player = Main.LocalPlayer;
+            player.inventory[2].SetDefaults(ItemID.MoltenFury);
+            player.inventory[3].SetDefaults(ItemID.Blowpipe);
+            player.inventory[4] = new Item(ItemID.ThrowingKnife, 20);
+            player.inventory[54] = new Item(ItemID.WoodenArrow, 50);
+            player.inventory[55] = new Item(ItemID.Seed, 50);
+            enemy.defense = 28;
+            return true;
+        });
+        var assessment = await Call("combat_assess", new JsonObject { ["radius"] = 15 });
+        var estimates = assessment["targets"].AsArray().Single(n => n["who"].GetValue<int>() == enemy.whoAmI)["weapons"]
+            .AsArray().OrderBy(w => w["slot"].GetValue<int>()).Select(w => w["estimated_damage_per_second"].GetValue<float>()).ToArray();
+        Check(await OnMain(() => Main.LocalPlayer.inventory[54].stack == 50 && Main.LocalPlayer.inventory[55].stack == 50),
+            "damage estimate consumed live ammo");
+        Check(estimates[2] > estimates[1] && estimates[2] > estimates[3]
+            && estimates[2] > estimates[4] && await Choose(160) == 2,
+            "Molten Fury with arrows did not dominate the weak ranged options against armor");
         Console.WriteLine("CONTEXTUAL_WEAPON_PASS close=breaker_blade far=shuriken explicit_lock=shuriken model_calls=0");
+        Console.WriteLine("ARMORED_WEAPON_PASS defense=28 dps=" + string.Join(",", estimates.Select(x => $"{x:F1}")));
     }
 
     async Task CheckFallingDestination()

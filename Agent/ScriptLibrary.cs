@@ -481,21 +481,26 @@ public sealed class ScriptLibrary
             "内置随身武器判断，可直接调用revision=0。input含combat_assess返回的combat、instruction及last_request；Jev从含弹药与射界事实的武器中选择。背包武器换入已有武器槽或空快捷栏槽，交换前刷新type/prefix/stack，保留原物品；无合适槽位返回needs_review。原动作在判断期间继续。",
             """
             const c=input.combat??tool('combat_assess',{radius:15});
-            const weapons=[...new Map((c.targets??[]).flatMap(n=>n.weapons??[]).map(w=>[w.slot,w])).values()];
-            const usable=weapons.filter(w=>w.has_ammo&&w.mana_available);
+            const recommend=scene=>(scene.targets??[]).filter(n=>n.attackable).flatMap(n=>{
+              const hitting=(n.weapons??[]).filter(w=>w.has_ammo&&w.mana_available&&w.line_or_reach_passed);
+              const best=weapons=>weapons.sort((a,b)=>b.estimated_damage_per_second-a.estimated_damage_per_second||
+                Number(a.consumable)-Number(b.consumable)||a.slot-b.slot)[0];
+              return [best(hitting.filter(w=>w.projectile_type<=0)),best(hitting.filter(w=>w.projectile_type>0))].filter(Boolean);
+            });
+            const usable=[...new Map(recommend(c).map(w=>[w.slot,w])).values()];
             if(!usable.some(w=>w.slot>=10)) return {status:'no_backpack_weapon'};
             const criteria={keep:'Keep the current loadout while continuing the task.',
               ...Object.fromEntries(usable.map(w=>['slot_'+w.slot,{weapon:w,action:w.slot<10?'select hotbar weapon':'swap this backpack weapon into a hotbar weapon or empty slot, then select it'}]))};
             const r=tool('jev_judge',{channel:'loadout',context:'task-loadout',interval_ms:1500,max_age_ms:1500,
               state:{instruction:input.instruction,combat:c,weapons:usable},questions:{response:{type:'choice',
-                instructions:'Which available weapon best supports the current task and nearby threats? Compare weapons that can hit the target now, using attack reach, nominal damage per second, ammo and mana. Favor an effective reusable weapon over throwing consumables at close range. Moving a backpack weapon costs one inventory swap.',criteria}}});
+                instructions:'Which available weapon best supports the current task and nearby threats? Compare hit reach and estimated DPS after target defense and current ammunition. Use the current enemy and terrain. Moving a backpack weapon costs one inventory swap.',criteria}}});
             if(r.status==='pending'||r.request_id===input.last_request) return {status:r.status};
             if(r.status==='failed') return {request_id:r.request_id,error:r.result.error};
             const choice=r.result.answers.response.choice;
             if(choice==='keep') return {request_id:r.request_id,status:'kept'};
             const selected=r.input_state.weapons.find(w=>'slot_'+w.slot===choice);
             const now=tool('combat_assess',{radius:15});
-            const current=now.targets.flatMap(n=>n.weapons).find(w=>w.slot===selected.slot&&w.type===selected.type
+            const current=recommend(now).find(w=>w.slot===selected.slot&&w.type===selected.type
               &&w.prefix===selected.prefix&&w.stack===selected.stack&&w.has_ammo&&w.mana_available);
             if(!current) return {request_id:r.request_id,status:'weapon_changed'};
             if(current.slot<10&&current.type===now.preferred_weapon_type)
