@@ -36,6 +36,7 @@ static class PlanningTrial
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "escape-replay") return await JungleRailAscent.ReplayEscape();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "mobility-candidates" or "mobility-grapple" or "mobility-progress")
             return await MobilityCandidateTrial.Run();
+        if (MobilityCandidateTrial.BenchmarkEnabled) return await MobilityCandidateTrial.RunBenchmark();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "encounter" or "encounter-injured") return await JungleRailAscent.RunEncounter();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "baseline" or "jev") return await JungleReactionTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1") return await UiInteractionTrial.Run();
@@ -832,12 +833,46 @@ public sealed class MobilityCandidateTrial : ModSystem
     sealed record Branch(string Id, int[] Keys, int ReleaseFrame);
     sealed record Candidate(Branch Branch, JsonArray Trace, Point Landing, bool UsedAbility, float ClosestEnemy, JsonObject Evidence);
     static Playback active;
+    static CollectionClock collection;
+    internal static bool BenchmarkEnabled => Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "mobility-benchmark";
 
-    public override void PostUpdatePlayers() => active?.After(Main.LocalPlayer);
+    public override void PostUpdatePlayers()
+    {
+        active?.After(Main.LocalPlayer);
+        collection?.Observe(Main.LocalPlayer);
+    }
 
     static JsonArray Keys(IEnumerable<int> keys) => new(keys.Select(k => JsonValue.Create(k)).ToArray());
     static float Number(JsonNode row, string key) => row[key].GetValue<float>();
     static Vector2 Position(JsonNode row) => new(Number(row, "x"), Number(row, "y"));
+
+    static Task<JsonObject> Batch(JsonObject snapshot, Branch[] branches, CancellationToken token)
+    {
+        var observe = typeof(VanillaNavigationDemo).GetMethod("Observe", BindingFlags.Instance | BindingFlags.NonPublic);
+        var request = new JsonObject { ["command"] = "combat_replays", ["snapshot"] = snapshot,
+            ["branches"] = new JsonArray(branches.Select(b => (JsonNode)new JsonObject
+            { ["id"] = b.Id, ["controls"] = Keys(b.Keys) }).ToArray()) };
+        return (Task<JsonObject>)observe.Invoke(VanillaNavigationDemo.Instance, new object[] { request, token });
+    }
+
+    static JsonObject Capture(Player p)
+    {
+        var at = p.Center.ToTileCoordinates();
+        return VanillaFrame.Capture(p, new Rectangle(at.X - 34, at.Y - 40, 69, 88), true);
+    }
+
+    static bool AtRestOnGround(JsonNode frame) => frame["grounded"].GetValue<bool>() && Number(frame, "vy") == 0;
+
+    static int SettledFrame(JsonArray frames, int released, bool confirm = true)
+    {
+        for (int i = released; i < frames.Count; i++)
+        {
+            if (!AtRestOnGround(frames[i])) continue;
+            if (!confirm) return i + 1;
+            if (i + 1 < frames.Count && AtRestOnGround(frames[i + 1])) return i + 2;
+        }
+        return 0;
+    }
 
     static Branch[] Inputs(bool extraJump)
     {
@@ -897,6 +932,138 @@ public sealed class MobilityCandidateTrial : ModSystem
 
     static bool UsedAbility(JsonObject start, JsonNode frame) => Number(frame, "wing_time") < Number(start, "wing_time") - 0.5f
         || frame["available_jumps"].GetValue<int>() < start["available_jumps"].GetValue<int>();
+
+    sealed class CollectionClock(Point goal)
+    {
+        readonly Stopwatch time = Stopwatch.StartNew();
+        readonly ulong start = Main.GameUpdateCount;
+        public JsonObject At128 { get; private set; }
+        public JsonObject Pickup { get; private set; }
+        public JsonObject Read(Player p) => new()
+        {
+            ["frame"] = (ulong)Main.GameUpdateCount - start, ["ms"] = time.Elapsed.TotalMilliseconds,
+            ["feet"] = new JsonArray(p.Bottom.X / 16, p.Bottom.Y / 16), ["hp"] = p.statLife, ["dead"] = p.dead,
+            ["stock"] = p.CountItem(ItemID.LifeCrystal), ["nav"] = RecedingNav.Active,
+            ["goal_distance_tiles"] = Vector2.Distance(p.Bottom, goal.ToWorldCoordinates()) / 16
+        };
+        public void Observe(Player p)
+        {
+            if (At128 == null && Main.GameUpdateCount - start >= 128) At128 = Read(p);
+            if (Pickup == null && p.CountItem(ItemID.LifeCrystal) >= 10) Pickup = Read(p);
+        }
+    }
+
+    internal static async Task<string> RunBenchmark()
+    {
+        bool boost = Environment.GetEnvironmentVariable("TB_MOBILITY_ROUTE") == "sandstorm";
+        string output = Path.Combine(Main.SavePath, "jungle-mobility-benchmark.json");
+        var report = new JsonObject { ["ok"] = false, ["route"] = boost ? "sandstorm_then_gather" : "direct_gather",
+            ["seed"] = Main.ActiveWorldFileData.SeedText, ["model_calls"] = 0, ["native_terrain"] = true, ["spawns"] = false };
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        var token = deadline.Token;
+        try
+        {
+            var scene = JsonNode.Parse(File.ReadAllText(Environment.GetEnvironmentVariable("TB_MOBILITY_SCENE")))["decision_scene"];
+            Vector2 center = Position(scene) * 16;
+            var goal = new Point(scene["crystal_destination"][0].GetValue<int>(), scene["crystal_destination"][1].GetValue<int>());
+            var warmup = await CrossingDiscovery.OnGame(() =>
+            {
+                NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; FrameProgram.Clear();
+                Config.I.AgentEnabled = true; Combat.Enabled = Dodge.Enabled = Concessions.Enabled = false;
+                Main.musicVolume = 0;
+                return Capture(Main.LocalPlayer);
+            });
+            await Batch(warmup, new[] { new Branch("warm", new int[2], 0) }, token);
+            await CrossingDiscovery.OnGame(() =>
+            {
+                var p = Main.LocalPlayer;
+                p.armor[3].SetDefaults(ItemID.SandstorminaBottle);
+                p.inventory[8].SetDefaults(ItemID.LifeCrystal); p.inventory[8].stack = 9;
+                p.statLife = p.statLifeMax2; p.Center = center; p.velocity = Vector2.Zero;
+                p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                return true;
+            });
+            await Task.Delay(120, token);
+            var initial = await CrossingDiscovery.OnGame(() =>
+            {
+                var p = Main.LocalPlayer;
+                collection = new CollectionClock(goal);
+                return (Clock: collection, Start: VanillaPrediction.Observe(p, false),
+                    Snapshot: boost ? Capture(p) : null, Scene: collection.Read(p), Width: p.width, Height: p.height);
+            });
+            report["start"] = initial.Scene;
+            report["start_physics"] = initial.Start;
+            if (boost)
+            {
+                var branches = Inputs(extraJump: true);
+                var result = await Batch(initial.Snapshot, branches, token);
+                report["forecast_ready"] = await CrossingDiscovery.OnGame(() => initial.Clock.Read(Main.LocalPlayer));
+                report["forecast_worker_ms"] = result["total_ms"]?.DeepClone();
+                var branch = branches.Single(b => b.Id == "repress_jump_left_36");
+                var frames = result["branches"].AsArray().Single(b => b["id"].ToString() == branch.Id)["frames"].AsArray();
+                int settled = SettledFrame(frames, branch.ReleaseFrame, confirm: false);
+                if (settled == 0 || !frames.Take(settled).Any(f => UsedAbility(initial.Start, f))
+                    || frames.Take(settled).Any(f => f["dead"].GetValue<bool>() || f["hp"].GetValue<int>() < initial.Start["hp"].GetValue<int>()))
+                    throw new InvalidOperationException("recorded_sandstorm_route_no_longer_safe");
+                int confirmed = SettledFrame(frames, branch.ReleaseFrame);
+                report["landing_forecast"] = new JsonObject
+                {
+                    ["touchdown_frame"] = settled, ["touchdown_hp"] = frames[settled - 1]["hp"].DeepClone(),
+                    ["following_frame_hp"] = settled < frames.Count ? frames[settled]["hp"].DeepClone() : null,
+                    ["confirmed_frame"] = confirmed > 0 ? confirmed : null,
+                    ["safe_to_offer"] = confirmed > 0 && frames.Take(confirmed).All(f => !f["dead"].GetValue<bool>()
+                        && f["hp"].GetValue<int>() >= initial.Start["hp"].GetValue<int>())
+                };
+                var trace = new JsonArray(frames.Take(settled).Select(f => f.DeepClone()).ToArray());
+                var foot = Position(trace[^1]) + new Vector2(initial.Width / 2f, initial.Height);
+                var candidate = new Candidate(branch, trace, foot.ToTileCoordinates(), true, 0, new JsonObject());
+                var playback = await CrossingDiscovery.OnGame(() =>
+                {
+                    var p = Main.LocalPlayer;
+                    if (Vector2.Distance(p.position, Position(initial.Start)) > 1 || p.velocity.LengthSquared() > 0.01f
+                        || p.dead || p.statLife != initial.Start["hp"].GetValue<int>())
+                        throw new InvalidOperationException("sandstorm_start_state_changed");
+                    report["ability_start"] = initial.Clock.Read(p);
+                    active = new Playback(candidate, initial.Start); BoundaryInputPlayer.Drive = active.Drive;
+                    return active;
+                });
+                var proof = await playback.Result.WaitAsync(token);
+                report["ability"] = proof;
+                if (!proof["matches"].GetValue<bool>()) throw new InvalidOperationException("sandstorm_playback_mismatch");
+            }
+            report["gather_requested"] = await CrossingDiscovery.OnGame(() => initial.Clock.Read(Main.LocalPlayer));
+            var gather = await AgentTools.Execute("gather", new JsonObject
+            {
+                ["targets"] = new JsonArray(new JsonObject { ["item_type"] = (int)ItemID.LifeCrystal,
+                    ["count"] = 10, ["tile_names"] = new JsonArray("Heart") }),
+                ["source_area"] = new JsonObject { ["x"] = goal.X - 2, ["y"] = goal.Y - 2, ["width"] = 6, ["height"] = 6 }
+            }, token);
+            report["gather"] = JsonNode.Parse(gather);
+            while (!await CrossingDiscovery.OnGame(() => initial.Clock.At128 != null)) await Task.Delay(15, token);
+            await CrossingDiscovery.OnGame(() =>
+            {
+                report["frame_128"] = initial.Clock.At128;
+                report["pickup"] = initial.Clock.Pickup;
+                return true;
+            });
+            if (report["pickup"] is JsonObject pickup)
+                report["damage_before_pickup"] = initial.Start["hp"].GetValue<int>() - pickup["hp"].GetValue<int>();
+            report["ok"] = report["gather"]["ok"]?.GetValue<bool>() == true && report["pickup"] != null;
+        }
+        catch (Exception error) { report["error"] = error.ToString(); }
+        finally
+        {
+            await CrossingDiscovery.OnGame(() =>
+            {
+                active = null; collection = null; BoundaryInputPlayer.Drive = null; Halt.All();
+                VanillaNavigationDemo.Instance.Stop(closeWorker: true);
+                return true;
+            });
+            File.WriteAllText(output, report.ToJsonString());
+            Console.WriteLine($"JUNGLE_MOBILITY_BENCHMARK_COMPLETE ok={report["ok"]} route={report["route"]} path={output}");
+        }
+        return report.ToJsonString();
+    }
 
     static Vector2? NearbyGrappleFooting(Player p)
     {
@@ -973,17 +1140,6 @@ public sealed class MobilityCandidateTrial : ModSystem
             var target = new Vector2(original["crystal_destination"][0].GetValue<int>() * 16 + 8,
                 original["crystal_destination"][1].GetValue<int>() * 16 + 8);
             var enemies = original["enemies"].AsArray().Select(e => center + new Vector2(Number(e, "dx_tiles"), Number(e, "dy_tiles")) * 16).ToArray();
-            var worker = typeof(VanillaNavigationDemo).GetMethod("Observe", BindingFlags.Instance | BindingFlags.NonPublic);
-            Task<JsonObject> Batch(JsonObject snapshot, Branch[] branches) =>
-                (Task<JsonObject>)worker.Invoke(VanillaNavigationDemo.Instance, new object[] {
-                    new JsonObject { ["command"] = "combat_replays", ["snapshot"] = snapshot,
-                        ["branches"] = new JsonArray(branches.Select(b => (JsonNode)new JsonObject {
-                            ["id"] = b.Id, ["controls"] = Keys(b.Keys) }).ToArray()) }, token });
-            JsonObject Capture(Player p)
-            {
-                var at = p.Center.ToTileCoordinates();
-                return VanillaFrame.Capture(p, new Rectangle(at.X - 34, at.Y - 40, 69, 88), true);
-            }
             await CrossingDiscovery.OnGame(() =>
             {
                 NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; FrameProgram.Clear();
@@ -998,7 +1154,7 @@ public sealed class MobilityCandidateTrial : ModSystem
                 return true;
             });
             if (!grappleOnly)
-                await Batch(await CrossingDiscovery.OnGame(() => Capture(Main.LocalPlayer)), new[] { new Branch("warm", new int[2], 0) });
+                await Batch(await CrossingDiscovery.OnGame(() => Capture(Main.LocalPlayer)), new[] { new Branch("warm", new int[2], 0) }, token);
             foreach (bool bottle in grappleOnly ? Array.Empty<bool>() : progressOnly ? new[] { true } : new[] { false, true })
             {
                 int item = bottle ? ItemID.SandstorminaBottle : ItemID.AngelWings;
@@ -1024,7 +1180,7 @@ public sealed class MobilityCandidateTrial : ModSystem
                 var startFeet = Position(origin.Start) + new Vector2(origin.Width / 2f, origin.Height);
                 float initialGoalDistance = Vector2.Distance(startFeet, target) / 16;
                 var clock = Stopwatch.StartNew();
-                var batch = await Batch(origin.Snapshot, variants);
+                var batch = await Batch(origin.Snapshot, variants, token);
                 var evidence = new JsonArray();
                 var candidates = new List<Candidate>();
                 foreach (var row in batch["branches"].AsArray())
@@ -1034,8 +1190,7 @@ public sealed class MobilityCandidateTrial : ModSystem
                     if (frames.Count == 0) continue;
                     int grounded = frames.Select((f, i) => (f, i)).Where(e => e.i >= branch.ReleaseFrame
                         && e.f["grounded"].GetValue<bool>()).Select(e => e.i + 1).FirstOrDefault();
-                    int settled = frames.Select((f, i) => (f, i)).Where(e => e.i >= branch.ReleaseFrame
-                        && e.f["grounded"].GetValue<bool>() && Number(e.f, "vy") == 0).Select(e => e.i + 1).FirstOrDefault();
+                    int settled = SettledFrame(frames, branch.ReleaseFrame);
                     var trace = new JsonArray(frames.Take(settled > 0 ? settled : frames.Count).Select(f => f.DeepClone()).ToArray());
                     var end = trace.Last();
                     Vector2 foot = Position(end) + new Vector2(origin.Width / 2f, origin.Height);
@@ -4308,7 +4463,7 @@ public sealed class ExperimentArenaNpcs : GlobalNPC
 {
     public override void EditSpawnRate(Player player, ref int spawnRate, ref int maxSpawns)
     {
-        if (AsciiTerrainTrial.Enabled && !AsciiTerrainTrial.LiveOpening || RailSkillTrial.Recording
+        if (MobilityCandidateTrial.BenchmarkEnabled || AsciiTerrainTrial.Enabled && !AsciiTerrainTrial.LiveOpening || RailSkillTrial.Recording
             || Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1")
         { spawnRate = int.MaxValue; maxSpawns = 0; }
     }
