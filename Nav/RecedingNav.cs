@@ -27,6 +27,7 @@ namespace TerraBlind
         // Reach = 目标悬空,站不上去也放不了东西,人挨着它伸手就算到
         public enum Mode { Snap, Mine, Stand, Reach }
         static Mode _mode;
+        static int? _toolReachBoost;
         internal static (int X, int Y, Mode Mode)? DisplayGoal => Active ? (_goalWx, _goalWy, _mode) : null;
         internal static string MovementWaitOwner => _waitOn;
         const float GoalDistPx = 24f;
@@ -246,7 +247,7 @@ namespace TerraBlind
         public static void Start(int goalWx, int goalWy, Mode mode)
             => Start(goalWx, goalWy, mode, false);
 
-        internal static void Start(int goalWx, int goalWy, Mode mode, bool avoidPressurePlates)
+        internal static void Start(int goalWx, int goalWy, Mode mode, bool avoidPressurePlates, int? toolReachBoost = null)
         {
             if (!AgentTools.ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
             { LastStop = "agent_navigation_forbidden"; Stop(); return; }
@@ -259,7 +260,8 @@ namespace TerraBlind
             // 拿原始值去比永远不相等,守卫等于没写
             if (mode == Mode.Snap)
                 goalWy = StateSpacePlanner.SnapGoalToStandable(goalWx, goalWy);   // clicked air → fall to ground (same as navwand)
-            if (Active && _goalWx == goalWx && _goalWy == goalWy && _mode == mode && AvoidPressurePlates == avoidPressurePlates) return;
+            if (Active && _goalWx == goalWx && _goalWy == goalWy && _mode == mode && AvoidPressurePlates == avoidPressurePlates
+                && _toolReachBoost == toolReachBoost) return;
             AvoidPressurePlates = avoidPressurePlates;
             PressurePlateStop = null;
             _startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -271,6 +273,7 @@ namespace TerraBlind
             VanillaNavBridge.Reset();
             StateSpacePlanner.StopNav();
             _mode = mode;
+            _toolReachBoost = toolReachBoost;
             // 按【在不在地狱】开,不按模式开:Stand 那一段照样会掉熔岩,而掉了就是重开。
             StateSpacePlanner.PreciseMode = goalWy >= Main.UnderworldLayer
                 || ActExecutor.OriginCy(Main.LocalPlayer) >= Main.UnderworldLayer;
@@ -309,6 +312,10 @@ namespace TerraBlind
             EventLog.W(Ev.Goal, $"new goal ({goalWx},{goalWy}) — building field");
             Chatter.Say($"[TerraBlind] receding nav → ({goalWx},{goalWy}) (building field…)");
         }
+
+        static bool CanReachGoal(Player player) => _toolReachBoost is int boost
+            ? Reach.CanMine(player, _goalWx, _goalWy, boost)
+            : Reach.CanInteract(player, _goalWx, _goalWy);
 
         public static void Stop()
         {
@@ -393,7 +400,7 @@ namespace TerraBlind
             {
                 var destination = new Vector2(_goalWx * 16 + 8 - p.width / 2f, (_goalWy + 1) * 16 - p.height);
                 if (_mode == Mode.Reach) destination.Y = p.position.Y;
-                if ((_mode == Mode.Snap || _mode == Mode.Stand || _mode == Mode.Reach && !Reach.CanInteract(p, _goalWx, _goalWy))
+                if ((_mode == Mode.Snap || _mode == Mode.Stand || _mode == Mode.Reach && !CanReachGoal(p))
                     && VanillaContactRegion.TryWalk(p, destination, out var input))
                 {
                     VanillaPrediction.ApplyInput(p, new VanillaPrediction.Input(input));
@@ -426,7 +433,7 @@ namespace TerraBlind
                 {
                     if (SettleAt.IsRunning) return;
                     _braking = false;
-                    if (SettleAt.Outcome == "done" && p.velocity.Y == 0f && Reach.CanInteract(p, _goalWx, _goalWy))
+                    if (SettleAt.Outcome == "done" && p.velocity.Y == 0f && CanReachGoal(p))
                     {
                         DiagLog.Write($"[recede] 停稳了 goal=({_goalWx},{_goalWy}) 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)})");
                         LastStop = "done"; Stop(); return;
@@ -435,8 +442,7 @@ namespace TerraBlind
                 // 【够得着 = 手能碰到,按最窄的那把尺子算】。Mode.Reach 的调用方是开箱/挖那种
                 // "凑近了就行"的活,而交互(右键开箱)的范围只有 tileRangeX,不含 blockRange
                 // 拿 CanPlace 判就会在够不着的地方报"到了",人站定却开不了箱。
-                if (p.velocity.Y == 0f
-                    && Reach.CanInteract(p, _goalWx, _goalWy))
+                if (p.velocity.Y == 0f && CanReachGoal(p))
                 {
                     DiagLog.Write($"[recede] 够到了 goal=({_goalWx},{_goalWy}) 人=({ActExecutor.OriginCx(p)},{ActExecutor.OriginCy(p)}) vx={p.velocity.X:0.##}");
                     if (System.MathF.Abs(p.velocity.X) > SettleAt.VxDead

@@ -421,6 +421,11 @@ public sealed class ControlTrial : ModSystem
             await CheckBridgeClearance();
             return;
         }
+        if (Environment.GetEnvironmentVariable("TB_TOOL_REACH_CHECK") == "1")
+        {
+            await CheckToolReach();
+            return;
+        }
         await OnMain(() =>
         {
             Config.I.AgentEnabled = true; Config.I.AiClient = false;
@@ -2091,6 +2096,49 @@ public sealed class ControlTrial : ModSystem
                 .All(x => Main.tile[x, row].HasTile && Main.tile[x, row].TileType == TileID.Platforms)),
             "clearing the tree did not finish the continuous span");
         Console.WriteLine("BRIDGE_CLEARANCE_PASS model_calls=0 preserved_prefix=true continuous_span=true");
+    }
+
+    async Task CheckToolReach()
+    {
+        var target = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            Main.hardMode = true;
+            var player = Main.LocalPlayer;
+            int x = (int)(player.Center.X / 16), y = (int)(player.Bottom.Y / 16) + 4;
+            for (int i = x - 14; i <= x + 8; i++)
+            for (int j = y - 8; j <= y + 3; j++)
+            {
+                var tile = Main.tile[i, j];
+                tile.ClearEverything();
+                if (j >= y) tile.ResetToType(TileID.Stone);
+            }
+            player.position = new Vector2(x * 16 + 8 - player.width / 2f, y * 16 - player.height);
+            player.velocity = Vector2.Zero;
+            player.inventory[8].SetDefaults(ItemID.Pwnhammer);
+            int tx = x - Player.tileRangeX - 1;
+            WorldGen.Place3x2(tx, y - 1, TileID.DemonAltar, 0);
+            Check(Main.tile[tx, y - 1].HasTile && Main.tile[tx, y - 1].TileType == TileID.DemonAltar, "altar fixture missing");
+            return (X: tx, Y: y - 1, Altars: WorldGen.altarCount);
+        });
+        await DelayFrames(3);
+        var args = new JsonObject { ["x"] = target.X, ["y"] = target.Y, ["mode"] = "interact" };
+        var interact = await Call("nav_to", args);
+        Check(interact["done"]?.GetValue<bool>() == true && await OnMain(() =>
+            !Reach.CanMine(Main.LocalPlayer, target.X, target.Y, Main.LocalPlayer.inventory[8])),
+            "expected the right-click boundary to be outside hammer range");
+        args["mode"] = "use";
+        args["tool_slot"] = 8;
+        var approach = await Call("nav_to", args);
+        Check(approach["done"]?.GetValue<bool>() == true && await OnMain(() =>
+            Reach.CanMine(Main.LocalPlayer, target.X, target.Y, Main.LocalPlayer.inventory[8])),
+            "tool approach stopped short of native hammer range");
+        await Call("use_item", new JsonObject { ["x"] = target.X, ["y"] = target.Y,
+            ["slot"] = 8, ["duration_ticks"] = 60, ["strict"] = true });
+        Check(await OnMain(() => !Main.tile[target.X, target.Y].HasTile && WorldGen.altarCount == target.Altars + 1),
+            "native hammer did not smash the altar after tool approach");
+        Console.WriteLine("TOOL_REACH_PASS model_calls=0 interaction_boundary_short=true native_altar_smashed=true");
     }
 
     Task<bool> CheckCursorInput() => OnMain(() =>

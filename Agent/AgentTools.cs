@@ -4174,10 +4174,20 @@ public static partial class AgentTools
             int x = Int(args, "x"), y = Int(args, "y");
             bool reach = Bool(args, "reach"), exact = Bool(args, "exact"), stand = Bool(args, "stand");
             string mode = Text(args, "mode");
+            int? toolReachBoost = null;
             if (mode.Length > 0)
             {
-                if (mode is not ("travel" or "mine" or "interact" or "stand")) throw new ArgumentException("mode需要travel/mine/interact/stand。");
-                reach = mode is "travel" or "interact"; exact = mode == "mine"; stand = mode == "stand";
+                if (mode is not ("travel" or "mine" or "interact" or "stand" or "use"))
+                    throw new ArgumentException("mode must be travel, mine, interact, stand, or use");
+                reach = mode is "travel" or "interact" or "use"; exact = mode == "mine"; stand = mode == "stand";
+                if (mode == "use")
+                {
+                    int slot = Int(args, "tool_slot", -1);
+                    var item = slot is >= 0 and < 50 ? Main.LocalPlayer.inventory[slot] : null;
+                    if (item == null || item.IsAir || item.pick <= 0 && item.axe <= 0 && item.hammer <= 0)
+                        return new JsonObject { ["error"] = "nav_use_needs_collect_tool_slot" };
+                    toolReachBoost = item.tileBoost;
+                }
             }
             else if (!exact && !stand) reach = true;
             if (exact && WorldGen.InWorld(x, y))
@@ -4187,8 +4197,22 @@ public static partial class AgentTools
                     reach = true;
             }
             return new JsonObject { ["gx"] = x, ["gy"] = y, ["exact"] = exact && !reach, ["reach"] = reach,
-                ["stand"] = stand, ["avoid_pressure_plates"] = avoidPlates };
+                ["stand"] = stand, ["avoid_pressure_plates"] = avoidPlates, ["tool_reach_boost"] = toolReachBoost };
         }, token);
+        if (Rejected(request)) return request;
+        int gx = Int(request, "gx"), gy = Int(request, "gy");
+        int? boost = request["tool_reach_boost"]?.GetValue<int>();
+        bool CanReach(Player player) => boost is int range
+            ? Reach.CanMine(player, gx, gy, range) : Reach.CanInteract(player, gx, gy);
+        Task<JsonObject> StartRoute(CancellationToken ct) => boost is int range
+            ? NativeAgent.OnMain(() =>
+            {
+                if (!ControlAllows(ControlBehavior.Navigation, ControlChannels.All, delegated: true))
+                    return new JsonObject { ["error"] = "agent_navigation_forbidden" };
+                RecedingNav.Start(gx, gy, RecedingNav.Mode.Reach, avoidPlates, range);
+                return new JsonObject { ["ok"] = true };
+            }, ct)
+            : Call("/nav_recede", request, ct);
         var clearances = new JsonArray();
         var clearedSites = new HashSet<string>();
         var clock = Stopwatch.StartNew();
@@ -4210,7 +4234,7 @@ public static partial class AgentTools
                     return player.dead || player.itemAnimation == 0 && player.itemTime == 0
                         || player.HeldItem.pick > 0 || player.HeldItem.createTile >= 0;
                 }, token)) await Task.Delay(16, token);
-                start = await Call("/nav_recede", request, token);
+                start = await StartRoute(token);
             }
             finally
             {
@@ -4238,7 +4262,7 @@ public static partial class AgentTools
                         },
                         async ct =>
                         {
-                            var restarted = await Call("/nav_recede", request, ct);
+                            var restarted = await StartRoute(ct);
                             if (Rejected(restarted)) throw new InvalidOperationException(restarted.ToJsonString());
                             progress = new NavigationProgress(requireApproach: true);
                         }, new JsonObject { ["tool"] = "nav_to", ["args"] = args.DeepClone() });
@@ -4256,9 +4280,8 @@ public static partial class AgentTools
                     lastPlanning = planning;
                     DiagLog.Write($"[agent_navigation_phase] phase={(planning ? "building_field" : "executing")} elapsed_seconds={elapsed:0.###}");
                 }
-                int gx = Int(request, "gx"), gy = Int(request, "gy");
                 var field = planning ? null : MazeWand.PeekFieldOrNull(gx, gy);
-                if (!planning && !Reach.CanInteract(player, gx, gy))
+                if (!planning && !CanReach(player))
                 {
                     if (openTreasureRoute && field != null
                         && !field.ContainsKey(StateSpacePlanner.StandCell(player.position.X, player.position.Y)))
@@ -4359,7 +4382,7 @@ public static partial class AgentTools
             if (result["outcome"] == null && Text(result, "reason") is "local_escape_search_budget" or "repeated_action_failure")
                 result["outcome"] = "no_progress";
             int distance = Math.Max(Math.Abs(ActExecutor.OriginCx(p) - Int(args, "x")), Math.Abs(ActExecutor.OriginCy(p) - Int(args, "y")));
-            bool arrived = Bool(request, "reach") ? Reach.CanInteract(p, Int(args, "x"), Int(args, "y")) : distance <= 6;
+            bool arrived = Bool(request, "reach") ? CanReach(p) : distance <= 6;
             if (Bool(request, "reach") && (Bool(args, "exact") || Text(args, "mode") == "mine"))
                 result["mode_adjustment"] = "non_solid_target_use_reach_then_use_tool";
             if (Bool(result, "done") && !arrived)
