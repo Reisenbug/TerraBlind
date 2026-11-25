@@ -32,6 +32,7 @@ static class PlanningTrial
     public static async Task<string> Run()
     {
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "ascent") return await JungleRailAscent.Run();
+        if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "encounter-data") return await JungleRailAscent.CheckEncounterData();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "encounter" or "encounter-injured") return await JungleRailAscent.RunEncounter();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "baseline" or "jev") return await JungleReactionTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_AGENT_UI_TEST") == "1") return await UiInteractionTrial.Run();
@@ -298,23 +299,93 @@ public sealed class JungleRailAscent : ModSystem
             : (best.Site, best.Heart, best.LaunchCoverage);
     }
 
+    static JsonObject RelativeThreat(Player p, Vector2 center, Vector2 velocity, int type, string name, bool ignoresTiles) => new()
+    {
+        ["type"] = type, ["name"] = name,
+        ["dx_tiles"] = (center.X - p.Center.X) / 16, ["dy_tiles"] = (center.Y - p.Center.Y) / 16,
+        ["vx"] = velocity.X, ["vy"] = velocity.Y, ["ignores_tiles"] = ignoresTiles,
+        ["line_clear"] = Collision.CanHitLine(p.Center, 1, 1, center, 1, 1)
+    };
+
+    static JsonObject HitEstimate(Player p, int damage, int multiplier = 1, int armorPenetration = 0)
+    {
+        var modifiers = new Player.HurtModifiers();
+        modifiers.ArmorPenetration += armorPenetration;
+        modifiers.FinalDamage *= Math.Max(1f - p.endurance, 0f);
+        int AfterDefense(int varied) => (int)modifiers.GetDamage(varied * multiplier, p.statDefense, p.DefenseEffectiveness.Value);
+        float variation = Main.DefaultDamageVariationPercent / 100f;
+        return new JsonObject
+        {
+            ["nominal_before_defense"] = damage * multiplier, ["armor_penetration"] = armorPenetration,
+            ["hp_loss_estimate"] = AfterDefense(damage),
+            ["hp_loss_range"] = new JsonArray(AfterDefense((int)Math.Round(damage * (1f - variation))),
+                AfterDefense((int)Math.Round(damage * (1f + variation))))
+        };
+    }
+
+    static JsonObject JungleSpikeStatus(Player p) => new()
+    {
+        ["name"] = "Poisoned", ["immune"] = p.buffImmune[BuffID.Poisoned], ["hp_per_second"] = 2,
+        ["duration_outcomes"] = new JsonArray(
+            new JsonObject { ["chance"] = 0.375, ["vanilla_classic_seconds"] = 5 },
+            new JsonObject { ["chance"] = 0.25, ["vanilla_classic_seconds"] = 20 })
+    };
+
+    static JsonObject EnemyThreat(Player p, NPC n)
+    {
+        var enemy = RelativeThreat(p, n.Center, n.velocity, n.type, n.TypeName, n.noTileCollide);
+        enemy["hp"] = n.life; enemy["max_hp"] = n.lifeMax; enemy["defense"] = n.defense;
+        enemy["can_take_damage"] = !n.dontTakeDamage && !n.immortal;
+        enemy["contact_hit"] = HitEstimate(p, n.damage);
+        if (n.type == NPCID.SpikedJungleSlime && !Main.expertMode)
+            enemy["known_ranged_attack"] = new JsonObject { ["projectile_type"] = ProjectileID.JungleSpike,
+                ["hit"] = HitEstimate(p, 13, multiplier: 2), ["on_hit_status"] = JungleSpikeStatus(p) };
+        return enemy;
+    }
+
+    static JsonObject ProjectileThreat(Player p, Projectile shot)
+    {
+        var data = RelativeThreat(p, shot.Center, shot.velocity * (shot.extraUpdates + 1), shot.type, shot.Name, !shot.tileCollide);
+        data["raw_projectile_damage"] = shot.damage;
+        data["hit"] = HitEstimate(p, shot.damage, multiplier: 2, armorPenetration: shot.ArmorPenetration);
+        if (shot.type == ProjectileID.JungleSpike) data["on_hit_status"] = JungleSpikeStatus(p);
+        return data;
+    }
+
+    static JsonObject EquipmentForDecision(Player p)
+    {
+        var weapons = new JsonArray();
+        foreach (var item in p.inventory.Take(50).Where(item => item.damage > 0 && item.ammo == 0
+            && item.pick == 0 && item.axe == 0 && item.hammer == 0))
+        {
+            int damage = p.GetWeaponDamage(item);
+            bool usable = p.GetManaCost(item) <= p.statMana;
+            if (item.useAmmo > 0)
+                usable &= p.PickAmmo(item, out _, out _, out damage, out _, out _, dontConsume: true);
+            weapons.Add(new JsonObject { ["name"] = item.Name, ["damage_class"] = item.DamageType.Name,
+                ["attack_damage_before_enemy_defense"] = damage,
+                ["usable"] = usable, ["use_animation_frames"] = item.useAnimation,
+                ["held"] = ReferenceEquals(p.HeldItem, item) });
+            if (weapons.Count >= 4) break;
+        }
+        return new JsonObject { ["weapons"] = weapons, ["rails"] = p.CountItem(ItemID.MinecartTrack),
+            ["featherfall_potions"] = p.CountItem(ItemID.FeatherfallPotion) };
+    }
+
     static JsonObject ReadEncounter()
     {
         var p = Main.LocalPlayer;
-        JsonObject Threat(Vector2 center, Vector2 velocity, string name, bool ignoresTiles, int damage) => new()
-        {
-            ["name"] = name, ["dx_tiles"] = (center.X - p.Center.X) / 16, ["dy_tiles"] = (center.Y - p.Center.Y) / 16,
-            ["vx"] = velocity.X, ["vy"] = velocity.Y, ["damage"] = damage, ["ignores_tiles"] = ignoresTiles,
-            ["line_clear"] = Collision.CanHitLine(p.Center, 1, 1, center, 1, 1)
-        };
         var enemies = Main.npc.Where(n => n.active && !n.friendly && n.damage > 0 && Vector2.Distance(n.Center, p.Center) < 20 * 16)
             .OrderBy(n => Vector2.Distance(n.Center, p.Center)).Take(5)
-            .Select(n => (JsonNode)Threat(n.Center, n.velocity, n.TypeName, n.noTileCollide, n.damage)).ToArray();
+            .Select(n => (JsonNode)EnemyThreat(p, n)).ToArray();
         var shots = Main.projectile.Where(s => s.active && s.hostile && s.damage > 0 && Vector2.Distance(s.Center, p.Center) < 16 * 16)
             .OrderBy(s => Vector2.Distance(s.Center, p.Center)).Take(5)
-            .Select(s => (JsonNode)Threat(s.Center, s.velocity, s.Name, !s.tileCollide, s.damage)).ToArray();
+            .Select(s => (JsonNode)ProjectileThreat(p, s)).ToArray();
+        int poison = p.FindBuffIndex(BuffID.Poisoned);
         return new JsonObject { ["tick"] = (ulong)Main.GameUpdateCount, ["hp"] = p.statLife, ["dead"] = p.dead,
-            ["max_hp"] = p.statLifeMax2, ["crystals_in_inventory"] = p.CountItem(ItemID.LifeCrystal),
+            ["max_hp"] = p.statLifeMax2, ["defense"] = (int)p.statDefense, ["life_regen_raw"] = p.lifeRegen,
+            ["poison_seconds_left"] = poison < 0 ? 0 : p.buffTime[poison] / 60f,
+            ["crystals_in_inventory"] = p.CountItem(ItemID.LifeCrystal),
             ["x"] = p.Center.X / 16, ["y"] = p.Center.Y / 16, ["vx"] = p.velocity.X, ["vy"] = p.velocity.Y,
             ["nav_active"] = RecedingNav.Active, ["enemies"] = new JsonArray(enemies), ["shots"] = new JsonArray(shots) };
     }
@@ -328,7 +399,7 @@ public sealed class JungleRailAscent : ModSystem
     static JsonObject EscapeQuestions() => new()
     {
         ["move"] = new JsonObject { ["type"] = "choice",
-            ["instructions"] = "You choose the player's tactic for the next 2 to 4 seconds during a Life Crystal run. The crystal can wait. Compare continuing toward the destination with making space upward now and resuming later. Prefer rail_ascent when the current route keeps a reachable enemy or recurring fire near the player, especially if another one or two hits are dangerous and the overhead lane leads away from the threat. Prefer continue when movement is already opening distance, danger is separated by tiles, or the only hazard is one projectile passing through. A projectile already in flight can arrive before the decision takes effect. Use enemy locations and tile obstruction for the sustained risk. Positive y is downward. Velocities are pixels per game frame.",
+            ["instructions"] = "Choose the player's tactic for the next 2 to 4 seconds while gathering a Life Crystal. Compare continuing toward the destination with making space upward and resuming later. Use hp_loss_range with the player's current HP to distinguish survivable hits from a plausible one-hit death. The estimate includes defense and endurance. Evaluate known on-hit status separately, including immunity and poison that keeps draining HP after reaching cover. Use the enemy's remaining HP and defense, the player's usable weapons, and line of sight to judge whether the enemy is likely to stay dangerous. Prefer rail_ascent if continuing exposes the player to lethal contact or recurring fire and the overhead lane leads away. Prefer continue when movement is opening distance, terrain separates the danger, or the hazard is passing without threatening the chosen route. A projectile already in flight can arrive before this decision takes effect. Positive y is downward. Velocities are pixels per game frame.",
             ["criteria"] = new JsonObject {
                 ["continue"] = "Keep the current collection route and make progress toward the crystal.",
                 ["rail_ascent"] = "Break contact and gain vertical separation. Drink the available Featherfall potion, place one carried rail in the clear overhead lane, use the native track pull and cancel it with a jump while holding up. Resume the same collection action after the ascent." } },
@@ -340,6 +411,47 @@ public sealed class JungleRailAscent : ModSystem
                 ["passing_hazard"] = "Individual projectile or threat is passing or being left behind.",
                 ["separated"] = "Terrain separates the threat or visible danger is low." } }
     };
+
+    internal static async Task<string> CheckEncounterData()
+    {
+        var result = await CrossingDiscovery.OnGame(() =>
+        {
+            var p = Main.LocalPlayer;
+            p.statLife = 25;
+            p.inventory[3].SetDefaults(ItemID.MinecartTrack); p.inventory[3].stack = 5;
+            p.inventory[4].SetDefaults(ItemID.FeatherfallPotion);
+            p.inventory[5].SetDefaults(ItemID.WoodenBow);
+            p.inventory[6].SetDefaults(ItemID.WoodenArrow); p.inventory[6].stack = 50;
+            var enemy = new NPC();
+            enemy.SetDefaults(NPCID.SpikedJungleSlime);
+            enemy.Center = p.Center - new Vector2(9 * 16, 0);
+            var spike = new Projectile();
+            spike.SetDefaults(ProjectileID.JungleSpike);
+            spike.Center = p.Center - new Vector2(5 * 16, 0);
+            spike.damage = 13;
+            var sample = ReadEncounter();
+            sample["enemies"] = new JsonArray(EnemyThreat(p, enemy));
+            var projectile = ProjectileThreat(p, spike);
+            sample["shots"] = new JsonArray(projectile);
+            var equipment = EquipmentForDecision(p);
+            sample["equipment"] = equipment;
+            bool ok = projectile["raw_projectile_damage"].GetValue<int>() == 13
+                && projectile["hit"]["nominal_before_defense"].GetValue<int>() == 26
+                && projectile["hit"]["hp_loss_range"][0].GetValue<int>() == 22
+                && projectile["hit"]["hp_loss_range"][1].GetValue<int>() == 30
+                && projectile["on_hit_status"]["name"].ToString() == "Poisoned"
+                && projectile["on_hit_status"]["hp_per_second"].GetValue<int>() == 2
+                && sample["enemies"][0]["hp"].GetValue<int>() == 65
+                && equipment["weapons"].AsArray().Any(weapon => weapon["name"].ToString() == p.inventory[5].Name
+                    && weapon["usable"].GetValue<bool>() && weapon["attack_damage_before_enemy_defense"].GetValue<int>() == 9)
+                && !equipment["weapons"].AsArray().Any(weapon => weapon["name"].ToString() == p.inventory[6].Name);
+            return new JsonObject { ["ok"] = ok, ["state"] = sample, ["questions"] = EscapeQuestions() };
+        });
+        var path = Path.Combine(Main.SavePath, "jungle-threat-input.json");
+        File.WriteAllText(path, result.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        Console.WriteLine($"JUNGLE_THREAT_INPUT_COMPLETE ok={result["ok"]} path={path}");
+        return result.ToJsonString();
+    }
 
     static Site AvailableTrack()
     {
@@ -431,6 +543,7 @@ public sealed class JungleRailAscent : ModSystem
                     scene["rail_target"] = new JsonArray(rail.Track.X, rail.Track.Y);
                     scene["clear_upward_tiles"] = rail.Clearance;
                     scene["hp_at_gather_start"] = initialHp;
+                    scene["equipment"] = await CrossingDiscovery.OnGame(() => EquipmentForDecision(Main.LocalPlayer));
                     report["decision_scene"] = scene;
                     report["model_calls"] = 1;
                     Save();
