@@ -3850,9 +3850,12 @@ public static partial class AgentTools
                         }
                 int limit = Math.Clamp(Int(args, "n", 12), 1, 100);
                 var ordered = matches.OrderBy(m => m["dist"].GetValue<float>()).ToArray();
+                var selected = ordered.Take(limit).ToArray();
+                foreach (var match in selected)
+                    if (TerrainInspection.DestinationSandRisk(Int(match, "x"), Int(match, "y")) is { } risk)
+                        match["destination_risk"] = risk;
                 var variants = ordered.GroupBy(m => (X: m["frame_x"].GetValue<int>(), Y: m["frame_y"].GetValue<int>())).ToArray();
-                return new JsonObject { ["tiles"] = new JsonArray(ordered
-                    .Take(limit).Select(m => (JsonNode)m).ToArray()),
+                return new JsonObject { ["tiles"] = new JsonArray(selected),
                     ["variants"] = new JsonArray(variants.Take(32).Select(group => (JsonNode)new JsonObject
                     { ["frame_x"] = group.Key.X, ["frame_y"] = group.Key.Y, ["count"] = group.Count(),
                         ["nearest"] = group.First().DeepClone() }).ToArray()),
@@ -3878,6 +3881,8 @@ public static partial class AgentTools
                     tiles[i]["frame_x"] = (int)Main.tile[x, y].TileFrameX;
                     tiles[i]["frame_y"] = (int)Main.tile[x, y].TileFrameY;
                     tiles[i]["emission"] = TileEmission(x, y);
+                    if (TerrainInspection.DestinationSandRisk(x, y) is { } risk)
+                        tiles[i]["destination_risk"] = risk;
                 }
                 result["stale_candidates_removed"] = stale;
                 return true;
@@ -4158,6 +4163,13 @@ public static partial class AgentTools
                 && TerrainInspection.UndergroundDesertWall(x, y))
                 return new JsonObject { ["error"] = "early_underground_desert_destination", ["x"] = x, ["y"] = y,
                     ["recovery"] = "Choose a target through an observed forest, snow, or jungle descent, or allow the underground desert if required by the task." };
+            var player = Main.LocalPlayer;
+            if (!Bool(args, "allow_dense_falling_terrain") && Text(args, "mode") != "stand"
+                && Math.Max(Math.Abs((long)x - ActExecutor.OriginCx(player)), Math.Abs((long)y - ActExecutor.OriginCy(player))) > 8
+                && TerrainInspection.DestinationSandRisk(x, y) is { } risk && Bool(risk, "dense_falling_terrain"))
+                return new JsonObject { ["error"] = "dense_falling_terrain_destination", ["x"] = x, ["y"] = y,
+                    ["destination_risk"] = risk,
+                    ["recovery"] = "Compare equivalent sources outside the falling terrain. If this destination is necessary, inspect its approach and set allow_dense_falling_terrain for the selected leg." };
             return null;
         }, token);
         if (region != null) return region;

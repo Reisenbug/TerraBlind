@@ -59,6 +59,31 @@ public static class TerrainInspection
             or WallID.CrimsonSandstone or WallID.CrimsonHardenedSand
             or WallID.HallowSandstone or WallID.HallowHardenedSand;
 
+    internal static JsonObject DestinationSandRisk(int x, int y)
+    {
+        if (!WorldGen.InWorld(x, y, 1)) return null;
+        bool desert = y >= Main.worldSurface && UndergroundDesertWall(x, y);
+        int falling = 0, tallest = 0;
+        for (int col = Math.Max(1, x - 4); col <= Math.Min(Main.maxTilesX - 2, x + 4); col++)
+        {
+            int column = 0;
+            for (int row = Math.Max(1, y - 6); row <= Math.Min(Main.maxTilesY - 2, y + 2); row++)
+            {
+                var tile = Main.tile[col, row];
+                if (tile.HasUnactuatedTile && TileID.Sets.Falling[tile.TileType])
+                {
+                    falling++;
+                    tallest = Math.Max(tallest, ++column);
+                }
+                else column = 0;
+            }
+        }
+        bool dense = falling >= 12 && tallest >= 3;
+        return desert || dense ? new JsonObject { ["underground_desert"] = desert,
+            ["nearby_falling_tiles"] = falling, ["tallest_falling_column"] = tallest,
+            ["dense_falling_terrain"] = dense } : null;
+    }
+
     public static JsonObject Opportunity(int x, int y, JsonObject destination)
     {
         var clock = Stopwatch.StartNew();

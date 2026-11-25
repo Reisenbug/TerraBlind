@@ -426,6 +426,11 @@ public sealed class ControlTrial : ModSystem
             await CheckToolReach();
             return;
         }
+        if (Environment.GetEnvironmentVariable("TB_FALLING_DESTINATION_CHECK") == "1")
+        {
+            await CheckFallingDestination();
+            return;
+        }
         await OnMain(() =>
         {
             Config.I.AgentEnabled = true; Config.I.AiClient = false;
@@ -2096,6 +2101,40 @@ public sealed class ControlTrial : ModSystem
                 .All(x => Main.tile[x, row].HasTile && Main.tile[x, row].TileType == TileID.Platforms)),
             "clearing the tree did not finish the continuous span");
         Console.WriteLine("BRIDGE_CLEARANCE_PASS model_calls=0 preserved_prefix=true continuous_span=true");
+    }
+
+    async Task CheckFallingDestination()
+    {
+        var target = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            Manual.On = false; NativeAgent.Stop(); AgentTools.NewTask(); Halt.All();
+            var player = Main.LocalPlayer;
+            int x = ActExecutor.OriginCx(player) + 25, y = Math.Max(ActExecutor.OriginCy(player) + 16, (int)Main.worldSurface + 10);
+            for (int dx = -4; dx <= 17; dx++)
+            for (int dy = -6; dy <= 2; dy++)
+            {
+                var cell = Main.tile[x + dx, y + dy];
+                cell.ClearEverything();
+                if (dy >= 0) cell.ResetToType(TileID.Stone);
+                else if (dx is >= -1 and <= 1 && dy >= -5) cell.ResetToType(TileID.Sand);
+            }
+            Main.tile[x, y].ResetToType(TileID.Demonite);
+            Main.tile[x, y].WallType = WallID.Sandstone;
+            Main.tile[x + 12, y].ResetToType(TileID.Demonite);
+            return (X: x, Y: y);
+        });
+        var candidates = await Call("find_tiles", new JsonObject { ["name"] = "Demonite", ["n"] = 2,
+            ["source_area"] = new JsonObject { ["x"] = target.X, ["y"] = target.Y, ["width"] = 13, ["height"] = 1 } });
+        var selected = candidates["tiles"].AsArray();
+        var risk = selected.Single(tile => tile["x"].GetValue<int>() == target.X)["destination_risk"];
+        Check(risk?["underground_desert"]?.GetValue<bool>() == true && risk["nearby_falling_tiles"].GetValue<int>() == 15
+            && selected.Single(tile => tile["x"].GetValue<int>() == target.X + 12)["destination_risk"] == null,
+            "resource query did not distinguish dense falling terrain from the clear alternative");
+        var rejected = await Call("nav_to", new JsonObject { ["x"] = target.X, ["y"] = target.Y, ["allow_underground_desert"] = true });
+        Check(rejected["error"]?.ToString() == "dense_falling_terrain_destination"
+            && await OnMain(() => !RecedingNav.Active), "risky destination started navigation before reconsideration");
+        Console.WriteLine("FALLING_DESTINATION_PASS model_calls=0 falling_tiles=15 alternate_visible=true nav_started=false");
     }
 
     async Task CheckToolReach()

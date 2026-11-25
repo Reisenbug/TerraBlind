@@ -237,7 +237,7 @@
     "type": "function",
     "function": {
       "name": "find_tiles",
-      "description": "整张地图可读,所以'这世界有没有钨矿/最近的铁在哪'不是探索问题,是查询问题。给一个 TileID 精确名(不确定先 tile_names 查),返回按距离排序的格坐标。**找矿把 max_dist 开大(2000 以上)**:一次就能知道这世界到底有没有这种矿。空结果只证明本次指定范围和筛选条件下未找到，不证明整个世界不存在；可扩大范围或分区查询。source_area模式同时支持frame_x/frame_y精确变体，并返回实际tile_type和frame。拿到坐标直接 nav_to,寻路会自己挖竖井下去。找 Containers(箱子)时每个结果带 kind 字段(如 Chest=普通木箱/Gold Chest/Ivy Chest 常春藤箱/Ice Chest 等)。**要特定种类的箱子时,把 n 设大(比如20),从返回列表里筛出 kind 匹配的那个再挑最近**:因为按距离排序时想要的种类可能排在很多其他箱子后面,n 太小会漏掉。找到后 nav_to 到旁边再 interact 开箱。",
+      "description": "按已查证的 TileID 精确名称查询世界格坐标，结果按直线距离排序。destination_risk 标出地下沙漠或目标附近的密集落沙。选目标时结合来源价值、天然通路和同类候选，优先走通畅且稳定的路线。source_area 支持精确变体 frame_x/frame_y；箱子结果含 kind，可增加 n 筛选所需类型。空结果只覆盖本次范围和筛选条件。Compare natural approaches and alternate sources when destination_risk indicates dense falling terrain or the Underground Desert.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -275,6 +275,10 @@
           "allow_underground_desert": {
             "type": "boolean",
             "description": "前期目标确实需要进入地下沙漠时设为true。Allow a pre-Hardmode destination inside the Underground Desert when the task requires it."
+          },
+          "allow_dense_falling_terrain": {
+            "type": "boolean",
+            "description": "比较候选并选定进路后，允许这一段接近密集落沙附近的目标。Allow this leg to a dense falling-terrain target after reviewing alternatives and its approach."
           },
           "avoid_pressure_plates": {
             "type": "boolean",
