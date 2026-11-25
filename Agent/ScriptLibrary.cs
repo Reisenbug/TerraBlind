@@ -11,8 +11,8 @@ public sealed class ScriptLibrary
     readonly string directory;
     public ScriptLibrary(string directory) => this.directory = directory;
     internal static string FunctionSource(string code) => "(function(input) {\n" + code + "\n});";
-    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel", "grapple_move", "bank_coins", "pack_workstations" };
-    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "use_life_crystals", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel", "grapple_move", "bank_coins", "pack_workstations" };
+    static readonly string[] Templates = { "navigate_observe", "collect_detour", "use_life_crystals", "sample_tile_variants", "observe_boss_control", "recover_pressure_plate", "recover_navigation", "safety_reactions", "combat_approach", "combat_loadout", "inventory_space", "gather_route", "hunt_drops", "reactive_travel", "task_reactions", "decision_travel", "decision_reactions", "joint_reactions", "joint_combat", "tactical_reactions", "travel_maneuver", "travel_intent", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel", "grapple_move", "bank_coins", "pack_workstations" };
+    static readonly string[] BuiltIns = { "recover_navigation", "inventory_space", "travel_intent", "joint_combat", "safety_reactions", "task_reactions", "combat_approach", "combat_loadout", "gather_route", "hunt_drops", "use_life_crystals", "resource_intents", "craft_batch", "feedback_combat", "build_block_pattern", "travel_disarm_plates", "early_exploration_route", "ensure_town_housing", "invasion_response", "minecart_travel", "grapple_move", "bank_coins", "pack_workstations" };
     internal static string BuiltinIndex => string.Join("\n", BuiltIns.Select(name =>
         name + "@0: " + Example(name)["detail"].ToString().Split('。')[0]));
 
@@ -1331,6 +1331,30 @@ public sealed class ScriptLibrary
             if(policyOnly) return {registered:true};
             try { return step('travel',()=>tool('nav_to',config.destination)); }
             finally { tool('set_combat',{auto_attack:originalCombat.auto_attack,weapon_type:originalCombat.combat_weapon_type}); }
+            """);
+        if (name == "hunt_drops") return Template(name,
+            "刷怪掉落材料时用这个技能。传target:{item_type,count,npc_types}及可选site:{x,y}、biome_flag、depth_flag、source_area。进区后优先捡目标掉落，再接近实际刷出的敌人并攻击。没有敌人或掉落时返回新证据。Hunt observed enemies and collect the specified drop.",
+            """
+            const {target,site,biome_flag,depth_flag,source_area}=input??{};
+            if(!target||!Array.isArray(target.npc_types)||target.npc_types.length===0)
+              return {error:'verified_npc_sources_required'};
+            const fields=['player','depth','inventory_counts'];
+            let state=tool('get_state',{fields});
+            const enough=s=>(s.inventory_counts[target.item_type]??0)>=target.count;
+            const inArea=s=>(!biome_flag||s.player.biome_flags[biome_flag]===true)&&(!depth_flag||s.depth[depth_flag]===true);
+            if(enough(state))return {status:'collected',count:state.inventory_counts[target.item_type]};
+            if(site&&(!inArea(state)||!biome_flag&&!depth_flag)){
+              const approach=tool('nav_to',{x:site.x,y:site.y,mode:'travel'});
+              if(!approach.done)return {status:'needs_review',reason:'hunting_site_unreached',approach};
+              state=tool('get_state',{fields});
+            }
+            if(!inArea(state))return {status:'needs_review',reason:'wrong_hunting_biome_or_depth',
+              biome:state.player.biome_flags,depth:state.depth};
+            const result=tool('gather',{targets:[target],source_area});
+            const count=tool('get_state',{fields:['inventory_counts']}).inventory_counts[target.item_type]??0;
+            return {status:count>=target.count?'collected':'needs_review',count,needed:target.count,
+              reason:result.outcome==='source_unavailable'?'no_observed_enemy_or_drop':result.error??result.outcome,
+              last_outcome:result.last_result?.result?.outcome,actions:result.actions};
             """);
         if (name == "gather_route") return Template(name,
             "内置参数化采集技能，可直接调用revision=0。input含gather_args及最多8项已观察的waypoints。每项可以只给source_area，由gather接近目标，或给x/y及可选mode/source_area，先导航再采集。当前来源耗尽或无法到达时立即切换到下一项，按实际库存验收。",

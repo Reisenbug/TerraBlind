@@ -209,13 +209,44 @@ public sealed class GameGather : IGatherWorld
                 ["detail"] = "敌怪超出当前战斗范围，未向敌怪坐标导航；选择并验证人物站位后恢复原采集句柄。" };
         }, token);
         if (engagement != null) return engagement;
+        bool ReadyToAttack() => Valid() && !Main.LocalPlayer.dead
+            && Microsoft.Xna.Framework.Vector2.Distance(Main.LocalPlayer.Center, Main.npc[who].Center) <= 640f
+            && CombatLoadout.Select(Main.LocalPlayer, Main.npc[who], allowPickaxeFallback: true) >= 0;
+        if (!await NativeAgent.OnMain(ReadyToAttack, token))
+        {
+            var report = JsonNode.Parse(await AgentTools.Execute("npc_combat_observe",
+                new JsonObject { ["npc"] = who, ["npc_type"] = candidate["npc_type"].DeepClone() }, token))?.AsObject();
+            var destination = await NativeAgent.OnMain(() =>
+            {
+                var player = Main.LocalPlayer;
+                return (report?["terrain"]?["stance_probes"]?.AsArray() ?? new JsonArray())
+                    .OfType<JsonObject>().Where(p => p["body_fits"]?.GetValue<bool>() == true
+                        && p["supported"]?.GetValue<bool>() != false
+                        && p["weapon_types"] is JsonArray { Count: > 0 } && p["target_distance_tiles"].GetValue<float>() <= 40)
+                    .OrderBy(p => p["player_distance_tiles"].GetValue<float>())
+                    .Select(p => (X: p["support_x"].GetValue<int>(), Y: p["support_y"].GetValue<int>() - 1))
+                    .Where(cell => ControlAllowsStance(cell.X, cell.Y, player))
+                    .Select(cell => new JsonObject { ["x"] = cell.X, ["y"] = cell.Y, ["mode"] = "stand" })
+                    .FirstOrDefault();
+            }, token);
+            if (destination == null) return new JsonObject { ["outcome"] = "combat_obstructed",
+                ["reason"] = "no_reachable_attack_stance", ["npc"] = who };
+            JsonObject ReachedAttackRange()
+            {
+                if (!Valid()) return new JsonObject { ["error"] = "target_changed" };
+                return ReadyToAttack() ? new JsonObject { ["outcome"] = "attack_range_reached", ["condition_met"] = true } : null;
+            }
+            var approach = await AgentTools.Navigate(destination, token, 8, interruption: ReachedAttackRange);
+            if (!await NativeAgent.OnMain(ReadyToAttack, token)) return new JsonObject { ["outcome"] = "combat_obstructed",
+                ["reason"] = "attack_stance_unreached", ["npc"] = who, ["navigation"] = approach };
+        }
         int hpBefore = 0;
         var startFight = await NativeAgent.OnMain(() =>
         {
             if (!Valid()) return false;
             if (!AgentPermissions.Attack) throw new InvalidOperationException("玩家禁止自动攻击。");
             hpBefore = Main.npc[who].life;
-            FightCoordinator.StartAction(40, new[] { candidate["npc_type"].GetValue<int>() });
+            FightCoordinator.StartAction(40, target: Main.npc[who]);
             return true;
         }, token);
         if (!startFight) return new JsonObject { ["error"] = "target_changed" };
@@ -262,6 +293,14 @@ public sealed class GameGather : IGatherWorld
             return combat;
         }
         finally { if (!token.IsCancellationRequested) await NativeAgent.OnMain(() => { FightCoordinator.Stop(); return true; }, token); }
+    }
+
+    static bool ControlAllowsStance(int x, int y, Player player)
+    {
+        var position = new Microsoft.Xna.Framework.Vector2(x * 16 + 8 - player.width / 2f, (y + 1) * 16 - player.height);
+        return AgentTools.Control.CheckAt(ControlBehavior.Navigation, x, y) == null
+            && VanillaContactRegion.SafeBody(position, player.width, player.height)
+            && !TerrainInspection.BurnsOnContact(player, x, y + 1);
     }
 
     public Task Stop(CancellationToken token) => NativeAgent.OnMain(() =>

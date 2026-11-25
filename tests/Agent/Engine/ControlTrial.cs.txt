@@ -436,6 +436,11 @@ public sealed class ControlTrial : ModSystem
             await CheckContextualWeapon();
             return;
         }
+        if (Environment.GetEnvironmentVariable("TB_HUNT_DROPS_CHECK") == "1")
+        {
+            await CheckHuntDrops();
+            return;
+        }
         await OnMain(() =>
         {
             Config.I.AgentEnabled = true; Config.I.AiClient = false;
@@ -2106,6 +2111,58 @@ public sealed class ControlTrial : ModSystem
                 .All(x => Main.tile[x, row].HasTile && Main.tile[x, row].TileType == TileID.Platforms)),
             "clearing the tree did not finish the continuous span");
         Console.WriteLine("BRIDGE_CLEARANCE_PASS model_calls=0 preserved_prefix=true continuous_span=true");
+    }
+
+    async Task CheckHuntDrops()
+    {
+        var site = await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            NativeAgent.Stop(); AgentTools.NewTask(); Halt.All(); Manual.On = false; Concessions.Enabled = false;
+            var player = Main.LocalPlayer;
+            int x = ActExecutor.OriginCx(player), y = ActExecutor.OriginCy(player) + 5;
+            for (int tx = x - 8; tx <= x + 22; tx++)
+            for (int ty = y - 8; ty <= y + 2; ty++)
+            {
+                var tile = Main.tile[tx, ty];
+                tile.ClearEverything();
+                if (ty >= y) tile.ResetToType(TileID.Stone);
+            }
+            player.position = new Vector2(x * 16 + 8 - player.width / 2f, y * 16 - player.height);
+            player.velocity = Vector2.Zero;
+            for (int slot = 0; slot < 50; slot++) player.inventory[slot].TurnToAir();
+            player.inventory[0].SetDefaults(ItemID.BreakerBlade);
+            player.selectedItem = 0;
+            return (X: x, Y: y);
+        });
+        await DelayFrames(3);
+        var input = new JsonObject { ["target"] = new JsonObject { ["item_type"] = (int)ItemID.Gel,
+            ["count"] = 1, ["npc_types"] = new JsonArray((int)NPCID.BlueSlime) },
+            ["source_area"] = new JsonObject { ["x"] = site.X - 4, ["y"] = site.Y - 6, ["width"] = 22, ["height"] = 7 } };
+        Task<JsonObject> Hunt() => Call("run_script", new JsonObject { ["code"] = "return skill('hunt_drops',0," + input.ToJsonString() + ");" });
+        var empty = await Hunt();
+        Check(empty["value"]?["reason"]?.ToString() == "no_observed_enemy_or_drop"
+            && empty["value"]?["actions"]?.GetValue<int>() == 0, "hunting without targets started actions");
+        var live = await OnMain(() =>
+        {
+            var player = Main.LocalPlayer;
+            int id = NPC.NewNPC(new EntitySource_Misc("HuntDropsCheck"),
+                (site.X + 9) * 16, site.Y * 16 - 2, NPCID.BlueSlime);
+            soulMobs.Add(id);
+            var target = Main.npc[id];
+            target.aiStyle = -1; target.noGravity = true; target.life = 1;
+            Check(CombatLoadout.Select(player, target) < 0, "enemy already within melee reach");
+            return (Id: id, Start: player.Center.X);
+        });
+        var hunted = await Hunt();
+        var proof = await OnMain(() =>
+        {
+            var player = Main.LocalPlayer;
+            return (Delta: player.Center.X - live.Start, Dead: !Main.npc[live.Id].active, Gel: player.CountItem(ItemID.Gel));
+        });
+        Check(hunted["value"]?["status"]?.ToString() == "collected" && proof.Delta > 16 && proof.Dead && proof.Gel >= 1,
+            $"hunting native drop evidence: movement={proof.Delta:F1} dead={proof.Dead} gel={proof.Gel}");
+        Console.WriteLine($"HUNT_DROPS_PASS model_calls=0 movement_px={proof.Delta:F1} killed=true gel={proof.Gel} empty_actions=0");
     }
 
     async Task CheckContextualWeapon()

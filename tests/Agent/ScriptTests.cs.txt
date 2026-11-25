@@ -460,12 +460,14 @@ static class ScriptTests
     {
         var agent = new NativeAgent(); agent.Load();
         var previous = Terraria.Main.npc;
+        var player = Terraria.Main.LocalPlayer;
+        var held = player.inventory[0];
         int messages = AgentChat.Messages.Count;
         bool reacted = false;
         try
         {
             AgentTools.NewTask(); AgentTools.Plan.Reset(); AgentTools.ControlSession.Reset(); AgentPermissions.Reset();
-            var player = Terraria.Main.LocalPlayer;
+            player.inventory[0] = new Terraria.Item { type = 2, stack = 1, damage = 10, shoot = 1, useTime = 20, useAnimation = 20 };
             Terraria.Main.npc = Enumerable.Range(0, Terraria.Main.maxNPCs).Select(_ => new Terraria.NPC()).ToArray();
             Terraria.Main.npc[0] = new Terraria.NPC { active = true, type = 42,
                 position = new(player.position.X + 80, player.position.Y) };
@@ -502,6 +504,7 @@ static class ScriptTests
         finally
         {
             AgentTools.NewTask(); AgentTools.ControlSession.Reset(); FightCoordinator.Stop(); Terraria.Main.npc = previous;
+            player.inventory[0] = held;
             agent.Unload();
         }
         Console.WriteLine("PASS: actual gather combat services script reactions before target defeat while its attack stays active");

@@ -2444,10 +2444,9 @@ static class RuntimeTests
                 Terraria.Collision.Clear = false;
                 var blocked = await Execute(gather.Act(replacement.AsObject(), default));
                 Check(blocked["outcome"]?.ToString() == "combat_obstructed"
-                    && blocked["blocked_samples"].GetValue<int>() == 8 && blocked["clear_line"].GetValue<bool>() == false
-                    && blocked["hp_before"].GetValue<int>() == blocked["hp_after"].GetValue<int>()
-                    && blocked["target_x"] != null && !FightCoordinator.IsActive,
-                    "obstructed material combat failed to return measured evidence and release attack");
+                    && blocked["reason"]?.ToString() == "no_reachable_attack_stance"
+                    && blocked["npc"]?.GetValue<int>() == 0 && !FightCoordinator.IsActive,
+                    "obstructed material combat attacked despite having no observed firing position");
                 var observed = JsonNode.Parse(await Execute(AgentTools.Execute("npc_combat_observe",
                     new JsonObject { ["npc"] = 0, ["npc_type"] = 42 }, default)));
                 Check(observed["npc_type"].GetValue<int>() == 42 && observed["hp"].GetValue<int>() == Game.npc[0].life

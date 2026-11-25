@@ -14,6 +14,7 @@ namespace TerraBlind
         private static float _maxDistTiles = 20f;
         private const int TimeoutFrames = 360;
         private static HashSet<int> _types;
+        private static NPC _actionTarget;
         private static bool _endWithoutTarget;
         internal static bool EndedWithoutTarget { get; private set; }
         private static bool _idleDefense;
@@ -266,12 +267,14 @@ namespace TerraBlind
             _framesLeft = TimeoutFrames;
             _active = true;
             _types = types == null ? null : new HashSet<int>(types);
+            _actionTarget = null;
             _endWithoutTarget = EndedWithoutTarget = false;
         }
 
-        internal static void StartAction(float maxDistTiles, int[] types = null, string movement = "auto")
+        internal static void StartAction(float maxDistTiles, int[] types = null, string movement = "auto", NPC target = null)
         {
             Start(maxDistTiles, types, movement);
+            _actionTarget = target;
             _endWithoutTarget = true;
         }
 
@@ -283,6 +286,7 @@ namespace TerraBlind
             _active = false;
             _framesLeft = 0;
             _types = null;
+            _actionTarget = null;
             _animationSlot = -1;
             _animationTarget = null;
             _attackNext = false;
@@ -452,6 +456,7 @@ namespace TerraBlind
             {
                 NPC npc = Main.npc[i];
                 if (npc == null || !npc.CanBeChasedBy(p)) continue;
+                if (!idle && _actionTarget != null && !ReferenceEquals(npc, _actionTarget)) continue;
                 if (idle ? npc.damage <= 0 : _types != null && !_types.Contains(npc.type)) continue;
                 if (npc.townNPC || npc.friendly) continue;
                 if (!TempleTargetAllowed(p, npc)) continue;

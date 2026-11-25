@@ -357,9 +357,9 @@ static class GatherTests
             CombatLoadout.PreferredType = 0; p.position = new(160, 160);
             p.itemAnimation = p.itemTime = 0;
             p.inventory = Enumerable.Range(0, 58).Select(_ => new Item()).ToArray();
-            p.inventory[0] = new Item { type = 50, stack = 1, damage = 100, width = 30, height = 30 };
-            p.inventory[1] = new Item { type = 51, stack = 1, damage = 20, shoot = 77 };
-            p.inventory[2] = new Item { type = 52, stack = 1, damage = 15, shoot = 78 };
+            p.inventory[0] = new Item { type = 50, stack = 1, damage = 100, width = 30, height = 30, useTime = 20, useAnimation = 20 };
+            p.inventory[1] = new Item { type = 51, stack = 1, damage = 20, shoot = 77, useTime = 20, useAnimation = 20 };
+            p.inventory[2] = new Item { type = 52, stack = 1, damage = 15, shoot = 78, useTime = 20, useAnimation = 20 };
             p.inventory[1].useAmmo = 2;
             p.inventory[23] = new Item { type = 53, stack = 14, ammo = 2, consumable = true };
             p.inventory[56] = new Item { type = 54, stack = 6, ammo = 2, consumable = true };
@@ -411,7 +411,7 @@ static class GatherTests
             Terraria.ID.ContentSamples.ProjectilesByType[1170] = new Projectile { type = 1170, aiStyle = Terraria.ID.ProjAIStyleID.Explosive };
             Terraria.ID.ProjectileID.Sets.RocketsSkipDamageForPlayers[1170] = false;
             Projectile.PrepareBomb = shot => { shot.width = shot.height = 128; };
-            p.inventory[3] = new Item { type = 53, stack = 5, damage = 300, shoot = 1170 };
+            p.inventory[3] = new Item { type = 53, stack = 5, damage = 300, shoot = 1170, useTime = 20, useAnimation = 20 };
             target.position.X = 180;
             Check(CombatLoadout.Select(p, target) != 3, "automatic attack threw a self-damaging explosive inside its blast range");
             Main.npc = new[] { target };
