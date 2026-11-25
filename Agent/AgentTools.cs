@@ -3431,16 +3431,7 @@ public static partial class AgentTools
                 result = await Place(args, token);
                 break;
             case "build_bridge":
-                result = await NativeAgent.OnMain(() => StartBridgeSegment(args, locateApproach: true), token);
-                if (result["approach"] is JsonObject bridgeEntry)
-                {
-                    var arrival = await NavigateTreasure(bridgeEntry, token);
-                    result = Bool(arrival, "done")
-                        ? await NativeAgent.OnMain(() => StartBridgeSegment(args), token)
-                        : new JsonObject { ["error"] = "bridge_entry_not_reached", ["approach"] = bridgeEntry.DeepClone(),
-                            ["navigation"] = arrival };
-                }
-                if (Bool(result, "accepted")) result = await Wait("/bridge_status", "running", "/bridge_stop", 0, token);
+                result = await BuildBridge(args, token);
                 break;
             case "house_site":
                 int rooms = Int(args, "rooms", 1), direction = Int(args, "dir", 1);
@@ -4711,6 +4702,72 @@ public static partial class AgentTools
         }
         finally { player.selectedItem = previous; }
         return result;
+    }
+
+    static async Task<JsonObject> BuildBridge(JsonObject args, CancellationToken token)
+    {
+        var allowed = args["clear_tile_types"]?.AsArray().Select(type => type.GetValue<int>()).ToHashSet();
+        var segment = args.DeepClone().AsObject();
+        var cleared = new JsonArray();
+        int placed = 0, already = 0;
+        int from = Int(args, "from_x"), to = Int(args, "to_x"), row = Int(args, "y");
+        while (true)
+        {
+            var result = await NativeAgent.OnMain(() => StartBridgeSegment(segment, locateApproach: true), token);
+            if (result["approach"] is JsonObject entry)
+            {
+                var arrival = await NavigateTreasure(entry, token);
+                result = Bool(arrival, "done")
+                    ? await NativeAgent.OnMain(() => StartBridgeSegment(segment), token)
+                    : new JsonObject { ["error"] = "bridge_entry_not_reached", ["approach"] = entry.DeepClone(),
+                        ["navigation"] = arrival };
+            }
+            if (Bool(result, "accepted")) result = await Wait("/bridge_status", "running", "/bridge_stop", 0, token);
+            if (allowed == null || allowed.Count == 0) return result;
+            placed += Int(result, "placed");
+            already += Int(result, "already_there");
+            result["placed"] = placed; result["already_there"] = already;
+            result["wanted"] = Math.Abs((long)from - to) + 1;
+            result["cleared"] = cleared.DeepClone();
+            if (Text(result, "outcome") != "blocked" || Text(result, "reason") is not ("occupied" or "bridge_cell_unavailable")
+                || result["target_cell"] is not JsonArray { Count: 2 } cell || cell[1].GetValue<int>() != row)
+                return result;
+            int x = cell[0].GetValue<int>();
+            if (x < Math.Min(from, to) || x > Math.Max(from, to)
+                || cleared.Any(previous => previous["x"].GetValue<int>() == x)) return result;
+
+            var target = await NativeAgent.OnMain(() =>
+            {
+                var tile = Main.tile[x, row];
+                int type = tile.TileType, tx = x, ty = row;
+                if (!tile.HasUnactuatedTile || !allowed.Contains(type)
+                    || Control.CheckAt(ControlBehavior.Placement, x, row) != null
+                    || Control.CheckAt(ControlBehavior.Mining, x, row) != null
+                    || Predicates.IsLava(x, row) || TileID.Sets.Falling[type]) return (Valid: false, X: tx, Y: ty, Type: type);
+                if (TileID.Sets.IsATreeTrunk[type])
+                {
+                    if (!ItemUseCoordinator.TrySnapTree(ref tx, ref ty) || Main.tile[tx, ty].TileType != type
+                        || Control.CheckAt(ControlBehavior.Mining, tx, ty) != null)
+                        return (Valid: false, X: tx, Y: ty, Type: type);
+                }
+                else if (Main.tileFrameImportant[type] || !WorldGen.CanKillTile(x, row)
+                    || !Main.LocalPlayer.inventory.Take(50).Any(item => item.pick > 0 && Reach.CanMine(Main.LocalPlayer, x, row, item)))
+                    return (Valid: false, X: tx, Y: ty, Type: type);
+                bool valid = LavaSafety.CanMine(tx, ty);
+                return (Valid: valid, X: tx, Y: ty, Type: type);
+            }, token);
+            if (!target.Valid) return result;
+            var removed = await CollectTarget(target.X, target.Y, token, nonSolidOnly: false);
+            bool open = await NativeAgent.OnMain(() => !Main.tile[x, row].HasUnactuatedTile, token);
+            if (!open)
+            {
+                result["clearance"] = removed;
+                return result;
+            }
+            cleared.Add(new JsonObject { ["x"] = x, ["y"] = row, ["tile_type"] = target.Type,
+                ["tool_target"] = new JsonArray(target.X, target.Y) });
+            segment["from_x"] = x;
+        }
     }
 
     static JsonObject StartBridgeSegment(JsonObject args, bool locateApproach = false)

@@ -416,6 +416,11 @@ public sealed class ControlTrial : ModSystem
             await CheckCursorInput();
             return;
         }
+        if (Environment.GetEnvironmentVariable("TB_BRIDGE_CLEARANCE_CHECK") == "1")
+        {
+            await CheckBridgeClearance();
+            return;
+        }
         await OnMain(() =>
         {
             Config.I.AgentEnabled = true; Config.I.AiClient = false;
@@ -2051,6 +2056,41 @@ public sealed class ControlTrial : ModSystem
             PrimitiveBindingProbe.Pressed == 1 && PrimitiveBindingProbe.Held == 3 && PrimitiveBindingProbe.Released == 1),
             "primitive_mod_trigger_did_not_deliver_press_hold_release");
         Console.WriteLine("NATIVE_PRIMITIVES_COMPLETE native_engine=true model_calls=0");
+    }
+
+    async Task CheckBridgeClearance()
+    {
+        const int start = 2097, row = 273, tree = 2103, end = 2107;
+        await OnMain(() =>
+        {
+            Config.I.AgentEnabled = true; Config.I.AiClient = false;
+            Manual.On = false; NativeAgent.Stop(); AgentTools.NewTask();
+            var player = Main.LocalPlayer;
+            Check(Main.tile[tree, row].HasTile && Main.tile[tree, row].TileType == TileID.Trees,
+                "expected the original arena tree");
+            WorldGen.PlaceTile(start - 1, row, TileID.Platforms, mute: true, forced: true);
+            Check(Main.tile[start - 1, row].HasTile && Main.tile[start - 1, row].TileType == TileID.Platforms,
+                "missing bridge starting support");
+            player.inventory[3] = new Item(ItemID.WoodPlatform, 80);
+            player.inventory[4] = new Item(ItemID.CopperAxe);
+            player.armor[3] = new Item(ItemID.CloudinaBottle);
+            player.armor[4] = new Item(ItemID.BlizzardinaBottle);
+            player.position = new Vector2((start - 1) * 16 + 8 - player.width / 2f, row * 16 - player.height);
+            player.velocity = Vector2.Zero;
+            return true;
+        });
+        await DelayFrames(3);
+        var args = new JsonObject { ["from_x"] = start, ["to_x"] = end, ["y"] = row, ["item_type"] = (int)ItemID.WoodPlatform };
+        var blocked = await Call("build_bridge", args);
+        Check(blocked["reason"]?.ToString() == "occupied" && blocked["target_cell"]?[0]?.GetValue<int>() == tree,
+            "baseline did not stop at the actual tree");
+        args["clear_tile_types"] = new JsonArray((int)TileID.Trees);
+        var resumed = await Call("build_bridge", args);
+        Check(resumed["outcome"]?.ToString() == "done" && resumed["cleared"]?[0]?["x"]?.GetValue<int>() == tree
+            && await OnMain(() => Enumerable.Range(start, end - start + 1)
+                .All(x => Main.tile[x, row].HasTile && Main.tile[x, row].TileType == TileID.Platforms)),
+            "clearing the tree did not finish the continuous span");
+        Console.WriteLine("BRIDGE_CLEARANCE_PASS model_calls=0 preserved_prefix=true continuous_span=true");
     }
 
     Task<bool> CheckCursorInput() => OnMain(() =>
