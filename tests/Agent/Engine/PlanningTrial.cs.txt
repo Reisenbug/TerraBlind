@@ -34,7 +34,7 @@ static class PlanningTrial
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "ascent") return await JungleRailAscent.Run();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "encounter-data") return await JungleRailAscent.CheckEncounterData();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "escape-replay") return await JungleRailAscent.ReplayEscape();
-        if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "mobility-candidates" or "mobility-grapple")
+        if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "mobility-candidates" or "mobility-grapple" or "mobility-progress")
             return await MobilityCandidateTrial.Run();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "encounter" or "encounter-injured") return await JungleRailAscent.RunEncounter();
         if (Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") is "baseline" or "jev") return await JungleReactionTrial.Run();
@@ -924,13 +924,42 @@ public sealed class MobilityCandidateTrial : ModSystem
         return null;
     }
 
+    static async Task<JsonObject> ReleaseAndLand(Func<string, JsonObject, Task<JsonObject>> tool, CancellationToken token)
+    {
+        Task<JsonObject> Observe() => CrossingDiscovery.OnGame(() =>
+        {
+            var p = Main.LocalPlayer;
+            return new JsonObject { ["tick"] = (ulong)Main.GameUpdateCount, ["latched"] = p.grapCount > 0,
+                ["feet"] = new JsonArray(p.Bottom.X / 16, p.Bottom.Y / 16), ["hp"] = p.statLife, ["dead"] = p.dead,
+                ["grounded"] = p.velocity.Y == 0 && Collision.SolidCollision(p.position + Vector2.UnitY, p.width, p.height) };
+        });
+        var start = await Observe();
+        if (!start["latched"].GetValue<bool>()) return new JsonObject { ["ok"] = false, ["error"] = "missing_latch_at_release" };
+        var release = await tool("act", new JsonObject { ["steps"] = new JsonArray(new JsonObject
+            { ["keys"] = new JsonArray("jump"), ["until"] = new JsonObject { ["frames"] = 1 } }), ["timeout_frames"] = 20 });
+        var end = await Observe();
+        ulong elapsed = end["tick"].GetValue<ulong>() - start["tick"].GetValue<ulong>();
+        while (elapsed < 90 && !end["dead"].GetValue<bool>()
+            && (end["latched"].GetValue<bool>() || !end["grounded"].GetValue<bool>()))
+        {
+            await Task.Delay(15, token);
+            end = await Observe();
+            elapsed = end["tick"].GetValue<ulong>() - start["tick"].GetValue<ulong>();
+        }
+        return new JsonObject { ["ok"] = release["outcome"]?.ToString() == "done" && !end["latched"].GetValue<bool>()
+                && end["grounded"].GetValue<bool>() && !end["dead"].GetValue<bool>()
+                && end["hp"].GetValue<int>() >= start["hp"].GetValue<int>(),
+            ["frames_to_landing"] = elapsed, ["before"] = start, ["release"] = release, ["after"] = end };
+    }
+
     internal static async Task<string> Run()
     {
         string output = Path.Combine(Main.SavePath, "jungle-mobility-candidates.json");
         var cases = new JsonArray();
         bool grappleOnly = Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "mobility-grapple";
+        bool progressOnly = Environment.GetEnvironmentVariable("TB_JUNGLE_REACTION") == "mobility-progress";
         var report = new JsonObject { ["ok"] = false, ["world"] = Main.ActiveWorldFileData.SeedText, ["cases"] = cases,
-            ["terrain"] = "native cave", ["grapple_only"] = grappleOnly,
+            ["terrain"] = "native cave", ["grapple_only"] = grappleOnly, ["progress_trial"] = progressOnly,
             ["enemy_projection"] = "positions from the recorded encounter held fixed" };
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(150));
         var token = timeout.Token;
@@ -970,7 +999,7 @@ public sealed class MobilityCandidateTrial : ModSystem
             });
             if (!grappleOnly)
                 await Batch(await CrossingDiscovery.OnGame(() => Capture(Main.LocalPlayer)), new[] { new Branch("warm", new int[2], 0) });
-            foreach (bool bottle in grappleOnly ? Array.Empty<bool>() : new[] { false, true })
+            foreach (bool bottle in grappleOnly ? Array.Empty<bool>() : progressOnly ? new[] { true } : new[] { false, true })
             {
                 int item = bottle ? ItemID.SandstorminaBottle : ItemID.AngelWings;
                 async Task<(JsonObject Start, JsonObject Snapshot, int Width, int Height)> Reset()
@@ -992,6 +1021,8 @@ public sealed class MobilityCandidateTrial : ModSystem
                 }
                 var origin = await Reset();
                 var variants = Inputs(bottle);
+                var startFeet = Position(origin.Start) + new Vector2(origin.Width / 2f, origin.Height);
+                float initialGoalDistance = Vector2.Distance(startFeet, target) / 16;
                 var clock = Stopwatch.StartNew();
                 var batch = await Batch(origin.Snapshot, variants);
                 var evidence = new JsonArray();
@@ -1013,10 +1044,14 @@ public sealed class MobilityCandidateTrial : ModSystem
                     bool used = trace.Any(frame => UsedAbility(origin.Start, frame));
                     bool safe = settled > 0
                         && trace.All(f => !f["dead"].GetValue<bool>() && f["hp"].GetValue<int>() >= origin.Start["hp"].GetValue<int>());
+                    float remaining = Vector2.Distance(foot, target) / 16;
+                    float progress = initialGoalDistance - remaining;
                     var summary = new JsonObject { ["id"] = branch.Id, ["frames"] = trace.Count,
                         ["held_input_frames"] = branch.ReleaseFrame, ["landing"] = new JsonArray(foot.X / 16, foot.Y / 16),
                         ["closest_enemy_tiles"] = MathF.Round(nearest, 2), ["used_ability"] = used,
-                        ["goal_distance_tiles"] = MathF.Round(Vector2.Distance(foot, target) / 16, 2),
+                        ["goal_distance_tiles"] = MathF.Round(remaining, 2),
+                        ["goal_progress_tiles"] = MathF.Round(progress, 2),
+                        ["goal_progress_tiles_per_second"] = MathF.Round(progress * 60 / trace.Count, 2),
                         ["first_grounded_frame"] = grounded > 0 ? grounded : null,
                         ["settled_frame"] = settled > 0 ? settled : null,
                         ["safe_landing"] = safe, ["outcome"] = row["outcome"].DeepClone() };
@@ -1035,6 +1070,9 @@ public sealed class MobilityCandidateTrial : ModSystem
                 var criteria = new JsonObject();
                 foreach (var option in options)
                     criteria[option.Branch.Id] = $"Run the verified short input and land on tile {option.Landing.X},{option.Landing.Y}.";
+                string instruction = progressOnly
+                    ? "Choose a maneuver for the next 2.5 seconds. Compare progress toward the crystal over the entire maneuver, including the distance left at its landing. The shortest input can leave almost all travel for later. Among routes with similar threat exposure, prefer one that leaves the player much closer to the crystal and has a good progress rate. Each closest enemy distance uses the recorded enemy position held fixed; use it as a comparison rather than a guarantee. Avoid paths that approach a threat closely. Return the candidate ID."
+                    : "Choose one already simulated maneuver. Prefer opening or maintaining distance from the nearby threat while making progress toward the crystal. Use the candidate's closest enemy distance along the path, landing position, and time in frames. Return the candidate ID.";
                 var choice = await Tool("jev_judge", new JsonObject
                 {
                     ["state"] = new JsonObject { ["hp"] = origin.Start["hp"].DeepClone(), ["equipment"] = entry["equipment"].DeepClone(),
@@ -1042,9 +1080,10 @@ public sealed class MobilityCandidateTrial : ModSystem
                         ["enemies"] = original["enemies"].DeepClone(),
                         ["enemy_distances_basis"] = report["enemy_projection"].DeepClone() },
                     ["questions"] = new JsonObject { ["move"] = new JsonObject { ["type"] = "choice",
-                        ["instructions"] = "Choose one already simulated maneuver. Prefer opening or maintaining distance from the nearby threat while making progress toward the crystal. Use the candidate's closest enemy distance along the path, landing position, and time in frames. Return the candidate ID.",
+                        ["instructions"] = instruction,
                         ["criteria"] = criteria } }
                 });
+                entry["instruction"] = instruction;
                 entry["jev"] = choice;
                 var selected = options.FirstOrDefault(c => c.Branch.Id == choice["answers"]?["move"]?["choice"]?.ToString());
                 if (selected == null) { entry["error"] = "decision_unavailable"; continue; }
@@ -1066,7 +1105,8 @@ public sealed class MobilityCandidateTrial : ModSystem
                 }
                 entry["selected"] = selected.Branch.Id;
                 entry["physical"] = await Play(selected, origin.Start);
-                if (!selected.UsedAbility && candidates.Where(candidate => candidate.UsedAbility).MinBy(c => c.Trace.Count) is Candidate ability)
+                if (!selected.UsedAbility && candidates.Where(candidate => candidate.UsedAbility)
+                    .MinBy(c => progressOnly ? Number(c.Evidence, "goal_distance_tiles") : c.Trace.Count) is Candidate ability)
                 {
                     var reset = await Reset();
                     entry["ability_proof"] = new JsonObject { ["id"] = ability.Branch.Id,
@@ -1074,6 +1114,13 @@ public sealed class MobilityCandidateTrial : ModSystem
                 }
                 Save();
             }
+            if (progressOnly)
+                await CrossingDiscovery.OnGame(() =>
+                {
+                    var p = Main.LocalPlayer;
+                    p.Center = center; p.velocity = Vector2.Zero; p.fallStart = p.fallStart2 = (int)(p.position.Y / 16);
+                    return true;
+                });
             async Task<JsonObject> ReadGrapple() => (await Tool("get_state",
                 new JsonObject { ["fields"] = new JsonArray("movement_capabilities") }))["movement_capabilities"]["grapple"].AsObject();
             report["grapple"] = (await ReadGrapple()).DeepClone();
@@ -1101,8 +1148,12 @@ public sealed class MobilityCandidateTrial : ModSystem
                 { ["code"] = "return skill('grapple_move',0," + input.ToJsonString() + ");", ["timeout_ms"] = 15000 });
             }
             report["grapple_verified"] = report["grapple_skill"]?["value"]?["verified"]?.GetValue<bool>() == true;
-            report["ok"] = grappleOnly ? report["grapple_verified"].GetValue<bool>()
-                : cases.Count == 2 && cases.All(c => c["physical"]?["matches"]?.GetValue<bool>() == true
+            if (report["grapple_verified"].GetValue<bool>())
+                report["grapple_landing"] = await ReleaseAndLand(Tool, token);
+            bool landedAfterHook = report["grapple_landing"]?["ok"]?.GetValue<bool>() == true;
+            report["ok"] = grappleOnly ? landedAfterHook
+                : (!progressOnly || landedAfterHook) && cases.Count == (progressOnly ? 1 : 2)
+                && cases.All(c => c["physical"]?["matches"]?.GetValue<bool>() == true
                 && (c["physical"]?["used_ability"]?.GetValue<bool>() == true
                     || c["ability_proof"]?["physical"]?["matches"]?.GetValue<bool>() == true));
         }
